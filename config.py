@@ -1,0 +1,3 @@
+MODEL_NAME = "mistral:7b"
+EMBED_MODEL = "mistral:7b"
+SHORT_MEMORY_LIMIT = 20
