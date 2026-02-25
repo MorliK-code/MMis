@@ -1,23 +1,38 @@
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 class UserProfile:
-    def __init__(self, path: str = "user_profile.json"):
-        self.path = path
+    def __init__(self, path: Union[str, Path] = "user_profile.json"):
+        self.path = Path(path)
         self.data: Dict[str, Any] = {}
         self.load()
 
     def load(self):
-        if os.path.exists(self.path):
-            with open(self.path, "r", encoding="utf-8") as f:
+        if self.path.exists():
+            with self.path.open("r", encoding="utf-8") as f:
                 self.data = json.load(f)
         else:
             self.data = {}
 
     def save(self):
-        with open(self.path, "w", encoding="utf-8") as f:
+        with self.path.open("w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _normalize_value(value: Any) -> Any:
+        if isinstance(value, list):
+            normalized: List[str] = []
+            for item in value:
+                item_str = str(item).strip()
+                if item_str and item_str not in normalized:
+                    normalized.append(item_str)
+            return normalized
+
+        if isinstance(value, str):
+            return value.strip()
+
+        return value
 
     def merge(self, facts: dict):
         if not facts:
@@ -27,16 +42,17 @@ class UserProfile:
             if v is None:
                 continue
 
-            if isinstance(v, list):
+            normalized = self._normalize_value(v)
+            if isinstance(normalized, list):
                 current = self.data.get(k, [])
                 if not isinstance(current, list):
                     current = []
-                for item in v:
+                for item in normalized:
                     if item not in current:
                         current.append(item)
                 self.data[k] = current
             else:
-                self.data[k] = v
+                self.data[k] = normalized
 
         self.save()
 
