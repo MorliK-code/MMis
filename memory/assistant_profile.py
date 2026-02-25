@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 DEFAULT_ASSISTANT_PROFILE: Dict[str, Any] = {
     "style": "лёгкая ирония",
@@ -51,6 +51,30 @@ class AssistantProfile:
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
 
+    @staticmethod
+    def _normalize_value(value: Any) -> Any:
+        if isinstance(value, list):
+            normalized: List[str] = []
+            for item in value:
+                item_str = str(item).strip()
+                if item_str and item_str not in normalized:
+                    normalized.append(item_str)
+            return normalized
+
+        if isinstance(value, str):
+            return value.strip()
+
+        return value
+
+    @classmethod
+    def _normalize_to_list(cls, items: Any) -> List[str]:
+        if items is None:
+            return []
+        if not isinstance(items, list):
+            items = [items]
+        normalized = cls._normalize_value(items)
+        return normalized if isinstance(normalized, list) else []
+
     def merge(self, patch: Dict[str, Any]):
         """Смешивает поля профиля. Списки — дополняет уникальными элементами."""
         if not patch:
@@ -60,17 +84,17 @@ class AssistantProfile:
             if v is None:
                 continue
 
-            if isinstance(v, list):
+            normalized = self._normalize_value(v)
+            if isinstance(normalized, list):
                 cur = self.data.get(k, [])
                 if not isinstance(cur, list):
                     cur = []
-                for item in v:
-                    item = str(item).strip()
-                    if item and item not in cur:
+                for item in normalized:
+                    if item not in cur:
                         cur.append(item)
                 self.data[k] = cur
             else:
-                self.data[k] = v
+                self.data[k] = normalized
 
         self.save()
 
@@ -87,18 +111,15 @@ class AssistantProfile:
                 self.data[k] = []
 
         def add_unique(key: str, items):
-            if not items:
-                return
-            for it in items:
-                it = str(it).strip()
-                if it and it not in self.data[key]:
+            for it in self._normalize_to_list(items):
+                if it not in self.data[key]:
                     self.data[key].append(it)
 
         def remove_items(key: str, items):
-            if not items:
+            remove_set = set(self._normalize_to_list(items))
+            if not remove_set:
                 return
-            s = {str(x).strip() for x in items if str(x).strip()}
-            self.data[key] = [x for x in self.data[key] if x not in s]
+            self.data[key] = [x for x in self.data[key] if x not in remove_set]
 
         if polarity in ("assertion", "correction"):
             if "likes" in facts:

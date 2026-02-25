@@ -28,9 +28,39 @@ FACT_SYSTEM = (
     "- НЕ выдумывай факты.\n"
 )
 
-ALLOWED_KEYS = {
-    "name", "birth_year", "birth_month", "birth_day",
-    "profession", "projects", "likes", "habits"
+ALLOWED_FACT_KEYS = {
+    "user": {
+        "name",
+        "birth_year",
+        "birth_month",
+        "birth_day",
+        "profession",
+        "projects",
+        "likes",
+        "dislikes",
+        "interests",
+        "habits",
+        "bio",
+        "communication_style",
+        "boundaries",
+        "values",
+        "goals",
+        "persona_notes",
+    },
+    "assistant": {
+        "name",
+        "profession",
+        "projects",
+        "likes",
+        "dislikes",
+        "interests",
+        "bio",
+        "communication_style",
+        "boundaries",
+        "values",
+        "goals",
+        "persona_notes",
+    },
 }
 
 def _extract_json(text: str) -> dict:
@@ -50,10 +80,15 @@ def _extract_json(text: str) -> dict:
     obj.setdefault("confidence", 0.0)
     obj.setdefault("facts", {})
 
+    about = str(obj.get("about", "none")).strip().lower()
     facts = obj.get("facts", {})
     if not isinstance(facts, dict):
         facts = {}
-    facts = {k: v for k, v in facts.items() if k in ALLOWED_KEYS}
+    allowed_keys = ALLOWED_FACT_KEYS.get(about, set())
+    if allowed_keys:
+        facts = {k: v for k, v in facts.items() if k in allowed_keys}
+    else:
+        facts = {}
     obj["facts"] = facts
     return obj
 
