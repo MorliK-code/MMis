@@ -14,6 +14,7 @@ class MemoryManager:
         assistant_profile,
         event_store,
         chat_log,
+        dialogue_state=None,
         distance_threshold: float = 0.65,
     ):
         self.short = short_memory
@@ -22,6 +23,7 @@ class MemoryManager:
         self.assistant_profile = assistant_profile
         self.events = event_store
         self.log = chat_log
+        self.dialogue_state = dialogue_state
         self.distance_threshold = distance_threshold
 
     def store_turn(self, user_text: str, assistant_text: str) -> None:
@@ -68,6 +70,14 @@ class MemoryManager:
             conf = float(self_res.get("confidence", 0.0))
             if conf >= 0.7 and facts:
                 self.assistant_profile.apply_fact_patch(pol, facts)
+        except Exception:
+            pass
+
+
+        # 7) Текущее состояние диалога
+        try:
+            if self.dialogue_state is not None:
+                self.dialogue_state.update_from_turn(user_text, assistant_text)
         except Exception:
             pass
 

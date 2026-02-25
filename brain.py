@@ -41,6 +41,18 @@ class Brain:
         except Exception:
             pass
 
+        # Краткое состояние диалога
+        try:
+            if getattr(self.mm, "dialogue_state", None) is not None:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": self.mm.dialogue_state.to_prompt_block(max_len=420),
+                    }
+                )
+        except Exception:
+            pass
+
         # Воспоминания — только самые релевантные, и в усечённом виде, чтобы не тащить болтовню
         if recalled:
             short_recalled = [self._truncate(x, 240) for x in recalled[:3]]

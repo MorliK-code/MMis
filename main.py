@@ -8,6 +8,7 @@ from brain import Brain
 from config import SHORT_MEMORY_LIMIT
 from config import MemoryStorageDir
 from memory.assistant_profile import AssistantProfile
+from memory.dialogue_state import DialogueState
 
 short = ShortMemory(limit=SHORT_MEMORY_LIMIT)
 longm = LongMemory(path=MemoryStorageDir / "chroma_db")
@@ -15,8 +16,9 @@ profile_user = UserProfile(MemoryStorageDir / "user_profile.json")
 profile_assistant = AssistantProfile(MemoryStorageDir / "assistant_profile.json")
 events = EventStore(MemoryStorageDir / "events.json")
 log = ChatLog(MemoryStorageDir / "chat_log.jsonl")
+dialogue_state = DialogueState(MemoryStorageDir / "dialogue_state.json")
 
-mm = MemoryManager(short, longm, profile_user, profile_assistant, events, log, distance_threshold=0.65)
+mm = MemoryManager(short, longm, profile_user, profile_assistant, events, log, dialogue_state=dialogue_state, distance_threshold=0.65)
 brain = Brain(mm)
 
 print("MMis запущен.\n")
