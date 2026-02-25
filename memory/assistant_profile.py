@@ -1,6 +1,6 @@
 import json
-import os
-from typing import Dict, Any, List
+from pathlib import Path
+from typing import Any, Dict, List, Union
 
 DEFAULT_ASSISTANT_PROFILE: Dict[str, Any] = {
     "style": "лёгкая ирония",
