@@ -217,18 +217,22 @@ class MemoryManager:
                 )
             return
 
-        # Неуверенные/слухи — тоже в события
-        if polarity in ("rumor", "uncertain") and about in ("user", "assistant", "other"):
+        should_write_events_only = (
+            about in ("user", "assistant", "other")
+            and (confidence < 0.70 or polarity in ("rumor", "uncertain"))
+        )
+        if should_write_events_only:
+            tag = "rumor" if polarity == "rumor" else "uncertain" if polarity == "uncertain" else "low_confidence"
             try:
                 self.events.add(
                     {
                         "type": "note",
                         "who": None,
-                        "what": f"{polarity}_about_{about}: {facts}",
+                        "what": f"{tag}_about_{about}: {facts}",
                         "when": None,
                         "where": None,
                         "importance": "low",
-                        "tags": ["rumor"] if polarity == "rumor" else ["uncertain"],
+                        "tags": [tag],
                         "source_text": user_text,
                     }
                 )
