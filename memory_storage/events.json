@@ -144,5 +144,42 @@
     ],
     "source_text": "о, я кстати, играл в war thunder и мне очень фартило, классно поиграл",
     "ts": "2026-02-25T14:14:59"
+  },
+  {
+    "type": "interest",
+    "who": "я",
+    "what": "меломан",
+    "source_text": "я меломан",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "ts": "2026-02-25T14:39:40"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "Вопрос о шансах создать IAI-подружку",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [
+      "AI",
+      "chatbot",
+      "friend"
+    ],
+    "source_text": "ты, кстати, как думаешь, у меня есть шансы в одного сделать/создать ии-подружку, с которой мог бы даже голосом общаться?",
+    "ts": "2026-02-25T14:44:42"
+  },
+  {
+    "type": "call",
+    "who": "Паша",
+    "what": "Меня зовут",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "меня зовут Паша",
+    "ts": "2026-02-25T14:49:20"
   }
 ]
