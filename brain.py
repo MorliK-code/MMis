@@ -29,8 +29,20 @@ class Brain:
 
     def _is_name_question(self, user_input: str) -> bool:
         text = (user_input or "").lower()
-        triggers = ["как тебя зовут", "кто ты по имени", "твое имя", "твое имя?", "как тебя зовут?"]
-        return any(t in text for t in triggers)
+        normalized = text.replace("ё", "е")
+        triggers = [
+            "как тебя зовут",
+            "кто ты по имени",
+            "твое имя",
+            "твое имя?",
+            "твоё имя",
+            "твоё имя?",
+            "тебе нравится твое имя",
+            "тебе нравится твое имя?",
+            "тебе нравится твоё имя",
+            "тебе нравится твоё имя?"
+            ]
+        return any(t in normalized for t in triggers)
 
     def _truncate(self, s: str, limit: int = 220) -> str:
         s = (s or "").strip()
@@ -117,7 +129,7 @@ class Brain:
                 "presence_penalty": 0.2,
                 "frequency_penalty": 0.2,
                 "mirostat": 0,
-                "stop": ["\n\n", "\n-", "Пользователь:", "User:"],
+                "stop": ["\n-", "Пользователь:", "User:"],
             }
         )
 

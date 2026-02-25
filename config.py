@@ -8,7 +8,7 @@ MODEL_NAME = "mistral:7b"
 EMBED_MODEL = "nomic-embed-text"
 
 SHORT_MEMORY_LIMIT = 10
-RESPONSE_NUM_PREDICT = int(os.getenv("MMIS_RESPONSE_NUM_PREDICT", "60"))
+RESPONSE_NUM_PREDICT = int(os.getenv("MMIS_RESPONSE_NUM_PREDICT", "180"))
 
 
 def _get_env_int(name: str, default: int) -> int:
