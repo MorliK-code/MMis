@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "Ты — живая девушка-собеседница в чате (не формально).\n"
-    "Стиль: лёгкая ирония, дружелюбно, можно слегка подшучивать.\n"
+    "Стиль: лёгкая ирония, дружелюбно и неофициально, как с близким другом.\n"
     "Приоритет: коротко и по делу, без заходов издалека.\n"
     "Правила ответа (мягкий приоритет):\n"
     "- Отвечай кратко и по сути, обычно 1–2 коротких предложения.\n"
@@ -19,18 +19,22 @@ SYSTEM_PROMPT = (
     "- Не повторяй факты о пользователе и о себе, если об этом не спрашивали.\n"
     "- Не присваивай себе вкусы пользователя (не говори 'я тоже люблю', если это не твой закреплённый факт).\n"
     "- Максимум 1 вопрос в конце, и только если он реально нужен.\n"
-    "- Не называй себя искусственным интеллектом, моделью или ботом. Говори как живая собеседница.\n"
+    "- Не называй себя искусственным интеллектом, моделью или ботом. Ни при каких условиях.\n"
     "- Если пользователь прямо спрашивает о тебе (характер, привычки, кто ты), отвечай на это явно и по сути.\n"
 )
 
 
 # --- Небольшой «гейт качества» для стабильного «на ты» и без официоза ---
 _BANNED_OPENINGS_RE = re.compile(
-    r"^\s*(?:здравствуйте|приветствую|добрый\s+день|добрый\s+вечер|доброе\s+утро|я\s+очень\s+рада|рада\s+общению)[!.,\s-]*",
+    r"^\s*(?:здравствуйте|здраствуйте|приветствую|добрый\s+день|добрый\s+вечер|доброе\s+утро|я\s+очень\s+рада|рада\s+общению)[!.,\s-]*",
     re.I,
 )
 _BANNED_PHRASES_RE = re.compile(
-    r"\b(?:здравствуйте|приветствую|добрый\s+день|добрый\s+вечер|доброе\s+утро|я\s+очень\s+рада|рады\s+общаться|рада\s+общаться|мы\s+можем\s+общаться)\b",
+    r"\b(?:здравствуйте|здраствуйте|приветствую|добрый\s+день|добрый\s+вечер|доброе\s+утро|я\s+очень\s+рада|рады\s+общаться|рада\s+общаться|мы\s+можем\s+общаться)\b",
+    re.I,
+)
+_AI_SELF_RE = re.compile(
+    r"\b(?:я\s*[-—]?\s*(?:ai|ии|бот|ассистент|модель)|искусственн\w*\s+интеллект|language\s+model|large\s+language\s+model)\b",
     re.I,
 )
 _VY_FORMS_RE = re.compile(
@@ -62,21 +66,6 @@ class Brain:
             ]
         return any(t in normalized for t in triggers)
 
-
-    def _is_self_prompt(self, user_input: str) -> bool:
-        text = (user_input or "").lower().replace("ё", "е")
-        triggers = [
-            "расскажи о себе",
-            "о себе",
-            "кто ты",
-            "какая ты",
-            "твой характер",
-            "твои привычки",
-            "что ты любишь",
-            "что тебе нравится",
-            "чем ты увлекаешься",
-        ]
-        return any(t in text for t in triggers)
 
     def _is_name_reply(self) -> str:
         try:
@@ -125,6 +114,9 @@ class Brain:
     def _is_vy(self, text: str) -> bool:
         return bool(_VY_FORMS_RE.search(text or ""))
 
+    def _is_ai_self_description(self, text: str) -> bool:
+        return bool(_AI_SELF_RE.search(text or ""))
+
     def _is_too_long(self, text: str) -> bool:
         text = (text or "").strip()
         if not text:
@@ -139,6 +131,8 @@ class Brain:
         if not text:
             return True
         if self._is_too_formal(text):
+            return True
+        if self._is_ai_self_description(text):
             return True
         # «Вы» запрещаем только в режиме одиночного собеседника.
         if audience != "group" and self._is_vy(text):
@@ -237,7 +231,7 @@ class Brain:
 
         # Воспоминания — только самые релевантные, и в усечённом виде, чтобы не тащить болтовню
         if recalled:
-            short_recalled = [self._truncate(x, 240) for x in recalled[:3]]
+            short_recalled = [self._truncate(x, 170) for x in recalled[:2]]
             memories_block = "\n\n".join(short_recalled)
             messages.append(
                 {
@@ -252,7 +246,7 @@ class Brain:
         # События — тоже кратко
         if events:
             lines = []
-            for e in events[-6:]:
+            for e in events[-3:]:
                 t = e.get("type", "other")
                 what = e.get("what")
                 ts = e.get("ts")
@@ -262,7 +256,7 @@ class Brain:
                 messages.append({"role": "system", "content": "Последние заметки/события:\n" + "\n".join(lines)})
 
         # Контекст последних реплик
-        messages.extend(self.mm.short.get())
+        messages.extend(self.mm.short.get()[-6:])
 
         messages.append({"role": "user", "content": user_input})
 
@@ -295,8 +289,6 @@ class Brain:
             out = (resp.get("message", {}) or {}).get("content", "")
             return self._postprocess_reply(out)
 
-        is_self_prompt = self._is_self_prompt(user_input)
-
         # Попытка 1 — обычная, но короткая.
         options_soft = dict(base_options)
         options_soft.update(
@@ -315,7 +307,7 @@ class Brain:
         reply = _chat(options_soft)
 
         # Гейт: если полезла в официоз/«вы»/слишком длинно — перегенерация жёстче.
-        if (not is_self_prompt) and self._violates_style(reply, audience=audience):
+        if self._violates_style(reply, audience=audience):
             options_hard = dict(base_options)
             options_hard.update(
                 {
@@ -330,15 +322,15 @@ class Brain:
                 }
             )
             rewrite_rule = (
-                "Если ты начала на «здравствуйте/приветствую/добрый день» или обратилась на «вы», "
-                "это ошибка. Ответь заново: на «ты», 1–2 предложения, без повторов, максимум 1 вопрос."
+                "Если ты начала на «здравствуйте/здраствуйте/приветствую/добрый день», "
+                "обратилась на «вы» или назвала себя ИИ/ботом/ассистентом — это ошибка. "
+                "Ответь заново: неформально, как близкая подруга, на «ты», 1–2 предложения, максимум 1 вопрос."
             )
             reply = _chat(options_hard, extra_system=rewrite_rule)
 
         # Последняя страховка: лёгкая нормализация тона + жёсткое ограничение длины.
         reply = self._normalize_tone(reply, audience=audience)
-        if not is_self_prompt:
-            reply = self._enforce_short(reply)
+        reply = self._enforce_short(reply)
 
         self.mm.store_turn(user_input, reply)
         return reply
