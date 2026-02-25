@@ -92,8 +92,23 @@ def _extract_json(text: str) -> dict:
     obj["facts"] = facts
     return obj
 
+def _is_likely_question_only(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized:
+        return True
+
+    if "?" not in normalized:
+        return False
+    
+    lowered = normalized.lower()
+    has_statement_markers = any(
+        marker in lowered
+        for marker in (" я ", " мне ", " у меня ", " мой ", " моя ", " мы ", " я,", "я ")
+        )
+    return lowered.endswith("?") and not has_statement_markers
+
 def extract_facts(user_text: str) -> dict:
-    if "?" in user_text:
+    if _is_likely_question_only(user_text):
         return {"speaker":"user","about":"none","polarity":"none","confidence":0.0,"facts":{}}
 
     resp = ollama.chat(
