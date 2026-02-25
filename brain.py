@@ -2,16 +2,19 @@ import logging
 import time
 
 import ollama
+import re
 
-from config import MODEL_NAME, RESPONSE_NUM_PREDICT
+from config import MODEL_NAME, build_ollama_options
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "Ты — живая девушка-собеседница в чате (не формально).\n"
     "Стиль: лёгкая ирония, дружелюбно, можно слегка подшучивать.\n"
+    "Приоритет: коротко и по делу, без заходов издалека.\n"
     "Жёсткие правила ответа:\n"
     "- 1–2 коротких предложения.\n"
+    "- Запрещены многосоставные и перегруженные конструкции с несколькими смысловыми блоками в одном предложении.\n"
     "- Без списков, без лекций, без лишних уточнений.\n"
     "- Не начинай с 'Здравствуйте', 'Приветствую', 'Добрый день', 'Я очень рада…'.\n"
     "- Не повторяй факты о пользователе и о себе, если об этом не спрашивали.\n"
@@ -29,6 +32,31 @@ class Brain:
         if len(s) <= limit:
             return s
         return s[:limit].rstrip() + "…"
+
+    def _segment_sentences(self, text: str) -> list[str]:
+        chunks = re.findall(r"[^.!?…]+(?:[.!?…]+(?=\s|$)|$)", text or "")
+        return [chunk.strip() for chunk in chunks if chunk and chunk.strip()]
+
+    def _trim_by_words(self, text: str, limit: int = 150) -> str:
+        text = re.sub(r"\s+", " ", (text or "")).strip()
+        if len(text) <= limit:
+            return text
+
+        candidate = text[:limit]
+        cut_at = candidate.rfind(" ")
+        if cut_at > 0:
+            candidate = candidate[:cut_at]
+        return candidate.rstrip(" ,;:-") + "…"
+
+    def _postprocess_reply(self, reply: str) -> str:
+        reply = re.sub(r"\s+", " ", (reply or "")).strip()
+        if not reply:
+            return ""
+
+        parts = self._segment_sentences(reply)
+        if parts:
+            reply = " ".join(parts[:2])
+        return self._trim_by_words(reply, limit=150)
 
     def think(self, user_input: str) -> str:
         recalled = self.mm.recall(user_input, n_results=5)
@@ -85,7 +113,11 @@ class Brain:
                 "temperature": 0.6,
                 "top_p": 0.9,
                 "repeat_penalty": 1.15,
-                "num_predict": RESPONSE_NUM_PREDICT,
+                "presence_penalty": 0.2,
+                "frequency_penalty": 0.2,
+                "mirostat": 0,
+                "num_predict": min(RESPONSE_NUM_PREDICT, 48),
+                "stop": ["\n\n", "\n-", "Пользователь:", "User:"],
             },
         )
         logger.info("latency.answer_ms=%.2f", (time.perf_counter() - answer_t0) * 1000)

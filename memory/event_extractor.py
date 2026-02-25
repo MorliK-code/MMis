@@ -1,7 +1,7 @@
 import json
 import re
 import ollama
-from config import MODEL_NAME
+from config import MODEL_NAME, build_ollama_options
 
 EVENT_SYSTEM = (
     "Ты извлекаешь события из реплики пользователя для памяти.\n"
@@ -42,7 +42,7 @@ def extract_events_llm(user_text: str) -> list[dict]:
             {"role": "system", "content": EVENT_SYSTEM},
             {"role": "user", "content": user_text},
         ],
-        options={"temperature": 0}
+        options=build_ollama_options("event_extraction")
     )
     raw = resp["message"]["content"].strip()
     events = _extract_json_array(raw)
