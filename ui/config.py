@@ -3,11 +3,8 @@
 FLOPS_PER_TOKEN = 14e9
 SHOW_TFLOPS_EST = True
 
-DEFAULT_TEXT_SIZE = 11
-DEFAULT_BUBBLE_OPACITY = 0.12
-
-STATS_FONT_SIZE_PX = 8
-STATS_TEXT_ALPHA = 0.38
+DEFAULT_TEXT_SIZE = 14
+DEFAULT_BUBBLE_OPACITY = 0.12  # ВАЖНО: именно это имя импортируется в app.py
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -15,7 +12,6 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 
 def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
-    """Build chat CSS with clamped controls and fixed stats style."""
     font_size_px = int(_clamp(float(font_size_px), 9, 28))
     bubble_opacity = _clamp(float(bubble_opacity), 0.05, 0.9)
     user_opacity = _clamp(bubble_opacity + 0.06, 0.05, 0.95)
@@ -24,6 +20,7 @@ def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
 <style>
 .msg {{ margin: 10px 0 18px 0; }}
 .name {{ font-weight: 600; margin-bottom: 6px; font-size: 12px; }}
+
 .bubble {{
   display: inline-block;
   padding: 10px 12px;
@@ -33,15 +30,20 @@ def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
   white-space: pre-wrap;
   font-size: {font_size_px}px;
 }}
+
 .msg.user .bubble {{ background: rgba(120,120,120,{user_opacity:.3f}); }}
 .msg.ai .bubble {{ background: rgba(120,120,120,{bubble_opacity:.3f}); }}
+
 .stats {{
-  margin-top: 2px;
+  margin-top: 6px;
+  padding: 0;
+  background: transparent;
   display: block;
-  font-size: {STATS_FONT_SIZE_PX}px;
+  font-size: 8px;
   line-height: 1.2;
-  color: rgba(0,0,0,{STATS_TEXT_ALPHA:.3f});
+  color: rgba(255,255,255,0.7);
 }}
+
 .sep {{ height: 10px; }}
 </style>
 """

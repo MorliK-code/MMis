@@ -1,4 +1,5 @@
-__pycache__/
+__pycache__/*
+**/__pycache__/*
 *.pyc
 *.pyo
 venv/
@@ -10,4 +11,4 @@ venv/
 Thumbs.db
 secrets.json
 *.gitignore
-memory_storage/
+memory_storage/*

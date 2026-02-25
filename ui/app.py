@@ -35,6 +35,7 @@ from memory.memory_manager import MemoryManager
 from memory.short_memory import ShortMemory
 from memory.user_profile import UserProfile
 from ui.config import (
+    DEFAULT_TEXT_SIZE,
     DEFAULT_BUBBLE_OPACITY,
     DEFAULT_TEXT_SIZE,
     FLOPS_PER_TOKEN,
@@ -162,25 +163,6 @@ class MainWindow(QMainWindow):
         for w in (self.status_label, self.avg_ms_label, self.avg_tokens_label, self.avg_tps_label, self.avg_tflops_label):
             w.setTextInteractionFlags(Qt.TextSelectableByMouse)
             side_layout.addWidget(w)
-
-        view_form = QFormLayout()
-        self.text_size_label = QLabel(f"{self._text_size}px")
-        self.text_size_slider = QSlider(Qt.Horizontal)
-        self.text_size_slider.setRange(9, 24)
-        self.text_size_slider.setValue(self._text_size)
-        self.text_size_slider.valueChanged.connect(self._on_text_size_changed)
-
-        self.opacity_label = QLabel(f"{int(self._bubble_opacity * 100)}%")
-        self.opacity_slider = QSlider(Qt.Horizontal)
-        self.opacity_slider.setRange(5, 90)
-        self.opacity_slider.setValue(int(self._bubble_opacity * 100))
-        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
-
-        view_form.addRow("Размер текста", self.text_size_slider)
-        view_form.addRow("", self.text_size_label)
-        view_form.addRow("Прозрачность bubble", self.opacity_slider)
-        view_form.addRow("", self.opacity_label)
-        side_layout.addLayout(view_form)
 
         side_layout.addStretch(1)
         splitter.addWidget(side)
