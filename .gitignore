@@ -1,4 +1,3 @@
-
 __pycache__/
 *.pyc
 *.pyo
@@ -9,8 +8,6 @@ venv/
 *.log
 .DS_Store
 Thumbs.db
-config.json
 secrets.json
-.gitignore
+*.gitignore
 memory_storage/
-memory/__pycache__
