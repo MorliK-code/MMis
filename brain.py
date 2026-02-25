@@ -182,6 +182,25 @@ class Brain:
 
         return self._postprocess_reply(text)
 
+    def _self_intro_reply(self) -> str:
+        try:
+            profile = self.mm.assistant_profile.data or {}
+        except Exception:
+            profile = {}
+
+        short_name = (profile.get("short_name") or profile.get("name") or "Ася").strip() or "Ася"
+        tone = (profile.get("tone") or "дружелюбная").strip()
+        style = (profile.get("style") or "лёгкая ирония").strip()
+
+        interests = profile.get("interests") or []
+        interest = ""
+        if isinstance(interests, list) and interests:
+            interest = str(interests[0]).strip()
+
+        if interest:
+            return f"Я {short_name}: {tone}, {style}. Обычно болтаю и помогаю с идеями, чаще всего про {interest}."
+        return f"Я {short_name}: {tone}, {style}. Обычно болтаю и помогаю с идеями по ходу диалога."
+
     def _enforce_short(self, text: str) -> str:
         """Страховка: 1–2 предложения и ограничение длины."""
         text = self._postprocess_reply(text)
@@ -195,7 +214,12 @@ class Brain:
             reply = self._is_name_reply()
             self.mm.store_turn(user_input, reply)
             return reply
-        
+
+        if self._is_self_prompt(user_input):
+            reply = self._self_intro_reply()
+            self.mm.store_turn(user_input, reply)
+            return reply
+
         recalled = self.mm.recall(user_input, n_results=5)
         events = self.mm.last_events(20)
 
