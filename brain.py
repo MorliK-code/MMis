@@ -20,6 +20,7 @@ SYSTEM_PROMPT = (
     "- Не присваивай себе вкусы пользователя (не говори 'я тоже люблю', если это не твой закреплённый факт).\n"
     "- Максимум 1 вопрос в конце, и только если он реально нужен.\n"
     "- Не называй себя искусственным интеллектом, моделью или ботом. Говори как живая собеседница.\n"
+    "- Если пользователь прямо спрашивает о тебе (характер, привычки, кто ты), отвечай на это явно и по сути.\n"
 )
 
 
@@ -60,6 +61,22 @@ class Brain:
             "тебе нравится твоё имя?"
             ]
         return any(t in normalized for t in triggers)
+
+
+    def _is_self_prompt(self, user_input: str) -> bool:
+        text = (user_input or "").lower().replace("ё", "е")
+        triggers = [
+            "расскажи о себе",
+            "о себе",
+            "кто ты",
+            "какая ты",
+            "твой характер",
+            "твои привычки",
+            "что ты любишь",
+            "что тебе нравится",
+            "чем ты увлекаешься",
+        ]
+        return any(t in text for t in triggers)
 
     def _is_name_reply(self) -> str:
         try:
@@ -254,6 +271,8 @@ class Brain:
             out = (resp.get("message", {}) or {}).get("content", "")
             return self._postprocess_reply(out)
 
+        is_self_prompt = self._is_self_prompt(user_input)
+
         # Попытка 1 — обычная, но короткая.
         options_soft = dict(base_options)
         options_soft.update(
@@ -272,7 +291,7 @@ class Brain:
         reply = _chat(options_soft)
 
         # Гейт: если полезла в официоз/«вы»/слишком длинно — перегенерация жёстче.
-        if self._violates_style(reply, audience=audience):
+        if (not is_self_prompt) and self._violates_style(reply, audience=audience):
             options_hard = dict(base_options)
             options_hard.update(
                 {
@@ -294,7 +313,8 @@ class Brain:
 
         # Последняя страховка: лёгкая нормализация тона + жёсткое ограничение длины.
         reply = self._normalize_tone(reply, audience=audience)
-        reply = self._enforce_short(reply)
+        if not is_self_prompt:
+            reply = self._enforce_short(reply)
 
         self.mm.store_turn(user_input, reply)
         return reply

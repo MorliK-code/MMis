@@ -41,7 +41,9 @@ OLLAMA_PROFILES = {
     "QUALITY": {
         "num_thread": 8,
         "num_ctx": 4096,
-        "num_gpu": 1,
+        # В Ollama num_gpu = число GPU-слоёв, а не флаг 0/1.
+        # Значение 1 обычно даёт ~1 GB VRAM (офлоадится только один слой).
+        "num_gpu": 35,
         "num_batch": 256,
         "repeat_penalty": 1.12,
         "temperature": 0.55,
@@ -51,7 +53,7 @@ OLLAMA_PROFILES = {
     "BALANCED": {
         "num_thread": 6,
         "num_ctx": 3072,
-        "num_gpu": 1,
+        "num_gpu": 28,
         "num_batch": 128,
         "repeat_penalty": 1.15,
         "temperature": 0.6,
@@ -61,7 +63,7 @@ OLLAMA_PROFILES = {
     "FAST": {
         "num_thread": 6,
         "num_ctx": 2048,
-        "num_gpu": 1,
+        "num_gpu": 20,
         "num_batch": 64,
         "repeat_penalty": 1.1,
         "temperature": 0.65,
