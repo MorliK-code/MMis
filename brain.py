@@ -1,6 +1,11 @@
+import logging
+import time
+
 import ollama
 
 from config import MODEL_NAME, RESPONSE_NUM_PREDICT
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "Ты — живая девушка-собеседница в чате (не формально).\n"
@@ -72,6 +77,7 @@ class Brain:
 
         messages.append({"role": "user", "content": user_input})
 
+        answer_t0 = time.perf_counter()
         resp = ollama.chat(
             model=MODEL_NAME,
             messages=messages,
@@ -82,6 +88,7 @@ class Brain:
                 "num_predict": RESPONSE_NUM_PREDICT,
             },
         )
+        logger.info("latency.answer_ms=%.2f", (time.perf_counter() - answer_t0) * 1000)
         reply = (resp.get("message", {}) or {}).get("content", "").strip()
 
         # Доп. страховка от раздувания: если модель всё равно написала много — обрежем до 2 предложений.
