@@ -4,7 +4,7 @@ from pathlib import Path
 basedir = Path(__file__).parent
 MemoryStorageDir = basedir / "memory_storage"
 
-MODEL_NAME = "mistral:7b-instruct"
+MODEL_NAME = "qwen2.5:7b-instruct"
 EMBED_MODEL = "nomic-embed-text"
 
 SHORT_MEMORY_LIMIT = 10
@@ -51,8 +51,8 @@ OLLAMA_PROFILES = {
     "BALANCED": {
         "num_thread": 6,
         "num_ctx": 4096,
-        "num_gpu": 28,
-        "num_batch": 128,
+        "num_gpu": 25,
+        "num_batch": 64,
         "repeat_penalty": 1.15,
         "temperature": 0.6,
         "top_p": 0.9,

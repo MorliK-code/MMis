@@ -3,23 +3,26 @@
 FLOPS_PER_TOKEN = 14e9
 SHOW_TFLOPS_EST = True
 
-DEFAULT_TEXT_SIZE = 11
-DEFAULT_BUBBLE_OPACITY = 0.12
+# DEFAULT_TEXT_SIZE = 11
+# DEFAULT_BUBBLE_OPACITY = 0.12
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+# def _clamp(value: float, low: float, high: float) -> float:
+#     return max(low, min(high, value))
 
 
-def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
-    font_size_px = int(_clamp(float(font_size_px), 9, 28))
-    bubble_opacity = _clamp(float(bubble_opacity), 0.05, 0.9)
-    user_opacity = _clamp(bubble_opacity + 0.06, 0.05, 0.95)
+# def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
+#     font_size_px = int(_clamp(float(font_size_px), 9, 28))
+#     bubble_opacity = _clamp(float(bubble_opacity), 0.05, 0.9)
+#     user_opacity = _clamp(bubble_opacity + 0.06, 0.05, 0.95)
 
-    return f"""
+
+
+#     return 
+f"""
 <style>
 .msg {{ margin: 10px 0 18px 0; }}
-.name {{ font-weight: 600; margin-bottom: 6px; font-size: {font_size_px}px; }}
+.name {{ font-weight: 600; margin-bottom: 6px; font-size: 12px; }}
 .bubble {{
   display: inline-block;
   padding: 10px 12px;
@@ -27,14 +30,14 @@ def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
   max-width: 820px;
   line-height: 1.38;
   white-space: pre-wrap;
-  font-size: {font_size_px}px;
+  font-size: 14px;
 }}
-.msg.user .bubble {{ background: rgba(120,120,120,{user_opacity:.3f}); }}
-.msg.ai .bubble {{ background: rgba(120,120,120,{bubble_opacity:.3f}); }}
+.msg.user .bubble {{ background: rgba(120,120,120,0); }}
+.msg.ai .bubble {{ background: rgba(120,120,120,0); }}
 .stats {{
   margin-top: 2px;
   display: block;
-  font-size: {max(font_size_px - 3, 8)}px;
+  font-size: {max(11 - 3, 8)}px;
   line-height: 1.2;
   color: rgba(0,0,0,0.38);
 }}
