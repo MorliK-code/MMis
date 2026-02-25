@@ -1,5 +1,3 @@
-
-
 .msg {
   margin: 10px 0 18px 0;
   padding: 8px 10px;
@@ -19,8 +17,8 @@
   font-size: 14px;
 }
 
-.msg.user { background: rgba(120, 120, 120, 0.12); }
-.msg.ai { background: rgba(120, 120, 120, 0.12); }
+.msg.user { background: rgba(120, 120, 120, .15); }
+.msg.ai { background: rgba(120, 120, 120, 0.14); }
 
 .stats {
   margin-top: 6px;

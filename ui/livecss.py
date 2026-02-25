@@ -1,3 +1,5 @@
+"""Hot-reload helper for chat CSS overrides."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,8 +8,9 @@ from pathlib import Path
 class LiveCss:
     """Loads a CSS template from disk and reloads it when the file changes.
 
-    The template can use ``str.format`` placeholders:
+    The template can use plain token placeholders:
     ``{font_size_px}``, ``{bubble_opacity}``, and ``{user_opacity}``.
+    We intentionally avoid ``str.format`` so regular CSS braces do not need escaping.
     """
 
     def __init__(self, css_path: Path):
@@ -40,11 +43,13 @@ class LiveCss:
             return fallback_css
 
         user_opacity = min(max(bubble_opacity + 0.03, 0.04), 0.35)
-        try:
-            return self._template.format(
-                font_size_px=int(font_size_px),
-                bubble_opacity=float(bubble_opacity),
-                user_opacity=float(user_opacity),
-            )
-        except (KeyError, ValueError):
-            return self._template
+        rendered = self._template
+        rendered = rendered.replace("{font_size_px}", str(int(font_size_px)))
+        rendered = rendered.replace("{bubble_opacity}", f"{float(bubble_opacity):.3f}")
+        rendered = rendered.replace("{user_opacity}", f"{float(user_opacity):.3f}")
+
+        # QTextBrowser reliably applies styles when they are inside <style>...</style>.
+        if "<style" not in rendered.lower():
+            rendered = f"<style>\n{rendered}\n</style>"
+
+        return rendered

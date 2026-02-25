@@ -4,7 +4,7 @@ from pathlib import Path
 basedir = Path(__file__).parent
 MemoryStorageDir = basedir / "memory_storage"
 
-MODEL_NAME = ""
+MODEL_NAME = "qwen2.5:7b-instruct"
 EMBED_MODEL = "nomic-embed-text"
 
 SHORT_MEMORY_LIMIT = 10
@@ -39,7 +39,7 @@ def _get_env_float(name: str, default: float) -> float:
 #   num_batch=128..256, keep_alive>=600 для тёплой модели между запросами).
 OLLAMA_PROFILES = {
     "QUALITY": {
-        "num_thread": 8,
+        "num_thread": 10,
         "num_ctx": 4096,
         "num_gpu": 35,
         "num_batch": 256,
@@ -49,9 +49,9 @@ OLLAMA_PROFILES = {
         "keep_alive": "30m",
     },
     "BALANCED": {
-        "num_thread": 6,
+        "num_thread": 8,
         "num_ctx": 4096,
-        "num_gpu": 25,
+        "num_gpu": 30,
         "num_batch": 64,
         "repeat_penalty": 1.15,
         "temperature": 0.6,
