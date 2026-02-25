@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from memory.fact_extractor import extract_facts
 from memory.event_extractor import extract_events_llm
 from memory.assistant_fact_extractor import extract_assistant_self
+from memory.logging_utils import ErrorMetrics, get_memory_logger
 
 
 class MemoryManager:
@@ -23,14 +24,43 @@ class MemoryManager:
         self.events = event_store
         self.log = chat_log
         self.distance_threshold = distance_threshold
+        self.logger = get_memory_logger()
+        self.error_metrics = ErrorMetrics()
+
+    @staticmethod
+    def _input_size(*values: Any) -> int:
+        return sum(len(str(v or "")) for v in values)
+
+    def _log_error(
+        self,
+        operation: str,
+        error: Exception,
+        input_size: int,
+        category: Optional[str] = None,
+    ) -> None:
+        self.logger.warning(
+            "operation=%s error=%s input_size=%s",
+            operation,
+            error,
+            input_size,
+        )
+        if category:
+            self.error_metrics.increment(category)
+
+    def error_metrics_snapshot(self) -> Dict[str, int]:
+        return self.error_metrics.snapshot()
 
     def store_turn(self, user_text: str, assistant_text: str) -> None:
         # 1) Полный лог
         try:
             self.log.append("user", user_text)
             self.log.append("assistant", assistant_text)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_error(
+                operation="chat_log_append",
+                error=exc,
+                input_size=self._input_size(user_text, assistant_text),
+            )
 
         # 2) События (из реплики пользователя)
         try:
@@ -39,10 +69,15 @@ class MemoryManager:
                 for ev in evs:
                     if isinstance(ev, dict):
                         self.events.add(ev)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_error(
+                operation="extract_events",
+                error=exc,
+                input_size=self._input_size(user_text),
+                category="extractor_error",
+            )
 
-        # 3) Оперативная память
+        # 3) Оперативная память (критичная операция — fail-safe не меняем)
         self.short.add("user", user_text)
         self.short.add("assistant", assistant_text)
 
@@ -50,15 +85,25 @@ class MemoryManager:
         try:
             combined = f"User: {user_text}\nAssistant: {assistant_text}"
             self.long.add(combined, meta={"type": "dialog_turn"})
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_error(
+                operation="long_memory_add",
+                error=exc,
+                input_size=self._input_size(user_text, assistant_text),
+                category="embedding_error",
+            )
 
         # 5) Факты из сообщения пользователя
         try:
             result = extract_facts(user_text)
             self._apply_fact_result(user_text, result)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_error(
+                operation="extract_facts",
+                error=exc,
+                input_size=self._input_size(user_text),
+                category="extractor_error",
+            )
 
         # 6) Факты о самой ассистентке (из её ответа)
         try:
@@ -68,13 +113,24 @@ class MemoryManager:
             conf = float(self_res.get("confidence", 0.0))
             if conf >= 0.7 and facts:
                 self.assistant_profile.apply_fact_patch(pol, facts)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._log_error(
+                operation="extract_assistant_self",
+                error=exc,
+                input_size=self._input_size(assistant_text),
+                category="extractor_error",
+            )
 
     def recall(self, query: str, n_results: int = 5) -> List[str]:
         try:
             found = self.long.search(query, n_results=n_results)
-        except Exception:
+        except Exception as exc:
+            self._log_error(
+                operation="recall",
+                error=exc,
+                input_size=self._input_size(query),
+                category="embedding_error",
+            )
             return []
 
         recalled: List[str] = []
@@ -90,13 +146,23 @@ class MemoryManager:
     def last_events(self, n: int = 20) -> List[Dict[str, Any]]:
         try:
             return self.events.last(n)
-        except Exception:
+        except Exception as exc:
+            self._log_error(
+                operation="last_events",
+                error=exc,
+                input_size=self._input_size(n),
+            )
             return []
 
     def last_event_of_type(self, event_type: str) -> Optional[Dict[str, Any]]:
         try:
             return self.events.last_of_type(event_type)
-        except Exception:
+        except Exception as exc:
+            self._log_error(
+                operation="last_event_of_type",
+                error=exc,
+                input_size=self._input_size(event_type),
+            )
             return None
 
     def _apply_fact_result(self, user_text: str, result: Any) -> None:
@@ -117,7 +183,15 @@ class MemoryManager:
         can_write_profile = confidence >= 0.70 and polarity in ("assertion", "correction")
 
         if about == "user" and can_write_profile:
-            self.user_profile.merge(facts)
+            try:
+                self.user_profile.merge(facts)
+            except Exception as exc:
+                self._log_error(
+                    operation="user_profile_merge",
+                    error=exc,
+                    input_size=self._input_size(user_text, facts),
+                    category="profile_write_error",
+                )
             return
 
         # Если пользователь говорит факты про ассистентку — добавляем как заметку/событие (не меняем профиль)
@@ -135,25 +209,37 @@ class MemoryManager:
                         "source_text": user_text,
                     }
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log_error(
+                    operation="events_add_about_assistant",
+                    error=exc,
+                    input_size=self._input_size(user_text, facts),
+                )
             return
 
-        # Неуверенные/слухи — тоже в события
-        if polarity in ("rumor", "uncertain") and about in ("user", "assistant", "other"):
+        should_write_events_only = (
+            about in ("user", "assistant", "other")
+            and (confidence < 0.70 or polarity in ("rumor", "uncertain"))
+        )
+        if should_write_events_only:
+            tag = "rumor" if polarity == "rumor" else "uncertain" if polarity == "uncertain" else "low_confidence"
             try:
                 self.events.add(
                     {
                         "type": "note",
                         "who": None,
-                        "what": f"{polarity}_about_{about}: {facts}",
+                        "what": f"{tag}_about_{about}: {facts}",
                         "when": None,
                         "where": None,
                         "importance": "low",
-                        "tags": ["rumor"] if polarity == "rumor" else ["uncertain"],
+                        "tags": [tag],
                         "source_text": user_text,
                     }
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                self._log_error(
+                    operation="events_add_uncertain_or_rumor",
+                    error=exc,
+                    input_size=self._input_size(user_text, facts),
+                )
             return
