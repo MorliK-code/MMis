@@ -1,7 +1,9 @@
 from typing import Any, Dict, List, Optional
+
 from memory.fact_extractor import extract_facts
 from memory.event_extractor import extract_events_llm
 from memory.assistant_fact_extractor import extract_assistant_self
+
 
 class MemoryManager:
     def __init__(
@@ -23,7 +25,6 @@ class MemoryManager:
         self.distance_threshold = distance_threshold
 
     def store_turn(self, user_text: str, assistant_text: str) -> None:
-
         # 1) Полный лог
         try:
             self.log.append("user", user_text)
@@ -45,19 +46,21 @@ class MemoryManager:
         self.short.add("user", user_text)
         self.short.add("assistant", assistant_text)
 
-        # 4) Векторная память (чтобы можно было "вспомнить по смыслу")
+        # 4) Векторная память (для recall по смыслу)
         try:
             combined = f"User: {user_text}\nAssistant: {assistant_text}"
             self.long.add(combined, meta={"type": "dialog_turn"})
         except Exception:
             pass
 
-        # 5) Факты user vs assistant
+        # 5) Факты из сообщения пользователя
         try:
             result = extract_facts(user_text)
+            self._apply_fact_result(user_text, result)
         except Exception:
-            result = None
+            pass
 
+        # 6) Факты о самой ассистентке (из её ответа)
         try:
             self_res = extract_assistant_self(assistant_text)
             pol = self_res.get("polarity", "none")
@@ -111,14 +114,32 @@ class MemoryManager:
         if not isinstance(facts, dict) or not facts:
             return
 
-        can_write_profile = (
-            confidence >= 0.70 and polarity in ("assertion", "correction")
-        )
+        can_write_profile = confidence >= 0.70 and polarity in ("assertion", "correction")
 
         if about == "user" and can_write_profile:
             self.user_profile.merge(facts)
             return
 
+        # Если пользователь говорит факты про ассистентку — добавляем как заметку/событие (не меняем профиль)
+        if about == "assistant" and confidence >= 0.70 and polarity in ("assertion", "correction"):
+            try:
+                self.events.add(
+                    {
+                        "type": "note",
+                        "who": "user",
+                        "what": f"user_claim_about_assistant: {facts}",
+                        "when": None,
+                        "where": None,
+                        "importance": "low",
+                        "tags": ["about_assistant"],
+                        "source_text": user_text,
+                    }
+                )
+            except Exception:
+                pass
+            return
+
+        # Неуверенные/слухи — тоже в события
         if polarity in ("rumor", "uncertain") and about in ("user", "assistant", "other"):
             try:
                 self.events.add(
@@ -136,5 +157,3 @@ class MemoryManager:
             except Exception:
                 pass
             return
-
-        return

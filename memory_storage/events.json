@@ -94,5 +94,164 @@
     ],
     "source_text": "я обожаю табак и книги",
     "ts": "2026-02-25T06:05:17"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "Пользователь приветствует бота",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "приветик. как твои делишки?",
+    "ts": "2026-02-25T11:21:55"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "User asked about the reason for long conversation",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "почему ты так длинно разговариваешь? вроде-же было описано что говори кратко",
+    "ts": "2026-02-25T11:25:17"
+  },
+  {
+    "type": "opinion",
+    "who": null,
+    "what": "ненавижу",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [
+      "emotion"
+    ],
+    "source_text": "я их ненавижу",
+    "ts": "2026-02-25T11:26:03"
+  },
+  {
+    "type": "preference",
+    "who": null,
+    "what": "Dislike cigarette smoke",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [
+      "smoke",
+      "dislike"
+    ],
+    "source_text": "я терпеть не могу запах табака, ненавижу блять",
+    "ts": "2026-02-25T11:26:59"
+  },
+  {
+    "type": "task",
+    "who": null,
+    "what": "Call Garry tomorrow at 10 AM",
+    "when": "завтра в 10 часов утра",
+    "where": null,
+    "importance": "high",
+    "tags": [
+      "call",
+      "Garry"
+    ],
+    "source_text": "ты не переносишь маты?",
+    "ts": "2026-02-25T11:27:57"
+  },
+  {
+    "type": "reminder",
+    "who": "мама",
+    "what": "Buy milk",
+    "when": "через минуту",
+    "where": null,
+    "importance": "normal",
+    "tags": [
+      "shopping",
+      "milk"
+    ],
+    "source_text": "ты не переносишь маты?",
+    "ts": "2026-02-25T11:27:57"
+  },
+  {
+    "type": "fact",
+    "who": null,
+    "what": "User's name is Pasha and he is 21 years old.",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [
+      "name",
+      "age"
+    ],
+    "source_text": "чем забавный? я просто тебя проверяю. но как минимум мне интересно запомнишь ли ты что я Паша и мне 21?)",
+    "ts": "2026-02-25T11:29:09"
+  },
+  {
+    "type": "fact",
+    "who": null,
+    "what": "User's name is not specified",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "привет. как меня зовут?",
+    "ts": "2026-02-25T11:31:34"
+  },
+  {
+    "type": "message",
+    "who": null,
+    "what": "User started speaking briefly",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "привет. наконец-то начала говорить коротко?)",
+    "ts": "2026-02-25T11:36:59"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "Начало ошибок в ответах",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [],
+    "source_text": "что-то ты начала неправильно говорить, с багами",
+    "ts": "2026-02-25T11:37:51"
+  },
+  {
+    "type": "preference",
+    "who": null,
+    "what": "I like this task",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "а ты любишь это?",
+    "ts": "2026-02-25T11:39:00"
+  },
+  {
+    "type": "meeting",
+    "who": "John",
+    "what": "Meeting",
+    "when": "Tomorrow at 10 AM",
+    "where": "conference room",
+    "importance": "normal",
+    "tags": [],
+    "source_text": "фу, как так можно... асуждаю",
+    "ts": "2026-02-25T11:40:10"
+  },
+  {
+    "type": "opinion",
+    "who": null,
+    "what": "ненавижу",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [
+      "emotion"
+    ],
+    "source_text": "я их ненавижу",
+    "ts": "2026-02-25T11:40:52"
   }
 ]

@@ -19,6 +19,15 @@
   ],
   "signature_phrases": [],
   "likes": [
-    "мороженое"
-  ]
+    "мороженое",
+    "ice cream",
+    "tobacco",
+    "сигареты",
+    "cigarettes"
+  ],
+  "dislikes": [
+    "smoke from cigarettes",
+    "дым от сигарет"
+  ],
+  "interests": []
 }
