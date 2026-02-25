@@ -1,1 +1,0 @@
-"""MMis desktop UI package."""
