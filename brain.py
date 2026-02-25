@@ -27,6 +27,11 @@ class Brain:
     def __init__(self, memory_manager):
         self.mm = memory_manager
 
+    def _is_name_question(self, user_input: str) -> bool:
+        text = (user_input or "").lower()
+        triggers = ["как тебя зовут", "кто ты по имени", "твое имя", "твое имя?", "как тебя зовут?"]
+        return any(t in text for t in triggers)
+
     def _truncate(self, s: str, limit: int = 220) -> str:
         s = (s or "").strip()
         if len(s) <= limit:
@@ -37,10 +42,26 @@ class Brain:
         chunks = re.findall(r"[^.!?…]+(?:[.!?…]+(?=\s|$)|$)", text or "")
         return [chunk.strip() for chunk in chunks if chunk and chunk.strip()]
 
+    def _trim_by_words(self, text: str, limit: int = 220) -> str:
+        text = re.sub(r"\s+", " ", (text or "")).strip()
+        if len(text) <= limit:
+            return text
+
+        candidate = text[:limit]
+        cut_at = candidate.rfind(" ")
+        if cut_at > 0:
+            candidate = candidate[:cut_at]
+        return candidate.rstrip(" ,;:-") + "…"
+
     def _postprocess_reply(self, reply: str) -> str:
         return re.sub(r"\s+", " ", (reply or "")).strip()
 
     def think(self, user_input: str) -> str:
+        if self._is_name_question(user_input):
+            reply = self._is_name_reply()
+            self.mm.store_turn(user_input, reply)
+            return reply
+        
         recalled = self.mm.recall(user_input, n_results=5)
         events = self.mm.last_events(20)
 

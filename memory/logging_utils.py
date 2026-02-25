@@ -31,4 +31,3 @@ class ErrorMetrics:
 
     def snapshot(self) -> Dict[str, int]:
         return dict(self._counters)
-
