@@ -1,7 +1,7 @@
 import json
 import re
 import ollama
-from config import MODEL_NAME
+from config import MODEL_NAME, build_ollama_options
 
 SELF_SYSTEM = (
     "Ты анализируешь ТОЛЬКО ответ ассистентки и извлекаешь факты о НЕЙ.\n"
@@ -68,6 +68,6 @@ def extract_assistant_self(assistant_text: str) -> dict:
             {"role": "system", "content": SELF_SYSTEM},
             {"role": "user", "content": assistant_text},
         ],
-        options={"temperature": 0},
+        options=build_ollama_options("assistant_fact_extraction"),
     )
     return _extract_json_obj(resp["message"]["content"].strip())

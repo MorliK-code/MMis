@@ -1,6 +1,6 @@
 import ollama
 
-from config import MODEL_NAME, RESPONSE_NUM_PREDICT
+from config import MODEL_NAME, build_ollama_options
 
 SYSTEM_PROMPT = (
     "Ты — живая девушка-собеседница в чате (не формально).\n"
@@ -75,12 +75,7 @@ class Brain:
         resp = ollama.chat(
             model=MODEL_NAME,
             messages=messages,
-            options={
-                "temperature": 0.6,
-                "top_p": 0.9,
-                "repeat_penalty": 1.15,
-                "num_predict": RESPONSE_NUM_PREDICT,
-            },
+            options=build_ollama_options("chat_response"),
         )
         reply = (resp.get("message", {}) or {}).get("content", "").strip()
 
