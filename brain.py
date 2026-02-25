@@ -105,20 +105,25 @@ class Brain:
 
         messages.append({"role": "user", "content": user_input})
 
-        answer_t0 = time.perf_counter()
-        resp = ollama.chat(
-            model=MODEL_NAME,
-            messages=messages,
-            options={
+        options = build_ollama_options("chat")
+        options.update(
+            {
                 "temperature": 0.6,
                 "top_p": 0.9,
                 "repeat_penalty": 1.15,
                 "presence_penalty": 0.2,
                 "frequency_penalty": 0.2,
                 "mirostat": 0,
-                "num_predict": min(RESPONSE_NUM_PREDICT, 48),
+                "num_predict": min(int(options.get("num_predict", 48)), 48),
                 "stop": ["\n\n", "\n-", "Пользователь:", "User:"],
-            },
+            }
+        )
+
+        answer_t0 = time.perf_counter()
+        resp = ollama.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            options=options,
         )
         logger.info("latency.answer_ms=%.2f", (time.perf_counter() - answer_t0) * 1000)
         reply = (resp.get("message", {}) or {}).get("content", "").strip()
