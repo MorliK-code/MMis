@@ -323,15 +323,19 @@ class MainWindow(QMainWindow):
         text = self.input.toPlainText().strip()
         if not text:
             return
+
+        started = self._start_request(text, show_user=True)
+        if not started:
+            return
+
         self.input.clear()
         self._last_user_text = text
         self.btn_regen.setEnabled(True)
-        self._start_request(text, show_user=True)
 
-    def _start_request(self, user_text: str, show_user: bool):
+    def _start_request(self, user_text: str, show_user: bool) -> bool:
         if self._thread and self._thread.isRunning():
             QMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация. Нажми 'Стоп' или дождись ответа.")
-            return
+            return False
 
         if show_user:
             self._append_user(user_text)
@@ -353,6 +357,7 @@ class MainWindow(QMainWindow):
         self._thread.finished.connect(self._cleanup_thread)
 
         self._thread.start()
+        return True
 
     @Slot(object)
     def _on_reply(self, res: ReplyResult):
