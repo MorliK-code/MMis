@@ -1,7 +1,7 @@
 import ollama
 import re
 
-from config import MODEL_NAME, RESPONSE_NUM_PREDICT
+from config import MODEL_NAME, build_ollama_options
 
 SYSTEM_PROMPT = (
     "Ты — живая девушка-собеседница в чате (не формально).\n"
