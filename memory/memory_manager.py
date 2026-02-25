@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from memory.fact_extractor import extract_facts
@@ -27,6 +28,7 @@ class MemoryManager:
         self.distance_threshold = distance_threshold
         self.logger = get_memory_logger()
         self.error_metrics = ErrorMetrics()
+        self._postprocess_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mm-postprocess")
 
     @staticmethod
     def _input_size(*values: Any) -> int:
@@ -63,7 +65,17 @@ class MemoryManager:
                 input_size=self._input_size(user_text, assistant_text),
             )
 
-        self._process_turn(user_text, assistant_text)
+        self._postprocess_executor.submit(self._safe_process_turn, user_text, assistant_text)
+
+    def _safe_process_turn(self, user_text: str, assistant_text: str) -> None:
+        try:
+            self._process_turn(user_text, assistant_text)
+        except Exception as exc:
+            self._log_error(
+                operation="process_turn_background",
+                error=exc,
+                input_size=self._input_size(user_text, assistant_text),
+            )
 
     def _process_turn(self, user_text: str, assistant_text: str) -> None:
         t0 = time.perf_counter()
