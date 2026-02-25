@@ -1,32 +1,6 @@
-import json
-import re
-import ollama
-from config import MODEL_NAME, build_ollama_options
-
-FACT_SYSTEM = (
-    "Ты извлекаешь структурированные факты из сообщения пользователя.\n"
-    "Верни ТОЛЬКО JSON объект строго такого вида:\n"
-    "{"
-    "\"speaker\":\"user\","
-    "\"about\":\"user|assistant|other|none\","
-    "\"polarity\":\"assertion|correction|rumor|uncertain|none\","
-    "\"confidence\": number,"
-    "\"facts\": { ... }"
-    "}\n\n"
-    "Правила:\n"
-    "- speaker всегда 'user' (это сообщение пользователя).\n"
-    "- about='user' если факты про пользователя (я/мне/у меня/мой).\n"
-    "- about='assistant' если факты про ассистентку (ты/тебе/у тебя/твой).\n"
-    "- about='other' если факт про третье лицо (Гарри, мама, друг).\n"
-    "- about='none' если фактов нет или это вопрос.\n"
-    "- polarity:\n"
-    "  * correction если пользователь исправляет прошлое (\"нет\", \"не\", \"а неееет\")\n"
-    "  * rumor если есть маркеры слуха (\"я слышал\", \"говорят\")\n"
-    "  * uncertain если (\"кажется\", \"вроде\")\n"
-    "  * assertion если уверенное утверждение\n"
-    "- НЕ извлекай факты из вопросов.\n"
-    "- НЕ выдумывай факты.\n"
-)
+from prompts.extractors import FACT_SYSTEM
+from prompts.handlers import run_chat_prompt
+from prompts.json_extract import extract_json_object
 
 ALLOWED_FACT_KEYS = {
     "user": {
@@ -63,16 +37,13 @@ ALLOWED_FACT_KEYS = {
     },
 }
 
+
+def _default_result() -> dict:
+    return {"speaker": "user", "about": "none", "polarity": "none", "confidence": 0.0, "facts": {}}
+
+
 def _extract_json(text: str) -> dict:
-    m = re.search(r"\{[\s\S]*\}", text)
-    if not m:
-        return {"speaker":"user","about":"none","polarity":"none","confidence":0.0,"facts":{}}
-    try:
-        obj = json.loads(m.group(0))
-        if not isinstance(obj, dict):
-            raise ValueError
-    except Exception:
-        return {"speaker":"user","about":"none","polarity":"none","confidence":0.0,"facts":{}}
+    obj = extract_json_object(text, _default_result())
 
     obj.setdefault("speaker", "user")
     obj.setdefault("about", "none")
@@ -85,12 +56,9 @@ def _extract_json(text: str) -> dict:
     if not isinstance(facts, dict):
         facts = {}
     allowed_keys = ALLOWED_FACT_KEYS.get(about, set())
-    if allowed_keys:
-        facts = {k: v for k, v in facts.items() if k in allowed_keys}
-    else:
-        facts = {}
-    obj["facts"] = facts
+    obj["facts"] = {k: v for k, v in facts.items() if k in allowed_keys} if allowed_keys else {}
     return obj
+
 
 def _is_likely_question_only(text: str) -> bool:
     normalized = (text or "").strip()
@@ -99,24 +67,24 @@ def _is_likely_question_only(text: str) -> bool:
 
     if "?" not in normalized:
         return False
-    
+
     lowered = normalized.lower()
     has_statement_markers = any(
-        marker in lowered
-        for marker in (" я ", " мне ", " у меня ", " мой ", " моя ", " мы ", " я,", "я ")
-        )
+        marker in lowered for marker in (" я ", " мне ", " у меня ", " мой ", " моя ", " мы ", " я,", "я ")
+    )
     return lowered.endswith("?") and not has_statement_markers
+
 
 def extract_facts(user_text: str) -> dict:
     if _is_likely_question_only(user_text):
-        return {"speaker":"user","about":"none","polarity":"none","confidence":0.0,"facts":{}}
+        return _default_result()
 
-    resp = ollama.chat(
-        model=MODEL_NAME,
+    resp = run_chat_prompt(
+        task_type="fact_extraction",
         messages=[
             {"role": "system", "content": FACT_SYSTEM},
             {"role": "user", "content": user_text},
         ],
-        options=build_ollama_options("fact_extraction")
+        default_content="{}",
     )
-    return _extract_json(resp["message"]["content"].strip())
+    return _extract_json(resp.content)

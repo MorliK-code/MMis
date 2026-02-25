@@ -7,6 +7,8 @@ import sys
 import traceback
 from dataclasses import dataclass
 
+from prompts.handlers import PromptResponse
+
 from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -60,7 +62,7 @@ def build_brain() -> Brain:
 @dataclass
 class ReplyResult:
     text: str
-    stats: dict
+    stats: PromptResponse | None
 
 
 class ReplyWorker(QObject):
@@ -80,7 +82,7 @@ class ReplyWorker(QObject):
     def run(self):
         try:
             answer = self.brain.think(self.user_text)
-            stats = getattr(self.brain, "last_stats", {}) or {}
+            stats = getattr(self.brain, "last_stats", None)
             if self._cancel_requested:
                 return
             self.finished.emit(ReplyResult(text=answer, stats=stats))
@@ -257,28 +259,23 @@ class MainWindow(QMainWindow):
     def _set_status(self, status: str):
         self.status_label.setText(f"Статус: <b>{status}</b>")
 
-    def _format_stats_line(self, stats: dict) -> tuple[str, float, int, int, float]:
-        ms = stats.get("answer_ms") or stats.get("ms")
-        gen = stats.get("eval_count")
-        prompt = stats.get("prompt_eval_count")
-        eval_ms = stats.get("eval_duration_ms")
-
-        ms_f = float(ms) if ms is not None else 0.0
-        gen_i = int(gen) if gen is not None else 0
-        prompt_i = int(prompt) if prompt is not None else 0
-        eval_ms_f = float(eval_ms) if eval_ms is not None else 0.0
+    def _format_stats_line(self, stats: PromptResponse | None) -> tuple[str, float, int, int, float]:
+        ms_f = float(stats.timings.answer_ms) if stats else 0.0
+        gen_i = int(stats.usage.eval_count) if (stats and stats.usage.eval_count is not None) else 0
+        prompt_i = int(stats.usage.prompt_eval_count) if (stats and stats.usage.prompt_eval_count is not None) else 0
+        eval_ms_f = float(stats.timings.eval_duration_ms) if (stats and stats.timings.eval_duration_ms is not None) else 0.0
 
         sec = eval_ms_f / 1000.0 if eval_ms_f else (ms_f / 1000.0 if ms_f else 0.0)
         tps = safe_div(gen_i, sec)
 
         parts = []
-        if ms is not None:
+        if stats:
             parts.append(f"{int(ms_f)} ms")
-        if eval_ms is not None:
+        if stats and stats.timings.eval_duration_ms is not None:
             parts.append(f"decode {int(eval_ms_f)} ms")
-        if prompt is not None:
+        if stats and stats.usage.prompt_eval_count is not None:
             parts.append(f"prompt {prompt_i}")
-        if gen is not None:
+        if stats and stats.usage.eval_count is not None:
             parts.append(f"gen {gen_i}")
         if tps:
             parts.append(f"{tps:.1f} tok/s")
@@ -375,7 +372,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_reply(self, res: ReplyResult):
-        stats = res.stats or {}
+        stats = res.stats
         stat_line, ms, gen, prompt, tps = self._format_stats_line(stats)
 
         self._append_ai(res.text, stat_line)
