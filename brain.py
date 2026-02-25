@@ -1,7 +1,12 @@
+import logging
+import time
+
 import ollama
 import re
 
 from config import MODEL_NAME, build_ollama_options
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "Ты — живая девушка-собеседница в чате (не формально).\n"
@@ -100,6 +105,7 @@ class Brain:
 
         messages.append({"role": "user", "content": user_input})
 
+        answer_t0 = time.perf_counter()
         resp = ollama.chat(
             model=MODEL_NAME,
             messages=messages,
@@ -114,7 +120,14 @@ class Brain:
                 "stop": ["\n\n", "\n-", "Пользователь:", "User:"],
             },
         )
-        reply = self._postprocess_reply((resp.get("message", {}) or {}).get("content", ""))
+        logger.info("latency.answer_ms=%.2f", (time.perf_counter() - answer_t0) * 1000)
+        reply = (resp.get("message", {}) or {}).get("content", "").strip()
+
+        # Доп. страховка от раздувания: если модель всё равно написала много — обрежем до 2 предложений.
+        if reply:
+            parts = [p.strip() for p in reply.replace("!", ".").replace("?", ".").split(".") if p.strip()]
+            if len(parts) > 2:
+                reply = parts[0] + ". " + parts[1] + "."
 
         self.mm.store_turn(user_input, reply)
         return reply

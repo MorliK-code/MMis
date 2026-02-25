@@ -1,3 +1,5 @@
+import logging
+
 from memory.short_memory import ShortMemory
 from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
@@ -8,6 +10,11 @@ from brain import Brain
 from config import SHORT_MEMORY_LIMIT
 from config import MemoryStorageDir
 from memory.assistant_profile import AssistantProfile
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 short = ShortMemory(limit=SHORT_MEMORY_LIMIT)
 longm = LongMemory(path=MemoryStorageDir / "chroma_db")
