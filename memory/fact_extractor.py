@@ -1,7 +1,7 @@
 import json
 import re
 import ollama
-from config import MODEL_NAME
+from config import MODEL_NAME, build_ollama_options
 
 FACT_SYSTEM = (
     "Ты извлекаешь структурированные факты из сообщения пользователя.\n"
@@ -67,6 +67,6 @@ def extract_facts(user_text: str) -> dict:
             {"role": "system", "content": FACT_SYSTEM},
             {"role": "user", "content": user_text},
         ],
-        options={"temperature": 0}
+        options=build_ollama_options("fact_extraction")
     )
     return _extract_json(resp["message"]["content"].strip())
