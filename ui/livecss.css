@@ -8,7 +8,7 @@
   font-weight: 500;
   margin-bottom: 4px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .bubble {
@@ -17,8 +17,8 @@
   font-size: 14px;
 }
 
-.msg.user { background: rgba(120, 120, 120, .15); }
-.msg.ai { background: rgba(120, 120, 120, 0.14); }
+.msg.user { background: rgba(120, 120, 120, 0); }
+.msg.ai { background: rgba(120, 120, 120, 0); }
 
 .stats {
   margin-top: 6px;

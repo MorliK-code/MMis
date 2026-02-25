@@ -29,10 +29,11 @@ class LiveCss:
             return True
 
         stat = self.css_path.stat()
-        if self._mtime_ns == stat.st_mtime_ns:
+        text = self.css_path.read_text(encoding="utf-8")
+        if self._mtime_ns == stat.st_mtime_ns and self._template == text:
             return False
 
-        self._template = self.css_path.read_text(encoding="utf-8")
+        self._template = text
         self._mtime_ns = stat.st_mtime_ns
         return True
 
