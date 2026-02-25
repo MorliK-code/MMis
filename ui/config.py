@@ -1,40 +1,43 @@
 """UI-specific constants and styles."""
 
-CHAT_CSS = """
+FLOPS_PER_TOKEN = 14e9
+SHOW_TFLOPS_EST = True
+
+DEFAULT_TEXT_SIZE = 11
+DEFAULT_BUBBLE_OPACITY = 0.12
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
+    font_size_px = int(_clamp(float(font_size_px), 9, 28))
+    bubble_opacity = _clamp(float(bubble_opacity), 0.05, 0.9)
+    user_opacity = _clamp(bubble_opacity + 0.06, 0.05, 0.95)
+
+    return f"""
 <style>
-/* общие */
-.msg { margin: 10px 0 18px 0; }
-.name { font-weight: 600; margin-bottom: 6px; }
-.bubble {
+.msg {{ margin: 10px 0 18px 0; }}
+.name {{ font-weight: 600; margin-bottom: 6px; font-size: {font_size_px}px; }}
+.bubble {{
   display: inline-block;
   padding: 10px 12px;
   border-radius: 12px;
   max-width: 820px;
-  line-height: 1.35;
+  line-height: 1.38;
   white-space: pre-wrap;
-}
-
-/* твои сообщения */
-.msg.user .bubble { background: rgba(120,120,120,0.14); }
-
-/* её сообщения */
-.msg.ai .bubble { background: rgba(120,120,120,0.09); }
-
-/* статистика под её ответом */
-.stats {
+  font-size: {font_size_px}px;
+}}
+.msg.user .bubble {{ background: rgba(120,120,120,{user_opacity:.3f}); }}
+.msg.ai .bubble {{ background: rgba(120,120,120,{bubble_opacity:.3f}); }}
+.stats {{
   margin-top: 2px;
   display: block;
-  font-size: 8px;
+  font-size: {max(font_size_px - 3, 8)}px;
   line-height: 1.2;
-  color: rgba(0,0,0,0.20);
-}
-
-/* если вдруг используешь тёмную тему — раскомментируй:
-.stats { color: rgba(255,255,255,0.50); }
-*/
-.sep { height: 10px; }
+  color: rgba(0,0,0,0.38);
+}}
+.sep {{ height: 10px; }}
 </style>
 """
-
-FLOPS_PER_TOKEN = 14e9
-SHOW_TFLOPS_EST = True
