@@ -9,6 +9,8 @@ EMBED_MODEL = "nomic-embed-text"
 
 SHORT_MEMORY_LIMIT = 10
 RESPONSE_NUM_PREDICT = int(os.getenv("MMIS_RESPONSE_NUM_PREDICT", "180"))
+FAST_MODE = os.getenv("MMIS_FAST_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
+EXTRACTOR_TIMEOUT_SEC = float(os.getenv("MMIS_EXTRACTOR_TIMEOUT_SEC", "2.0"))
 
 
 def _get_env_int(name: str, default: int) -> int:
@@ -95,7 +97,12 @@ def build_ollama_options(task_type: str) -> dict:
     options = dict(OLLAMA_OPTIONS)
 
     # Быстрые «детерминированные» извлечения для памяти.
-    if task_type in {"fact_extraction", "event_extraction", "assistant_fact_extraction"}:
+    if task_type in {
+        "fact_extraction",
+        "event_extraction",
+        "assistant_fact_extraction",
+        "turn_metadata_extraction",
+    }:
         options.update(
             {
                 "temperature": _get_env_float("MMIS_EXTRACT_TEMPERATURE", 0.0),

@@ -1,55 +1,18 @@
-import json
-import re
-import ollama
-from config import MODEL_NAME, build_ollama_options
+from prompts.extractors import EVENT_SYSTEM
+from prompts.handlers import run_chat_prompt
+from prompts.json_extract import extract_json_array
 
-EVENT_SYSTEM = (
-    "Ты извлекаешь события из реплики пользователя для памяти.\n"
-    "Верни ТОЛЬКО JSON-массив. Если событий нет — верни []\n"
-    "Каждый элемент массива — объект:\n"
-    "{"
-    "\"type\":\"call|message|meeting|reminder|task|promise|plan|purchase|idea|preference|fact|location|health|mood|relationship|deadline|other\","
-    "\"who\":string|null,"
-    "\"what\":string|null,"
-    "\"when\":string|null,"
-    "\"where\":string|null,"
-    "\"importance\":\"low|normal|high\","
-    "\"tags\":[string],"
-    "\"source_text\":string"
-    "}\n"
-    "Правила:\n"
-    "- who: имя/кто связан, если есть (Гарри, мама, босс)\n"
-    "- when: если есть 'через минуту/завтра/в пятницу' — запиши строкой как сказано\n"
-    "- what: кратко что произошло/что нужно сделать\n"
-    "- source_text: оригинальная реплика пользователя\n"
-    "- Не выдумывай факты. Только то, что явно сказано.\n"
-    "- Если не уверен, что это событие — не записывай. Лучше пропустить, чем ошибиться.\n" \
-    "- Если событие связано с планами/намерениями — запиши как есть, не преобразовывая в обещание или задачу. Пусть так и будет, если пользователь так выразился.\n" \
-    "- Факты о пользователе, его вкусах, предпочтениях, отношениях, настроении и здоровье — тоже события для памяти. Просто пометь их тегом 'fact' и соответствующими тегами по теме (например, 'preference', 'health', 'relationship', 'mood').\n"
-    "- Различай важные события от неважных. Если пользователь говорит 'я люблю пиццу' — это факт с тегами ['fact', 'preference'], но не событие для напоминания. Если говорит 'я завтра иду к стоматологу' — это событие с тегами ['appointment', 'health'] и важностью 'high'.\n"
-)
-
-def _extract_json_array(text: str):
-    m = re.search(r"\[[\s\S]*\]", text)
-    if not m:
-        return []
-    try:
-        data = json.loads(m.group(0))
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
 
 def extract_events_llm(user_text: str) -> list[dict]:
-    resp = ollama.chat(
-        model=MODEL_NAME,
+    resp = run_chat_prompt(
+        task_type="event_extraction",
         messages=[
             {"role": "system", "content": EVENT_SYSTEM},
             {"role": "user", "content": user_text},
         ],
-        options=build_ollama_options("event_extraction")
+        default_content="[]",
     )
-    raw = resp["message"]["content"].strip()
-    events = _extract_json_array(raw)
+    events = extract_json_array(resp.content)
 
     cleaned = []
     for e in events:
