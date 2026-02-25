@@ -5,6 +5,8 @@ SHOW_TFLOPS_EST = True
 
 DEFAULT_TEXT_SIZE = 11
 DEFAULT_BUBBLE_OPACITY = 0.12
+STATS_TEXT_SIZE_PX = 10
+STATS_TEXT_ALPHA = 0.2
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -31,12 +33,12 @@ def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
 }}
 .msg.user .bubble {{ background: rgba(120,120,120,{user_opacity:.3f}); }}
 .msg.ai .bubble {{ background: rgba(120,120,120,{bubble_opacity:.3f}); }}
-.stats {{
+.msg.ai .stats {{
   margin-top: 2px;
   display: block;
-  font-size: {max(font_size_px - 3, 8)}px;
+  font-size: {STATS_TEXT_SIZE_PX}px;
   line-height: 1.2;
-  color: rgba(0,0,0,0.38);
+  color: rgba(0,0,0,{STATS_TEXT_ALPHA:.3f});
 }}
 .sep {{ height: 10px; }}
 </style>
