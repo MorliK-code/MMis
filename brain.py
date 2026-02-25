@@ -44,6 +44,23 @@ class Brain:
             ]
         return any(t in normalized for t in triggers)
 
+    def _is_name_reply(self) -> str:
+        try:
+            profile = self.mm.assistant_profile.data
+            short_name = (profile.get("short_name") or "").strip()
+            full_name = (profile.get("full_name") or "").strip()
+        except Exception:
+            short_name = ""
+            full_name = ""
+        
+        if short_name and full_name and short_name != full_name:
+            return f"Меня зовут {short_name} ({full_name})."
+        if short_name:
+            return f"Меня зовут {short_name}."
+        if full_name:
+            return f"Меня зовут {full_name}."
+        return "Меня зовут Ася."
+
     def _truncate(self, s: str, limit: int = 220) -> str:
         s = (s or "").strip()
         if len(s) <= limit:
