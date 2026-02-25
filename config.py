@@ -59,9 +59,9 @@ OLLAMA_PROFILES = {
         "keep_alive": "10m",
     },
     "FAST": {
-        "num_thread": 4,
+        "num_thread": 6,
         "num_ctx": 2048,
-        "num_gpu": 0,
+        "num_gpu": 1,
         "num_batch": 64,
         "repeat_penalty": 1.1,
         "temperature": 0.65,

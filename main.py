@@ -1,4 +1,5 @@
 import logging
+import os
 
 from memory.short_memory import ShortMemory
 from memory.long_memory import LongMemory
@@ -12,7 +13,7 @@ from config import MemoryStorageDir
 from memory.assistant_profile import AssistantProfile
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.getenv("MMIS_LOG_LEVEL", "WARNING").upper(), logging.WARNING),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
