@@ -40,7 +40,7 @@ def _get_env_float(name: str, default: float) -> float:
 OLLAMA_PROFILES = {
     "QUALITY": {
         "num_thread": 8,
-        "num_ctx": 8192,
+        "num_ctx": 4096,
         "num_gpu": 1,
         "num_batch": 256,
         "repeat_penalty": 1.12,
@@ -50,7 +50,7 @@ OLLAMA_PROFILES = {
     },
     "BALANCED": {
         "num_thread": 6,
-        "num_ctx": 4096,
+        "num_ctx": 3072,
         "num_gpu": 1,
         "num_batch": 128,
         "repeat_penalty": 1.15,

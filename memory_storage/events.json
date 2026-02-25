@@ -390,5 +390,76 @@
     ],
     "source_text": "шо ты, интернетный воин?)",
     "ts": "2026-02-25T18:07:18"
+  },
+  {
+    "type": "greeting",
+    "who": "user",
+    "what": "Hello",
+    "source_text": "приветик",
+    "importance": "normal",
+    "tags": [],
+    "when": null,
+    "where": null,
+    "ts": "2026-02-25T18:19:39"
+  },
+  {
+    "type": "fact",
+    "who": null,
+    "what": "User introduced themselves",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [
+      "fact"
+    ],
+    "source_text": "приветик. как тебя зовут?",
+    "ts": "2026-02-25T18:23:57"
+  },
+  {
+    "type": "greeting",
+    "who": "user",
+    "what": "Hello",
+    "source_text": "приветик",
+    "importance": "normal",
+    "tags": [],
+    "when": null,
+    "where": null,
+    "ts": "2026-02-25T18:31:02"
+  },
+  {
+    "type": "fact",
+    "who": null,
+    "what": "User mentioned they like pizza",
+    "when": null,
+    "where": null,
+    "importance": "low",
+    "tags": [
+      "fact",
+      "preference"
+    ],
+    "source_text": "да, в целом нормально",
+    "ts": "2026-02-25T18:32:21"
+  },
+  {
+    "type": "greeting",
+    "who": "user",
+    "what": "Hello",
+    "source_text": "приветик",
+    "importance": "normal",
+    "tags": [],
+    "when": null,
+    "where": null,
+    "ts": "2026-02-25T18:39:54"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "Пользователь приветствует",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "привет",
+    "ts": "2026-02-25T18:41:29"
   }
 ]
