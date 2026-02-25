@@ -12,3 +12,5 @@ Thumbs.db
 secrets.json
 *.gitignore
 memory_storage/*
+__init__.py
+ui/__pycache__/
