@@ -1,9 +1,4 @@
-"""MMis Desktop UI (PySide6).
-
-Это только UI поверх существующего "мозга" MMis.
-Никакой логики ответа тут не переизобретается: мы импортируем Brain/MemoryManager
-и вызываем brain.think(...).
-"""
+"""MMis Desktop UI (PySide6)."""
 
 from __future__ import annotations
 
@@ -16,12 +11,14 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSlider,
     QSplitter,
     QTextBrowser,
     QVBoxLayout,
@@ -37,7 +34,7 @@ from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
 from memory.short_memory import ShortMemory
 from memory.user_profile import UserProfile
-from ui.config import CHAT_CSS, FLOPS_PER_TOKEN, SHOW_TFLOPS_EST
+from ui.config import DEFAULT_BUBBLE_OPACITY, DEFAULT_TEXT_SIZE, FLOPS_PER_TOKEN, SHOW_TFLOPS_EST, build_chat_css
 
 
 def safe_div(a: float, b: float) -> float:
@@ -49,7 +46,6 @@ def est_tflops(tokens_per_sec: float) -> float:
 
 
 def build_brain() -> Brain:
-    """Создаёт те же объекты, что и main.py (CLI), но для UI."""
     short = ShortMemory(limit=SHORT_MEMORY_LIMIT)
     longm = LongMemory(path=MemoryStorageDir / "chroma_db")
     profile_user = UserProfile(MemoryStorageDir / "user_profile.json")
@@ -57,15 +53,7 @@ def build_brain() -> Brain:
     events = EventStore(MemoryStorageDir / "events.json")
     log = ChatLog(MemoryStorageDir / "chat_log.jsonl")
 
-    mm = MemoryManager(
-        short,
-        longm,
-        profile_user,
-        profile_assistant,
-        events,
-        log,
-        distance_threshold=0.65,
-    )
+    mm = MemoryManager(short, longm, profile_user, profile_assistant, events, log, distance_threshold=0.65)
     return Brain(mm)
 
 
@@ -76,7 +64,7 @@ class ReplyResult:
 
 
 class ReplyWorker(QObject):
-    finished = Signal(object)  # ReplyResult
+    finished = Signal(object)
     errored = Signal(str)
 
     def __init__(self, brain: Brain, user_text: str):
@@ -86,8 +74,6 @@ class ReplyWorker(QObject):
         self._cancel_requested = False
 
     def request_cancel(self):
-        # Мы не можем мгновенно оборвать blocking-вызов ollama.chat,
-        # но можем игнорировать результат.
         self._cancel_requested = True
 
     @Slot()
@@ -106,19 +92,23 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MMis — Desktop")
-        self.resize(980, 720)
+        self.resize(1080, 760)
 
         self.brain = build_brain()
 
         self._thread: QThread | None = None
         self._worker: ReplyWorker | None = None
         self._last_user_text: str | None = None
+        self._history: list[tuple[str, str, str | None]] = []
 
-        # агрегаты для средних значений
         self.n_answers = 0
         self.sum_ms = 0.0
         self.sum_eval = 0
         self.sum_prompt = 0
+        self.sum_tps = 0.0
+
+        self._text_size = DEFAULT_TEXT_SIZE
+        self._bubble_opacity = DEFAULT_BUBBLE_OPACITY
 
         self._build_ui()
 
@@ -129,13 +119,10 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
-        # --- Top bar ---
         top = QHBoxLayout()
         layout.addLayout(top)
-
         self.model_label = QLabel(f"Model: <b>{MODEL_NAME}</b>")
         top.addWidget(self.model_label)
-
         top.addStretch(1)
 
         self.btn_stop = QPushButton("Стоп")
@@ -147,22 +134,18 @@ class MainWindow(QMainWindow):
         self.btn_clear.clicked.connect(self.on_clear)
         top.addWidget(self.btn_clear)
 
-        # --- Splitter: chat + stats ---
         splitter = QSplitter(Qt.Horizontal)
         layout.addWidget(splitter, 1)
 
-        # Chat view
         self.chat = QTextBrowser()
         self.chat.setOpenExternalLinks(False)
-        self.chat.setFont(QFont("Segoe UI", 11))
-        self.chat.setHtml(CHAT_CSS)
+        self.chat.setFont(QFont("Segoe UI", self._text_size))
         splitter.addWidget(self.chat)
 
-        # Stats panel (справа)
-        stats_wrap = QWidget()
-        stats_layout = QVBoxLayout(stats_wrap)
-        stats_layout.setContentsMargins(10, 10, 10, 10)
-        stats_layout.setSpacing(8)
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(10, 10, 10, 10)
+        side_layout.setSpacing(10)
 
         self.status_label = QLabel("Статус: <b>Готово</b>")
         self.avg_ms_label = QLabel("Среднее: время —")
@@ -170,25 +153,38 @@ class MainWindow(QMainWindow):
         self.avg_tps_label = QLabel("Среднее: tok/s —")
         self.avg_tflops_label = QLabel("Среднее: TFLOPs —")
 
-        for w in (
-            self.status_label,
-            self.avg_ms_label,
-            self.avg_tokens_label,
-            self.avg_tps_label,
-            self.avg_tflops_label,
-        ):
+        for w in (self.status_label, self.avg_ms_label, self.avg_tokens_label, self.avg_tps_label, self.avg_tflops_label):
             w.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            stats_layout.addWidget(w)
+            side_layout.addWidget(w)
 
-        stats_layout.addStretch(1)
-        splitter.addWidget(stats_wrap)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
+        view_form = QFormLayout()
+        self.text_size_label = QLabel(f"{self._text_size}px")
+        self.text_size_slider = QSlider(Qt.Horizontal)
+        self.text_size_slider.setRange(9, 24)
+        self.text_size_slider.setValue(self._text_size)
+        self.text_size_slider.valueChanged.connect(self._on_text_size_changed)
+
+        self.opacity_label = QLabel(f"{int(self._bubble_opacity * 100)}%")
+        self.opacity_slider = QSlider(Qt.Horizontal)
+        self.opacity_slider.setRange(5, 90)
+        self.opacity_slider.setValue(int(self._bubble_opacity * 100))
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+
+        view_form.addRow("Размер текста", self.text_size_slider)
+        view_form.addRow("", self.text_size_label)
+        view_form.addRow("Прозрачность bubble", self.opacity_slider)
+        view_form.addRow("", self.opacity_label)
+        side_layout.addLayout(view_form)
+
+        side_layout.addStretch(1)
+        splitter.addWidget(side)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 2)
 
         self.input = QPlainTextEdit()
         self.input.setPlaceholderText("Напиши сообщение…")
-        self.input.setFont(QFont("Segoe UI", 11))
-        self.input.setFixedHeight(110)
+        self.input.setFont(QFont("Segoe UI", self._text_size))
+        self.input.setFixedHeight(120)
         layout.addWidget(self.input)
 
         bottom = QHBoxLayout()
@@ -209,58 +205,77 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Return"), self, activated=self.on_send)
         QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self.on_send)
 
+        self._render_chat()
         self._append_system("MMis UI запущен. Ctrl+Enter — отправить.")
 
-    def _append_system(self, text: str):
-        safe = html.escape(text).replace("\n", "<br>")
-        self.chat.append(
-            f"<div class='msg'>"
-            f"<div class='name'>SYSTEM</div>"
-            f"<div class='bubble'>{safe}</div>"
-            f"</div><div class='sep'></div>"
-        )
+    def _chat_css(self) -> str:
+        return build_chat_css(self._text_size, self._bubble_opacity)
+
+    def _render_chat(self):
+        blocks = [self._chat_css()]
+        for role, text, stat_line in self._history:
+            safe = html.escape(text).replace("\n", "<br>")
+            if role == "system":
+                blocks.append(f"<div class='msg'><div class='name'>SYSTEM</div><div class='bubble'>{safe}</div></div><div class='sep'></div>")
+            elif role == "user":
+                blocks.append(f"<div class='msg user'><div class='name'>Ты</div><div class='bubble'>{safe}</div></div><div class='sep'></div>")
+            else:
+                stat_safe = html.escape(stat_line or "—")
+                blocks.append(
+                    f"<div class='msg ai'><div class='name'>Она</div><div class='bubble'>{safe}</div>"
+                    f"<div class='stats'>{stat_safe}</div></div><div class='sep'></div>"
+                )
+        self.chat.setHtml("\n".join(blocks))
         self.chat.verticalScrollBar().setValue(self.chat.verticalScrollBar().maximum())
+
+    def _append_system(self, text: str):
+        self._history.append(("system", text, None))
+        self._render_chat()
 
     def _append_user(self, text: str):
-        safe = html.escape(text).replace("\n", "<br>")
-        self.chat.append(
-            f"<div class='msg user'>"
-            f"<div class='name'>Ты</div>"
-            f"<div class='bubble'>{safe}</div>"
-            f"</div><div class='sep'></div>"
-        )
-        self.chat.verticalScrollBar().setValue(self.chat.verticalScrollBar().maximum())
+        self._history.append(("user", text, None))
+        self._render_chat()
 
     def _append_ai(self, text: str, stat_line: str):
-        safe = html.escape(text).replace("\n", "<br>")
-        stat_safe = html.escape(stat_line)
-        self.chat.append(
-            f"<div class='msg ai'>"
-            f"<div class='name'>Она</div>"
-            f"<div class='bubble'>{safe}</div>"
-            f"<div class='stats'>{stat_safe}</div>"
-            f"</div><div class='sep'></div>"
-        )
-        self.chat.verticalScrollBar().setValue(self.chat.verticalScrollBar().maximum())
+        self._history.append(("ai", text, stat_line))
+        self._render_chat()
+
+    @Slot(int)
+    def _on_text_size_changed(self, value: int):
+        self._text_size = int(value)
+        self.text_size_label.setText(f"{self._text_size}px")
+        self.chat.setFont(QFont("Segoe UI", self._text_size))
+        self.input.setFont(QFont("Segoe UI", self._text_size))
+        self._render_chat()
+
+    @Slot(int)
+    def _on_opacity_changed(self, value: int):
+        self._bubble_opacity = value / 100.0
+        self.opacity_label.setText(f"{value}%")
+        self._render_chat()
 
     def _set_status(self, status: str):
         self.status_label.setText(f"Статус: <b>{status}</b>")
 
-    def _format_stats_line(self, stats: dict) -> tuple[str, float, int, int]:
+    def _format_stats_line(self, stats: dict) -> tuple[str, float, int, int, float]:
         ms = stats.get("answer_ms") or stats.get("ms")
         gen = stats.get("eval_count")
         prompt = stats.get("prompt_eval_count")
+        eval_ms = stats.get("eval_duration_ms")
 
         ms_f = float(ms) if ms is not None else 0.0
         gen_i = int(gen) if gen is not None else 0
         prompt_i = int(prompt) if prompt is not None else 0
+        eval_ms_f = float(eval_ms) if eval_ms is not None else 0.0
 
-        sec = ms_f / 1000.0 if ms_f else 0.0
+        sec = eval_ms_f / 1000.0 if eval_ms_f else (ms_f / 1000.0 if ms_f else 0.0)
         tps = safe_div(gen_i, sec)
 
         parts = []
         if ms is not None:
             parts.append(f"{int(ms_f)} ms")
+        if eval_ms is not None:
+            parts.append(f"decode {int(eval_ms_f)} ms")
         if prompt is not None:
             parts.append(f"prompt {prompt_i}")
         if gen is not None:
@@ -270,16 +285,14 @@ class MainWindow(QMainWindow):
         if SHOW_TFLOPS_EST and tps:
             parts.append(f"~{est_tflops(tps):.2f} TFLOPs (est)")
 
-        return (" • ".join(parts) if parts else "—", ms_f, gen_i, prompt_i)
+        return (" • ".join(parts) if parts else "—", ms_f, gen_i, prompt_i, tps)
 
     def _update_side_stats(self):
         n = max(self.n_answers, 1)
         avg_ms = self.sum_ms / n if self.sum_ms else 0.0
         avg_gen = self.sum_eval / n if self.sum_eval else 0.0
         avg_prompt = self.sum_prompt / n if self.sum_prompt else 0.0
-
-        total_sec = (self.sum_ms / 1000.0) if self.sum_ms else 0.0
-        avg_tps = safe_div(self.sum_eval, total_sec)
+        avg_tps = self.sum_tps / n if self.sum_tps else 0.0
 
         self.avg_ms_label.setText(f"Среднее: время {int(avg_ms) if avg_ms else '—'}")
         self.avg_tokens_label.setText(f"Среднее: gen {avg_gen:.0f} / prompt {avg_prompt:.0f}")
@@ -290,7 +303,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def on_clear(self):
-        self.chat.setHtml(CHAT_CSS)
+        self._history = []
         self._append_system("Чат очищен.")
         self._last_user_text = None
         self.btn_regen.setEnabled(False)
@@ -299,6 +312,7 @@ class MainWindow(QMainWindow):
         self.sum_ms = 0.0
         self.sum_eval = 0
         self.sum_prompt = 0
+        self.sum_tps = 0.0
 
         self._set_status("Готово")
         self.avg_ms_label.setText("Среднее: время —")
@@ -362,7 +376,7 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_reply(self, res: ReplyResult):
         stats = res.stats or {}
-        stat_line, ms, gen, prompt = self._format_stats_line(stats)
+        stat_line, ms, gen, prompt, tps = self._format_stats_line(stats)
 
         self._append_ai(res.text, stat_line)
 
@@ -370,6 +384,7 @@ class MainWindow(QMainWindow):
             self.sum_ms += ms
         self.sum_eval += gen
         self.sum_prompt += prompt
+        self.sum_tps += tps
         self.n_answers += 1
 
         self._update_side_stats()
