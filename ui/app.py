@@ -34,7 +34,13 @@ from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
 from memory.short_memory import ShortMemory
 from memory.user_profile import UserProfile
-from ui.config import FLOPS_PER_TOKEN, SHOW_TFLOPS_EST, build_chat_css
+from ui.config import (
+    DEFAULT_BUBBLE_OPACITY,
+    DEFAULT_TEXT_SIZE,
+    FLOPS_PER_TOKEN,
+    SHOW_TFLOPS_EST,
+    build_chat_css,
+)
 
 
 def safe_div(a: float, b: float) -> float:
