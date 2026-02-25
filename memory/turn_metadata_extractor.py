@@ -1,58 +1,14 @@
-import json
 import logging
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Any, Dict, List, Optional
 
-import ollama
-
-from config import EXTRACTOR_TIMEOUT_SEC, FAST_MODE, MODEL_NAME
+from config import EXTRACTOR_TIMEOUT_SEC, FAST_MODE
+from prompts.extractors import TURN_METADATA_SYSTEM
+from prompts.handlers import run_chat_prompt
+from prompts.json_extract import extract_json_object
 
 logger = logging.getLogger(__name__)
-
-TURN_METADATA_SYSTEM = (
-    "Ты извлекаешь метаданные хода диалога для памяти.\\n"
-    "Верни ТОЛЬКО JSON-объект строго такого формата:\\n"
-    "{"
-    "\\\"facts\\\": {"
-    "\\\"speaker\\\":\\\"user\\\","
-    "\\\"about\\\":\\\"user|assistant|other|none\\\","
-    "\\\"polarity\\\":\\\"assertion|correction|rumor|uncertain|none\\\","
-    "\\\"confidence\\\": number,"
-    "\\\"facts\\\": { ... }"
-    "},"
-    "\\\"events\\\": ["
-    "{"
-    "\\\"type\\\":\\\"call|message|meeting|reminder|task|promise|plan|purchase|idea|preference|fact|location|health|mood|relationship|deadline|other\\\","
-    "\\\"who\\\":string|null,"
-    "\\\"what\\\":string|null,"
-    "\\\"when\\\":string|null,"
-    "\\\"where\\\":string|null,"
-    "\\\"importance\\\":\\\"low|normal|high\\\","
-    "\\\"tags\\\":[string],"
-    "\\\"source_text\\\":string"
-    "}"
-    "],"
-    "\\\"assistant_self\\\": {"
-    "\\\"about\\\":\\\"assistant\\\","
-    "\\\"polarity\\\":\\\"assertion|correction|retraction|none\\\","
-    "\\\"confidence\\\": number,"
-    "\\\"facts\\\": {"
-    "\\\"likes\\\": [string],"
-    "\\\"dislikes\\\": [string],"
-    "\\\"interests\\\": [string],"
-    "\\\"do_not_say\\\": [string],"
-    "\\\"signature_phrases\\\": [string]"
-    "}"
-    "}"
-    "}\\n\\n"
-    "Правила:\\n"
-    "- Извлекай только явно сказанное, ничего не выдумывай.\\n"
-    "- facts: НЕ извлекай факты из вопросов пользователя.\\n"
-    "- events: если событий нет, верни пустой массив.\\n"
-    "- assistant_self: анализируй только assistant_text (если он передан). Если фактов нет, верни polarity='none', confidence=0, facts={}.\\n"
-)
 
 FACT_ALLOWED_KEYS = {
     "name", "birth_year", "birth_month", "birth_day", "profession", "projects", "likes", "habits"
@@ -69,17 +25,7 @@ def _default_metadata() -> Dict[str, Any]:
 
 
 def _extract_json_obj(text: str) -> Dict[str, Any]:
-    m = re.search(r"\{[\s\S]*\}", text)
-    if not m:
-        return _default_metadata()
-
-    try:
-        obj = json.loads(m.group(0))
-        if not isinstance(obj, dict):
-            raise ValueError
-    except Exception:
-        return _default_metadata()
-
+    obj = extract_json_object(text, _default_metadata())
     out = _default_metadata()
 
     facts = obj.get("facts")
@@ -152,15 +98,16 @@ def _extract_turn_metadata_internal(user_text: str, assistant_text: Optional[str
     if "?" in user_text and not assistant_text:
         return _default_metadata()
 
-    resp = ollama.chat(
-        model=MODEL_NAME,
+    resp = run_chat_prompt(
+        task_type="turn_metadata_extraction",
         messages=[
             {"role": "system", "content": TURN_METADATA_SYSTEM},
             {"role": "user", "content": _build_user_prompt(user_text, assistant_text)},
         ],
-        options={"temperature": 0},
+        timeout_sec=EXTRACTOR_TIMEOUT_SEC,
+        default_content="{}",
     )
-    return _extract_json_obj((resp.get("message", {}) or {}).get("content", "").strip())
+    return _extract_json_obj(resp.content)
 
 
 def extract_turn_metadata(user_text: str, assistant_text: Optional[str] = None) -> Dict[str, Any]:
