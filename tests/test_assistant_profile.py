@@ -26,8 +26,8 @@ class AssistantProfileLoadTests(unittest.TestCase):
 
             profile = AssistantProfile(profile_path)
 
-            self.assertEqual(profile.data["name"], "Вероника")
-            self.assertEqual(profile.data["short_name"], "Ника")
+            self.assertEqual(profile.data["name"], "Асия")
+            self.assertEqual(profile.data["short_name"], "Ася")
             self.assertEqual(profile.data["style"], "лёгкая ирония")
             self.assertIn("кофе", profile.data["likes"])
             self.assertIn("старая фраза", profile.data["do_not_say"])

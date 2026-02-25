@@ -42,5 +42,107 @@
     "tags": [],
     "source_text": "приветик. как тебя зовут?",
     "ts": "2026-02-25T13:32:02"
+  },
+  {
+    "type": "message",
+    "who": null,
+    "what": "User said hello",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "привет",
+    "ts": "2026-02-25T13:47:10"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "User greets the assistant",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "приветик. как тебя зовут?",
+    "ts": "2026-02-25T14:01:09"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "User asks the assistant's name",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "приветик. как тебя зовут?",
+    "ts": "2026-02-25T14:01:09"
+  },
+  {
+    "type": "statement",
+    "who": "Ася",
+    "what": "сложно вести диалог",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "Ася, ты сказала что сложно вести диалог. почему?",
+    "ts": "2026-02-25T14:05:13"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "Вопрос о моём имени",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "тебе вообще нравиться твоё имя?",
+    "ts": "2026-02-25T14:06:47"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "понравилось",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "да, понравилось",
+    "ts": "2026-02-25T14:07:44"
+  },
+  {
+    "type": "plan",
+    "who": null,
+    "what": "отныне я хочу чтобы ты себя звала и называла Ася",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [],
+    "source_text": "отныне я хочу чтобы ты себя звала и называла Ася",
+    "ts": "2026-02-25T14:08:34"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "You enjoy listening to music",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "кстати, обожаю слушать музыку, а ты?",
+    "ts": "2026-02-25T14:11:25"
+  },
+  {
+    "type": "game",
+    "who": null,
+    "what": "Played War Thunder and enjoyed it",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [
+      "game",
+      "War Thunder"
+    ],
+    "source_text": "о, я кстати, играл в war thunder и мне очень фартило, классно поиграл",
+    "ts": "2026-02-25T14:14:59"
   }
 ]

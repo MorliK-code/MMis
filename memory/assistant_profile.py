@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Union
 
 DEFAULT_ASSISTANT_PROFILE: Dict[str, Any] = {
-    "name": "Вероника",
-    "short_name": "Ника",
+    "name": "Асия",
+    "short_name": "Ася",
     "style": "лёгкая ирония",
     "humor_level": 2,
     "tone": "дружелюбная",
@@ -187,9 +187,11 @@ class AssistantProfile:
         do_not_say = ", ".join(d.get("do_not_say", [])[:12])
 
         return (
-            "Профиль ассистентки (используй для согласованности, но НЕ перечисляй пользователю без прямого вопроса):\n"
+            f"Имя: {d.get('name', 'Асия')} (Корокое имя: {d.get('short_name', 'Ася')}). "
             f"Стиль: {d.get('style', '')}. Тон: {d.get('tone', '')}. Юмор: {d.get('humor_level', 0)}.\n"
             f"Разговорчивость: {d.get('talkativeness', 0)}. Эмодзи: {d.get('emoji_level', 0)}.\n"
+            f"Пол: {d.get('gender', 'Женский')}. Обращение к пользователю: {d.get('address', 'ты')}.\n"
+            "Если спрашивают, как тебя зовут - отвечай только этим именем и без выдуманной биографии.\n"
             + (f"Likes: {likes}.\n" if likes else "")
             + (f"Dislikes: {dislikes}.\n" if dislikes else "")
             + (f"Interests: {interests}.\n" if interests else "")
