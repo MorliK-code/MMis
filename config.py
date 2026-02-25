@@ -5,4 +5,4 @@ MemoryStorageDir = basedir / "memory_storage"
 
 MODEL_NAME = "mistral:7b"
 EMBED_MODEL = "nomic-embed-text"
-SHORT_MEMORY_LIMIT = 20
+SHORT_MEMORY_LIMIT = 30

@@ -19,8 +19,25 @@ class UserProfile:
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
 
-    def upsert(self, key: str, value: Any):
-        self.data[key] = value
+    def merge(self, facts: dict):
+        if not facts:
+            return
+
+        for k, v in facts.items():
+            if v is None:
+                continue
+
+            if isinstance(v, list):
+                current = self.data.get(k, [])
+                if not isinstance(current, list):
+                    current = []
+                for item in v:
+                    if item not in current:
+                        current.append(item)
+                self.data[k] = current
+            else:
+                self.data[k] = v
+
         self.save()
 
     def get_summary(self) -> str:

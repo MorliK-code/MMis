@@ -1,103 +1,98 @@
 [
   {
-    "type": "fact",
-    "who": null,
-    "what": "Today's date is not specified in the input",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "давай. кстати, какое сегодня число?",
-    "ts": "2026-02-25T02:38:01"
-  },
-  {
     "type": "other",
-    "who": null,
-    "what": "Пользователь сидит и программирует.",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "не знаю. посижу по-программирую что-нибудь. какое твоё любимое хобби?",
-    "ts": "2026-02-25T02:39:47"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "Today's year is 2022",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "а какой сегодня год?",
-    "ts": "2026-02-25T02:40:54"
-  },
-  {
-    "type": "event",
-    "who": null,
-    "what": "my birthday",
-    "when": "17 марта",
-    "where": null,
-    "importance": "high",
-    "tags": [],
-    "source_text": "а нееет, мой день рождения 17 марта",
-    "ts": "2026-02-25T02:42:01"
-  },
-  {
-    "type": "message",
     "who": null,
     "what": "Greeting",
     "when": null,
     "where": null,
     "importance": "normal",
     "tags": [],
-    "source_text": "приветик. как дела, снова?)",
-    "ts": "2026-02-25T02:45:29"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "It's the 25th of February.",
-    "when": "25 February",
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "да нет, сейчас 25 февраля. кстати, 26 год уже)",
-    "ts": "2026-02-25T02:47:27"
+    "source_text": "приветик. как твои дела, чем увлекаешься?",
+    "ts": "2026-02-25T05:36:43"
   },
   {
     "type": "preference",
     "who": null,
-    "what": "я люблю",
+    "what": "люблю мороженое",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "приветик. ты ж любишь мороженое?",
+    "ts": "2026-02-25T06:00:00"
+  },
+  {
+    "type": "preference",
+    "who": null,
+    "what": "likes ice cream",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "привет. а сейчас ты любишь мороженное?",
+    "ts": "2026-02-25T06:01:30"
+  },
+  {
+    "type": "preference",
+    "who": null,
+    "what": "пиво",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [
+      "drink"
+    ],
+    "source_text": "а пиво любишь?",
+    "ts": "2026-02-25T06:02:08"
+  },
+  {
+    "type": "preference",
+    "who": null,
+    "what": "не люблю",
     "when": null,
     "where": null,
     "importance": "high",
     "tags": [
-      "personal"
+      "dislike"
     ],
-    "source_text": "что я люблю?",
-    "ts": "2026-02-25T02:49:18"
+    "source_text": "а что ты не любишь?",
+    "ts": "2026-02-25T06:02:37"
   },
   {
-    "type": "fact",
+    "type": "preference",
     "who": null,
-    "what": "You were born in the year 2004.",
+    "what": "I don't like smoking and reading books",
     "when": null,
     "where": null,
     "importance": "normal",
     "tags": [],
-    "source_text": "а родился, я кстати, 2004 года. можешь посчитать сколько мне сейчас)",
-    "ts": "2026-02-25T02:52:23"
+    "source_text": "ты не любишь табак и книги?",
+    "ts": "2026-02-25T06:03:25"
   },
   {
-    "type": "fact",
-    "who": "мой друг",
-    "what": "уехал за границу",
+    "type": "preference",
+    "who": null,
+    "what": "я обожаю",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [
+      "likes"
+    ],
+    "source_text": "а я обожаю",
+    "ts": "2026-02-25T06:04:30"
+  },
+  {
+    "type": "preference",
+    "who": null,
+    "what": "likes tobacco and books",
     "when": null,
     "where": null,
     "importance": "normal",
-    "tags": [],
-    "source_text": "мой друг, кстати, уехал за границу, увы(",
-    "ts": "2026-02-25T02:55:49"
+    "tags": [
+      "hobbies"
+    ],
+    "source_text": "я обожаю табак и книги",
+    "ts": "2026-02-25T06:05:17"
   }
 ]
