@@ -29,14 +29,14 @@ DEFAULT_ASSISTANT_PROFILE: Dict[str, Any] = {
 
 
 class AssistantProfile:
-    def __init__(self, path: str = "assistant_profile.json"):
-        self.path = str(path)
+    def __init__(self, path: Union[str, Path] = "assistant_profile.json"):
+        self.path = Path(path)
         self.data: Dict[str, Any] = {}
         self.load()
 
     def load(self):
-        if os.path.exists(self.path):
-            with open(self.path, "r", encoding="utf-8") as f:
+        if self.path.exists():
+            with self.path.open("r", encoding="utf-8") as f:
                 self.data = json.load(f)
         else:
             self.data = DEFAULT_ASSISTANT_PROFILE
@@ -48,7 +48,7 @@ class AssistantProfile:
                 self.data[k] = v
 
     def save(self):
-        with open(self.path, "w", encoding="utf-8") as f:
+        with self.path.open("w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
 
     @staticmethod
