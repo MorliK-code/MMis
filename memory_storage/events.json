@@ -1,0 +1,103 @@
+[
+  {
+    "type": "fact",
+    "who": null,
+    "what": "Today's date is not specified in the input",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "давай. кстати, какое сегодня число?",
+    "ts": "2026-02-25T02:38:01"
+  },
+  {
+    "type": "other",
+    "who": null,
+    "what": "Пользователь сидит и программирует.",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "не знаю. посижу по-программирую что-нибудь. какое твоё любимое хобби?",
+    "ts": "2026-02-25T02:39:47"
+  },
+  {
+    "type": "fact",
+    "who": null,
+    "what": "Today's year is 2022",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "а какой сегодня год?",
+    "ts": "2026-02-25T02:40:54"
+  },
+  {
+    "type": "event",
+    "who": null,
+    "what": "my birthday",
+    "when": "17 марта",
+    "where": null,
+    "importance": "high",
+    "tags": [],
+    "source_text": "а нееет, мой день рождения 17 марта",
+    "ts": "2026-02-25T02:42:01"
+  },
+  {
+    "type": "message",
+    "who": null,
+    "what": "Greeting",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "приветик. как дела, снова?)",
+    "ts": "2026-02-25T02:45:29"
+  },
+  {
+    "type": "fact",
+    "who": null,
+    "what": "It's the 25th of February.",
+    "when": "25 February",
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "да нет, сейчас 25 февраля. кстати, 26 год уже)",
+    "ts": "2026-02-25T02:47:27"
+  },
+  {
+    "type": "preference",
+    "who": null,
+    "what": "я люблю",
+    "when": null,
+    "where": null,
+    "importance": "high",
+    "tags": [
+      "personal"
+    ],
+    "source_text": "что я люблю?",
+    "ts": "2026-02-25T02:49:18"
+  },
+  {
+    "type": "fact",
+    "who": null,
+    "what": "You were born in the year 2004.",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "а родился, я кстати, 2004 года. можешь посчитать сколько мне сейчас)",
+    "ts": "2026-02-25T02:52:23"
+  },
+  {
+    "type": "fact",
+    "who": "мой друг",
+    "what": "уехал за границу",
+    "when": null,
+    "where": null,
+    "importance": "normal",
+    "tags": [],
+    "source_text": "мой друг, кстати, уехал за границу, увы(",
+    "ts": "2026-02-25T02:55:49"
+  }
+]

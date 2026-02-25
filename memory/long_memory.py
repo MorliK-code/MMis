@@ -5,7 +5,7 @@ from config import EMBED_MODEL
 
 class LongMemory:
     def __init__(self, path: str = "chroma_db"):
-        self.client = chromadb.PersistentClient(path="chroma_db")
+        self.client = chromadb.PersistentClient(path=path)
         self.collection = self.client.get_or_create_collection("assistant_memory")
 
     def add(self, text: str, meta: dict | None = None):

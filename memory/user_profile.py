@@ -12,14 +12,13 @@ class UserProfile:
         if os.path.exists(self.path):
             with open(self.path, "r", encoding="utf-8") as f:
                 self.data = json.load(f)
-            
         else:
             self.data = {}
 
     def save(self):
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
-    
+
     def upsert(self, key: str, value: Any):
         self.data[key] = value
         self.save()
@@ -27,7 +26,5 @@ class UserProfile:
     def get_summary(self) -> str:
         if not self.data:
             return "Профиль пользователя пока пуст."
-        lines = []
-        for k, v in self.data.items():
-            lines.append(f"- {k}: {v}")
-            return "Профиль пользователя\n" + "\n".join(lines)
+        lines = [f"- {k}: {v}" for k, v in self.data.items()]
+        return "Профиль пользователя:\n" + "\n".join(lines)

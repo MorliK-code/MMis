@@ -2,16 +2,22 @@ from memory.short_memory import ShortMemory
 from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
 from memory.user_profile import UserProfile
+from memory.event_store import EventStore
+from memory.chat_log import ChatLog
 from brain import Brain
 from config import SHORT_MEMORY_LIMIT
+from config import MemoryStorageDir
 
 short = ShortMemory(limit=SHORT_MEMORY_LIMIT)
-longm = LongMemory(path="chroma_db")
-profile = UserProfile("user_profile.json")
-mm = MemoryManager(short, longm, distance_threshold=0.65)
+longm = LongMemory(path=MemoryStorageDir / "chroma_db")
+profile = UserProfile(MemoryStorageDir / "user_profile.json")
+events = EventStore(MemoryStorageDir / "events.json")
+log = ChatLog(MemoryStorageDir / "chat_log.jsonl")
+
+mm = MemoryManager(short, longm, profile, events, log, distance_threshold=0.65)
 brain = Brain(mm)
 
-print("Ассистент с долговременной памятью запущен.\n")
+print("MMis запущен.\n")
 
 while True:
     user_input = input("Ты: ")

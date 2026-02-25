@@ -1,0 +1,20 @@
+{
+  "user_level": "novice",
+  "greeting_preference": "informal",
+  "birthday": "25 февраля",
+  "occupation": "",
+  "interests": [
+    "books",
+    "friends"
+  ],
+  "hobbies": [
+    "reading books",
+    "spending time with friends"
+  ],
+  "age": 26,
+  "profession": "programmer",
+  "important_date": "17 марта",
+  "birth_year": 2004,
+  "lives_abroad": true,
+  "current_activity": "programming"
+}

@@ -5,14 +5,12 @@ from config import MODEL_NAME
 FACT_SYSTEM = (
     "Ты извлекаешь устойчивые факты о пользователе для профиля. "
     "Возвращай ТОЛЬКО JSON-объект. "
-    "Если новых фактов нет — верни пустой объект {}. "
-    "Не включай случайные детали. "
-    "Примеры фактов: имя, город (если явно сказал), предпочтения, долгие проекты, "
-    "технический стек, язык общения."
+    "Если новых фактов нет — верни {}. "
+    "Не включай случайные детали."
 )
 
 def extract_facts(user_text: str, assistant_text: str) -> dict:
-    promt = (
+    prompt = (
         f"User said: {user_text}\n"
         f"Assistant replied: {assistant_text}\n"
         "Extract new stable facts about the user (if any)."
