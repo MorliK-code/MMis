@@ -1,6 +1,6 @@
 import json
-import os
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Union
 
 class UserProfile:
     def __init__(self, path: Union[str, Path] = "user_profile.json"):
