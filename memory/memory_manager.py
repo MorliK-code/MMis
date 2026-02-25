@@ -120,37 +120,26 @@ class MemoryManager:
             self.user_profile.merge(facts)
             return
 
-        # Если пользователь говорит факты про ассистентку — добавляем как заметку/событие (не меняем профиль)
-        if about == "assistant" and confidence >= 0.70 and polarity in ("assertion", "correction"):
-            try:
-                self.events.add(
-                    {
-                        "type": "note",
-                        "who": "user",
-                        "what": f"user_claim_about_assistant: {facts}",
-                        "when": None,
-                        "where": None,
-                        "importance": "low",
-                        "tags": ["about_assistant"],
-                        "source_text": user_text,
-                    }
-                )
-            except Exception:
-                pass
+        if about == "assistant" and can_write_profile:
+            self.assistant_profile.merge(facts)
             return
 
-        # Неуверенные/слухи — тоже в события
-        if polarity in ("rumor", "uncertain") and about in ("user", "assistant", "other"):
+        should_write_events_only = (
+            about in ("user", "assistant", "other")
+            and (confidence < 0.70 or polarity in ("rumor", "uncertain"))
+        )
+        if should_write_events_only:
+            tag = "rumor" if polarity == "rumor" else "uncertain" if polarity == "uncertain" else "low_confidence"
             try:
                 self.events.add(
                     {
                         "type": "note",
                         "who": None,
-                        "what": f"{polarity}_about_{about}: {facts}",
+                        "what": f"{tag}_about_{about}: {facts}",
                         "when": None,
                         "where": None,
                         "importance": "low",
-                        "tags": ["rumor"] if polarity == "rumor" else ["uncertain"],
+                        "tags": [tag],
                         "source_text": user_text,
                     }
                 )
