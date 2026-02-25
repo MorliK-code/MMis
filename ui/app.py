@@ -6,8 +6,9 @@ import html
 import sys
 import traceback
 from dataclasses import dataclass
+from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -35,6 +36,7 @@ from memory.memory_manager import MemoryManager
 from memory.short_memory import ShortMemory
 from memory.user_profile import UserProfile
 from ui import config as ui_config
+from ui.livecss import LiveCss
 
 DEFAULT_TEXT_SIZE = getattr(ui_config, "DEFAULT_TEXT_SIZE", 14)
 DEFAULT_BUBBLE_OPACITY = getattr(ui_config, "DEFAULT_BUBBLE_OPACITY", 0.1)
@@ -115,8 +117,14 @@ class MainWindow(QMainWindow):
 
         self._text_size = DEFAULT_TEXT_SIZE
         self._bubble_opacity = DEFAULT_BUBBLE_OPACITY
+        self._live_css = LiveCss(Path(__file__).with_name("livecss.css"))
 
         self._build_ui()
+
+        self._css_timer = QTimer(self)
+        self._css_timer.setInterval(1000)
+        self._css_timer.timeout.connect(self._on_live_css_tick)
+        self._css_timer.start()
 
     def _build_ui(self):
         root = QWidget()
@@ -196,7 +204,13 @@ class MainWindow(QMainWindow):
         self._append_system("MMis UI запущен. Ctrl+Enter — отправить.")
 
     def _chat_css(self) -> str:
-        return build_chat_css(self._text_size, self._bubble_opacity)
+        fallback_css = build_chat_css(self._text_size, self._bubble_opacity)
+        return self._live_css.render(fallback_css, self._text_size, self._bubble_opacity)
+
+    @Slot()
+    def _on_live_css_tick(self):
+        if self._live_css.load_if_changed():
+            self._render_chat()
 
     def _render_chat(self):
         blocks = [self._chat_css()]
