@@ -22,9 +22,11 @@ CHAT_CSS = """
 
 /* статистика под её ответом */
 .stats {
-  margin-top: 3px;
-  font-size: 9px;
-  color: rgba(0,0,0,0.22);
+  margin-top: 2px;
+  display: block;
+  font-size: 8px;
+  line-height: 1.2;
+  color: rgba(0,0,0,0.20);
 }
 
 /* если вдруг используешь тёмную тему — раскомментируй:
