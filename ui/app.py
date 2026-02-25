@@ -34,14 +34,13 @@ from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
 from memory.short_memory import ShortMemory
 from memory.user_profile import UserProfile
-from ui.config import (
-    DEFAULT_TEXT_SIZE,
-    DEFAULT_BUBBLE_OPACITY,
-    DEFAULT_TEXT_SIZE,
-    FLOPS_PER_TOKEN,
-    SHOW_TFLOPS_EST,
-    build_chat_css,
-)
+from ui import config as ui_config
+
+DEFAULT_TEXT_SIZE = getattr(ui_config, "DEFAULT_TEXT_SIZE", 14)
+DEFAULT_BUBBLE_OPACITY = getattr(ui_config, "DEFAULT_BUBBLE_OPACITY", 0.1)
+FLOPS_PER_TOKEN = getattr(ui_config, "FLOPS_PER_TOKEN", 14e9)
+SHOW_TFLOPS_EST = getattr(ui_config, "SHOW_TFLOPS_EST", True)
+build_chat_css = ui_config.build_chat_css
 
 
 def safe_div(a: float, b: float) -> float:
