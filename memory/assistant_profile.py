@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Union
 
 DEFAULT_ASSISTANT_PROFILE: Dict[str, Any] = {
+    "name": "Вероника",
+    "short_name": "Ника",
     "style": "лёгкая ирония",
     "humor_level": 2,
     "tone": "дружелюбная",
@@ -27,6 +29,20 @@ DEFAULT_ASSISTANT_PROFILE: Dict[str, Any] = {
     "signature_phrases": [],
 }
 
+IMMUTABLE_BASE_KEYS = (
+    "name",
+    "short_name",
+    "style",
+    "humor_level",
+    "tone",
+    "address",
+    "gender",
+    "talkativeness",
+    "emoji_level",
+)
+
+LIST_PROFILE_KEYS = ("likes", "dislikes", "interests", "do_not_say", "signature_phrases")
+
 
 class AssistantProfile:
     def __init__(self, path: Union[str, Path] = "assistant_profile.json"):
@@ -39,13 +55,29 @@ class AssistantProfile:
             with self.path.open("r", encoding="utf-8") as f:
                 self.data = json.load(f)
         else:
-            self.data = DEFAULT_ASSISTANT_PROFILE
-            self.save()
+            self.data = DEFAULT_ASSISTANT_PROFILE.copy()
 
-        # гарантируем ключи
-        for k, v in DEFAULT_ASSISTANT_PROFILE.items():
-            if k not in self.data:
-                self.data[k] = v
+        # Базовые параметры ассистентки должны подтягиваться из DEFAULT всегда,
+        # чтобы правки в коде применялись без ручного удаления профиля.
+        for key in IMMUTABLE_BASE_KEYS:
+            self.data[key] = DEFAULT_ASSISTANT_PROFILE.get(key)
+
+        # Для списков сохраняем обученные значения и добавляем дефолтные.
+        for key in LIST_PROFILE_KEYS:
+            existing = self._normalize_to_list(self.data.get(key))
+            defaults = self._normalize_to_list(DEFAULT_ASSISTANT_PROFILE.get(key))
+            merged = defaults.copy()
+            for item in existing:
+                if item not in merged:
+                    merged.append(item)
+            self.data[key] = merged
+
+        # На случай будущих новых ключей.
+        for key, value in DEFAULT_ASSISTANT_PROFILE.items():
+            if key not in self.data:
+                self.data[key] = value
+
+        self.save()
 
     def save(self):
         with self.path.open("w", encoding="utf-8") as f:

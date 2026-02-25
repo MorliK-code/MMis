@@ -1,8 +1,5 @@
-import logging
-import queue
-import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from memory.fact_extractor import extract_facts
 from memory.event_extractor import extract_events_llm
@@ -51,13 +48,6 @@ class MemoryManager:
         if category:
             self.error_metrics.increment(category)
 
-    def error_metrics_snapshot(self) -> Dict[str, int]:
-        return self.error_metrics.snapshot()
-
-        self._store_queue: "queue.Queue[Tuple[str, str]]" = queue.Queue()
-        self._store_worker = threading.Thread(target=self._store_worker_loop, daemon=True)
-        self._store_worker.start()
-
     def store_turn(self, user_text: str, assistant_text: str) -> None:
         # Неблокирующий путь: только быстрая запись в short memory + постановка задачи в очередь.
         self.short.add("user", user_text)
@@ -72,6 +62,8 @@ class MemoryManager:
                 error=exc,
                 input_size=self._input_size(user_text, assistant_text),
             )
+
+        self._process_turn(user_text, assistant_text)
 
     def _process_turn(self, user_text: str, assistant_text: str) -> None:
         t0 = time.perf_counter()
@@ -91,13 +83,8 @@ class MemoryManager:
                 category="extractor_error",
             )
 
-        # 3) Оперативная память (критичная операция — fail-safe не меняем)
-        self.short.add("user", user_text)
-        self.short.add("assistant", assistant_text)
-
         # 4) Векторная память (для recall по смыслу)
         try:
-            embed_t0 = time.perf_counter()
             combined = f"User: {user_text}\nAssistant: {assistant_text}"
             self.long.add(combined, meta={"type": "dialog_turn"})
         except Exception as exc:
@@ -259,8 +246,3 @@ class MemoryManager:
                     input_size=self._input_size(user_text, facts),
                 )
             return
-        pol = self_res.get("polarity", "none")
-        facts = self_res.get("facts", {}) or {}
-        conf = float(self_res.get("confidence", 0.0))
-        if conf >= 0.7 and facts:
-            self.assistant_profile.apply_fact_patch(pol, facts)

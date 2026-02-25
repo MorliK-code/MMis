@@ -44,7 +44,7 @@ class BrainSmokeTests(unittest.TestCase):
         self.mm = _DummyMemoryManager()
         self.brain = Brain(self.mm)
 
-    def test_typical_inputs_stay_short(self):
+    def test_typical_inputs_keep_content_without_hard_truncation(self):
         mocked_response = {
             "message": {
                 "content": (
@@ -64,20 +64,21 @@ class BrainSmokeTests(unittest.TestCase):
 
         for reply in replies:
             self.assertTrue(reply)
-            self.assertLessEqual(len(reply), 160)
-            sentence_count = len(self.brain._segment_sentences(reply))
-            self.assertLessEqual(sentence_count, 2)
+            self.assertIn("Конечно", reply)
+            self.assertGreater(len(reply), 120)
 
-    def test_ollama_options_include_brevity_controls(self):
+    def test_ollama_options_include_response_controls(self):
         with patch("brain.ollama.chat", return_value={"message": {"content": "Коротко и ясно."}}) as chat_mock:
             self.brain.think("Что нового?")
 
         options = chat_mock.call_args.kwargs["options"]
         self.assertIn("num_predict", options)
+        self.assertGreaterEqual(options["num_predict"], 1)
         self.assertIn("stop", options)
         self.assertIn("mirostat", options)
         self.assertIn("presence_penalty", options)
         self.assertIn("frequency_penalty", options)
+        self.assertNotIn("\n\n", options["stop"])
 
 
 if __name__ == "__main__":
