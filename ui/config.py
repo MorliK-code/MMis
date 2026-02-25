@@ -3,8 +3,8 @@
 FLOPS_PER_TOKEN = 14e9
 SHOW_TFLOPS_EST = True
 
-# DEFAULT_TEXT_SIZE = 11
-# DEFAULT_BUBBLE_OPACITY = 0.12
+DEFAULT_TEXT_SIZE = 11
+DEFAULT_BUBBLE_OPACITY = 0.12
 
 
 # def _clamp(value: float, low: float, high: float) -> float:
@@ -32,14 +32,14 @@ f"""
   white-space: pre-wrap;
   font-size: 14px;
 }}
-.msg.user .bubble {{ background: rgba(120,120,120,0); }}
-.msg.ai .bubble {{ background: rgba(120,120,120,0); }}
+.msg.user .bubble {{ background: rgba(120,120,120,{user_opacity:.3f}); }}
+.msg.ai .bubble {{ background: rgba(120,120,120,{bubble_opacity:.3f}); }}
 .stats {{
   margin-top: 2px;
   display: block;
-  font-size: {max(11 - 3, 8)}px;
+  font-size: {max(font_size_px - 3, 8)}px;
   line-height: 1.2;
-  color: rgba(0,0,0,0.38);
+  color: rgba(0,0,0,{STATS_TEXT_ALPHA:.3f});
 }}
 .sep {{ height: 10px; }}
 </style>
