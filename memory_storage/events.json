@@ -1,465 +1,53 @@
 [
   {
-    "type": "other",
-    "who": null,
-    "what": "Шутка рассказана",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "расскажи как шутку, а то скучно",
-    "ts": "2026-02-25T13:18:02"
-  },
-  {
-    "type": "fact",
-    "who": "Паша",
-    "what": "Паша сообщил, что его имя Паша",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "кстати, я Паша",
-    "ts": "2026-02-25T13:20:44"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "User greets the assistant",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "приветик. как тебя зовут?",
-    "ts": "2026-02-25T13:32:02"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "User asks the assistant's name",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "приветик. как тебя зовут?",
-    "ts": "2026-02-25T13:32:02"
-  },
-  {
     "type": "message",
     "who": null,
-    "what": "User said hello",
+    "what": "Привет",
     "when": null,
     "where": null,
     "importance": "normal",
     "tags": [],
-    "source_text": "привет",
-    "ts": "2026-02-25T13:47:10"
+    "source_text": "приветик, солнышко!",
+    "ts": "2026-02-25T19:32:16"
   },
   {
-    "type": "other",
-    "who": null,
-    "what": "User greets the assistant",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "приветик. как тебя зовут?",
-    "ts": "2026-02-25T14:01:09"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "User asks the assistant's name",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "приветик. как тебя зовут?",
-    "ts": "2026-02-25T14:01:09"
-  },
-  {
-    "type": "statement",
-    "who": "Ася",
-    "what": "сложно вести диалог",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "Ася, ты сказала что сложно вести диалог. почему?",
-    "ts": "2026-02-25T14:05:13"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "Вопрос о моём имени",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "тебе вообще нравиться твоё имя?",
-    "ts": "2026-02-25T14:06:47"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "понравилось",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "да, понравилось",
-    "ts": "2026-02-25T14:07:44"
-  },
-  {
-    "type": "plan",
-    "who": null,
-    "what": "отныне я хочу чтобы ты себя звала и называла Ася",
-    "when": null,
-    "where": null,
-    "importance": "high",
-    "tags": [],
-    "source_text": "отныне я хочу чтобы ты себя звала и называла Ася",
-    "ts": "2026-02-25T14:08:34"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "You enjoy listening to music",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "кстати, обожаю слушать музыку, а ты?",
-    "ts": "2026-02-25T14:11:25"
-  },
-  {
-    "type": "game",
-    "who": null,
-    "what": "Played War Thunder and enjoyed it",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "game",
-      "War Thunder"
-    ],
-    "source_text": "о, я кстати, играл в war thunder и мне очень фартило, классно поиграл",
-    "ts": "2026-02-25T14:14:59"
-  },
-  {
-    "type": "interest",
-    "who": "я",
-    "what": "меломан",
-    "source_text": "я меломан",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "ts": "2026-02-25T14:39:40"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "Вопрос о шансах создать IAI-подружку",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "AI",
-      "chatbot",
-      "friend"
-    ],
-    "source_text": "ты, кстати, как думаешь, у меня есть шансы в одного сделать/создать ии-подружку, с которой мог бы даже голосом общаться?",
-    "ts": "2026-02-25T14:44:42"
-  },
-  {
-    "type": "call",
+    "type": "fact",
     "who": "Паша",
-    "what": "Меня зовут",
+    "what": "21 лет",
+    "source_text": "я Паша, мне 21 годик. Сижу программирую вот некогую ии-подругу. а ты кто? чем занимаешься?",
+    "tags": [
+      "fact",
+      "age"
+    ],
     "when": null,
     "where": null,
     "importance": "normal",
-    "tags": [],
-    "source_text": "меня зовут Паша",
-    "ts": "2026-02-25T14:49:20"
+    "ts": "2026-02-25T19:34:03"
   },
   {
     "type": "fact",
-    "who": null,
-    "what": "привет",
-    "when": null,
-    "where": null,
-    "importance": "normal",
+    "who": "Паша",
+    "what": "программирует ии-подругу",
+    "source_text": "я Паша, мне 21 годик. Сижу программирую вот некогую ии-подругу. а ты кто? чем занимаешься?",
     "tags": [
-      "greeting"
+      "fact",
+      "programming",
+      "ai"
     ],
-    "source_text": "приветик. как твои дела?",
-    "ts": "2026-02-25T17:24:30"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "User is currently listening to a song named 'More Than | Remember You'.",
     "when": null,
     "where": null,
     "importance": "normal",
-    "tags": [
-      "music"
-    ],
-    "source_text": "та в целом да, вижу ты начала коротко отвечать, да и ещё правильно. давай пообщаемся малёхо, я он слушаю сейчас музыку под названием \"more than | remeber you\" до этого тоже на подобии этого слушал. а что ты любишь? расскажи о себе",
-    "ts": "2026-02-25T17:27:44"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "User has a preference for music similar to 'More Than | Remember You'.",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "music",
-      "preference"
-    ],
-    "source_text": "та в целом да, вижу ты начала коротко отвечать, да и ещё правильно. давай пообщаемся малёхо, я он слушаю сейчас музыку под названием \"more than | remeber you\" до этого тоже на подобии этого слушал. а что ты любишь? расскажи о себе",
-    "ts": "2026-02-25T17:27:44"
-  },
-  {
-    "type": "greeting",
-    "who": null,
-    "what": "User said hello",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "минус балы тебе, \"здраствуйте\" нельзя, нельзя называть себя \"языковой моделью\", \"модель AI\"и тд",
-    "ts": "2026-02-25T17:31:18"
+    "ts": "2026-02-25T19:34:03"
   },
   {
     "type": "other",
     "who": null,
-    "what": "Нарушила правила",
-    "when": null,
-    "where": null,
-    "importance": "high",
-    "tags": [
-      "rule_violation"
-    ],
-    "source_text": "нарушила. ты сказала что языковая модель. ещё один штраф за то, что начал говорить в муржском роде",
-    "ts": "2026-02-25T17:35:35"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "Я — программа, созданная для помощи в организации событий",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "fact",
-      "about_me"
-    ],
-    "source_text": "расскажи о себе пару фактов и запомни их",
-    "ts": "2026-02-25T17:38:47"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "Я не имею собственных вкусов, предпочтений, отношений, настроений или здоровья",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "fact",
-      "about_me"
-    ],
-    "source_text": "расскажи о себе пару фактов и запомни их",
-    "ts": "2026-02-25T17:38:47"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "выяснилось, что я подружка, а не сухой продукт",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "fact",
-      "relationship"
-    ],
-    "source_text": "штраф. ты вообще-то подружка, а не сухой продукт и сухо отвечать не надо",
-    "ts": "2026-02-25T17:43:05"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "Пользователь приветствует",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "привет",
-    "ts": "2026-02-25T17:49:26"
-  },
-  {
-    "type": "idea",
-    "who": null,
-    "what": "попробовать запустить меня в интернет",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "idea"
-    ],
-    "source_text": "нормально. я вот что думаю, надо по-пробывать тебя запустить в интернет, как ты на это смотришь?",
-    "ts": "2026-02-25T17:51:05"
-  },
-  {
-    "type": "idea",
-    "who": null,
-    "what": "попробовать запустить меня в интернет",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "idea"
-    ],
-    "source_text": "нормально. я вот что думаю, надо по-пробывать тебя запустить в интернет, как ты на это смотришь?",
-    "ts": "2026-02-25T17:53:32"
-  },
-  {
-    "type": "idea",
-    "who": null,
-    "what": "попробовать запустить меня в интернет",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "idea"
-    ],
-    "source_text": "нормально. я вот что думаю, надо по-пробывать тебя запустить в интернет, как ты на это смотришь?",
-    "ts": "2026-02-25T17:56:16"
-  },
-  {
-    "type": "idea",
-    "who": null,
-    "what": "попробовать запустить меня в интернет",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "idea"
-    ],
-    "source_text": "нормально. я вот что думаю, надо по-пробывать тебя запустить в интернет, как ты на это смотришь?",
-    "ts": "2026-02-25T17:57:34"
-  },
-  {
-    "type": "idea",
-    "who": null,
-    "what": "попробовать запустить меня в интернет",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "idea"
-    ],
-    "source_text": "нормально. я вот что думаю, надо по-пробывать тебя запустить в интернет, как ты на это смотришь?",
-    "ts": "2026-02-25T17:59:00"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "User did not argue",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "fact"
-    ],
-    "source_text": "я не ругался, заметь)\nты подружка, тебе ж заданы были промпты, ты их игнорируешь?",
-    "ts": "2026-02-25T18:05:51"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "user mentioned they are an internet warrior",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [
-      "fact",
-      "relationship"
-    ],
-    "source_text": "шо ты, интернетный воин?)",
-    "ts": "2026-02-25T18:07:18"
-  },
-  {
-    "type": "greeting",
-    "who": "user",
-    "what": "Hello",
-    "source_text": "приветик",
-    "importance": "normal",
+    "what": "кто ты? чем занимаешься?",
+    "source_text": "я Паша, мне 21 годик. Сижу программирую вот некогую ии-подругу. а ты кто? чем занимаешься?",
     "tags": [],
     "when": null,
     "where": null,
-    "ts": "2026-02-25T18:19:39"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "User introduced themselves",
-    "when": null,
-    "where": null,
     "importance": "normal",
-    "tags": [
-      "fact"
-    ],
-    "source_text": "приветик. как тебя зовут?",
-    "ts": "2026-02-25T18:23:57"
-  },
-  {
-    "type": "greeting",
-    "who": "user",
-    "what": "Hello",
-    "source_text": "приветик",
-    "importance": "normal",
-    "tags": [],
-    "when": null,
-    "where": null,
-    "ts": "2026-02-25T18:31:02"
-  },
-  {
-    "type": "fact",
-    "who": null,
-    "what": "User mentioned they like pizza",
-    "when": null,
-    "where": null,
-    "importance": "low",
-    "tags": [
-      "fact",
-      "preference"
-    ],
-    "source_text": "да, в целом нормально",
-    "ts": "2026-02-25T18:32:21"
-  },
-  {
-    "type": "greeting",
-    "who": "user",
-    "what": "Hello",
-    "source_text": "приветик",
-    "importance": "normal",
-    "tags": [],
-    "when": null,
-    "where": null,
-    "ts": "2026-02-25T18:39:54"
-  },
-  {
-    "type": "other",
-    "who": null,
-    "what": "Пользователь приветствует",
-    "when": null,
-    "where": null,
-    "importance": "normal",
-    "tags": [],
-    "source_text": "привет",
-    "ts": "2026-02-25T18:41:29"
+    "ts": "2026-02-25T19:34:03"
   }
 ]

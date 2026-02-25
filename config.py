@@ -4,7 +4,7 @@ from pathlib import Path
 basedir = Path(__file__).parent
 MemoryStorageDir = basedir / "memory_storage"
 
-MODEL_NAME = "mistral:7b"
+MODEL_NAME = "mistral:7b-instruct"
 EMBED_MODEL = "nomic-embed-text"
 
 SHORT_MEMORY_LIMIT = 10
@@ -41,8 +41,6 @@ OLLAMA_PROFILES = {
     "QUALITY": {
         "num_thread": 8,
         "num_ctx": 4096,
-        # В Ollama num_gpu = число GPU-слоёв, а не флаг 0/1.
-        # Значение 1 обычно даёт ~1 GB VRAM (офлоадится только один слой).
         "num_gpu": 35,
         "num_batch": 256,
         "repeat_penalty": 1.12,
@@ -52,7 +50,7 @@ OLLAMA_PROFILES = {
     },
     "BALANCED": {
         "num_thread": 6,
-        "num_ctx": 3072,
+        "num_ctx": 4096,
         "num_gpu": 28,
         "num_batch": 128,
         "repeat_penalty": 1.15,
