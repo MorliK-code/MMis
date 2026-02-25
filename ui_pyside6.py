@@ -19,6 +19,7 @@ import traceback
 import html
 from dataclasses import dataclass
 
+from brain import Brain
 from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -92,11 +93,11 @@ class ReplyWorker(QObject):
     finished = Signal(object)  # ReplyResult
     errored = Signal(str)
 
-    def __init__(self, brain: Brain, user_text: str, audience: str):
+    def __init__(self, brain: Brain, user_text: str):
         super().__init__()
         self.brain = brain
         self.user_text = user_text
-        self.audience = audience
+
         self._cancel_requested = False
 
     def request_cancel(self):
@@ -107,7 +108,7 @@ class ReplyWorker(QObject):
     @Slot()
     def run(self):
         try:
-            answer = self.brain.think(self.user_text, audience=self.audience)
+            answer = self.brain.think(self.user_text)
             stats = getattr(self.brain, "last_stats", {}) or {}
             if self._cancel_requested:
                 return
@@ -138,9 +139,9 @@ CHAT_CSS = """
 
 /* статистика под её ответом */
 .stats {
-  margin-top: 6px;
-  font-size: 11px;
-  color: rgba(0,0,0,0.45);  /* светлая тема */
+  margin-top: 4px;
+  font-size: 10px;
+  color: rgba(0,0,0,0.28);
 }
 
 /* если вдруг используешь тёмную тему — раскомментируй:
@@ -185,13 +186,6 @@ class MainWindow(QMainWindow):
         self.model_label = QLabel(f"Model: <b>{MODEL_NAME}</b>")
         top.addWidget(self.model_label)
 
-        top.addSpacing(14)
-        top.addWidget(QLabel("Кому отвечает:"))
-        self.audience_box = QComboBox()
-        self.audience_box.addItem("Я один (на ты)", userData="single")
-        self.audience_box.addItem("Мы компанией (на вы)", userData="group")
-        top.addWidget(self.audience_box)
-
         top.addStretch(1)
 
         self.btn_stop = QPushButton("Стоп")
@@ -222,12 +216,6 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("Статус: <b>Готово</b>")
 
-        # last ответ
-        self.last_ms_label = QLabel("Последний ответ: время —")
-        self.last_tokens_label = QLabel("Последний ответ: gen — / prompt —")
-        self.last_tps_label = QLabel("Последний ответ: tok/s —")
-        self.last_tflops_label = QLabel("Последний ответ: TFLOPs —")
-
         # average
         self.avg_ms_label = QLabel("Среднее: время —")
         self.avg_tokens_label = QLabel("Среднее: gen — / prompt —")
@@ -236,10 +224,6 @@ class MainWindow(QMainWindow):
 
         for w in (
             self.status_label,
-            self.last_ms_label,
-            self.last_tokens_label,
-            self.last_tps_label,
-            self.last_tflops_label,
             self.avg_ms_label,
             self.avg_tokens_label,
             self.avg_tps_label,
@@ -349,16 +333,6 @@ class MainWindow(QMainWindow):
         return (" • ".join(parts) if parts else "—", ms_f, gen_i, prompt_i)
 
     def _update_side_stats(self, last_ms: float, last_gen: int, last_prompt: int):
-        # last
-        sec = last_ms / 1000.0 if last_ms else 0.0
-        last_tps = safe_div(last_gen, sec)
-        self.last_ms_label.setText(f"Последний ответ: время {int(last_ms) if last_ms else '—'}")
-        self.last_tokens_label.setText(f"Последний ответ: gen {last_gen or '—'} / prompt {last_prompt or '—'}")
-        self.last_tps_label.setText(f"Последний ответ: tok/s {last_tps:.1f}" if last_tps else "Последний ответ: tok/s —")
-        self.last_tflops_label.setText(
-            f"Последний ответ: TFLOPs ~{est_tflops(last_tps):.2f}" if (SHOW_TFLOPS_EST and last_tps) else "Последний ответ: TFLOPs —"
-        )
-
         # avg
         n = max(self.n_answers, 1)
         avg_ms = self.sum_ms / n if self.sum_ms else 0.0
@@ -391,10 +365,6 @@ class MainWindow(QMainWindow):
 
         # reset panel
         self._set_status("Готово")
-        self.last_ms_label.setText("Последний ответ: время —")
-        self.last_tokens_label.setText("Последний ответ: gen — / prompt —")
-        self.last_tps_label.setText("Последний ответ: tok/s —")
-        self.last_tflops_label.setText("Последний ответ: TFLOPs —")
         self.avg_ms_label.setText("Среднее: время —")
         self.avg_tokens_label.setText("Среднее: gen — / prompt —")
         self.avg_tps_label.setText("Среднее: tok/s —")
@@ -430,14 +400,12 @@ class MainWindow(QMainWindow):
         if show_user:
             self._append_user(user_text)
 
-        audience = self.audience_box.currentData() or "single"
-
         self._set_status("Генерация…")
         self.btn_send.setEnabled(False)
         self.btn_stop.setEnabled(True)
 
         self._thread = QThread()
-        self._worker = ReplyWorker(self.brain, user_text=user_text, audience=audience)
+        self._worker = ReplyWorker(self.brain, user_text=user_text)
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
