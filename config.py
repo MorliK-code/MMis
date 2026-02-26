@@ -31,6 +31,19 @@ def _get_env_float(name: str, default: float) -> float:
         return default
 
 
+def _get_env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+MMIS_CHAT_FAST = _get_env_bool("MMIS_CHAT_FAST", False)
+MMIS_CHAT_RECALL_RESULTS = _get_env_int("MMIS_CHAT_RECALL_RESULTS", 5 if not MMIS_CHAT_FAST else 0)
+MMIS_CHAT_EVENTS_LIMIT = _get_env_int("MMIS_CHAT_EVENTS_LIMIT", 20 if not MMIS_CHAT_FAST else 6)
+MMIS_CHAT_ALLOW_REWRITE = _get_env_bool("MMIS_CHAT_ALLOW_REWRITE", True if not MMIS_CHAT_FAST else False)
+
+
 # Базовые профили Ollama. Можно выбрать через MMIS_PROFILE=QUALITY|BALANCED|FAST.
 # Рекомендации по железу:
 # - CPU-only: FAST (num_ctx=2048..4096, num_thread ~= количеству физических ядер,
@@ -52,7 +65,7 @@ OLLAMA_PROFILES = {
         "num_thread": 8,
         "num_ctx": 4096,
         "num_gpu": 30,
-        "num_batch": 64,
+        "num_batch": 128,
         "repeat_penalty": 1.15,
         "temperature": 0.6,
         "top_p": 0.9,
@@ -68,11 +81,23 @@ OLLAMA_PROFILES = {
         "top_p": 0.92,
         "keep_alive": "5m",
     },
+    # Hybrid profile: VRAM + RAM.
+    # Uses most layers on GPU, but intentionally leaves part for system RAM spill.
+    "HYBRID_RAM": {
+        "num_thread": 10,
+        "num_ctx": 8192,
+        "num_gpu": 24,
+        "num_batch": 128,
+        "repeat_penalty": 1.12,
+        "temperature": 0.58,
+        "top_p": 0.9,
+        "keep_alive": "15m",
+    },
 }
 
-OLLAMA_PROFILE = os.getenv("MMIS_PROFILE", "BALANCED").upper()
+OLLAMA_PROFILE = os.getenv("MMIS_PROFILE", "HYBRID_RAM").upper()
 if OLLAMA_PROFILE not in OLLAMA_PROFILES:
-    OLLAMA_PROFILE = "BALANCED"
+    OLLAMA_PROFILE = "HYBRID_RAM"
 
 # Общие (активные) опции с учётом профиля и env override'ов.
 OLLAMA_OPTIONS = {

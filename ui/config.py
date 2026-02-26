@@ -29,8 +29,10 @@ def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
   font-weight: 400;
   margin-bottom: 4px;
   font-size: 12px;
-  color: rgba(255,255,255,0.72);
+  color: rgba(255,255,255,0.9);
   background: transparent;
+  padding: 0;
+  border-radius: 0;
 }}
 
 .bubble {{
@@ -44,8 +46,8 @@ def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
   background: transparent;
 }}
 
-.msg.user {{ background: rgba(120,120,120,{user_opacity:.3f}); }}
-.msg.ai {{ background: rgba(120,120,120,{bubble_opacity:.3f}); }}
+.msg.user {{ background: rgba(70,130,180,{user_opacity:.3f}); }}
+.msg.ai {{ background: rgba(220,80,80,{bubble_opacity:.3f}); }}
 
 .stats {{
   margin-top: 6px;
@@ -63,3 +65,4 @@ def build_chat_css(font_size_px: int, bubble_opacity: float) -> str:
 </style>
 
 """
+

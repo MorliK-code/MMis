@@ -12,7 +12,7 @@ class EventStore:
 
     def load(self):
         if self.path.exists():
-            with self.path.open("r", encoding="utf-8") as f:
+            with self.path.open("r", encoding="utf-8-sig") as f:
                 self.events = json.load(f)
         else:
             self.events = []

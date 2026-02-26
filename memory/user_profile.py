@@ -1,6 +1,7 @@
-import json
+﻿import json
 from pathlib import Path
 from typing import Any, Dict, List, Union
+
 
 class UserProfile:
     def __init__(self, path: Union[str, Path] = "user_profile.json"):
@@ -10,7 +11,7 @@ class UserProfile:
 
     def load(self):
         if self.path.exists():
-            with self.path.open("r", encoding="utf-8") as f:
+            with self.path.open("r", encoding="utf-8-sig") as f:
                 self.data = json.load(f)
         else:
             self.data = {}
@@ -56,8 +57,29 @@ class UserProfile:
 
         self.save()
 
+    def add_memory_note(self, note: str):
+        text = str(note or "").strip()
+        if not text:
+            return
+        notes = self.data.get("memory_notes", [])
+        if not isinstance(notes, list):
+            notes = []
+        if text not in notes:
+            notes.append(text)
+            self.data["memory_notes"] = notes[-120:]
+            self.save()
+
     def get_summary(self) -> str:
         if not self.data:
             return "Профиль пользователя пока пуст."
-        lines = [f"- {k}: {v}" for k, v in self.data.items()]
+
+        lines: List[str] = []
+        for k, v in self.data.items():
+            if k == "memory_notes" and isinstance(v, list):
+                if v:
+                    lines.append("- memory_notes:")
+                    lines.extend(f"  - {x}" for x in v[-10:])
+                continue
+            lines.append(f"- {k}: {v}")
+
         return "Профиль пользователя:\n" + "\n".join(lines)

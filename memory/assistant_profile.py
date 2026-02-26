@@ -7,6 +7,7 @@ DEFAULT_ASSISTANT_PROFILE: Dict[str, Any] = {
     "short_name": "Ася",
     "style": "лёгкая ирония",
     "humor_level": 2,
+    "language": "Русский",
     "tone": "дружелюбная",
     "address": "ты",
     "gender": "женский",
@@ -34,6 +35,7 @@ IMMUTABLE_BASE_KEYS = (
     "short_name",
     "style",
     "humor_level",
+    "language",
     "tone",
     "address",
     "gender",
@@ -52,7 +54,7 @@ class AssistantProfile:
 
     def load(self):
         if self.path.exists():
-            with self.path.open("r", encoding="utf-8") as f:
+            with self.path.open("r", encoding="utf-8-sig") as f:
                 self.data = json.load(f)
         else:
             self.data = DEFAULT_ASSISTANT_PROFILE.copy()
@@ -189,6 +191,7 @@ class AssistantProfile:
         return (
             f"Имя: {d.get('name', 'Асия')} (Корокое имя: {d.get('short_name', 'Ася')}). "
             f"Стиль: {d.get('style', '')}. Тон: {d.get('tone', '')}. Юмор: {d.get('humor_level', 0)}.\n"
+            f"Язык: {d.get('language', 'Русский')}.\n"
             f"Разговорчивость: {d.get('talkativeness', 0)}. Эмодзи: {d.get('emoji_level', 0)}.\n"
             f"Пол: {d.get('gender', 'Женский')}. Обращение к пользователю: {d.get('address', 'ты')}.\n"
             "Если спрашивают, как тебя зовут - отвечай только этим именем и без выдуманной биографии.\n"

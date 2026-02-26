@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from memory.fact_extractor import extract_facts
 from memory.event_extractor import extract_events_llm
 from memory.assistant_fact_extractor import extract_assistant_self
+from memory.user_memory_selector import extract_user_memory_note
 from memory.logging_utils import ErrorMetrics, get_memory_logger
 
 
@@ -29,6 +30,8 @@ class MemoryManager:
         self.logger = get_memory_logger()
         self.error_metrics = ErrorMetrics()
         self._postprocess_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mm-postprocess")
+        self.dislike_penalty_default = 0.20
+        self.like_bonus_default = 0.03
 
     @staticmethod
     def _input_size(*values: Any) -> int:
@@ -119,6 +122,22 @@ class MemoryManager:
                 category="extractor_error",
             )
 
+        # 5b) LLM decides if this turn should become a compact long-term user note.
+        try:
+            note_res = extract_user_memory_note(user_text, assistant_text)
+            note = str(note_res.get("note", "") or "").strip()
+            remember = bool(note_res.get("remember", False))
+            confidence = float(note_res.get("confidence", 0.0) or 0.0)
+            if remember and note and confidence >= 0.55:
+                self.user_profile.add_memory_note(note)
+        except Exception as exc:
+            self._log_error(
+                operation="extract_user_memory_note",
+                error=exc,
+                input_size=self._input_size(user_text, assistant_text),
+                category="extractor_error",
+            )
+
         # 6) Факты о самой ассистентке (из её ответа)
         try:
             self_res = extract_assistant_self(assistant_text)
@@ -148,15 +167,143 @@ class MemoryManager:
             )
             return []
 
+        disliked = self.recent_disliked_assistant_texts(limit=12)
         recalled: List[str] = []
         for item in found:
             if not isinstance(item, (list, tuple)) or len(item) < 2:
                 continue
             doc = item[0]
             dist = item[1]
-            if doc and dist is not None and dist <= self.distance_threshold:
+            meta = item[2] if len(item) >= 3 and isinstance(item[2], dict) else {}
+            if not doc or dist is None:
+                continue
+
+            # Hard filter: skip chunks that match explicitly disliked assistant outputs.
+            doc_l = str(doc).lower()
+            if any((snippet and snippet in doc_l) for snippet in disliked):
+                continue
+
+            effective_dist = float(dist)
+            score = float(meta.get("feedback_score", 0.0) or 0.0)
+            if score < 0:
+                effective_dist += float(meta.get("feedback_penalty", self.dislike_penalty_default))
+            elif score > 0:
+                effective_dist -= float(meta.get("feedback_bonus", self.like_bonus_default))
+
+            if effective_dist <= self.distance_threshold:
                 recalled.append(doc)
         return recalled
+
+    def register_assistant_feedback(
+        self,
+        user_text: str,
+        assistant_text: str,
+        feedback: int,
+        penalty: float | None = None,
+    ) -> None:
+        self._postprocess_executor.submit(
+            self._register_assistant_feedback_sync,
+            user_text,
+            assistant_text,
+            feedback,
+            penalty,
+        )
+
+    def _register_assistant_feedback_sync(
+        self,
+        user_text: str,
+        assistant_text: str,
+        feedback: int,
+        penalty: float | None = None,
+    ) -> None:
+        rating = 1 if int(feedback) > 0 else -1
+        use_penalty = float(penalty) if penalty is not None else self.dislike_penalty_default
+        use_penalty = max(0.0, min(use_penalty, 1.0))
+
+        try:
+            self.events.add(
+                {
+                    "type": "assistant_feedback",
+                    "who": "user",
+                    "what": "assistant_reply_feedback",
+                    "rating": rating,
+                    "penalty": use_penalty if rating < 0 else 0.0,
+                    "assistant_text": assistant_text,
+                    "user_text": user_text,
+                    "importance": "high",
+                    "tags": ["feedback", "like" if rating > 0 else "dislike"],
+                }
+            )
+        except Exception as exc:
+            self._log_error(
+                operation="events_add_feedback",
+                error=exc,
+                input_size=self._input_size(user_text, assistant_text, rating),
+            )
+
+        try:
+            self.log.append("feedback", f"rating={rating}; penalty={use_penalty:.2f}; assistant={assistant_text}")
+        except Exception as exc:
+            self._log_error(
+                operation="chat_log_feedback_append",
+                error=exc,
+                input_size=self._input_size(user_text, assistant_text, rating),
+            )
+
+        try:
+            combined = f"User: {user_text}\nAssistant: {assistant_text}"
+            self.long.add(
+                combined,
+                meta={
+                    "type": "dialog_feedback",
+                    "feedback_score": float(rating),
+                    "feedback_penalty": use_penalty if rating < 0 else 0.0,
+                    "feedback_bonus": self.like_bonus_default if rating > 0 else 0.0,
+                },
+            )
+        except Exception as exc:
+            self._log_error(
+                operation="long_memory_add_feedback",
+                error=exc,
+                input_size=self._input_size(user_text, assistant_text, rating),
+                category="embedding_error",
+            )
+
+    def recent_disliked_assistant_texts(self, limit: int = 20) -> List[str]:
+        try:
+            events = self.events.last(300)
+        except Exception as exc:
+            self._log_error(
+                operation="events_read_feedback",
+                error=exc,
+                input_size=self._input_size(limit),
+            )
+            return []
+
+        out: List[str] = []
+        seen: set[str] = set()
+        for ev in reversed(events):
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("type") != "assistant_feedback":
+                continue
+            try:
+                rating = int(ev.get("rating", 0))
+            except Exception:
+                rating = 0
+            if rating >= 0:
+                continue
+            text = str(ev.get("assistant_text") or "").strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(key[:160])
+            if len(out) >= limit:
+                break
+        return out
 
     def last_events(self, n: int = 20) -> List[Dict[str, Any]]:
         try:
@@ -180,6 +327,35 @@ class MemoryManager:
             )
             return None
 
+    def recent_chat_messages(self, n: int = 20) -> List[Dict[str, Any]]:
+        try:
+            rows = self.log.last_messages(n=n, roles=("user", "assistant"))
+            return rows if isinstance(rows, list) else []
+        except Exception as exc:
+            self._log_error(
+                operation="recent_chat_messages",
+                error=exc,
+                input_size=self._input_size(n),
+            )
+            return []
+
+    def relevant_chat_messages(self, query: str, limit: int = 6, scan_last: int = 400) -> List[Dict[str, Any]]:
+        try:
+            rows = self.log.relevant_messages(
+                query=query,
+                limit=limit,
+                scan_last=scan_last,
+                roles=("user", "assistant"),
+            )
+            return rows if isinstance(rows, list) else []
+        except Exception as exc:
+            self._log_error(
+                operation="relevant_chat_messages",
+                error=exc,
+                input_size=self._input_size(query, limit, scan_last),
+            )
+            return []
+
     def _apply_fact_result(self, user_text: str, result: Any) -> None:
         if not isinstance(result, dict):
             return
@@ -195,7 +371,7 @@ class MemoryManager:
         if not isinstance(facts, dict) or not facts:
             return
 
-        can_write_profile = confidence >= 0.70 and polarity in ("assertion", "correction")
+        can_write_profile = confidence >= 0.55 and polarity in ("assertion", "correction")
 
         if about == "user" and can_write_profile:
             try:
@@ -210,7 +386,7 @@ class MemoryManager:
             return
 
         # Если пользователь говорит факты про ассистентку — добавляем как заметку/событие (не меняем профиль)
-        if about == "assistant" and confidence >= 0.70 and polarity in ("assertion", "correction"):
+        if about == "assistant" and confidence >= 0.55 and polarity in ("assertion", "correction"):
             try:
                 self.events.add(
                     {
