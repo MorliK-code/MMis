@@ -1,3 +1,4 @@
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
@@ -36,6 +37,50 @@ class MemoryManager:
     @staticmethod
     def _input_size(*values: Any) -> int:
         return sum(len(str(v or "")) for v in values)
+
+    @staticmethod
+    def _extract_user_do_not_say(user_text: str) -> List[str]:
+        text = str(user_text or "").strip()
+        if not text:
+            return []
+
+        lowered = text.lower()
+        triggers = (
+            "не говори",
+            "нельзя говорить",
+            "не произноси",
+            "не употребляй",
+            "не используй",
+            "запрещ",
+        )
+        if not any(t in lowered for t in triggers):
+            return []
+
+        out: List[str] = []
+        seen: set[str] = set()
+
+        def _push(raw: str) -> None:
+            value = re.sub(r"\s+", " ", str(raw or "")).strip(" \t\r\n\"'`«»“”.,;:!?")
+            if not value or len(value) > 80:
+                return
+            key = value.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            out.append(value)
+
+        for m in re.finditer(r"[\"'`«“”]([^\"'`»“”]{1,80})[\"'`»“”]", text):
+            _push(m.group(1))
+
+        for m in re.finditer(
+            r"(?:не\s+говори|нельзя\s+говорить|не\s+произноси|не\s+употребляй|не\s+используй)\s+"
+            r"(?:слово|слова|фразу|фраза|фразы)\s+([A-Za-zА-Яа-яЁё0-9_-]{1,40})",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            _push(m.group(1))
+
+        return out
 
     def _log_error(
         self,
@@ -120,6 +165,18 @@ class MemoryManager:
                 error=exc,
                 input_size=self._input_size(user_text),
                 category="extractor_error",
+            )
+
+        try:
+            forbidden = self._extract_user_do_not_say(user_text)
+            if forbidden:
+                self.assistant_profile.apply_fact_patch("assertion", {"do_not_say": forbidden})
+        except Exception as exc:
+            self._log_error(
+                operation="assistant_do_not_say_from_user",
+                error=exc,
+                input_size=self._input_size(user_text),
+                category="profile_write_error",
             )
 
         # 5b) LLM decides if this turn should become a compact long-term user note.
@@ -386,7 +443,25 @@ class MemoryManager:
             return
 
         # Если пользователь говорит факты про ассистентку — добавляем как заметку/событие (не меняем профиль)
+        # Explicit wording constraints from the user can update assistant profile.
         if about == "assistant" and confidence >= 0.55 and polarity in ("assertion", "correction"):
+            assistant_patch: Dict[str, Any] = {}
+            if isinstance(facts.get("do_not_say"), list) and facts.get("do_not_say"):
+                assistant_patch["do_not_say"] = facts.get("do_not_say")
+            if isinstance(facts.get("signature_phrases"), list) and facts.get("signature_phrases"):
+                assistant_patch["signature_phrases"] = facts.get("signature_phrases")
+
+            if assistant_patch:
+                try:
+                    self.assistant_profile.apply_fact_patch("assertion", assistant_patch)
+                except Exception as exc:
+                    self._log_error(
+                        operation="assistant_profile_merge_from_user_claim",
+                        error=exc,
+                        input_size=self._input_size(user_text, assistant_patch),
+                        category="profile_write_error",
+                    )
+                return
             try:
                 self.events.add(
                     {

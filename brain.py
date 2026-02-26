@@ -77,6 +77,64 @@ class Brain:
     def _postprocess_reply(self, reply: str) -> str:
         return re.sub(r"\s+", " ", (reply or "")).strip()
 
+    def _assistant_do_not_say(self, limit: int | None = None) -> list[str]:
+        try:
+            d = getattr(self.mm.assistant_profile, "data", {}) or {}
+        except Exception:
+            d = {}
+
+        raw = d.get("do_not_say", [])
+        if not isinstance(raw, list):
+            raw = [raw]
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in raw:
+            text = re.sub(r"\s+", " ", str(item or "")).strip()
+            if not text or self._looks_broken_text(text):
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+
+        if isinstance(limit, int) and limit > 0:
+            return out[:limit]
+        return out
+
+    def _assistant_guardrails_hint(self) -> str:
+        banned = self._assistant_do_not_say(limit=24)
+        if not banned:
+            return ""
+        lines = "\n".join(f"- {self._truncate(x, 80)}" for x in banned)
+        return (
+            "Строгий запрет: никогда не используй в ответе следующие слова/фразы:\n"
+            f"{lines}\n"
+            "Если мысль требует этих слов, переформулируй без них."
+        )
+
+    def _enforce_do_not_say(self, text: str) -> str:
+        out = str(text or "")
+        banned = self._assistant_do_not_say()
+        if not out or not banned:
+            return self._postprocess_reply(out)
+
+        for token in banned:
+            if re.search(r"\s", token):
+                pattern = re.compile(re.escape(token), flags=re.IGNORECASE)
+            else:
+                pattern = re.compile(rf"(?<!\w){re.escape(token)}(?!\w)", flags=re.IGNORECASE)
+            out = pattern.sub("", out)
+
+        out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+        out = re.sub(r"([,.;:!?]){2,}", r"\1", out)
+        out = re.sub(r"\s{2,}", " ", out).strip(" \t\r\n,;:-")
+
+        if not out:
+            out = "Поняла."
+        return self._postprocess_reply(out)
+
     @staticmethod
     def _strip_cjk(text: str) -> str:
         return _CJK_RE.sub("", text or "")
@@ -202,6 +260,9 @@ class Brain:
 
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         messages.append({"role": "system", "content": self._assistant_identity_hint()})
+        guardrails = self._assistant_guardrails_hint()
+        if guardrails:
+            messages.append({"role": "system", "content": guardrails})
 
         if include_heavy_context:
             try:
@@ -298,7 +359,7 @@ class Brain:
         messages.append({"role": "user", "content": user_input})
         return messages
 
-    def think(self, user_input: str, audience: str = "single") -> str:
+    def think(self, user_input: str, audience: str = "single", store_turn: bool = True) -> str:
         prep_t0 = time.perf_counter()
         messages = self._build_messages(user_input)
         prep_ms = (time.perf_counter() - prep_t0) * 1000
@@ -384,11 +445,13 @@ class Brain:
         reply = self._strip_cjk(reply)
         reply = self._normalize_tone(reply)
         reply = self._enforce_short(reply)
+        reply = self._enforce_do_not_say(reply)
 
-        self.mm.store_turn(user_input, reply)
+        if store_turn:
+            self.mm.store_turn(user_input, reply)
         return reply
 
-    def think_stream(self, user_input: str, on_chunk=None) -> str:
+    def think_stream(self, user_input: str, on_chunk=None, store_turn: bool = True) -> str:
         prep_t0 = time.perf_counter()
         messages = self._build_messages(user_input)
         prep_ms = (time.perf_counter() - prep_t0) * 1000
@@ -454,5 +517,7 @@ class Brain:
         reply = self._postprocess_reply(self._strip_cjk("".join(parts)))
         reply = self._normalize_tone(reply)
         reply = self._enforce_short(reply)
-        self.mm.store_turn(user_input, reply)
+        reply = self._enforce_do_not_say(reply)
+        if store_turn:
+            self.mm.store_turn(user_input, reply)
         return reply

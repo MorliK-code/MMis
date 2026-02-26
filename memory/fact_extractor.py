@@ -54,6 +54,8 @@ ALLOWED_FACT_KEYS = {
         "likes",
         "dislikes",
         "interests",
+        "do_not_say",
+        "signature_phrases",
         "bio",
         "communication_style",
         "boundaries",

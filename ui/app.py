@@ -5,25 +5,34 @@ from __future__ import annotations
 import re
 import sys
 import traceback
+import json
+import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, QObject, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QKeyEvent
+from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QPropertyAnimation, QObject, QSize, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QCursor, QFont, QKeyEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
+    QCheckBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -82,10 +91,11 @@ class ReplyWorker(QObject):
     errored = Signal(str)
     chunk = Signal(str)
 
-    def __init__(self, brain: Brain, user_text: str):
+    def __init__(self, brain: Brain, user_text: str, store_turn: bool = True):
         super().__init__()
         self.brain = brain
         self.user_text = user_text
+        self.store_turn = bool(store_turn)
         self._cancel_requested = False
 
     def request_cancel(self):
@@ -94,7 +104,7 @@ class ReplyWorker(QObject):
     @Slot()
     def run(self):
         try:
-            answer = self.brain.think_stream(self.user_text, on_chunk=self.chunk.emit)
+            answer = self.brain.think_stream(self.user_text, on_chunk=self.chunk.emit, store_turn=self.store_turn)
             stats = getattr(self.brain, "last_stats", {}) or {}
             if self._cancel_requested:
                 return
@@ -104,12 +114,20 @@ class ReplyWorker(QObject):
 
 
 class _HoverRevealFilter(QObject):
-    def __init__(self, owner: QWidget, target: QWidget, show_ms: int = 170, hide_ms: int = 130):
+    def __init__(
+        self,
+        owner: QWidget,
+        target: QWidget,
+        show_ms: int = 170,
+        hide_ms: int = 130,
+        require_reenter: bool = False,
+    ):
         super().__init__(owner)
         self.owner = owner
         self.target = target
         self.show_ms = max(0, int(show_ms))
         self.hide_ms = max(40, int(hide_ms))
+        self._must_leave_once = bool(require_reenter)
         self._pressed_inside_target = False
         self._outside_streak = 0
         target.setVisible(False)
@@ -119,7 +137,7 @@ class _HoverRevealFilter(QObject):
         self._sync_timer.start()
 
     def _contains_global(self, w: QWidget, global_pos, pad: int = 2) -> bool:
-        if not isValid(w) or not w.isVisible():
+        if not isValid(w):
             return False
         local = w.mapFromGlobal(global_pos)
         rect = w.rect().adjusted(-pad, -pad, pad, pad)
@@ -171,7 +189,14 @@ class _HoverRevealFilter(QObject):
             self._outside_streak = 0
             self.target.setVisible(True)
             return
-        if self._is_cursor_inside_owner_or_target():
+        inside = self._is_cursor_inside_owner_or_target()
+        if self._must_leave_once:
+            if inside:
+                self._outside_streak = 0
+                self.target.setVisible(False)
+                return
+            self._must_leave_once = False
+        if inside:
             self._outside_streak = 0
             self.target.setVisible(True)
             return
@@ -344,6 +369,66 @@ class _MessageCard(QFrame):
         self._overlay.move(x, y)
 
 
+class _ToggleSwitch(QCheckBox):
+    def __init__(self, text: str = "", parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self._track_off = QColor(95, 95, 105, 180)
+        self._track_on = QColor(58, 102, 163, 240)
+        self._track_border = QColor(255, 255, 255, 45)
+        self._knob = QColor(240, 240, 240)
+        self._text_color = QColor(240, 240, 240)
+        self._offset = 0.0
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(24)
+        self.toggled.connect(self._on_toggled)
+
+    def sizeHint(self):
+        return self.minimumSizeHint()
+
+    def minimumSizeHint(self):
+        fm = self.fontMetrics()
+        text_w = fm.horizontalAdvance(self.text())
+        return QSize(38 + 8 + text_w + 6, 24)
+
+    def set_colors(self, track_off: QColor, track_on: QColor, track_border: QColor, text_color: QColor) -> None:
+        self._track_off = QColor(track_off)
+        self._track_on = QColor(track_on)
+        self._track_border = QColor(track_border)
+        self._text_color = QColor(text_color)
+        self.update()
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._offset = 1.0 if checked else 0.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        h = max(18, self.height() - 4)
+        w = 38
+        x = 0
+        y = int((self.height() - h) / 2)
+        r = h / 2.0
+
+        track_rect = self.rect().adjusted(x, y, -(self.width() - (x + w)), -(self.height() - (y + h)))
+        track_color = self._track_on if self.isChecked() else self._track_off
+        p.setPen(QPen(self._track_border, 1))
+        p.setBrush(track_color)
+        p.drawRoundedRect(track_rect, r, r)
+
+        knob_d = h - 4
+        knob_y = y + 2
+        knob_min_x = x + 2
+        knob_max_x = x + w - knob_d - 2
+        knob_x = knob_max_x if self.isChecked() else knob_min_x
+        p.setPen(Qt.NoPen)
+        p.setBrush(self._knob)
+        p.drawEllipse(knob_x, knob_y, knob_d, knob_d)
+
+        p.setPen(self._text_color)
+        p.drawText(w + 8, 0, self.width() - (w + 8), self.height(), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+
 class _OverlayHost(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -404,8 +489,18 @@ class MainWindow(QMainWindow):
         self._live_css = LiveCss(Path(__file__).with_name("style.css"))
         self._feedback_reveal_show_ms = 170
         self._feedback_reveal_hide_ms = 130
+        self._sessions_dir = MemoryStorageDir / "ui_chats"
+        self._sessions_index_path = self._sessions_dir / "index.json"
+        self._legacy_sessions_path = MemoryStorageDir / "ui_chats.json"
+        self._chat_sessions: list[dict] = []
+        self._active_chat_id: str | None = None
+        self._updating_chat_controls = False
+        self._chats_open_width = 240
+        self._chats_drawer_open = False
+        self._chats_drawer_anim: QPropertyAnimation | None = None
 
         self._build_ui()
+        self._load_or_init_chat_sessions()
 
         self._css_timer = QTimer(self)
         self._css_timer.setInterval(1000)
@@ -452,6 +547,12 @@ class MainWindow(QMainWindow):
         self.model_label = QLabel(f"Model: <b>{MODEL_NAME}</b>")
         self.model_label.setObjectName("model_label")
         top.addWidget(self.model_label)
+
+        self.btn_toggle_chats = QPushButton("Чаты")
+        self.btn_toggle_chats.setObjectName("btn_toggle_chats")
+        self.btn_toggle_chats.clicked.connect(self._toggle_chats_drawer)
+        top.addWidget(self.btn_toggle_chats)
+
         top.addStretch(1)
 
         self.btn_stop = QPushButton("\u0421\u0442\u043e\u043f")
@@ -468,6 +569,29 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
         layout.addWidget(splitter, 1)
+
+        self.chats_panel = QFrame()
+        self.chats_panel.setObjectName("chats_panel")
+        chats_layout = QVBoxLayout(self.chats_panel)
+        chats_layout.setContentsMargins(8, 8, 8, 8)
+        chats_layout.setSpacing(8)
+
+        chats_title = QLabel("Чаты")
+        chats_title.setObjectName("stats_label")
+        chats_layout.addWidget(chats_title)
+
+        self.chat_list = QListWidget()
+        self.chat_list.setObjectName("chat_list")
+        self.chat_list.currentRowChanged.connect(self._on_chat_selected)
+        chats_layout.addWidget(self.chat_list, 1)
+
+        chats_actions = QHBoxLayout()
+        self.btn_new_chat = QPushButton("Новый")
+        self.btn_new_chat.setObjectName("btn_new_chat")
+        self.btn_new_chat.clicked.connect(self._on_new_chat)
+        chats_actions.addWidget(self.btn_new_chat)
+        chats_layout.addLayout(chats_actions)
+        splitter.addWidget(self.chats_panel)
 
         self.chat_panel = QFrame()
         self.chat_panel.setObjectName("chat_panel")
@@ -488,6 +612,7 @@ class MainWindow(QMainWindow):
         self.chat_layout.setContentsMargins(0, 0, 0, 0)
         self.chat_layout.setSpacing(0)
         self.chat_layout.setAlignment(Qt.AlignTop)
+        self.chat_layout.setSizeConstraint(QVBoxLayout.SetMinAndMaxSize)
         self.chat_scroll.setWidget(self.chat_root)
         chat_panel_layout.addWidget(self.chat_scroll)
         splitter.addWidget(self.chat_panel)
@@ -517,11 +642,15 @@ class MainWindow(QMainWindow):
 
         side_layout.addStretch(1)
         splitter.addWidget(self.stats_panel)
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(2, 2)
+        self.chats_panel.setMinimumWidth(0)
+        self.chats_panel.setMaximumWidth(self._chats_open_width)
         self.chat_scroll.setMinimumWidth(560)
         self.stats_panel.setMinimumWidth(260)
-        splitter.setSizes([780, 300])
+        splitter.setSizes([220, 760, 300])
+        self._set_chats_drawer_open(False, animated=False)
 
         self.input = QPlainTextEdit()
         self.input.setObjectName("chat_input")
@@ -551,7 +680,461 @@ class MainWindow(QMainWindow):
 
         self._apply_panel_styles(self._resolve_style())
         self._render_chat()
-        self._append_system("MMis UI \u0437\u0430\u043f\u0443\u0449\u0435\u043d. Ctrl+Enter \u2014 \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c.")
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now().isoformat(timespec="seconds")
+
+    @staticmethod
+    def _history_to_serializable(history: list[tuple[str, str, str | None, int | None]]) -> list[dict]:
+        out: list[dict] = []
+        for role, text, stat_line, feedback in history:
+            out.append(
+                {
+                    "role": str(role),
+                    "text": str(text or ""),
+                    "stat_line": None if stat_line is None else str(stat_line),
+                    "feedback": None if feedback is None else int(feedback),
+                }
+            )
+        return out
+
+    @staticmethod
+    def _history_from_serializable(rows: list[dict] | None) -> list[tuple[str, str, str | None, int | None]]:
+        out: list[tuple[str, str, str | None, int | None]] = []
+        if not isinstance(rows, list):
+            return out
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            role = str(row.get("role") or "")
+            if role not in {"system", "user", "ai"}:
+                continue
+            text = str(row.get("text") or "")
+            stat_line_raw = row.get("stat_line")
+            stat_line = None if stat_line_raw is None else str(stat_line_raw)
+            feedback_raw = row.get("feedback")
+            feedback = None
+            if feedback_raw is not None:
+                try:
+                    feedback = int(feedback_raw)
+                except Exception:
+                    feedback = None
+            out.append((role, text, stat_line, feedback))
+        return out
+
+    def _new_chat_payload(self, title: str | None = None, incognito: bool = False) -> dict:
+        ts = self._now_iso()
+        next_num = len(self._chat_sessions) + 1
+        return {
+            "id": f"chat-{int(datetime.now().timestamp() * 1000)}-{next_num}",
+            "title": title or f"Чат {next_num}",
+            "incognito": bool(incognito),
+            "created_at": ts,
+            "updated_at": ts,
+            "history": [("system", "MMis UI запущен. Ctrl+Enter — отправить.", None, None)],
+        }
+
+    def _chat_dir(self, chat_id: str) -> Path:
+        return self._sessions_dir / str(chat_id)
+
+    def _chat_payload_path(self, chat_id: str) -> Path:
+        return self._chat_dir(chat_id) / "chat.json"
+
+    def _load_legacy_sessions(self) -> tuple[list[dict], str | None]:
+        loaded: list[dict] = []
+        active_id: str | None = None
+        if not self._legacy_sessions_path.exists():
+            return loaded, active_id
+        try:
+            payload = json.loads(self._legacy_sessions_path.read_text(encoding="utf-8-sig"))
+            rows = payload.get("chats", []) if isinstance(payload, dict) else []
+            active_id_raw = payload.get("active_chat_id") if isinstance(payload, dict) else None
+            active_id = str(active_id_raw) if active_id_raw else None
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    chat_id = str(row.get("id") or "").strip()
+                    if not chat_id:
+                        continue
+                    loaded.append(
+                        {
+                            "id": chat_id,
+                            "title": str(row.get("title") or "Чат"),
+                            "incognito": bool(row.get("incognito", False)),
+                            "created_at": str(row.get("created_at") or self._now_iso()),
+                            "updated_at": str(row.get("updated_at") or self._now_iso()),
+                            "history": self._history_from_serializable(row.get("history")),
+                        }
+                    )
+            loaded = [c for c in loaded if not bool(c.get("incognito", False))]
+            if active_id and not any(str(c.get("id")) == active_id for c in loaded):
+                active_id = None
+        except Exception:
+            loaded = []
+            active_id = None
+        return loaded, active_id
+
+    def _save_chat_sessions(self) -> None:
+        self._sync_active_session_from_history()
+        try:
+            self._sessions_dir.mkdir(parents=True, exist_ok=True)
+            persisted_ids: set[str] = set()
+            persisted_meta: list[dict] = []
+
+            for chat in self._chat_sessions:
+                if bool(chat.get("incognito", False)):
+                    continue
+                chat_id = str(chat.get("id") or "").strip()
+                if not chat_id:
+                    continue
+                persisted_ids.add(chat_id)
+                payload = {
+                    "id": chat_id,
+                    "title": str(chat.get("title") or "Чат"),
+                    "incognito": False,
+                    "created_at": str(chat.get("created_at") or self._now_iso()),
+                    "updated_at": str(chat.get("updated_at") or self._now_iso()),
+                    "history": self._history_to_serializable(chat.get("history") or []),
+                }
+                chat_path = self._chat_payload_path(chat_id)
+                chat_path.parent.mkdir(parents=True, exist_ok=True)
+                chat_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                persisted_meta.append(
+                    {
+                        "id": payload["id"],
+                        "title": payload["title"],
+                        "created_at": payload["created_at"],
+                        "updated_at": payload["updated_at"],
+                    }
+                )
+
+            for child in self._sessions_dir.iterdir():
+                if not child.is_dir():
+                    continue
+                if child.name in persisted_ids:
+                    continue
+                shutil.rmtree(child, ignore_errors=True)
+
+            active_chat = self._active_chat()
+            active_id = None
+            if active_chat and not bool(active_chat.get("incognito", False)):
+                active_id = str(active_chat.get("id") or "") or None
+            index_payload = {"version": 2, "active_chat_id": active_id, "chats": persisted_meta}
+            self._sessions_index_path.write_text(json.dumps(index_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _load_or_init_chat_sessions(self) -> None:
+        loaded: list[dict] = []
+        active_id: str | None = None
+        if self._sessions_index_path.exists():
+            try:
+                payload = json.loads(self._sessions_index_path.read_text(encoding="utf-8-sig"))
+                rows = payload.get("chats", []) if isinstance(payload, dict) else []
+                active_id_raw = payload.get("active_chat_id") if isinstance(payload, dict) else None
+                active_id = str(active_id_raw) if active_id_raw else None
+                if isinstance(rows, list):
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        chat_id = str(row.get("id") or "").strip()
+                        if not chat_id:
+                            continue
+                        chat_payload_path = self._chat_payload_path(chat_id)
+                        if not chat_payload_path.exists():
+                            continue
+                        chat_payload = json.loads(chat_payload_path.read_text(encoding="utf-8-sig"))
+                        loaded.append(
+                            {
+                                "id": chat_id,
+                                "title": str(chat_payload.get("title") or row.get("title") or "Чат"),
+                                "incognito": False,
+                                "created_at": str(chat_payload.get("created_at") or row.get("created_at") or self._now_iso()),
+                                "updated_at": str(chat_payload.get("updated_at") or row.get("updated_at") or self._now_iso()),
+                                "history": self._history_from_serializable(chat_payload.get("history")),
+                            }
+                        )
+            except Exception:
+                loaded = []
+
+        if not loaded:
+            legacy_loaded, legacy_active = self._load_legacy_sessions()
+            loaded = legacy_loaded
+            active_id = legacy_active
+
+        self._chat_sessions = loaded
+        if loaded:
+            self._active_chat_id = active_id if any(c.get("id") == active_id for c in loaded) else str(loaded[0]["id"])
+        else:
+            self._active_chat_id = None
+        self._refresh_chat_selector()
+        self._apply_active_chat_to_ui(scroll_to_bottom=True)
+        self._save_chat_sessions()
+
+    def _active_chat(self) -> dict | None:
+        if not self._active_chat_id:
+            return None
+        return self._chat_by_id(self._active_chat_id)
+
+    def _chat_by_id(self, chat_id: str | None) -> dict | None:
+        if not chat_id:
+            return None
+        cid = str(chat_id)
+        for chat in self._chat_sessions:
+            if str(chat.get("id")) == cid:
+                return chat
+        return None
+
+    def _sync_active_session_from_history(self) -> None:
+        chat = self._active_chat()
+        if not chat:
+            return
+        chat["history"] = list(self._history)
+        chat["updated_at"] = self._now_iso()
+
+    def _refresh_chat_selector(self) -> None:
+        if not hasattr(self, "chat_list"):
+            return
+        self._updating_chat_controls = True
+        try:
+            self.chat_list.clear()
+            for chat in self._chat_sessions:
+                title = str(chat.get("title") or "Чат")
+                if bool(chat.get("incognito", False)):
+                    title = f"{title} (инкогнито)"
+                item = QListWidgetItem(self.chat_list)
+                item.setSizeHint(QSize(180, 30))
+                row = QWidget()
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(6, 2, 2, 2)
+                row_layout.setSpacing(6)
+
+                title_label = QLabel(title)
+                title_label.setObjectName("chat_title")
+                title_label.setTextInteractionFlags(Qt.NoTextInteraction)
+                row_layout.addWidget(title_label, 1)
+
+                dots_btn = QToolButton()
+                dots_btn.setObjectName("chat_item_menu_btn")
+                dots_btn.setText("⋯")
+                chat_id = str(chat.get("id") or "")
+                dots_btn.clicked.connect(lambda _=False, cid=chat_id, b=dots_btn: self._show_chat_item_menu(cid, b))
+                row_layout.addWidget(dots_btn, 0)
+                self.chat_list.setItemWidget(item, row)
+
+            idx = 0
+            for i, chat in enumerate(self._chat_sessions):
+                if str(chat.get("id")) == self._active_chat_id:
+                    idx = i
+                    break
+            if self._chat_sessions:
+                self.chat_list.setCurrentRow(idx)
+            else:
+                self.chat_list.setCurrentRow(-1)
+        finally:
+            self._updating_chat_controls = False
+        self._update_chat_controls_state()
+
+    def _apply_active_chat_to_ui(self, scroll_to_bottom: bool = False) -> None:
+        chat = self._active_chat()
+        if not chat:
+            self._history = []
+            self._stream_ai_index = None
+            self._stream_chunk_buffer = ""
+            self._last_user_text = None
+            self._set_status("Готово")
+            self._render_chat(scroll_to_bottom=scroll_to_bottom)
+            self._update_chat_controls_state()
+            return
+        self._history = list(chat.get("history") or [])
+        if not self._history:
+            self._history = [("system", "MMis UI запущен. Ctrl+Enter — отправить.", None, None)]
+            chat["history"] = list(self._history)
+        self._stream_ai_index = None
+        self._stream_chunk_buffer = ""
+        self._last_user_text = None
+        for role, text, _, _ in reversed(self._history):
+            if role == "user":
+                self._last_user_text = text
+                break
+        self._set_status("Готово")
+        self._render_chat(scroll_to_bottom=scroll_to_bottom)
+        self._update_chat_controls_state()
+
+    def _update_chat_controls_state(self) -> None:
+        has_active = self._active_chat() is not None
+        self.btn_new_chat.setEnabled(True)
+        self.btn_send.setEnabled(has_active and not (self._thread and self._thread.isRunning()))
+
+    def _show_chat_item_menu(self, chat_id: str, anchor: QWidget) -> None:
+        chat = self._chat_by_id(chat_id)
+        if not chat:
+            return
+        if chat_id != self._active_chat_id:
+            self._sync_active_session_from_history()
+            self._active_chat_id = chat_id
+            self._apply_active_chat_to_ui(scroll_to_bottom=True)
+            self._save_chat_sessions()
+            self._refresh_chat_selector()
+
+        menu = QMenu(self)
+        settings_action = menu.addAction("Настройки")
+        chosen = menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        if chosen == settings_action:
+            self._open_chat_settings(chat_id)
+
+    def _open_chat_settings(self, chat_id: str) -> None:
+        chat = self._chat_by_id(chat_id)
+        if not chat:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Настройки чата")
+        dlg.setModal(True)
+        dlg.setMinimumWidth(300)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        title = QLabel(str(chat.get("title") or "Чат"))
+        title.setObjectName("stats_label")
+        layout.addWidget(title)
+
+        incognito_switch = _ToggleSwitch("Инкогнито")
+        incognito_switch.setChecked(bool(chat.get("incognito", False)))
+        s = self._resolve_style()
+        incognito_switch.set_colors(
+            track_off=s["btn_disabled_bg"],
+            track_on=s["send_btn_bg"],
+            track_border=s["btn_border"],
+            text_color=s["ui_text"],
+        )
+        layout.addWidget(incognito_switch)
+
+        buttons_row = QHBoxLayout()
+        btn_export = QPushButton("Экспорт")
+        btn_delete = QPushButton("Удалить чат")
+        buttons_row.addWidget(btn_export)
+        buttons_row.addWidget(btn_delete)
+        layout.addLayout(buttons_row)
+
+        btn_close = QPushButton("Закрыть")
+        layout.addWidget(btn_close)
+
+        def _on_toggle(checked: bool):
+            self._set_chat_incognito(chat_id, checked)
+
+        incognito_switch.toggled.connect(_on_toggle)
+        btn_export.clicked.connect(lambda: self._export_chat_by_id(chat_id))
+        btn_delete.clicked.connect(lambda: self._delete_chat_by_id(chat_id, parent_dialog=dlg))
+        btn_close.clicked.connect(dlg.accept)
+
+        dlg.exec()
+
+    @Slot(int)
+    def _on_chat_selected(self, index: int) -> None:
+        if self._updating_chat_controls:
+            return
+        if index < 0 or index >= len(self._chat_sessions):
+            return
+        if self._thread and self._thread.isRunning():
+            self._updating_chat_controls = True
+            try:
+                self._refresh_chat_selector()
+            finally:
+                self._updating_chat_controls = False
+            QMessageBox.information(self, "Подожди", "Сначала останови или дождись завершения генерации.")
+            return
+        new_id = str(self._chat_sessions[index].get("id") or "")
+        if not new_id or new_id == self._active_chat_id:
+            return
+        self._sync_active_session_from_history()
+        self._active_chat_id = new_id
+        self._apply_active_chat_to_ui(scroll_to_bottom=True)
+        self._save_chat_sessions()
+        if self._chats_drawer_open:
+            self._set_chats_drawer_open(False, animated=True)
+
+    @Slot()
+    def _on_new_chat(self) -> None:
+        if self._thread and self._thread.isRunning():
+            QMessageBox.information(self, "Подожди", "Сначала останови или дождись завершения генерации.")
+            return
+        self._sync_active_session_from_history()
+        chat = self._new_chat_payload(incognito=False)
+        self._chat_sessions.append(chat)
+        self._active_chat_id = str(chat["id"])
+        self._refresh_chat_selector()
+        self._apply_active_chat_to_ui(scroll_to_bottom=True)
+        self._save_chat_sessions()
+
+    def _set_chat_incognito(self, chat_id: str, checked: bool) -> None:
+        chat = self._chat_by_id(chat_id)
+        if not chat:
+            return
+        chat["incognito"] = bool(checked)
+        chat["updated_at"] = self._now_iso()
+        self._refresh_chat_selector()
+        if str(chat.get("id") or "") == self._active_chat_id:
+            self._apply_active_chat_to_ui(scroll_to_bottom=False)
+        self._save_chat_sessions()
+
+    def _delete_chat_by_id(self, chat_id: str, parent_dialog: QDialog | None = None) -> None:
+        if self._thread and self._thread.isRunning():
+            QMessageBox.information(self, "Подожди", "Сначала останови или дождись завершения генерации.")
+            return
+        chat = self._chat_by_id(chat_id)
+        if not chat:
+            return
+        title = str(chat.get("title") or "Чат")
+        answer = QMessageBox.question(
+            self,
+            "Удалить чат",
+            f"Удалить чат «{title}»?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        self._chat_sessions = [c for c in self._chat_sessions if str(c.get("id") or "") != chat_id]
+        shutil.rmtree(self._chat_dir(chat_id), ignore_errors=True)
+
+        if self._chat_sessions and self._active_chat_id == chat_id:
+            self._active_chat_id = str(self._chat_sessions[0].get("id") or "")
+        elif not self._chat_sessions:
+            self._active_chat_id = None
+        self._refresh_chat_selector()
+        self._apply_active_chat_to_ui(scroll_to_bottom=True)
+        self._save_chat_sessions()
+        if parent_dialog is not None:
+            parent_dialog.accept()
+
+    def _export_chat_by_id(self, chat_id: str) -> None:
+        chat = self._chat_by_id(chat_id)
+        if not chat:
+            return
+        self._sync_active_session_from_history()
+        export_dir = MemoryStorageDir / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{str(chat.get('id') or 'chat')}_{stamp}.json"
+        path = export_dir / filename
+        payload = {
+            "id": chat.get("id"),
+            "title": chat.get("title"),
+            "incognito": bool(chat.get("incognito", False)),
+            "created_at": chat.get("created_at"),
+            "updated_at": chat.get("updated_at"),
+            "history": self._history_to_serializable(chat.get("history") or []),
+        }
+        try:
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            QMessageBox.information(self, "Экспорт", f"Чат экспортирован:\n{path}")
+        except Exception:
+            QMessageBox.warning(self, "Экспорт", "Не удалось экспортировать чат.")
 
     @Slot()
     def _on_live_css_tick(self):
@@ -570,6 +1153,40 @@ class MainWindow(QMainWindow):
                     self.on_send()
                     return True
         return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._sync_chat_content_geometry)
+
+    @Slot()
+    def _toggle_chats_drawer(self) -> None:
+        self._set_chats_drawer_open(not self._chats_drawer_open, animated=True)
+
+    def _set_chats_drawer_open(self, is_open: bool, animated: bool = True) -> None:
+        target = int(self._chats_open_width if is_open else 0)
+        self._chats_drawer_open = bool(is_open)
+        self.btn_toggle_chats.setText("Скрыть чаты" if is_open else "Чаты")
+        if not animated:
+            self.chats_panel.setMaximumWidth(target)
+            self.chats_panel.setVisible(target > 0)
+            return
+
+        if self._chats_drawer_anim and self._chats_drawer_anim.state() == QAbstractAnimation.Running:
+            self._chats_drawer_anim.stop()
+        if target > 0:
+            self.chats_panel.setVisible(True)
+        anim = QPropertyAnimation(self.chats_panel, b"maximumWidth", self)
+        anim.setDuration(180)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(int(self.chats_panel.maximumWidth()))
+        anim.setEndValue(target)
+
+        def _finish():
+            self.chats_panel.setVisible(target > 0)
+
+        anim.finished.connect(_finish)
+        self._chats_drawer_anim = anim
+        anim.start()
 
     @staticmethod
     def _px(value: str | None, default: int) -> int:
@@ -593,6 +1210,28 @@ class MainWindow(QMainWindow):
     def _str(value: str | None, default: str) -> str:
         raw = (value or "").strip()
         return raw if raw else default
+
+    @staticmethod
+    def _normalize_stream_text(text: str) -> str:
+        s = str(text or "")
+        if not s:
+            return ""
+        s = s.replace("\r\n", "\n").replace("\r", "\n")
+        # Prevent stream artifacts from inflating bubble height.
+        s = re.sub(r"\n{2,}", "\n", s)
+        s = re.sub(r"[ \t\f\v]+", " ", s)
+        s = re.sub(r"\s*\n\s*", " ", s)
+        s = re.sub(r"\s{2,}", " ", s)
+        return s.strip()
+
+    @staticmethod
+    def _is_pending_stat_line(stat_line: str | None) -> bool:
+        s = str(stat_line or "").strip()
+        if not s:
+            return True
+        if re.fullmatch(r"[.\?…]{1,3}", s):
+            return True
+        return False
 
     @staticmethod
     def _color(value: str | None, fallback: str) -> QColor:
@@ -662,9 +1301,33 @@ class MainWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
 
-    def _install_hover_reveal(self, owner: QWidget, target: QWidget) -> None:
+    def _sync_chat_content_geometry(self) -> None:
+        layout = self.chat_layout
+        if layout is None:
+            return
+        layout.invalidate()
+        layout.activate()
+        content_h = max(1, int(layout.sizeHint().height()))
+        # Keep content height strictly equal to rendered rows to avoid
+        # phantom scroll space caused by stale minimum-height states.
+        self.chat_root.setMinimumHeight(0)
+        self.chat_root.setMaximumHeight(16777215)
+        self.chat_root.setFixedHeight(content_h)
+        self.chat_root.updateGeometry()
+        self.chat_root.adjustSize()
+        bar = self.chat_scroll.verticalScrollBar()
+        if bar.value() > bar.maximum():
+            bar.setValue(bar.maximum())
+
+    def _install_hover_reveal(self, owner: QWidget, target: QWidget, require_reenter: bool = False) -> None:
         target.setVisible(False)
-        filt = _HoverRevealFilter(owner, target)
+        filt = _HoverRevealFilter(
+            owner,
+            target,
+            show_ms=self._feedback_reveal_show_ms,
+            hide_ms=self._feedback_reveal_hide_ms,
+            require_reenter=require_reenter,
+        )
         owner._hover_reveal_filter = filt  # keep reference alive
         for w in [owner, target, *target.findChildren(QWidget)]:
             w.setMouseTracking(True)
@@ -684,7 +1347,14 @@ class MainWindow(QMainWindow):
         button.installEventFilter(filt)
 
     def _install_base_button_animations(self, style: dict | None = None) -> None:
-        for btn in (self.btn_stop, self.btn_clear, self.btn_regen, self.btn_send):
+        for btn in (
+            self.btn_toggle_chats,
+            self.btn_stop,
+            self.btn_clear,
+            self.btn_new_chat,
+            self.btn_regen,
+            self.btn_send,
+        ):
             self._install_button_animation(btn, style=style)
 
     def _resolve_style(self) -> dict:
@@ -815,6 +1485,13 @@ class MainWindow(QMainWindow):
             f"border-radius: {panel_radius}px;"
             "}"
         )
+        self.chats_panel.setStyleSheet(
+            "QFrame#chats_panel {"
+            f"background-color: {panel_bg};"
+            f"border: 1px solid {panel_border};"
+            f"border-radius: {panel_radius}px;"
+            "}"
+        )
 
         p = style["panel_padding"]
         self.chat_panel.layout().setContentsMargins(p, p, p, p)
@@ -823,6 +1500,7 @@ class MainWindow(QMainWindow):
 
         s = style["stats_padding"]
         self.stats_panel.layout().setContentsMargins(s, s, s, s)
+        self.chats_panel.layout().setContentsMargins(s // 2, s // 2, s // 2, s // 2)
 
         self.chat_scroll.setStyleSheet(
             "QScrollArea#chat_scroll { background: transparent; border: none; }"
@@ -868,6 +1546,30 @@ class MainWindow(QMainWindow):
             "}"
             f"QPushButton#btn_send {{ background: {self._qss_rgba(style['send_btn_bg'])}; }}"
             f"QPushButton#btn_send:hover {{ background: {self._qss_rgba(style['send_btn_hover_bg'])}; }}"
+            "QListWidget#chat_list {"
+            f"background: {self._qss_rgba(style['chat_inner_bg'])};"
+            f"border: 1px solid {self._qss_rgba(style['chat_inner_border'])};"
+            f"border-radius: {style['chat_inner_radius']}px;"
+            "padding: 4px;"
+            "}"
+            "QListWidget#chat_list::item {"
+            "padding: 7px 8px;"
+            "border-radius: 6px;"
+            "}"
+            "QListWidget#chat_list::item:selected {"
+            f"background: {self._qss_rgba(style['btn_hover_bg'])};"
+            "}"
+            "QLabel#chat_title {"
+            f"color: {self._qss_rgba(style['ui_text'])};"
+            "}"
+            "QToolButton#chat_item_menu_btn {"
+            f"background: {self._qss_rgba(style['btn_bg'])};"
+            f"color: {self._qss_rgba(style['btn_fg'])};"
+            f"border: 1px solid {self._qss_rgba(style['btn_border'])};"
+            "border-radius: 5px;"
+            "padding: 0px 6px;"
+            "}"
+            f"QToolButton#chat_item_menu_btn:hover {{ background: {self._qss_rgba(style['btn_hover_bg'])}; }}"
             "QPushButton#feedback_like, QPushButton#feedback_dislike {"
             f"background: {self._qss_rgba(style['feedback_btn_bg'])};"
             f"color: {self._qss_rgba(style['feedback_btn_text'])};"
@@ -910,13 +1612,13 @@ class MainWindow(QMainWindow):
             bg_color = QColor(0, 0, 0, 0)
 
         outer = _OverlayHost()
-        outer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        outer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         outer_layout = QVBoxLayout(outer)
         outer_layout.setContentsMargins(0, style["msg_gap_top"], 0, style["msg_gap_bottom"])
         outer_layout.setSpacing(6)
 
         card = QFrame()
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         card.setObjectName("msg_card")
         card.setStyleSheet(
             f"QFrame#msg_card {{ background-color: {self._qss_rgba(bg_color)}; border-radius: {style['msg_radius']}px; }}"
@@ -950,7 +1652,7 @@ class MainWindow(QMainWindow):
         self._apply_text_shadow(bubble_label, style["msg_text_shadow"])
         card_layout.addWidget(bubble_label)
 
-        show_ai_meta = role == "ai" and bool(stat_line and stat_line != "…")
+        show_ai_meta = role == "ai" and (not self._is_pending_stat_line(stat_line))
 
         if role in {"user", "ai"}:
             shadow = QGraphicsDropShadowEffect(card)
@@ -994,8 +1696,6 @@ class MainWindow(QMainWindow):
             dislike_btn.setObjectName("feedback_dislike")
             like_btn.setAttribute(Qt.WA_Hover, True)
             dislike_btn.setAttribute(Qt.WA_Hover, True)
-            self._install_button_animation(like_btn, style=style)
-            self._install_button_animation(dislike_btn, style=style)
             like_btn._feedback_visual_filter = _FeedbackVisualFilter(
                 button=like_btn,
                 base_bg=self._qss_rgba(style["feedback_btn_bg"]),
@@ -1026,22 +1726,18 @@ class MainWindow(QMainWindow):
             dislike_btn.clicked.connect(lambda _, i=msg_index: self._set_feedback(i, -1))
 
             if feedback == 1:
-                like_btn.setText("👍✓")
+                like_btn.setText("👍")
                 like_btn.setProperty("selected", True)
                 dislike_btn.setProperty("selected", False)
-                like_btn._feedback_visual_filter.refresh()
-                dislike_btn._feedback_visual_filter.refresh()
             elif feedback == -1:
-                dislike_btn.setText("👎✓")
+                dislike_btn.setText("👎")
                 like_btn.setProperty("selected", False)
                 dislike_btn.setProperty("selected", True)
-                like_btn._feedback_visual_filter.refresh()
-                dislike_btn._feedback_visual_filter.refresh()
             else:
                 like_btn.setProperty("selected", False)
                 dislike_btn.setProperty("selected", False)
-                like_btn._feedback_visual_filter.refresh()
-                dislike_btn._feedback_visual_filter.refresh()
+            like_btn._feedback_visual_filter.refresh()
+            dislike_btn._feedback_visual_filter.refresh()
 
             if style["feedback_order"] == "dislike-first":
                 ordered_buttons = [dislike_btn, like_btn]
@@ -1070,11 +1766,12 @@ class MainWindow(QMainWindow):
                 bottom=int(style.get("feedback_overlay_bottom", 4)) - shift_y,
                 right=int(style.get("feedback_overlay_right", 8)),
             )
-            self._install_hover_reveal(outer, actions)
+            self._install_hover_reveal(card, actions, require_reenter=feedback is not None)
 
         return outer
 
     def _render_chat(self, scroll_to_bottom: bool = False):
+        self._prune_empty_ai_placeholders()
         style = self._resolve_style()
         bar = self.chat_scroll.verticalScrollBar()
         prev_value = bar.value()
@@ -1082,6 +1779,7 @@ class MainWindow(QMainWindow):
         self._clear_chat_widgets()
         for i, (role, text, stat_line, feedback) in enumerate(self._history):
             self.chat_layout.addWidget(self._message_widget(i, role, text, stat_line, feedback, style))
+        self._sync_chat_content_geometry()
         if scroll_to_bottom or was_at_bottom:
             QTimer.singleShot(
                 0,
@@ -1094,18 +1792,57 @@ class MainWindow(QMainWindow):
                     min(v, self.chat_scroll.verticalScrollBar().maximum())
                 ),
             )
+        QTimer.singleShot(0, self._sync_chat_content_geometry)
+
+    @staticmethod
+    def _is_empty_ai_placeholder(row: tuple[str, str, str | None, int | None]) -> bool:
+        role, text, stat_line, _ = row
+        if role != "ai":
+            return False
+        if str(text or "").strip():
+            return False
+        return MainWindow._is_pending_stat_line(stat_line)
+
+    def _prune_empty_ai_placeholders(self) -> None:
+        if not self._history:
+            return
+        keep: list[tuple[str, str, str | None, int | None]] = []
+        active_idx = self._stream_ai_index
+        for i, row in enumerate(self._history):
+            if active_idx is not None and i == active_idx:
+                keep.append(row)
+                continue
+            if self._is_empty_ai_placeholder(row):
+                continue
+            keep.append(row)
+        if len(keep) != len(self._history):
+            if active_idx is not None:
+                try:
+                    prefix_kept = 0
+                    for i, row in enumerate(self._history):
+                        if i == active_idx:
+                            break
+                        if not self._is_empty_ai_placeholder(row):
+                            prefix_kept += 1
+                    self._stream_ai_index = prefix_kept
+                except Exception:
+                    self._stream_ai_index = None
+            self._history = keep
 
     def _append_system(self, text: str):
         self._history.append(("system", text, None, None))
         self._render_chat(scroll_to_bottom=True)
+        self._save_chat_sessions()
 
     def _append_user(self, text: str):
         self._history.append(("user", text, None, None))
         self._render_chat(scroll_to_bottom=True)
+        self._save_chat_sessions()
 
     def _append_ai(self, text: str, stat_line: str):
         self._history.append(("ai", text, stat_line, None))
         self._render_chat(scroll_to_bottom=True)
+        self._save_chat_sessions()
 
     def _nearest_user_text_before(self, idx: int) -> str:
         i = idx - 1
@@ -1126,17 +1863,20 @@ class MainWindow(QMainWindow):
         if current == norm_rating:
             return
         self._history[msg_index] = (role, text, stat_line, norm_rating)
-        try:
-            self.brain.mm.register_assistant_feedback(
-                user_text=self._nearest_user_text_before(msg_index),
-                assistant_text=text,
-                feedback=norm_rating,
-                penalty=0.20,
-            )
-        except Exception:
-            pass
-        if not self._apply_feedback_to_existing_widget(msg_index, norm_rating):
-            self._render_chat(scroll_to_bottom=False)
+        chat = self._active_chat()
+        is_incognito = bool(chat.get("incognito", False)) if chat else False
+        if not is_incognito:
+            try:
+                self.brain.mm.register_assistant_feedback(
+                    user_text=self._nearest_user_text_before(msg_index),
+                    assistant_text=text,
+                    feedback=norm_rating,
+                    penalty=0.20,
+                )
+            except Exception:
+                pass
+        self._render_chat(scroll_to_bottom=False)
+        self._save_chat_sessions()
 
     def _apply_feedback_to_existing_widget(self, msg_index: int, rating: int) -> bool:
         item = self.chat_layout.itemAt(msg_index)
@@ -1161,6 +1901,16 @@ class MainWindow(QMainWindow):
         for b in (like_btn, dislike_btn):
             if hasattr(b, "_feedback_visual_filter"):
                 b._feedback_visual_filter.refresh()
+            b.adjustSize()
+
+        actions = like_btn.parentWidget()
+        if actions is not None:
+            actions.adjustSize()
+
+        # After text/state changes (e.g. adding/removing checkmark), realign overlay
+        # so hover hit-testing still matches the visible feedback buttons.
+        if isinstance(row, _OverlayHost):
+            row._reposition_overlay()
         return True
 
     @Slot(int)
@@ -1261,12 +2011,18 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def on_regen(self):
+        if not self._active_chat():
+            QMessageBox.information(self, "Чаты", "Сначала создай чат.")
+            return
         if not self._last_user_text:
             return
         self._start_request(self._last_user_text, show_user=False)
 
     @Slot()
     def on_send(self):
+        if not self._active_chat():
+            QMessageBox.information(self, "Чаты", "Сначала создай чат кнопкой «Новый».")
+            return
         text = self.input.toPlainText().strip()
         if not text:
             return
@@ -1279,6 +2035,9 @@ class MainWindow(QMainWindow):
         self._last_user_text = text
 
     def _start_request(self, user_text: str, show_user: bool) -> bool:
+        if not self._active_chat():
+            QMessageBox.information(self, "Чаты", "Сначала создай чат.")
+            return False
         if self._thread and self._thread.isRunning():
             QMessageBox.information(
                 self,
@@ -1289,8 +2048,12 @@ class MainWindow(QMainWindow):
 
         if show_user:
             self._append_user(user_text)
-        self._append_ai("", "…")
+        # Append streaming AI placeholder first, set index, then render.
+        # This prevents pruning logic from removing placeholder before index bind.
+        self._history.append(("ai", "", "…", None))
         self._stream_ai_index = len(self._history) - 1
+        self._render_chat(scroll_to_bottom=True)
+        self._save_chat_sessions()
         self._stream_chunk_buffer = ""
         self._stream_flush_timer.stop()
 
@@ -1300,7 +2063,9 @@ class MainWindow(QMainWindow):
         self.btn_regen.setEnabled(False)
 
         self._thread = QThread()
-        self._worker = ReplyWorker(self.brain, user_text=user_text)
+        chat = self._active_chat()
+        store_turn = not bool(chat.get("incognito", False)) if chat else True
+        self._worker = ReplyWorker(self.brain, user_text=user_text, store_turn=store_turn)
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
@@ -1332,8 +2097,9 @@ class MainWindow(QMainWindow):
         role, text, stat_line, feedback = self._history[idx]
         if role != "ai":
             self._stream_chunk_buffer = ""
+            self._stream_ai_index = None
             return
-        new_text = (text or "") + self._stream_chunk_buffer
+        new_text = self._normalize_stream_text((text or "") + self._stream_chunk_buffer)
         self._history[idx] = (role, new_text, stat_line, feedback)
         self._stream_chunk_buffer = ""
 
@@ -1344,6 +2110,12 @@ class MainWindow(QMainWindow):
             bubble = w.findChild(QLabel, "msg_bubble_label") if w else None
             if bubble is not None:
                 bubble.setText(new_text)
+                bubble.updateGeometry()
+                bubble.adjustSize()
+                if w is not None:
+                    w.updateGeometry()
+                    w.adjustSize()
+                self._sync_chat_content_geometry()
                 self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum())
                 return
         except Exception:
@@ -1359,12 +2131,17 @@ class MainWindow(QMainWindow):
         if self._stream_ai_index is not None and 0 <= self._stream_ai_index < len(self._history):
             i = self._stream_ai_index
             role, text, _, feedback = self._history[i]
-            final_text = res.text or text
-            self._history[i] = (role, final_text, stat_line, feedback)
-            self._render_chat(scroll_to_bottom=True)
+            if role == "ai":
+                final_text = res.text or text
+                self._history[i] = (role, final_text, stat_line, feedback)
+                self._render_chat(scroll_to_bottom=True)
+            else:
+                # Defensive fallback: never overwrite user/system rows with AI output.
+                self._append_ai(res.text, stat_line)
             self._stream_ai_index = None
         else:
             self._append_ai(res.text, stat_line)
+        self._save_chat_sessions()
 
         if ms:
             self.sum_ms += ms
@@ -1391,6 +2168,8 @@ class MainWindow(QMainWindow):
     def _cleanup_thread(self):
         self._stream_flush_timer.stop()
         self._stream_chunk_buffer = ""
+        self._stream_ai_index = None
+        self._prune_empty_ai_placeholders()
         self.btn_send.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_regen.setEnabled(bool(self._last_user_text))
@@ -1400,6 +2179,8 @@ class MainWindow(QMainWindow):
             self._thread.deleteLater()
         self._worker = None
         self._thread = None
+        self._render_chat(scroll_to_bottom=False)
+        self._save_chat_sessions()
 
 
 def main():
