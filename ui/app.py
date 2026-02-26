@@ -772,6 +772,8 @@ class MainWindow(QMainWindow):
                     feedback = int(feedback_raw)
                 except Exception:
                     feedback = None
+            if role == "system" and text.strip().startswith("MMis UI запущен"):
+                continue
             out.append((role, text, stat_line, feedback))
         return out
 
@@ -784,7 +786,7 @@ class MainWindow(QMainWindow):
             "incognito": bool(incognito),
             "created_at": ts,
             "updated_at": ts,
-            "history": [("system", "MMis UI запущен. Ctrl+Enter — отправить.", None, None)],
+            "history": [],
         }
 
     def _chat_dir(self, chat_id: str) -> Path:
@@ -1002,9 +1004,6 @@ class MainWindow(QMainWindow):
             self._update_chat_controls_state()
             return
         self._history = list(chat.get("history") or [])
-        if not self._history:
-            self._history = [("system", "MMis UI запущен. Ctrl+Enter — отправить.", None, None)]
-            chat["history"] = list(self._history)
         self._stream_ai_index = None
         self._stream_chunk_buffer = ""
         self._last_user_text = None
@@ -1063,6 +1062,7 @@ class MainWindow(QMainWindow):
             track_border=s["btn_border"],
             text_color=s["ui_text"],
         )
+        self._set_chats_drawer_open(True, animated=True)
         self.chat_settings_panel.setVisible(True)
 
     @Slot(bool)
@@ -1300,6 +1300,13 @@ class MainWindow(QMainWindow):
         return raw if raw else default
 
     @staticmethod
+    def _css_text(value: str | None, default: str) -> str:
+        raw = MainWindow._str(value, default)
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+            return raw[1:-1]
+        return raw
+
+    @staticmethod
     def _normalize_stream_text(text: str) -> str:
         s = str(text or "")
         if not s:
@@ -1396,6 +1403,9 @@ class MainWindow(QMainWindow):
         layout.invalidate()
         layout.activate()
         content_h = max(1, int(layout.sizeHint().height()))
+        if not self._history:
+            viewport_h = max(1, int(self.chat_scroll.viewport().height()))
+            content_h = max(content_h, viewport_h)
         # Keep content height strictly equal to rendered rows to avoid
         # phantom scroll space caused by stale minimum-height states.
         self.chat_root.setMinimumHeight(0)
@@ -1490,6 +1500,14 @@ class MainWindow(QMainWindow):
             "chat_settings_bg": self._color(vars_map.get("--chat-settings-bg"), "rgba(20, 21, 25, 0.75)"),
             "chat_settings_border": self._color(vars_map.get("--chat-settings-border"), "rgba(255, 255, 255, 0.10)"),
             "chat_settings_radius": self._px(vars_map.get("--chat-settings-radius"), 10),
+            "chat_empty_text": self._css_text(vars_map.get("--chat-empty-text"), "Привет. Напиши сюда что угодно."),
+            "chat_empty_color": self._color(vars_map.get("--chat-empty-color"), "rgba(163, 163, 163, 0.75)"),
+            "chat_empty_size": self._px(vars_map.get("--chat-empty-size"), 14),
+            "chat_empty_weight": self._px(vars_map.get("--chat-empty-weight"), 600),
+            "chat_empty_max_width": self._px(vars_map.get("--chat-empty-max-width"), 560),
+            "chat_empty_pad_y": self._px(vars_map.get("--chat-empty-pad-y"), 24),
+            "chat_empty_pad_x": self._px(vars_map.get("--chat-empty-pad-x"), 10),
+            "chat_empty_align": self._str(vars_map.get("--chat-empty-align"), "center").lower(),
             "chat_inner_bg": self._color(vars_map.get("--chat-inner-bg"), "rgba(24, 25, 29, 0.92)"),
             "chat_inner_border": self._color(vars_map.get("--chat-inner-border"), "rgba(255, 255, 255, 0.06)"),
             "chat_inner_radius": self._px(vars_map.get("--chat-inner-radius"), 10),
@@ -1898,6 +1916,28 @@ class MainWindow(QMainWindow):
         prev_value = bar.value()
         was_at_bottom = prev_value >= max(0, bar.maximum() - 4)
         self._clear_chat_widgets()
+        self.chat_layout.setAlignment(Qt.AlignTop)
+        if not self._history:
+            placeholder = QLabel(style["chat_empty_text"])
+            placeholder.setObjectName("chat_empty_placeholder")
+            placeholder.setWordWrap(True)
+            align_map = {"left": Qt.AlignLeft, "center": Qt.AlignHCenter, "right": Qt.AlignRight}
+            h_align = align_map.get(style["chat_empty_align"], Qt.AlignHCenter)
+            placeholder.setAlignment(Qt.AlignVCenter | h_align)
+            placeholder.setTextInteractionFlags(Qt.NoTextInteraction)
+            placeholder.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            max_w = int(style.get("chat_empty_max_width", 560))
+            if max_w > 0:
+                placeholder.setMaximumWidth(max_w)
+            placeholder.setStyleSheet(
+                f"color: {self._qss_rgba(style['chat_empty_color'])};"
+                "background: transparent;"
+                f"padding: {int(style['chat_empty_pad_y'])}px {int(style['chat_empty_pad_x'])}px;"
+                f"font-size: {int(style['chat_empty_size'])}px;"
+                f"font-weight: {int(style['chat_empty_weight'])};"
+            )
+            self.chat_layout.setAlignment(Qt.AlignCenter)
+            self.chat_layout.addWidget(placeholder, 0, Qt.AlignCenter | h_align)
         for i, (role, text, stat_line, feedback) in enumerate(self._history):
             self.chat_layout.addWidget(self._message_widget(i, role, text, stat_line, feedback, style))
         self._sync_chat_content_geometry()

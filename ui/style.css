@@ -58,8 +58,19 @@
   --panel-padding: 4px; /* Отступ от внешней панели до внутреннего окна чата */
   --panel-shadow: 0px 8px 20px rgba(0, 0, 0, 0.404); /* Тень панели чата */
   --chats-drawer-width: 250px; /* Ширина выдвижной панели чатов */
-  --stats-drawer-width: 280px; /* Ширина выдвижной панели статистики */
+  --stats-drawer-width: 220px; /* Ширина выдвижной панели статистики */
   --chat-min-width: 560px; /* Минимальная ширина центральной области чата */
+  --chat-settings-bg: rgba(20, 21, 25, 0.75); /* Фон встроенного блока настроек чата */
+  --chat-settings-border: rgba(255, 255, 255, 0.10); /* Граница встроенного блока настроек */
+  --chat-settings-radius: 10px; /* Скругление блока настроек чата */
+  --chat-empty-text: "Привет. Напиши сюда что угодно."; /* Текст placeholder в пустом чате */
+  --chat-empty-color: rgba(163, 163, 163, 0.75); /* Цвет placeholder в пустом чате */
+  --chat-empty-size: 16px; /* Размер шрифта placeholder */
+  --chat-empty-weight: 700; /* Жирность текста placeholder */
+  --chat-empty-max-width: 680px; /* Максимальная ширина строки placeholder */
+  --chat-empty-pad-y: 24px; /* Вертикальные внутренние отступы placeholder */
+  --chat-empty-pad-x: 10px; /* Горизонтальные внутренние отступы placeholder */
+  --chat-empty-align: center; /* Горизонтальное выравнивание placeholder: left|center|right */
   --chat-inner-bg: rgba(20, 21, 25, 0.92); /* Фон внутреннего окна диалога */
   --chat-inner-border: rgba(255, 255, 255, 0.06); /* Обводка внутреннего окна диалога */
   --chat-inner-radius: 10px; /* Закругление внутреннего окна диалога */
