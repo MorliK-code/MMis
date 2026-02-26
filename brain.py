@@ -5,9 +5,12 @@ import time
 import ollama
 
 from config import (
+    MODEL_FALLBACKS,
     MODEL_NAME,
     MMIS_CHAT_ALLOW_REWRITE,
     MMIS_CHAT_EVENTS_LIMIT,
+    MMIS_CHAT_PROOFREAD,
+    MMIS_CHAT_PROOFREAD_STRICT,
     MMIS_CHAT_RECALL_RESULTS,
     build_ollama_options,
 )
@@ -39,6 +42,7 @@ class Brain:
     def __init__(self, memory_manager):
         self.mm = memory_manager
         self.last_stats: dict = {}
+        self._runtime_model = MODEL_NAME
 
     def _truncate(self, s: str, limit: int = 220) -> str:
         s = (s or "").strip()
@@ -191,6 +195,80 @@ class Brain:
         if len(sents) > 3:
             text = " ".join(sents[:3]).strip()
         return self._trim_by_words(text, 260)
+
+    @staticmethod
+    def _looks_like_prompt_leak(text: str) -> bool:
+        s = str(text or "").lower()
+        if not s:
+            return False
+        markers = (
+            "system prompt",
+            "внутренние инструкции",
+            "служебные данные",
+            "role:",
+            "assistant:",
+            "user:",
+            "```",
+        )
+        return any(m in s for m in markers)
+
+    def _proofread_reply(self, reply: str, messages: list[dict], keep_alive, base_options: dict) -> str:
+        source = self._postprocess_reply(reply)
+        if not source:
+            return source
+
+        local_messages = list(messages)
+        strict_tail = (
+            " Проверяй максимально строго: орфография, пунктуация, согласование времен и падежей."
+            if MMIS_CHAT_PROOFREAD_STRICT
+            else ""
+        )
+        local_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Сделай только вычитку последнего ответа на русском: исправь орфографию, пунктуацию и грамматику, "
+                    "не меняй смысл, стиль, тон и объем. Верни только финальный исправленный текст без комментариев."
+                    + strict_tail
+                ),
+            }
+        )
+        local_messages.append({"role": "assistant", "content": source})
+
+        options = dict(base_options)
+        options.update(
+            {
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "repeat_penalty": 1.0,
+                "presence_penalty": 0.0,
+                "frequency_penalty": 0.0,
+                "mirostat": 0,
+                "num_predict": min(int(options.get("num_predict", 160)), 170),
+                "stop": ["\n-"],
+            }
+        )
+
+        try:
+            resp = ollama.chat(
+                model=MODEL_NAME,
+                messages=local_messages,
+                options=options,
+                keep_alive=keep_alive,
+            )
+            corrected = (resp.get("message", {}) or {}).get("content", "")
+        except Exception:
+            return source
+
+        corrected = self._postprocess_reply(self._strip_cjk(corrected))
+        if not corrected:
+            return source
+        if self._looks_like_prompt_leak(corrected):
+            return source
+        # Avoid destructive rewrites: correction should stay close to source text.
+        if len(corrected) > max(len(source) * 1.6, len(source) + 80):
+            return source
+        return corrected
 
     @staticmethod
     def _needs_memory_lookup(user_input: str) -> bool:
@@ -373,12 +451,26 @@ class Brain:
                 local_messages.append({"role": "system", "content": extra_system})
 
             t0 = time.perf_counter()
-            resp = ollama.chat(
-                model=MODEL_NAME,
-                messages=local_messages,
-                options=opts,
-                keep_alive=keep_alive,
-            )
+            try:
+                resp = ollama.chat(
+                    model=self._runtime_model,
+                    messages=local_messages,
+                    options=opts,
+                    keep_alive=keep_alive,
+                )
+            except Exception as exc:
+                if "not found" not in str(exc).lower():
+                    raise
+                resolved = self._resolve_existing_model()
+                if not resolved:
+                    raise
+                self._runtime_model = resolved
+                resp = ollama.chat(
+                    model=self._runtime_model,
+                    messages=local_messages,
+                    options=opts,
+                    keep_alive=keep_alive,
+                )
             elapsed_ms = (time.perf_counter() - t0) * 1000
             logger.info("latency.answer_ms=%.2f", elapsed_ms)
 
@@ -442,6 +534,9 @@ class Brain:
             rewrite_rule = "Переформулируй кратко и по делу: максимум 3 коротких предложения, без списков и официоза."
             reply = _chat(options_hard, extra_system=rewrite_rule)
 
+        if MMIS_CHAT_PROOFREAD:
+            reply = self._proofread_reply(reply, messages, keep_alive, base_options)
+
         reply = self._strip_cjk(reply)
         reply = self._normalize_tone(reply)
         reply = self._enforce_short(reply)
@@ -450,6 +545,27 @@ class Brain:
         if store_turn:
             self.mm.store_turn(user_input, reply)
         return reply
+
+    def _resolve_existing_model(self) -> str | None:
+        preferred = []
+        for x in [self._runtime_model, MODEL_NAME, *MODEL_FALLBACKS]:
+            y = str(x or "").strip()
+            if y and y not in preferred:
+                preferred.append(y)
+        try:
+            rows = (ollama.list() or {}).get("models", [])
+        except Exception:
+            return None
+        installed = []
+        for row in rows:
+            if isinstance(row, dict):
+                name = str(row.get("name") or "").strip()
+                if name:
+                    installed.append(name)
+        for cand in preferred:
+            if cand in installed:
+                return cand
+        return installed[0] if installed else None
 
     def think_stream(self, user_input: str, on_chunk=None, store_turn: bool = True) -> str:
         prep_t0 = time.perf_counter()
@@ -474,13 +590,30 @@ class Brain:
         t0 = time.perf_counter()
         parts: list[str] = []
         last_chunk = {}
-        for chunk in ollama.chat(
-            model=MODEL_NAME,
-            messages=messages,
-            options=opts,
-            keep_alive=keep_alive,
-            stream=True,
-        ):
+        try:
+            stream = ollama.chat(
+                model=self._runtime_model,
+                messages=messages,
+                options=opts,
+                keep_alive=keep_alive,
+                stream=True,
+            )
+        except Exception as exc:
+            if "not found" not in str(exc).lower():
+                raise
+            resolved = self._resolve_existing_model()
+            if not resolved:
+                raise
+            self._runtime_model = resolved
+            stream = ollama.chat(
+                model=self._runtime_model,
+                messages=messages,
+                options=opts,
+                keep_alive=keep_alive,
+                stream=True,
+            )
+
+        for chunk in stream:
             last_chunk = chunk or {}
             piece = ((chunk or {}).get("message", {}) or {}).get("content", "")
             if piece:
@@ -515,6 +648,8 @@ class Brain:
             self.last_stats = {"answer_ms": round(float(elapsed_ms), 2), "prep_ms": round(float(prep_ms), 2)}
 
         reply = self._postprocess_reply(self._strip_cjk("".join(parts)))
+        if MMIS_CHAT_PROOFREAD:
+            reply = self._proofread_reply(reply, messages, keep_alive, opts)
         reply = self._normalize_tone(reply)
         reply = self._enforce_short(reply)
         reply = self._enforce_do_not_say(reply)

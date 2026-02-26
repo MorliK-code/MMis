@@ -42,6 +42,25 @@ MMIS_CHAT_FAST = _get_env_bool("MMIS_CHAT_FAST", False)
 MMIS_CHAT_RECALL_RESULTS = _get_env_int("MMIS_CHAT_RECALL_RESULTS", 5 if not MMIS_CHAT_FAST else 0)
 MMIS_CHAT_EVENTS_LIMIT = _get_env_int("MMIS_CHAT_EVENTS_LIMIT", 20 if not MMIS_CHAT_FAST else 6)
 MMIS_CHAT_ALLOW_REWRITE = _get_env_bool("MMIS_CHAT_ALLOW_REWRITE", True if not MMIS_CHAT_FAST else False)
+MMIS_CHAT_PROOFREAD = _get_env_bool("MMIS_CHAT_PROOFREAD", True if not MMIS_CHAT_FAST else False)
+MMIS_CHAT_PROOFREAD_STRICT = _get_env_bool("MMIS_CHAT_PROOFREAD_STRICT", False)
+
+MMIS_VOICE_STT_BACKEND = os.getenv("MMIS_VOICE_STT_BACKEND", "faster_whisper").strip().lower()
+MMIS_VOICE_TTS_BACKEND = os.getenv("MMIS_VOICE_TTS_BACKEND", "edge_tts").strip().lower()
+MMIS_VOICE_STT_MODEL = os.getenv("MMIS_VOICE_STT_MODEL", "small")
+MMIS_VOICE_STT_DEVICE = os.getenv("MMIS_VOICE_STT_DEVICE", "cpu")
+MMIS_VOICE_STT_COMPUTE_TYPE = os.getenv("MMIS_VOICE_STT_COMPUTE_TYPE", "int8")
+MMIS_VOICE_LANGUAGE = os.getenv("MMIS_VOICE_LANGUAGE", "ru")
+MMIS_VOICE_TTS_VOICE = os.getenv("MMIS_VOICE_TTS_VOICE", "ru-RU-DmitryNeural")
+MMIS_VOICE_TTS_RATE = os.getenv("MMIS_VOICE_TTS_RATE", "+0%")
+MMIS_VOICE_TTS_VOLUME = os.getenv("MMIS_VOICE_TTS_VOLUME", "+0%")
+MMIS_VOICE_STORAGE_DIR = Path(
+    os.getenv("MMIS_VOICE_STORAGE_DIR", str(MemoryStorageDir / "voice"))
+).expanduser()
+MMIS_VOICE_INPUT_DIR = MMIS_VOICE_STORAGE_DIR / "input"
+MMIS_VOICE_OUTPUT_DIR = MMIS_VOICE_STORAGE_DIR / "output"
+MMIS_VOICE_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+MMIS_VOICE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # Базовые профили Ollama. Можно выбрать через MMIS_PROFILE=QUALITY|BALANCED|FAST.
@@ -81,6 +100,16 @@ OLLAMA_PROFILES = {
         "top_p": 0.92,
         "keep_alive": "5m",
     },
+    "ECONOM": {
+        "num_thread": 4,
+        "num_ctx": 1536,
+        "num_gpu": 16,
+        "num_batch": 32,
+        "repeat_penalty": 1.08,
+        "temperature": 0.62,
+        "top_p": 0.9,
+        "keep_alive": "3m",
+    },
     # Hybrid profile: VRAM + RAM.
     # Uses most layers on GPU, but intentionally leaves part for system RAM spill.
     "HYBRID_RAM": {
@@ -96,6 +125,8 @@ OLLAMA_PROFILES = {
 }
 
 OLLAMA_PROFILE = os.getenv("MMIS_PROFILE", "HYBRID_RAM").upper()
+if OLLAMA_PROFILE == "ECO":
+    OLLAMA_PROFILE = "ECONOM"
 if OLLAMA_PROFILE not in OLLAMA_PROFILES:
     OLLAMA_PROFILE = "HYBRID_RAM"
 

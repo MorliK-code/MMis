@@ -11,11 +11,26 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QPropertyAnimation, QObject, QSize, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPropertyAnimation,
+    QSize,
+    QThread,
+    QTimer,
+    Qt,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QColor, QCursor, QFont, QKeyEvent, QPainter, QPen
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QFileDialog,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QCheckBox,
@@ -23,6 +38,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QComboBox,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -30,6 +46,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QToolButton,
     QVBoxLayout,
@@ -38,7 +55,16 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from brain import Brain
-from config import MODEL_NAME, MemoryStorageDir, SHORT_MEMORY_LIMIT
+from config import (
+    MMIS_VOICE_INPUT_DIR,
+    MMIS_VOICE_OUTPUT_DIR,
+    MMIS_VOICE_TTS_RATE,
+    MMIS_VOICE_TTS_VOICE,
+    MMIS_VOICE_TTS_VOLUME,
+    MODEL_NAME,
+    MemoryStorageDir,
+    SHORT_MEMORY_LIMIT,
+)
 from memory.assistant_profile import AssistantProfile
 from memory.chat_log import ChatLog
 from memory.event_store import EventStore
@@ -48,11 +74,19 @@ from memory.short_memory import ShortMemory
 from memory.user_profile import UserProfile
 from ui import config as ui_config
 from ui.livecss import LiveCss
+from voice import build_stt_engine, build_tts_engine
 
 DEFAULT_TEXT_SIZE = getattr(ui_config, "DEFAULT_TEXT_SIZE", 14)
 DEFAULT_BUBBLE_OPACITY = getattr(ui_config, "DEFAULT_BUBBLE_OPACITY", 0.1)
 FLOPS_PER_TOKEN = getattr(ui_config, "FLOPS_PER_TOKEN", 14e9)
 SHOW_TFLOPS_EST = getattr(ui_config, "SHOW_TFLOPS_EST", True)
+FEMALE_TONE_PRESETS = [
+    ("Мягкий RU", "ru-RU-SvetlanaNeural"),
+    ("Нейтральный EN", "en-US-JennyNeural"),
+    ("Теплый EN", "en-GB-SoniaNeural"),
+    ("Энергичный DE", "de-DE-KatjaNeural"),
+    ("Спокойный FR", "fr-FR-DeniseNeural"),
+]
 
 
 def safe_div(a: float, b: float) -> float:
@@ -502,6 +536,19 @@ class MainWindow(QMainWindow):
         self._chats_drawer_anim: QPropertyAnimation | None = None
         self._stats_drawer_anim: QPropertyAnimation | None = None
         self._settings_chat_id: str | None = None
+        self._voice_stt = None
+        default_voice = MMIS_VOICE_TTS_VOICE
+        self._voice_tts_voice = default_voice
+        self._voice_rate_percent = self._percent_to_int(MMIS_VOICE_TTS_RATE, default=0)
+        self._voice_volume_percent = self._percent_to_int(MMIS_VOICE_TTS_VOLUME, default=0)
+        self._voice_cache_dir = MMIS_VOICE_OUTPUT_DIR / ".cache"
+        self._voice_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._voice_reply_cache_path = self._voice_cache_dir / "reply_live.mp3"
+        self._audio_output = QAudioOutput(self)
+        self._audio_output.setVolume(1.0)
+        self._media_player = QMediaPlayer(self)
+        self._media_player.setAudioOutput(self._audio_output)
+        self._media_player.errorOccurred.connect(self._on_media_error)
 
         self._build_ui()
         self._load_or_init_chat_sessions()
@@ -720,6 +767,58 @@ class MainWindow(QMainWindow):
         self.btn_regen.setEnabled(False)
         bottom.addWidget(self.btn_regen)
 
+        self.btn_voice_input = QPushButton("Голос файл")
+        self.btn_voice_input.setObjectName("btn_voice_input")
+        self.btn_voice_input.clicked.connect(self.on_voice_input_file)
+        bottom.addWidget(self.btn_voice_input)
+
+        self.btn_voice_speak = QPushButton("Озвучить")
+        self.btn_voice_speak.setObjectName("btn_voice_speak")
+        self.btn_voice_speak.clicked.connect(self.on_voice_speak_last_ai)
+        bottom.addWidget(self.btn_voice_speak)
+
+        self.voice_tone_label = QLabel("Тон")
+        self.voice_tone_label.setObjectName("stats_label")
+        bottom.addWidget(self.voice_tone_label)
+        self.voice_tone_combo = QComboBox()
+        self.voice_tone_combo.setObjectName("voice_tone_combo")
+        selected_idx = 0
+        for i, (label, voice_id) in enumerate(FEMALE_TONE_PRESETS):
+            self.voice_tone_combo.addItem(label, userData=voice_id)
+            if voice_id == self._voice_tts_voice:
+                selected_idx = i
+        self.voice_tone_combo.setCurrentIndex(selected_idx)
+        self._voice_tts_voice = str(self.voice_tone_combo.currentData() or self._voice_tts_voice)
+        self.voice_tone_combo.currentIndexChanged.connect(self._on_voice_tone_changed)
+        bottom.addWidget(self.voice_tone_combo)
+
+        self.voice_rate_label = QLabel("Скорость")
+        self.voice_rate_label.setObjectName("stats_label")
+        bottom.addWidget(self.voice_rate_label)
+        self.voice_rate_spin = QSpinBox()
+        self.voice_rate_spin.setObjectName("voice_rate_spin")
+        self.voice_rate_spin.setRange(-60, 60)
+        self.voice_rate_spin.setSingleStep(5)
+        self.voice_rate_spin.setSuffix("%")
+        self.voice_rate_spin.setValue(self._voice_rate_percent)
+        bottom.addWidget(self.voice_rate_spin)
+
+        self.voice_volume_label = QLabel("Громкость")
+        self.voice_volume_label.setObjectName("stats_label")
+        bottom.addWidget(self.voice_volume_label)
+        self.voice_volume_spin = QSpinBox()
+        self.voice_volume_spin.setObjectName("voice_volume_spin")
+        self.voice_volume_spin.setRange(-90, 100)
+        self.voice_volume_spin.setSingleStep(5)
+        self.voice_volume_spin.setSuffix("%")
+        self.voice_volume_spin.setValue(self._voice_volume_percent)
+        bottom.addWidget(self.voice_volume_spin)
+
+        self.voice_auto_tts = _ToggleSwitch("Авто-озвучка")
+        self.voice_auto_tts.setObjectName("voice_auto_tts")
+        self.voice_auto_tts.setChecked(False)
+        bottom.addWidget(self.voice_auto_tts)
+
         bottom.addStretch(1)
 
         self.btn_send = QPushButton("\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c")
@@ -736,6 +835,21 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _now_iso() -> str:
         return datetime.now().isoformat(timespec="seconds")
+
+    @staticmethod
+    def _percent_to_int(value: str, default: int = 0) -> int:
+        s = str(value or "").strip()
+        if not s.endswith("%"):
+            return int(default)
+        try:
+            return int(float(s[:-1]))
+        except Exception:
+            return int(default)
+
+    @staticmethod
+    def _int_to_percent(value: int) -> str:
+        v = int(value)
+        return f"{v:+d}%"
 
     @staticmethod
     def _history_to_serializable(history: list[tuple[str, str, str | None, int | None]]) -> list[dict]:
@@ -1019,8 +1133,15 @@ class MainWindow(QMainWindow):
 
     def _update_chat_controls_state(self) -> None:
         has_active = self._active_chat() is not None
+        is_busy = bool(self._thread and self._thread.isRunning())
         self.btn_new_chat.setEnabled(True)
-        self.btn_send.setEnabled(has_active and not (self._thread and self._thread.isRunning()))
+        self.btn_send.setEnabled(has_active and not is_busy)
+        self.btn_voice_input.setEnabled(has_active and not is_busy)
+        self.btn_voice_speak.setEnabled(has_active and not is_busy)
+        self.voice_tone_combo.setEnabled(has_active and not is_busy)
+        self.voice_rate_spin.setEnabled(has_active and not is_busy)
+        self.voice_volume_spin.setEnabled(has_active and not is_busy)
+        self.voice_auto_tts.setEnabled(has_active)
         self.chat_settings_export.setEnabled(has_active)
         self.chat_settings_delete.setEnabled(has_active)
         self.chat_settings_incognito.setEnabled(has_active)
@@ -1455,6 +1576,8 @@ class MainWindow(QMainWindow):
             self.chat_settings_delete,
             self.chat_settings_close,
             self.btn_regen,
+            self.btn_voice_input,
+            self.btn_voice_speak,
             self.btn_send,
         ):
             self._install_button_animation(btn, style=style)
@@ -2195,6 +2318,110 @@ class MainWindow(QMainWindow):
         self.input.clear()
         self._last_user_text = text
 
+    def _get_voice_stt(self):
+        if self._voice_stt is None:
+            self._voice_stt = build_stt_engine()
+        return self._voice_stt
+
+    def _copy_audio_into_input_dir(self, source_path: Path) -> Path:
+        MMIS_VOICE_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+        src = source_path.expanduser().resolve()
+        input_dir = MMIS_VOICE_INPUT_DIR.resolve()
+        if src.parent == input_dir:
+            return src
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dst = MMIS_VOICE_INPUT_DIR / f"{stamp}_{src.name}"
+        shutil.copy2(src, dst)
+        return dst
+
+    def _latest_ai_text(self) -> str:
+        for role, text, _, _ in reversed(self._history):
+            if role == "ai" and str(text or "").strip():
+                return str(text).strip()
+        return ""
+
+    @Slot(int)
+    def _on_voice_tone_changed(self, _index: int):
+        self._voice_tts_voice = str(self.voice_tone_combo.currentData() or self._voice_tts_voice)
+
+    @Slot(object, str)
+    def _on_media_error(self, _error, error_text: str):
+        if error_text:
+            self._set_status("Ошибка")
+            QMessageBox.warning(self, "Плеер", f"Ошибка воспроизведения:\n{error_text}")
+
+    def _speak_text_in_app(self, text: str) -> bool:
+        rate = self._int_to_percent(self.voice_rate_spin.value())
+        volume = self._int_to_percent(self.voice_volume_spin.value())
+        tts = build_tts_engine(tts_voice=self._voice_tts_voice, tts_rate=rate, tts_volume=volume)
+        saved = tts.synthesize_to_file(text, self._voice_reply_cache_path)
+        self._media_player.stop()
+        self._media_player.setSource(QUrl.fromLocalFile(str(saved.resolve())))
+        self._media_player.play()
+        return True
+
+    @Slot()
+    def on_voice_input_file(self):
+        if not self._active_chat():
+            QMessageBox.information(self, "Чаты", "Сначала создай чат кнопкой «Новый».")
+            return
+        if self._thread and self._thread.isRunning():
+            QMessageBox.information(self, "Подожди", "Сначала дождись завершения текущей генерации.")
+            return
+
+        selected, _flt = QFileDialog.getOpenFileName(
+            self,
+            "Выбери голосовой файл",
+            str(MMIS_VOICE_INPUT_DIR),
+            "Audio (*.wav *.mp3 *.m4a *.ogg *.flac);;All files (*.*)",
+        )
+        if not selected:
+            return
+
+        try:
+            source_path = self._copy_audio_into_input_dir(Path(selected))
+            self._set_status("Распознавание голоса…")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            QApplication.processEvents()
+            recognized = (self._get_voice_stt().transcribe_file(source_path) or "").strip()
+        except Exception as exc:
+            QMessageBox.critical(self, "Голос", f"Не удалось распознать файл:\n{exc}")
+            self._set_status("Ошибка")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if not recognized:
+            QMessageBox.warning(self, "Голос", "Распознавание вернуло пустой текст.")
+            self._set_status("Готово")
+            return
+
+        self.input.setPlainText(recognized)
+        self.input.setFocus()
+        self._set_status("Готово")
+
+    @Slot()
+    def on_voice_speak_last_ai(self):
+        text = self._latest_ai_text()
+        if not text:
+            QMessageBox.information(self, "Озвучка", "Пока нет ответа AI для озвучки.")
+            return
+
+        try:
+            self._set_status("Озвучка ответа…")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            QApplication.processEvents()
+            self._speak_text_in_app(text)
+        except Exception as exc:
+            QMessageBox.critical(self, "Озвучка", f"Не удалось озвучить ответ:\n{exc}")
+            self._set_status("Ошибка")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self._set_status("Готово")
+
     def _start_request(self, user_text: str, show_user: bool) -> bool:
         if not self._active_chat():
             QMessageBox.information(self, "Чаты", "Сначала создай чат.")
@@ -2220,6 +2447,11 @@ class MainWindow(QMainWindow):
 
         self._set_status("\u0413\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u044f\u2026")
         self.btn_send.setEnabled(False)
+        self.btn_voice_input.setEnabled(False)
+        self.btn_voice_speak.setEnabled(False)
+        self.voice_tone_combo.setEnabled(False)
+        self.voice_rate_spin.setEnabled(False)
+        self.voice_volume_spin.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_regen.setEnabled(False)
 
@@ -2316,6 +2548,14 @@ class MainWindow(QMainWindow):
         self._update_side_stats()
         self._set_status("\u0413\u043e\u0442\u043e\u0432\u043e")
         self.btn_regen.setEnabled(bool(self._last_user_text))
+        if self.voice_auto_tts.isChecked():
+            try:
+                self._set_status("Озвучка ответа…")
+                QApplication.processEvents()
+                self._speak_text_in_app(res.text or self._latest_ai_text())
+                self._set_status("Готово")
+            except Exception:
+                self._set_status("Ошибка")
 
     @Slot(str)
     def _on_error(self, tb: str):
@@ -2332,6 +2572,11 @@ class MainWindow(QMainWindow):
         self._stream_ai_index = None
         self._prune_empty_ai_placeholders()
         self.btn_send.setEnabled(True)
+        self.btn_voice_input.setEnabled(True)
+        self.btn_voice_speak.setEnabled(True)
+        self.voice_tone_combo.setEnabled(True)
+        self.voice_rate_spin.setEnabled(True)
+        self.voice_volume_spin.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.btn_regen.setEnabled(bool(self._last_user_text))
         if self._worker:
