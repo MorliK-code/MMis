@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QCheckBox,
-    QDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -496,8 +495,13 @@ class MainWindow(QMainWindow):
         self._active_chat_id: str | None = None
         self._updating_chat_controls = False
         self._chats_open_width = 240
+        self._stats_open_width = 300
+        self._chat_min_width = 560
         self._chats_drawer_open = False
+        self._stats_drawer_open = False
         self._chats_drawer_anim: QPropertyAnimation | None = None
+        self._stats_drawer_anim: QPropertyAnimation | None = None
+        self._settings_chat_id: str | None = None
 
         self._build_ui()
         self._load_or_init_chat_sessions()
@@ -553,6 +557,11 @@ class MainWindow(QMainWindow):
         self.btn_toggle_chats.clicked.connect(self._toggle_chats_drawer)
         top.addWidget(self.btn_toggle_chats)
 
+        self.btn_toggle_stats = QPushButton("Статистика")
+        self.btn_toggle_stats.setObjectName("btn_toggle_stats")
+        self.btn_toggle_stats.clicked.connect(self._toggle_stats_drawer)
+        top.addWidget(self.btn_toggle_stats)
+
         top.addStretch(1)
 
         self.btn_stop = QPushButton("\u0421\u0442\u043e\u043f")
@@ -568,6 +577,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(1)
         layout.addWidget(splitter, 1)
 
         self.chats_panel = QFrame()
@@ -584,6 +594,40 @@ class MainWindow(QMainWindow):
         self.chat_list.setObjectName("chat_list")
         self.chat_list.currentRowChanged.connect(self._on_chat_selected)
         chats_layout.addWidget(self.chat_list, 1)
+
+        self.chat_settings_panel = QFrame()
+        self.chat_settings_panel.setObjectName("chat_settings_panel")
+        settings_layout = QVBoxLayout(self.chat_settings_panel)
+        settings_layout.setContentsMargins(10, 10, 10, 10)
+        settings_layout.setSpacing(8)
+        self.chat_settings_title = QLabel("Настройки чата")
+        self.chat_settings_title.setObjectName("chat_settings_title")
+        settings_layout.addWidget(self.chat_settings_title)
+
+        self.chat_settings_incognito = _ToggleSwitch("Инкогнито")
+        self.chat_settings_incognito.setObjectName("chat_settings_incognito")
+        self.chat_settings_incognito.toggled.connect(self._on_settings_incognito_toggled)
+        settings_layout.addWidget(self.chat_settings_incognito)
+
+        settings_actions = QHBoxLayout()
+        settings_actions.setContentsMargins(0, 0, 0, 0)
+        settings_actions.setSpacing(6)
+        self.chat_settings_export = QPushButton("Экспорт")
+        self.chat_settings_export.setObjectName("chat_settings_export")
+        self.chat_settings_export.clicked.connect(self._on_settings_export_clicked)
+        settings_actions.addWidget(self.chat_settings_export)
+        self.chat_settings_delete = QPushButton("Удалить")
+        self.chat_settings_delete.setObjectName("chat_settings_delete")
+        self.chat_settings_delete.clicked.connect(self._on_settings_delete_clicked)
+        settings_actions.addWidget(self.chat_settings_delete)
+        settings_layout.addLayout(settings_actions)
+
+        self.chat_settings_close = QPushButton("Закрыть")
+        self.chat_settings_close.setObjectName("chat_settings_close")
+        self.chat_settings_close.clicked.connect(self._close_chat_settings_panel)
+        settings_layout.addWidget(self.chat_settings_close)
+        self.chat_settings_panel.setVisible(False)
+        chats_layout.addWidget(self.chat_settings_panel, 0)
 
         chats_actions = QHBoxLayout()
         self.btn_new_chat = QPushButton("Новый")
@@ -642,15 +686,23 @@ class MainWindow(QMainWindow):
 
         side_layout.addStretch(1)
         splitter.addWidget(self.stats_panel)
+        self.splitter = splitter
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 4)
         splitter.setStretchFactor(2, 2)
         self.chats_panel.setMinimumWidth(0)
         self.chats_panel.setMaximumWidth(self._chats_open_width)
-        self.chat_scroll.setMinimumWidth(560)
-        self.stats_panel.setMinimumWidth(260)
-        splitter.setSizes([220, 760, 300])
+        self.chat_scroll.setMinimumWidth(self._chat_min_width)
+        self.stats_panel.setMinimumWidth(0)
+        self.stats_panel.setMaximumWidth(self._stats_open_width)
+        splitter.setSizes([0, 980, 0])
+        for i in (1, 2):
+            handle = splitter.handle(i)
+            if handle:
+                handle.setEnabled(False)
+                handle.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._set_chats_drawer_open(False, animated=False)
+        self._set_stats_drawer_open(False, animated=False)
 
         self.input = QPlainTextEdit()
         self.input.setObjectName("chat_input")
@@ -940,6 +992,7 @@ class MainWindow(QMainWindow):
     def _apply_active_chat_to_ui(self, scroll_to_bottom: bool = False) -> None:
         chat = self._active_chat()
         if not chat:
+            self._close_chat_settings_panel()
             self._history = []
             self._stream_ai_index = None
             self._stream_chunk_buffer = ""
@@ -955,6 +1008,8 @@ class MainWindow(QMainWindow):
         self._stream_ai_index = None
         self._stream_chunk_buffer = ""
         self._last_user_text = None
+        if self._settings_chat_id and self._settings_chat_id != str(chat.get("id") or ""):
+            self._close_chat_settings_panel()
         for role, text, _, _ in reversed(self._history):
             if role == "user":
                 self._last_user_text = text
@@ -967,6 +1022,13 @@ class MainWindow(QMainWindow):
         has_active = self._active_chat() is not None
         self.btn_new_chat.setEnabled(True)
         self.btn_send.setEnabled(has_active and not (self._thread and self._thread.isRunning()))
+        self.chat_settings_export.setEnabled(has_active)
+        self.chat_settings_delete.setEnabled(has_active)
+        self.chat_settings_incognito.setEnabled(has_active)
+
+    def _close_chat_settings_panel(self) -> None:
+        self._settings_chat_id = None
+        self.chat_settings_panel.setVisible(False)
 
     def _show_chat_item_menu(self, chat_id: str, anchor: QWidget) -> None:
         chat = self._chat_by_id(chat_id)
@@ -989,49 +1051,37 @@ class MainWindow(QMainWindow):
         chat = self._chat_by_id(chat_id)
         if not chat:
             return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Настройки чата")
-        dlg.setModal(True)
-        dlg.setMinimumWidth(300)
-
-        layout = QVBoxLayout(dlg)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
-
-        title = QLabel(str(chat.get("title") or "Чат"))
-        title.setObjectName("stats_label")
-        layout.addWidget(title)
-
-        incognito_switch = _ToggleSwitch("Инкогнито")
-        incognito_switch.setChecked(bool(chat.get("incognito", False)))
+        self._settings_chat_id = chat_id
+        self.chat_settings_title.setText(f"Настройки: {str(chat.get('title') or 'Чат')}")
+        self.chat_settings_incognito.blockSignals(True)
+        self.chat_settings_incognito.setChecked(bool(chat.get("incognito", False)))
+        self.chat_settings_incognito.blockSignals(False)
         s = self._resolve_style()
-        incognito_switch.set_colors(
+        self.chat_settings_incognito.set_colors(
             track_off=s["btn_disabled_bg"],
             track_on=s["send_btn_bg"],
             track_border=s["btn_border"],
             text_color=s["ui_text"],
         )
-        layout.addWidget(incognito_switch)
+        self.chat_settings_panel.setVisible(True)
 
-        buttons_row = QHBoxLayout()
-        btn_export = QPushButton("Экспорт")
-        btn_delete = QPushButton("Удалить чат")
-        buttons_row.addWidget(btn_export)
-        buttons_row.addWidget(btn_delete)
-        layout.addLayout(buttons_row)
+    @Slot(bool)
+    def _on_settings_incognito_toggled(self, checked: bool) -> None:
+        if not self._settings_chat_id:
+            return
+        self._set_chat_incognito(self._settings_chat_id, checked)
 
-        btn_close = QPushButton("Закрыть")
-        layout.addWidget(btn_close)
+    @Slot()
+    def _on_settings_export_clicked(self) -> None:
+        if not self._settings_chat_id:
+            return
+        self._export_chat_by_id(self._settings_chat_id)
 
-        def _on_toggle(checked: bool):
-            self._set_chat_incognito(chat_id, checked)
-
-        incognito_switch.toggled.connect(_on_toggle)
-        btn_export.clicked.connect(lambda: self._export_chat_by_id(chat_id))
-        btn_delete.clicked.connect(lambda: self._delete_chat_by_id(chat_id, parent_dialog=dlg))
-        btn_close.clicked.connect(dlg.accept)
-
-        dlg.exec()
+    @Slot()
+    def _on_settings_delete_clicked(self) -> None:
+        if not self._settings_chat_id:
+            return
+        self._delete_chat_by_id(self._settings_chat_id)
 
     @Slot(int)
     def _on_chat_selected(self, index: int) -> None:
@@ -1076,12 +1126,16 @@ class MainWindow(QMainWindow):
             return
         chat["incognito"] = bool(checked)
         chat["updated_at"] = self._now_iso()
+        if self._settings_chat_id == chat_id and self.chat_settings_incognito.isChecked() != bool(checked):
+            self.chat_settings_incognito.blockSignals(True)
+            self.chat_settings_incognito.setChecked(bool(checked))
+            self.chat_settings_incognito.blockSignals(False)
         self._refresh_chat_selector()
         if str(chat.get("id") or "") == self._active_chat_id:
             self._apply_active_chat_to_ui(scroll_to_bottom=False)
         self._save_chat_sessions()
 
-    def _delete_chat_by_id(self, chat_id: str, parent_dialog: QDialog | None = None) -> None:
+    def _delete_chat_by_id(self, chat_id: str) -> None:
         if self._thread and self._thread.isRunning():
             QMessageBox.information(self, "Подожди", "Сначала останови или дождись завершения генерации.")
             return
@@ -1109,8 +1163,8 @@ class MainWindow(QMainWindow):
         self._refresh_chat_selector()
         self._apply_active_chat_to_ui(scroll_to_bottom=True)
         self._save_chat_sessions()
-        if parent_dialog is not None:
-            parent_dialog.accept()
+        if self._settings_chat_id == chat_id:
+            self._close_chat_settings_panel()
 
     def _export_chat_by_id(self, chat_id: str) -> None:
         chat = self._chat_by_id(chat_id)
@@ -1167,6 +1221,7 @@ class MainWindow(QMainWindow):
         self._chats_drawer_open = bool(is_open)
         self.btn_toggle_chats.setText("Скрыть чаты" if is_open else "Чаты")
         if not animated:
+            self.chats_panel.setMinimumWidth(target)
             self.chats_panel.setMaximumWidth(target)
             self.chats_panel.setVisible(target > 0)
             return
@@ -1182,10 +1237,43 @@ class MainWindow(QMainWindow):
         anim.setEndValue(target)
 
         def _finish():
+            self.chats_panel.setMinimumWidth(target)
             self.chats_panel.setVisible(target > 0)
 
         anim.finished.connect(_finish)
         self._chats_drawer_anim = anim
+        anim.start()
+
+    @Slot()
+    def _toggle_stats_drawer(self) -> None:
+        self._set_stats_drawer_open(not self._stats_drawer_open, animated=True)
+
+    def _set_stats_drawer_open(self, is_open: bool, animated: bool = True) -> None:
+        target = int(self._stats_open_width if is_open else 0)
+        self._stats_drawer_open = bool(is_open)
+        self.btn_toggle_stats.setText("Скрыть статистику" if is_open else "Статистика")
+        if not animated:
+            self.stats_panel.setMinimumWidth(target)
+            self.stats_panel.setMaximumWidth(target)
+            self.stats_panel.setVisible(target > 0)
+            return
+
+        if self._stats_drawer_anim and self._stats_drawer_anim.state() == QAbstractAnimation.Running:
+            self._stats_drawer_anim.stop()
+        if target > 0:
+            self.stats_panel.setVisible(True)
+        anim = QPropertyAnimation(self.stats_panel, b"maximumWidth", self)
+        anim.setDuration(180)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(int(self.stats_panel.maximumWidth()))
+        anim.setEndValue(target)
+
+        def _finish():
+            self.stats_panel.setMinimumWidth(target)
+            self.stats_panel.setVisible(target > 0)
+
+        anim.finished.connect(_finish)
+        self._stats_drawer_anim = anim
         anim.start()
 
     @staticmethod
@@ -1349,9 +1437,13 @@ class MainWindow(QMainWindow):
     def _install_base_button_animations(self, style: dict | None = None) -> None:
         for btn in (
             self.btn_toggle_chats,
+            self.btn_toggle_stats,
             self.btn_stop,
             self.btn_clear,
             self.btn_new_chat,
+            self.chat_settings_export,
+            self.chat_settings_delete,
+            self.chat_settings_close,
             self.btn_regen,
             self.btn_send,
         ):
@@ -1392,6 +1484,12 @@ class MainWindow(QMainWindow):
             "panel_radius": self._px(vars_map.get("--panel-radius"), 12),
             "panel_padding": self._px(vars_map.get("--panel-padding"), 8),
             "panel_shadow": self._shadow_from_css(vars_map.get("--panel-shadow")),
+            "chats_drawer_width": self._px(vars_map.get("--chats-drawer-width"), 240),
+            "stats_drawer_width": self._px(vars_map.get("--stats-drawer-width"), 300),
+            "chat_min_width": self._px(vars_map.get("--chat-min-width"), 560),
+            "chat_settings_bg": self._color(vars_map.get("--chat-settings-bg"), "rgba(20, 21, 25, 0.75)"),
+            "chat_settings_border": self._color(vars_map.get("--chat-settings-border"), "rgba(255, 255, 255, 0.10)"),
+            "chat_settings_radius": self._px(vars_map.get("--chat-settings-radius"), 10),
             "chat_inner_bg": self._color(vars_map.get("--chat-inner-bg"), "rgba(24, 25, 29, 0.92)"),
             "chat_inner_border": self._color(vars_map.get("--chat-inner-border"), "rgba(255, 255, 255, 0.06)"),
             "chat_inner_radius": self._px(vars_map.get("--chat-inner-radius"), 10),
@@ -1467,6 +1565,10 @@ class MainWindow(QMainWindow):
     def _apply_panel_styles(self, style: dict) -> None:
         self._feedback_reveal_show_ms = int(style.get("anim_feedback_reveal_show_ms", 170))
         self._feedback_reveal_hide_ms = int(style.get("anim_feedback_reveal_hide_ms", 130))
+        self._chats_open_width = max(170, int(style.get("chats_drawer_width", 240)))
+        self._stats_open_width = max(220, int(style.get("stats_drawer_width", 300)))
+        self._chat_min_width = max(360, int(style.get("chat_min_width", 560)))
+        self.chat_scroll.setMinimumWidth(self._chat_min_width)
         panel_bg = self._qss_rgba(style["panel_bg"])
         panel_border = self._qss_rgba(style["panel_border"])
         panel_radius = style["panel_radius"]
@@ -1490,6 +1592,13 @@ class MainWindow(QMainWindow):
             f"background-color: {panel_bg};"
             f"border: 1px solid {panel_border};"
             f"border-radius: {panel_radius}px;"
+            "}"
+        )
+        self.chat_settings_panel.setStyleSheet(
+            "QFrame#chat_settings_panel {"
+            f"background-color: {self._qss_rgba(style['chat_settings_bg'])};"
+            f"border: 1px solid {self._qss_rgba(style['chat_settings_border'])};"
+            f"border-radius: {int(style['chat_settings_radius'])}px;"
             "}"
         )
 
@@ -1562,6 +1671,10 @@ class MainWindow(QMainWindow):
             "QLabel#chat_title {"
             f"color: {self._qss_rgba(style['ui_text'])};"
             "}"
+            "QLabel#chat_settings_title {"
+            f"color: {self._qss_rgba(style['ui_text'])};"
+            "font-weight: 700;"
+            "}"
             "QToolButton#chat_item_menu_btn {"
             f"background: {self._qss_rgba(style['btn_bg'])};"
             f"color: {self._qss_rgba(style['btn_fg'])};"
@@ -1583,7 +1696,15 @@ class MainWindow(QMainWindow):
         self._apply_text_shadow(self.model_label, style["model_text_shadow"])
         for w in (self.status_label, self.avg_ms_label, self.avg_decode_label, self.avg_tokens_label, self.avg_tps_label, self.avg_tflops_label):
             self._apply_text_shadow(w, style["side_text_shadow"])
+        self.chat_settings_incognito.set_colors(
+            track_off=style["btn_disabled_bg"],
+            track_on=style["send_btn_bg"],
+            track_border=style["btn_border"],
+            text_color=style["ui_text"],
+        )
         self._install_base_button_animations(style)
+        self._set_chats_drawer_open(self._chats_drawer_open, animated=False)
+        self._set_stats_drawer_open(self._stats_drawer_open, animated=False)
 
         psx, psy, pblur, pcolor = style["panel_shadow"]
         self._apply_panel_shadow(self.chat_panel, blur=pblur, x=psx, y=psy, color=pcolor)
