@@ -1,4 +1,4 @@
-import re
+﻿import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
@@ -31,6 +31,7 @@ class MemoryManager:
         self.logger = get_memory_logger()
         self.error_metrics = ErrorMetrics()
         self._postprocess_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mm-postprocess")
+        self._shutting_down = False
         self.dislike_penalty_default = 0.20
         self.like_bonus_default = 0.03
 
@@ -46,12 +47,12 @@ class MemoryManager:
 
         lowered = text.lower()
         triggers = (
-            "не говори",
-            "нельзя говорить",
-            "не произноси",
-            "не употребляй",
-            "не используй",
-            "запрещ",
+            "РЅРµ РіРѕРІРѕСЂРё",
+            "РЅРµР»СЊР·СЏ РіРѕРІРѕСЂРёС‚СЊ",
+            "РЅРµ РїСЂРѕРёР·РЅРѕСЃРё",
+            "РЅРµ СѓРїРѕС‚СЂРµР±Р»СЏР№",
+            "РЅРµ РёСЃРїРѕР»СЊР·СѓР№",
+            "Р·Р°РїСЂРµС‰",
         )
         if not any(t in lowered for t in triggers):
             return []
@@ -60,7 +61,7 @@ class MemoryManager:
         seen: set[str] = set()
 
         def _push(raw: str) -> None:
-            value = re.sub(r"\s+", " ", str(raw or "")).strip(" \t\r\n\"'`«»“”.,;:!?")
+            value = re.sub(r"\s+", " ", str(raw or "")).strip(" \t\r\n\"'`В«В»вЂњвЂќ.,;:!?")
             if not value or len(value) > 80:
                 return
             key = value.lower()
@@ -69,12 +70,12 @@ class MemoryManager:
             seen.add(key)
             out.append(value)
 
-        for m in re.finditer(r"[\"'`«“”]([^\"'`»“”]{1,80})[\"'`»“”]", text):
+        for m in re.finditer(r"[\"'`В«вЂњвЂќ]([^\"'`В»вЂњвЂќ]{1,80})[\"'`В»вЂњвЂќ]", text):
             _push(m.group(1))
 
         for m in re.finditer(
-            r"(?:не\s+говори|нельзя\s+говорить|не\s+произноси|не\s+употребляй|не\s+используй)\s+"
-            r"(?:слово|слова|фразу|фраза|фразы)\s+([A-Za-zА-Яа-яЁё0-9_-]{1,40})",
+            r"(?:РЅРµ\s+РіРѕРІРѕСЂРё|РЅРµР»СЊР·СЏ\s+РіРѕРІРѕСЂРёС‚СЊ|РЅРµ\s+РїСЂРѕРёР·РЅРѕСЃРё|РЅРµ\s+СѓРїРѕС‚СЂРµР±Р»СЏР№|РЅРµ\s+РёСЃРїРѕР»СЊР·СѓР№)\s+"
+            r"(?:СЃР»РѕРІРѕ|СЃР»РѕРІР°|С„СЂР°Р·Сѓ|С„СЂР°Р·Р°|С„СЂР°Р·С‹)\s+([A-Za-zРђ-РЇР°-СЏРЃС‘0-9_-]{1,40})",
             text,
             flags=re.IGNORECASE,
         ):
@@ -99,7 +100,9 @@ class MemoryManager:
             self.error_metrics.increment(category)
 
     def store_turn(self, user_text: str, assistant_text: str) -> None:
-        # Неблокирующий путь: только быстрая запись в short memory + постановка задачи в очередь.
+        if self._shutting_down:
+            return
+        # РќРµР±Р»РѕРєРёСЂСѓСЋС‰РёР№ РїСѓС‚СЊ: С‚РѕР»СЊРєРѕ Р±С‹СЃС‚СЂР°СЏ Р·Р°РїРёСЃСЊ РІ short memory + РїРѕСЃС‚Р°РЅРѕРІРєР° Р·Р°РґР°С‡Рё РІ РѕС‡РµСЂРµРґСЊ.
         self.short.add("user", user_text)
         self.short.add("assistant", assistant_text)
 
@@ -128,7 +131,7 @@ class MemoryManager:
     def _process_turn(self, user_text: str, assistant_text: str) -> None:
         t0 = time.perf_counter()
 
-        # 1) Полный лог
+        # 1) РџРѕР»РЅС‹Р№ Р»РѕРі
         try:
             evs = extract_events_llm(user_text)
             if isinstance(evs, list):
@@ -143,7 +146,7 @@ class MemoryManager:
                 category="extractor_error",
             )
 
-        # 4) Векторная память (для recall по смыслу)
+        # 4) Р’РµРєС‚РѕСЂРЅР°СЏ РїР°РјСЏС‚СЊ (РґР»СЏ recall РїРѕ СЃРјС‹СЃР»Сѓ)
         try:
             combined = f"User: {user_text}\nAssistant: {assistant_text}"
             self.long.add(combined, meta={"type": "dialog_turn"})
@@ -155,7 +158,7 @@ class MemoryManager:
                 category="embedding_error",
             )
 
-        # 5) Факты из сообщения пользователя
+        # 5) Р¤Р°РєС‚С‹ РёР· СЃРѕРѕР±С‰РµРЅРёСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
         try:
             result = extract_facts(user_text)
             self._apply_fact_result(user_text, result)
@@ -195,7 +198,7 @@ class MemoryManager:
                 category="extractor_error",
             )
 
-        # 6) Факты о самой ассистентке (из её ответа)
+        # 6) Р¤Р°РєС‚С‹ Рѕ СЃР°РјРѕР№ Р°СЃСЃРёСЃС‚РµРЅС‚РєРµ (РёР· РµС‘ РѕС‚РІРµС‚Р°)
         try:
             self_res = extract_assistant_self(assistant_text)
             pol = self_res.get("polarity", "none")
@@ -258,6 +261,8 @@ class MemoryManager:
         feedback: int,
         penalty: float | None = None,
     ) -> None:
+        if self._shutting_down:
+            return
         self._postprocess_executor.submit(
             self._register_assistant_feedback_sync,
             user_text,
@@ -265,6 +270,15 @@ class MemoryManager:
             feedback,
             penalty,
         )
+
+    def shutdown(self, wait: bool = False, cancel_futures: bool = True) -> None:
+        self._shutting_down = True
+        try:
+            self._postprocess_executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+        except TypeError:
+            self._postprocess_executor.shutdown(wait=wait)
+        except Exception:
+            pass
 
     def _register_assistant_feedback_sync(
         self,
@@ -442,7 +456,7 @@ class MemoryManager:
                 )
             return
 
-        # Если пользователь говорит факты про ассистентку — добавляем как заметку/событие (не меняем профиль)
+        # Р•СЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РіРѕРІРѕСЂРёС‚ С„Р°РєС‚С‹ РїСЂРѕ Р°СЃСЃРёСЃС‚РµРЅС‚РєСѓ вЂ” РґРѕР±Р°РІР»СЏРµРј РєР°Рє Р·Р°РјРµС‚РєСѓ/СЃРѕР±С‹С‚РёРµ (РЅРµ РјРµРЅСЏРµРј РїСЂРѕС„РёР»СЊ)
         # Explicit wording constraints from the user can update assistant profile.
         if about == "assistant" and confidence >= 0.55 and polarity in ("assertion", "correction"):
             assistant_patch: Dict[str, Any] = {}
@@ -509,3 +523,5 @@ class MemoryManager:
                     input_size=self._input_size(user_text, facts),
                 )
             return
+
+

@@ -4,11 +4,19 @@ from pathlib import Path
 basedir = Path(__file__).parent
 MemoryStorageDir = basedir / "memory_storage"
 
-MODEL_NAME = "qwen2.5:7b-instruct"
+MODEL_NAME = os.getenv("MMIS_MODEL_NAME", "qwen3:8b").strip()
+MODEL_FALLBACKS = [
+    x.strip()
+    for x in os.getenv(
+        "MMIS_MODEL_FALLBACKS",
+        "qwen3:8b,qwen2.5:7b-instruct,mistral:7b-instruct,mistral:latest",
+    ).split(",")
+    if x.strip()
+]
 EMBED_MODEL = "nomic-embed-text"
 
 SHORT_MEMORY_LIMIT = 10
-RESPONSE_NUM_PREDICT = int(os.getenv("MMIS_RESPONSE_NUM_PREDICT", "180"))
+RESPONSE_NUM_PREDICT = int(os.getenv("MMIS_RESPONSE_NUM_PREDICT", "768"))
 
 
 def _get_env_int(name: str, default: int) -> int:
@@ -39,10 +47,10 @@ def _get_env_bool(name: str, default: bool) -> bool:
 
 
 MMIS_CHAT_FAST = _get_env_bool("MMIS_CHAT_FAST", False)
+MMIS_OLLAMA_NATIVE = _get_env_bool("MMIS_OLLAMA_NATIVE", True)
 MMIS_CHAT_RECALL_RESULTS = _get_env_int("MMIS_CHAT_RECALL_RESULTS", 5 if not MMIS_CHAT_FAST else 0)
 MMIS_CHAT_EVENTS_LIMIT = _get_env_int("MMIS_CHAT_EVENTS_LIMIT", 20 if not MMIS_CHAT_FAST else 6)
-MMIS_CHAT_ALLOW_REWRITE = _get_env_bool("MMIS_CHAT_ALLOW_REWRITE", True if not MMIS_CHAT_FAST else False)
-MMIS_CHAT_PROOFREAD = _get_env_bool("MMIS_CHAT_PROOFREAD", True if not MMIS_CHAT_FAST else False)
+MMIS_CHAT_PROOFREAD = _get_env_bool("MMIS_CHAT_PROOFREAD", False)
 MMIS_CHAT_PROOFREAD_STRICT = _get_env_bool("MMIS_CHAT_PROOFREAD_STRICT", False)
 
 MMIS_VOICE_STT_BACKEND = os.getenv("MMIS_VOICE_STT_BACKEND", "faster_whisper").strip().lower()
@@ -78,7 +86,7 @@ OLLAMA_PROFILES = {
         "repeat_penalty": 1.12,
         "temperature": 0.55,
         "top_p": 0.9,
-        "keep_alive": "30m",
+        "keep_alive": "5m",
     },
     "BALANCED": {
         "num_thread": 8,
@@ -88,27 +96,27 @@ OLLAMA_PROFILES = {
         "repeat_penalty": 1.15,
         "temperature": 0.6,
         "top_p": 0.9,
-        "keep_alive": "10m",
+        "keep_alive": "5m",
     },
     "FAST": {
-        "num_thread": 6,
-        "num_ctx": 2048,
-        "num_gpu": 20,
-        "num_batch": 64,
+        "num_thread": 3,
+        "num_ctx": 1536,
+        "num_gpu": -1,
+        "num_batch": 24,
         "repeat_penalty": 1.1,
         "temperature": 0.65,
         "top_p": 0.92,
-        "keep_alive": "5m",
+        "keep_alive": "3m",
     },
     "ECONOM": {
-        "num_thread": 4,
-        "num_ctx": 1536,
-        "num_gpu": 16,
-        "num_batch": 32,
+        "num_thread": 2,
+        "num_ctx": 2048,
+        "num_gpu": -1,
+        "num_batch": 16,
         "repeat_penalty": 1.08,
         "temperature": 0.62,
         "top_p": 0.9,
-        "keep_alive": "3m",
+        "keep_alive": "8m",
     },
     # Hybrid profile: VRAM + RAM.
     # Uses most layers on GPU, but intentionally leaves part for system RAM spill.
@@ -116,19 +124,17 @@ OLLAMA_PROFILES = {
         "num_thread": 10,
         "num_ctx": 8192,
         "num_gpu": 24,
-        "num_batch": 128,
+        "num_batch": 64,
         "repeat_penalty": 1.12,
         "temperature": 0.58,
         "top_p": 0.9,
-        "keep_alive": "15m",
+        "keep_alive": "1m",
     },
 }
 
 OLLAMA_PROFILE = os.getenv("MMIS_PROFILE", "HYBRID_RAM").upper()
-if OLLAMA_PROFILE == "ECO":
-    OLLAMA_PROFILE = "ECONOM"
 if OLLAMA_PROFILE not in OLLAMA_PROFILES:
-    OLLAMA_PROFILE = "HYBRID_RAM"
+    OLLAMA_PROFILE = "BALANCED"
 
 # Общие (активные) опции с учётом профиля и env override'ов.
 OLLAMA_OPTIONS = {
@@ -148,7 +154,7 @@ OLLAMA_OPTIONS = {
 
 def build_ollama_options(task_type: str) -> dict:
     """Собирает опции Ollama под конкретный тип задачи."""
-    options = dict(OLLAMA_OPTIONS)
+    options = {} if MMIS_OLLAMA_NATIVE else dict(OLLAMA_OPTIONS)
 
     # Быстрые «детерминированные» извлечения для памяти.
     if task_type in {"fact_extraction", "event_extraction", "assistant_fact_extraction"}:
@@ -161,6 +167,14 @@ def build_ollama_options(task_type: str) -> dict:
             }
         )
     else:
-        options["num_predict"] = _get_env_int("MMIS_NUM_PREDICT", RESPONSE_NUM_PREDICT)
+        explicit_num_predict = os.getenv("MMIS_NUM_PREDICT")
+        if (not MMIS_OLLAMA_NATIVE) or (explicit_num_predict is not None):
+            options["num_predict"] = _get_env_int("MMIS_NUM_PREDICT", RESPONSE_NUM_PREDICT)
+
+    keep_alive = os.getenv("MMIS_KEEP_ALIVE")
+    if keep_alive:
+        options["keep_alive"] = keep_alive
+    elif not MMIS_OLLAMA_NATIVE:
+        options["keep_alive"] = OLLAMA_PROFILES[OLLAMA_PROFILE]["keep_alive"]
 
     return options

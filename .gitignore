@@ -14,3 +14,4 @@ secrets.json
 memory_storage/*
 __init__.py
 ui/__pycache__/
+tools/ffmpeg/*.exe

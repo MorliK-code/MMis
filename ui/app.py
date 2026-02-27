@@ -7,6 +7,7 @@ import sys
 import traceback
 import json
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,9 +16,12 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QEvent,
+    QLockFile,
     QObject,
     QPropertyAnimation,
+    QPointF,
     QSize,
+    QStandardPaths,
     QThread,
     QTimer,
     Qt,
@@ -25,7 +29,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QColor, QCursor, QFont, QKeyEvent, QPainter, QPen
+from PySide6.QtGui import QCloseEvent, QColor, QCursor, QFont, QKeyEvent, QPainter, QPen, QPolygonF
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
@@ -61,7 +65,6 @@ from config import (
     MMIS_VOICE_TTS_RATE,
     MMIS_VOICE_TTS_VOICE,
     MMIS_VOICE_TTS_VOLUME,
-    MODEL_NAME,
     MemoryStorageDir,
     SHORT_MEMORY_LIMIT,
 )
@@ -117,12 +120,14 @@ def build_brain() -> Brain:
 class ReplyResult:
     text: str
     stats: dict
+    thinking: str = ""
 
 
 class ReplyWorker(QObject):
     finished = Signal(object)
     errored = Signal(str)
     chunk = Signal(str)
+    thinking_chunk = Signal(str)
 
     def __init__(self, brain: Brain, user_text: str, store_turn: bool = True):
         super().__init__()
@@ -137,13 +142,20 @@ class ReplyWorker(QObject):
     @Slot()
     def run(self):
         try:
-            answer = self.brain.think_stream(self.user_text, on_chunk=self.chunk.emit, store_turn=self.store_turn)
+            answer = self.brain.think_stream(
+                self.user_text,
+                on_chunk=self.chunk.emit,
+                on_thinking_chunk=self.thinking_chunk.emit,
+                store_turn=self.store_turn,
+            )
             stats = getattr(self.brain, "last_stats", {}) or {}
+            thinking = getattr(self.brain, "last_thinking", "") or ""
             if self._cancel_requested:
                 return
-            self.finished.emit(ReplyResult(text=answer, stats=stats))
-        except Exception:
-            self.errored.emit(traceback.format_exc())
+            self.finished.emit(ReplyResult(text=answer, stats=stats, thinking=thinking))
+        except Exception as exc:
+            msg = str(exc or "").strip()
+            self.errored.emit(msg if msg else traceback.format_exc())
 
 
 class _HoverRevealFilter(QObject):
@@ -491,6 +503,108 @@ class _OverlayHost(QWidget):
         self._overlay.move(x, y)
 
 
+class _MiniSparkline(QWidget):
+    def __init__(self, title: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._title = str(title)
+        self._values: list[float] = []
+        self._max_points = 80
+        self._line_color = QColor(110, 175, 255, 230)
+        self._fill_color = QColor(110, 175, 255, 40)
+        self._grid_color = QColor(255, 255, 255, 28)
+        self._title_color = QColor(220, 220, 220, 190)
+        self.setMinimumHeight(96)
+        self.setMaximumHeight(122)
+
+    def clear_values(self) -> None:
+        self._values.clear()
+        self.update()
+
+    def push_value(self, value: float) -> None:
+        v = max(0.0, float(value))
+        self._values.append(v)
+        if len(self._values) > self._max_points:
+            self._values = self._values[-self._max_points :]
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        base_font = p.font()
+        base_size = base_font.pointSizeF() if base_font.pointSizeF() > 0 else 10.0
+        label_font = QFont(base_font)
+        label_font.setPointSizeF(max(5.0, base_size * 0.5))
+        p.setFont(label_font)
+
+        plot = self.rect().adjusted(8, 20, -36, -20)
+        if plot.width() <= 8 or plot.height() <= 8:
+            return
+
+        p.setPen(self._title_color)
+        p.drawText(6, 13, self._title)
+
+        p.setPen(self._grid_color)
+        p.drawLine(plot.left(), plot.top(), plot.right(), plot.top())
+        p.drawLine(plot.left(), plot.top() + plot.height() // 2, plot.right(), plot.top() + plot.height() // 2)
+        p.drawLine(plot.left(), plot.bottom(), plot.right(), plot.bottom())
+
+        if self._values:
+            vmax = max(max(self._values), 1e-6)
+        else:
+            vmax = 1.0
+        vmid = vmax / 2.0
+
+        # Right-side vertical scale labels and tick marks.
+        p.setPen(self._title_color)
+        rx = plot.right() + 5
+        y_top = plot.top()
+        y_mid = plot.top() + plot.height() // 2
+        y_bot = plot.bottom()
+        for yy in (y_top, y_mid, y_bot):
+            p.setPen(self._grid_color)
+            p.drawLine(plot.right(), yy, plot.right() + 4, yy)
+        p.setPen(self._title_color)
+        p.drawText(rx, y_top + 4, f"{vmax:.1f}")
+        p.drawText(rx, y_mid + 4, f"{vmid:.1f}")
+        p.drawText(rx, y_bot + 4, "0.0")
+
+        # Bottom horizontal scale labels and tick marks.
+        x_left = plot.left()
+        x_mid = plot.left() + plot.width() // 2
+        x_right = plot.right()
+        for xx in (x_left, x_mid, x_right):
+            p.setPen(self._grid_color)
+            p.drawLine(xx, plot.bottom(), xx, plot.bottom() + 4)
+        p.setPen(self._title_color)
+        y_axis_text = self.height() - 5
+        p.drawText(x_left - 2, y_axis_text, "0")
+        p.drawText(x_mid - 7, y_axis_text, "50")
+        p.drawText(x_right - 14, y_axis_text, "100")
+
+        if len(self._values) < 2:
+            return
+
+        n = len(self._values) - 1
+        points: list[tuple[int, int]] = []
+        for i, v in enumerate(self._values):
+            x = plot.left() + int((i / n) * plot.width())
+            y = plot.bottom() - int((v / vmax) * plot.height())
+            points.append((x, y))
+
+        p.setPen(Qt.NoPen)
+        p.setBrush(self._fill_color)
+        poly = [*points, (plot.right(), plot.bottom()), (plot.left(), plot.bottom())]
+        p.drawPolygon(QPolygonF([QPointF(x, y) for x, y in poly]))
+
+        p.setPen(QPen(self._line_color, 2))
+        for i in range(1, len(points)):
+            x1, y1 = points[i - 1]
+            x2, y2 = points[i]
+            p.drawLine(x1, y1, x2, y2)
+
+        # Keep chart compact: no extra top metrics text to avoid overlap.
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -502,13 +616,30 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker: ReplyWorker | None = None
         self._last_user_text: str | None = None
-        self._history: list[tuple[str, str, str | None, int | None]] = []
+        self._history: list[tuple[str, str, str | None, int | None, str | None]] = []
+        self._thinking_open_by_msg: set[int] = set()
         self._stream_ai_index: int | None = None
         self._stream_chunk_buffer: str = ""
+        self._stream_thinking_buffer: str = ""
         self._stream_flush_timer = QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
-        self._stream_flush_timer.setInterval(70)
+        self._stream_flush_timer.setInterval(110)
         self._stream_flush_timer.timeout.connect(self._flush_stream_chunks)
+        self._message_row_widgets: dict[int, QWidget] = {}
+        self._chat_sync_pending_scroll_bottom = False
+        self._chat_sync_timer = QTimer(self)
+        self._chat_sync_timer.setSingleShot(True)
+        self._chat_sync_timer.setInterval(130)
+        self._chat_sync_timer.timeout.connect(self._on_deferred_chat_sync)
+
+        self._request_started_perf: float | None = None
+        self._rt_chunk_count = 0
+        self._rt_output_chars = 0
+        self._rt_thinking_chars = 0
+        self._rt_last_flush_ms = 0.0
+        self._rt_timer = QTimer(self)
+        self._rt_timer.setInterval(250)
+        self._rt_timer.timeout.connect(self._tick_realtime_stats)
 
         self.n_answers = 0
         self.sum_ms = 0.0
@@ -533,8 +664,11 @@ class MainWindow(QMainWindow):
         self._chat_min_width = 560
         self._chats_drawer_open = False
         self._stats_drawer_open = False
+        self._quick_settings_open = False
+        self._quick_settings_open_height = 96
         self._chats_drawer_anim: QPropertyAnimation | None = None
         self._stats_drawer_anim: QPropertyAnimation | None = None
+        self._quick_settings_anim: QPropertyAnimation | None = None
         self._settings_chat_id: str | None = None
         self._voice_stt = None
         default_voice = MMIS_VOICE_TTS_VOICE
@@ -552,6 +686,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_or_init_chat_sessions()
+        self._rt_timer.start()
 
         self._css_timer = QTimer(self)
         self._css_timer.setInterval(1000)
@@ -589,64 +724,107 @@ class MainWindow(QMainWindow):
         root.setObjectName("app_root")
         self.root_widget = root
         self.setCentralWidget(root)
+
         layout = QVBoxLayout(root)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        top = QHBoxLayout()
-        layout.addLayout(top)
-        self.model_label = QLabel(f"Model: <b>{MODEL_NAME}</b>")
+        top_bar = QFrame(root)
+        top_bar.setObjectName("top_bar")
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(8, 6, 8, 6)
+        top_bar_layout.setSpacing(8)
+
+        self.model_label = QLabel("Model:")
         self.model_label.setObjectName("model_label")
-        top.addWidget(self.model_label)
+        top_bar_layout.addWidget(self.model_label)
 
-        self.btn_toggle_chats = QPushButton("Чаты")
+        self.model_combo = QComboBox()
+        self.model_combo.setObjectName("model_combo")
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self.model_combo.setMinimumWidth(190)
+        top_bar_layout.addWidget(self.model_combo, 1)
+
+        self.btn_model_refresh = QPushButton("Обновить модели")
+        self.btn_model_refresh.setObjectName("btn_model_refresh")
+        self.btn_model_refresh.clicked.connect(self._refresh_models_in_ui)
+        top_bar_layout.addWidget(self.btn_model_refresh)
+
+        self.btn_new_chat = QPushButton("Новый чат")
+        self.btn_new_chat.setObjectName("btn_new_chat")
+        self.btn_new_chat.clicked.connect(self._on_new_chat)
+        top_bar_layout.addWidget(self.btn_new_chat)
+
+        top_bar_layout.addStretch(1)
+
+        self.btn_toggle_chats = QPushButton("Скрыть чаты")
         self.btn_toggle_chats.setObjectName("btn_toggle_chats")
         self.btn_toggle_chats.clicked.connect(self._toggle_chats_drawer)
-        top.addWidget(self.btn_toggle_chats)
+        top_bar_layout.addWidget(self.btn_toggle_chats)
 
         self.btn_toggle_stats = QPushButton("Статистика")
         self.btn_toggle_stats.setObjectName("btn_toggle_stats")
         self.btn_toggle_stats.clicked.connect(self._toggle_stats_drawer)
-        top.addWidget(self.btn_toggle_stats)
+        top_bar_layout.addWidget(self.btn_toggle_stats)
 
-        top.addStretch(1)
+        self.btn_toggle_quick_settings = QPushButton("Настройки")
+        self.btn_toggle_quick_settings.setObjectName("btn_toggle_quick_settings")
+        self.btn_toggle_quick_settings.clicked.connect(self._toggle_quick_settings)
+        top_bar_layout.addWidget(self.btn_toggle_quick_settings)
 
-        self.btn_stop = QPushButton("\u0421\u0442\u043e\u043f")
+        self.btn_stop = QPushButton("Стоп")
         self.btn_stop.setObjectName("btn_stop")
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_stop.setEnabled(False)
-        top.addWidget(self.btn_stop)
+        top_bar_layout.addWidget(self.btn_stop)
 
-        self.btn_clear = QPushButton("\u041e\u0447\u0438\u0441\u0442\u0438\u0442\u044c")
+        self.btn_clear = QPushButton("Очистить чат")
         self.btn_clear.setObjectName("btn_clear")
         self.btn_clear.clicked.connect(self.on_clear)
-        top.addWidget(self.btn_clear)
+        top_bar_layout.addWidget(self.btn_clear)
+
+        layout.addWidget(top_bar, 0)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(1)
         layout.addWidget(splitter, 1)
 
+        # Left: chat list + chat settings
         self.chats_panel = QFrame()
         self.chats_panel.setObjectName("chats_panel")
         chats_layout = QVBoxLayout(self.chats_panel)
-        chats_layout.setContentsMargins(8, 8, 8, 8)
+        chats_layout.setContentsMargins(10, 10, 10, 10)
         chats_layout.setSpacing(8)
 
+        chats_header = QHBoxLayout()
+        chats_header.setContentsMargins(0, 0, 0, 0)
+        chats_header.setSpacing(6)
         chats_title = QLabel("Чаты")
         chats_title.setObjectName("stats_label")
-        chats_layout.addWidget(chats_title)
+        chats_header.addWidget(chats_title)
+        chats_header.addStretch(1)
+        self.chat_count_label = QLabel("0")
+        self.chat_count_label.setObjectName("stats_label")
+        chats_header.addWidget(self.chat_count_label)
+        chats_layout.addLayout(chats_header)
 
         self.chat_list = QListWidget()
         self.chat_list.setObjectName("chat_list")
         self.chat_list.currentRowChanged.connect(self._on_chat_selected)
         chats_layout.addWidget(self.chat_list, 1)
 
+        self.btn_chat_settings_open = QPushButton("Настройки выбранного")
+        self.btn_chat_settings_open.setObjectName("btn_chat_settings_open")
+        self.btn_chat_settings_open.clicked.connect(self._open_active_chat_settings)
+        chats_layout.addWidget(self.btn_chat_settings_open, 0)
+
         self.chat_settings_panel = QFrame()
         self.chat_settings_panel.setObjectName("chat_settings_panel")
         settings_layout = QVBoxLayout(self.chat_settings_panel)
         settings_layout.setContentsMargins(10, 10, 10, 10)
         settings_layout.setSpacing(8)
+
         self.chat_settings_title = QLabel("Настройки чата")
         self.chat_settings_title.setObjectName("chat_settings_title")
         settings_layout.addWidget(self.chat_settings_title)
@@ -659,37 +837,34 @@ class MainWindow(QMainWindow):
         settings_actions = QHBoxLayout()
         settings_actions.setContentsMargins(0, 0, 0, 0)
         settings_actions.setSpacing(6)
+
         self.chat_settings_export = QPushButton("Экспорт")
         self.chat_settings_export.setObjectName("chat_settings_export")
         self.chat_settings_export.clicked.connect(self._on_settings_export_clicked)
         settings_actions.addWidget(self.chat_settings_export)
+
         self.chat_settings_delete = QPushButton("Удалить")
         self.chat_settings_delete.setObjectName("chat_settings_delete")
         self.chat_settings_delete.clicked.connect(self._on_settings_delete_clicked)
         settings_actions.addWidget(self.chat_settings_delete)
+
         settings_layout.addLayout(settings_actions)
 
         self.chat_settings_close = QPushButton("Закрыть")
         self.chat_settings_close.setObjectName("chat_settings_close")
         self.chat_settings_close.clicked.connect(self._close_chat_settings_panel)
         settings_layout.addWidget(self.chat_settings_close)
+
         self.chat_settings_panel.setVisible(False)
         chats_layout.addWidget(self.chat_settings_panel, 0)
-
-        chats_actions = QHBoxLayout()
-        self.btn_new_chat = QPushButton("Новый")
-        self.btn_new_chat.setObjectName("btn_new_chat")
-        self.btn_new_chat.clicked.connect(self._on_new_chat)
-        chats_actions.addWidget(self.btn_new_chat)
-        chats_layout.addLayout(chats_actions)
         splitter.addWidget(self.chats_panel)
 
+        # Center: chat stream + compact composer + quick settings drawer
         self.chat_panel = QFrame()
         self.chat_panel.setObjectName("chat_panel")
-
         chat_panel_layout = QVBoxLayout(self.chat_panel)
         chat_panel_layout.setContentsMargins(0, 0, 0, 0)
-        chat_panel_layout.setSpacing(0)
+        chat_panel_layout.setSpacing(8)
 
         self.chat_scroll = QScrollArea()
         self.chat_scroll.setObjectName("chat_scroll")
@@ -697,6 +872,7 @@ class MainWindow(QMainWindow):
         self.chat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.chat_scroll.setFrameShape(QFrame.NoFrame)
         self.chat_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         self.chat_root = QWidget()
         self.chat_root.setObjectName("chat_inner")
         self.chat_layout = QVBoxLayout(self.chat_root)
@@ -705,81 +881,61 @@ class MainWindow(QMainWindow):
         self.chat_layout.setAlignment(Qt.AlignTop)
         self.chat_layout.setSizeConstraint(QVBoxLayout.SetMinAndMaxSize)
         self.chat_scroll.setWidget(self.chat_root)
-        chat_panel_layout.addWidget(self.chat_scroll)
-        splitter.addWidget(self.chat_panel)
+        chat_panel_layout.addWidget(self.chat_scroll, 1)
 
-        self.stats_panel = QFrame()
-        self.stats_panel.setObjectName("stats_panel")
-        side_layout = QVBoxLayout(self.stats_panel)
-        side_layout.setContentsMargins(0, 0, 0, 0)
-        side_layout.setSpacing(10)
-
-        self.status_label = QLabel("\u0421\u0442\u0430\u0442\u0443\u0441: <b>\u0413\u043e\u0442\u043e\u0432\u043e</b>")
-        self.status_label.setObjectName("stats_label")
-        self.avg_ms_label = QLabel("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: \u0432\u0440\u0435\u043c\u044f \u2014")
-        self.avg_ms_label.setObjectName("stats_label")
-        self.avg_decode_label = QLabel("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: decode \u2014")
-        self.avg_decode_label.setObjectName("stats_label")
-        self.avg_tokens_label = QLabel("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: gen \u2014 / prompt \u2014")
-        self.avg_tokens_label.setObjectName("stats_label")
-        self.avg_tps_label = QLabel("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: tok/s \u2014")
-        self.avg_tps_label.setObjectName("stats_label")
-        self.avg_tflops_label = QLabel("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: TFLOPs \u2014")
-        self.avg_tflops_label.setObjectName("stats_label")
-
-        for w in (self.status_label, self.avg_ms_label, self.avg_decode_label, self.avg_tokens_label, self.avg_tps_label, self.avg_tflops_label):
-            w.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            side_layout.addWidget(w)
-
-        side_layout.addStretch(1)
-        splitter.addWidget(self.stats_panel)
-        self.splitter = splitter
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 4)
-        splitter.setStretchFactor(2, 2)
-        self.chats_panel.setMinimumWidth(0)
-        self.chats_panel.setMaximumWidth(self._chats_open_width)
-        self.chat_scroll.setMinimumWidth(self._chat_min_width)
-        self.stats_panel.setMinimumWidth(0)
-        self.stats_panel.setMaximumWidth(self._stats_open_width)
-        splitter.setSizes([0, 980, 0])
-        for i in (1, 2):
-            handle = splitter.handle(i)
-            if handle:
-                handle.setEnabled(False)
-                handle.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._set_chats_drawer_open(False, animated=False)
-        self._set_stats_drawer_open(False, animated=False)
+        composer = QFrame(self.chat_panel)
+        composer.setObjectName("composer_panel")
+        composer_layout = QVBoxLayout(composer)
+        composer_layout.setContentsMargins(0, 0, 0, 0)
+        composer_layout.setSpacing(6)
 
         self.input = QPlainTextEdit()
         self.input.setObjectName("chat_input")
-        self.input.setPlaceholderText("\u041d\u0430\u043f\u0438\u0448\u0438 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\u2026")
+        self.input.setPlaceholderText("Напиши сообщение…")
         self.input.setFont(QFont("Segoe UI", self._text_size))
         self.input.setFixedHeight(120)
-        layout.addWidget(self.input)
+        composer_layout.addWidget(self.input)
 
-        bottom = QHBoxLayout()
-        layout.addLayout(bottom)
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
 
-        self.btn_regen = QPushButton("\u0420\u0435\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u043e\u0432\u0430\u0442\u044c")
-        self.btn_regen.setObjectName("btn_regen")
-        self.btn_regen.clicked.connect(self.on_regen)
-        self.btn_regen.setEnabled(False)
-        bottom.addWidget(self.btn_regen)
+        controls.addStretch(1)
+
+        self.btn_send = QPushButton("Отправить")
+        self.btn_send.setObjectName("btn_send")
+        self.btn_send.clicked.connect(self.on_send)
+        self.btn_send.setDefault(True)
+        self.btn_send.setMinimumWidth(120)
+        controls.addWidget(self.btn_send)
+
+        composer_layout.addLayout(controls)
+        chat_panel_layout.addWidget(composer, 0)
+
+        self.quick_settings_panel = QFrame(self.chat_panel)
+        self.quick_settings_panel.setObjectName("quick_settings_panel")
+        quick_layout = QVBoxLayout(self.quick_settings_panel)
+        quick_layout.setContentsMargins(6, 4, 6, 6)
+        quick_layout.setSpacing(6)
+
+        quick_row_1 = QHBoxLayout()
+        quick_row_1.setContentsMargins(0, 0, 0, 0)
+        quick_row_1.setSpacing(8)
 
         self.btn_voice_input = QPushButton("Голос файл")
         self.btn_voice_input.setObjectName("btn_voice_input")
         self.btn_voice_input.clicked.connect(self.on_voice_input_file)
-        bottom.addWidget(self.btn_voice_input)
+        quick_row_1.addWidget(self.btn_voice_input)
 
         self.btn_voice_speak = QPushButton("Озвучить")
         self.btn_voice_speak.setObjectName("btn_voice_speak")
         self.btn_voice_speak.clicked.connect(self.on_voice_speak_last_ai)
-        bottom.addWidget(self.btn_voice_speak)
+        quick_row_1.addWidget(self.btn_voice_speak)
 
         self.voice_tone_label = QLabel("Тон")
         self.voice_tone_label.setObjectName("stats_label")
-        bottom.addWidget(self.voice_tone_label)
+        quick_row_1.addWidget(self.voice_tone_label)
+
         self.voice_tone_combo = QComboBox()
         self.voice_tone_combo.setObjectName("voice_tone_combo")
         selected_idx = 0
@@ -790,45 +946,189 @@ class MainWindow(QMainWindow):
         self.voice_tone_combo.setCurrentIndex(selected_idx)
         self._voice_tts_voice = str(self.voice_tone_combo.currentData() or self._voice_tts_voice)
         self.voice_tone_combo.currentIndexChanged.connect(self._on_voice_tone_changed)
-        bottom.addWidget(self.voice_tone_combo)
+        quick_row_1.addWidget(self.voice_tone_combo)
 
         self.voice_rate_label = QLabel("Скорость")
         self.voice_rate_label.setObjectName("stats_label")
-        bottom.addWidget(self.voice_rate_label)
+        quick_row_1.addWidget(self.voice_rate_label)
+
         self.voice_rate_spin = QSpinBox()
         self.voice_rate_spin.setObjectName("voice_rate_spin")
         self.voice_rate_spin.setRange(-60, 60)
         self.voice_rate_spin.setSingleStep(5)
         self.voice_rate_spin.setSuffix("%")
         self.voice_rate_spin.setValue(self._voice_rate_percent)
-        bottom.addWidget(self.voice_rate_spin)
+        quick_row_1.addWidget(self.voice_rate_spin)
 
         self.voice_volume_label = QLabel("Громкость")
         self.voice_volume_label.setObjectName("stats_label")
-        bottom.addWidget(self.voice_volume_label)
+        quick_row_1.addWidget(self.voice_volume_label)
+
         self.voice_volume_spin = QSpinBox()
         self.voice_volume_spin.setObjectName("voice_volume_spin")
         self.voice_volume_spin.setRange(-90, 100)
         self.voice_volume_spin.setSingleStep(5)
         self.voice_volume_spin.setSuffix("%")
         self.voice_volume_spin.setValue(self._voice_volume_percent)
-        bottom.addWidget(self.voice_volume_spin)
+        quick_row_1.addWidget(self.voice_volume_spin)
+
+        quick_row_1.addStretch(1)
+        quick_layout.addLayout(quick_row_1)
+
+        quick_row_2 = QHBoxLayout()
+        quick_row_2.setContentsMargins(0, 0, 0, 0)
+        quick_row_2.setSpacing(8)
 
         self.voice_auto_tts = _ToggleSwitch("Авто-озвучка")
         self.voice_auto_tts.setObjectName("voice_auto_tts")
         self.voice_auto_tts.setChecked(False)
-        bottom.addWidget(self.voice_auto_tts)
+        quick_row_2.addWidget(self.voice_auto_tts)
 
-        bottom.addStretch(1)
+        self.think_toggle = _ToggleSwitch("Думать")
+        self.think_toggle.setObjectName("think_toggle")
+        self.think_toggle.setChecked(self.brain.is_thinking_enabled())
+        self.think_toggle.toggled.connect(self._on_think_toggled)
+        quick_row_2.addWidget(self.think_toggle)
 
-        self.btn_send = QPushButton("\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c")
-        self.btn_send.setObjectName("btn_send")
-        self.btn_send.clicked.connect(self.on_send)
-        self.btn_send.setDefault(True)
-        bottom.addWidget(self.btn_send)
+        quick_row_2.addStretch(1)
+        quick_layout.addLayout(quick_row_2)
+
+        self._quick_settings_open_height = max(86, self.quick_settings_panel.sizeHint().height())
+        self.quick_settings_panel.setVisible(False)
+        self.quick_settings_panel.setMinimumHeight(0)
+        self.quick_settings_panel.setMaximumHeight(0)
+        chat_panel_layout.addWidget(self.quick_settings_panel, 0)
+
+        splitter.addWidget(self.chat_panel)
+
+        # Right: concise stats panel
+        self.stats_panel = QFrame()
+        self.stats_panel.setObjectName("stats_panel")
+        side_layout = QVBoxLayout(self.stats_panel)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(10)
+
+        self.status_label = QLabel("Статус: <b>Готово</b>")
+        self.status_label.setObjectName("stats_label")
+        side_layout.addWidget(self.status_label)
+
+        rt_block = QFrame(self.stats_panel)
+        rt_block.setObjectName("stats_rt_block")
+        rt_layout = QVBoxLayout(rt_block)
+        rt_layout.setContentsMargins(10, 10, 10, 10)
+        rt_layout.setSpacing(6)
+
+        self.rt_title_label = QLabel("Realtime")
+        self.rt_title_label.setObjectName("stats_label")
+        rt_layout.addWidget(self.rt_title_label)
+
+        self.rt_elapsed_label = QLabel("Время: —")
+        self.rt_elapsed_label.setObjectName("stats_label")
+        self.rt_tokens_out_label = QLabel("Токены out (оценка): —")
+        self.rt_tokens_out_label.setObjectName("stats_label")
+        self.rt_tokens_think_label = QLabel("Токены think (оценка): —")
+        self.rt_tokens_think_label.setObjectName("stats_label")
+        self.rt_tps_label = QLabel("Tok/s (оценка): —")
+        self.rt_tps_label.setObjectName("stats_label")
+        self.rt_chunks_label = QLabel("Chunk/s: —")
+        self.rt_chunks_label.setObjectName("stats_label")
+        self.rt_flush_label = QLabel("UI flush: —")
+        self.rt_flush_label.setObjectName("stats_label")
+        self.rt_buffer_label = QLabel("Буфер: out 0 / think 0")
+        self.rt_buffer_label.setObjectName("stats_label")
+
+        self.rt_tps_graph = _MiniSparkline("tok/s")
+        self.rt_chunk_graph = _MiniSparkline("chunk/s")
+        self.rt_ui_graph = _MiniSparkline("ui flush ms")
+
+        for w in (
+            self.rt_elapsed_label,
+            self.rt_tokens_out_label,
+            self.rt_tokens_think_label,
+            self.rt_tps_label,
+            self.rt_chunks_label,
+            self.rt_flush_label,
+            self.rt_buffer_label,
+            self.rt_tps_graph,
+            self.rt_chunk_graph,
+            self.rt_ui_graph,
+        ):
+            rt_layout.addWidget(w)
+        side_layout.addWidget(rt_block)
+
+        avg_block = QFrame(self.stats_panel)
+        avg_block.setObjectName("stats_avg_block")
+        avg_layout = QVBoxLayout(avg_block)
+        avg_layout.setContentsMargins(10, 10, 10, 10)
+        avg_layout.setSpacing(6)
+
+        self.avg_title_label = QLabel("Средние значения")
+        self.avg_title_label.setObjectName("stats_label")
+        avg_layout.addWidget(self.avg_title_label)
+
+        self.avg_ms_label = QLabel("Время —")
+        self.avg_ms_label.setObjectName("stats_label")
+        self.avg_decode_label = QLabel("Decode —")
+        self.avg_decode_label.setObjectName("stats_label")
+        self.avg_tokens_label = QLabel("Gen — / Prompt —")
+        self.avg_tokens_label.setObjectName("stats_label")
+        self.avg_tps_label = QLabel("Tok/s —")
+        self.avg_tps_label.setObjectName("stats_label")
+        self.avg_tflops_label = QLabel("TFLOPs —")
+        self.avg_tflops_label.setObjectName("stats_label")
+
+        for w in (
+            self.status_label,
+            self.rt_title_label,
+            self.rt_elapsed_label,
+            self.rt_tokens_out_label,
+            self.rt_tokens_think_label,
+            self.rt_tps_label,
+            self.rt_chunks_label,
+            self.rt_flush_label,
+            self.rt_buffer_label,
+            self.avg_title_label,
+            self.avg_ms_label,
+            self.avg_decode_label,
+            self.avg_tokens_label,
+            self.avg_tps_label,
+            self.avg_tflops_label,
+            self.chat_count_label,
+        ):
+            w.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        for w in (self.avg_ms_label, self.avg_decode_label, self.avg_tokens_label, self.avg_tps_label, self.avg_tflops_label):
+            avg_layout.addWidget(w)
+        side_layout.addWidget(avg_block)
+
+        side_layout.addStretch(1)
+        splitter.addWidget(self.stats_panel)
+
+        self.splitter = splitter
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 8)
+        splitter.setStretchFactor(2, 3)
+
+        self.chats_panel.setMinimumWidth(0)
+        self.chats_panel.setMaximumWidth(self._chats_open_width)
+        self.chat_scroll.setMinimumWidth(self._chat_min_width)
+        self.stats_panel.setMinimumWidth(0)
+        self.stats_panel.setMaximumWidth(self._stats_open_width)
+
+        splitter.setSizes([self._chats_open_width, 980, 0])
+        for i in (1, 2):
+            handle = splitter.handle(i)
+            if handle:
+                handle.setEnabled(False)
+                handle.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+        self._set_chats_drawer_open(True, animated=False)
+        self._set_stats_drawer_open(False, animated=False)
+        self._set_quick_settings_open(False, animated=False)
 
         self.input.installEventFilter(self)
 
+        self._refresh_models_in_ui()
         self._apply_panel_styles(self._resolve_style())
         self._render_chat()
 
@@ -851,23 +1151,61 @@ class MainWindow(QMainWindow):
         v = int(value)
         return f"{v:+d}%"
 
+    def _update_model_label(self) -> None:
+        current = ""
+        if hasattr(self, "model_combo") and self.model_combo.count() > 0:
+            current = str(self.model_combo.currentText() or "")
+        if not current:
+            current = self.brain.get_runtime_model()
+        self.model_label.setText(f"Model: <b>{current}</b>" if current else "Model: <b>—</b>")
+
+    @Slot()
+    def _refresh_models_in_ui(self) -> None:
+        models = self.brain.list_local_models()
+        current = self.brain.get_runtime_model()
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        for m in models:
+            self.model_combo.addItem(m)
+        if current and current in models:
+            self.model_combo.setCurrentIndex(models.index(current))
+        elif models:
+            chosen = models[0]
+            self.model_combo.setCurrentIndex(0)
+            self.brain.set_runtime_model(chosen)
+        self.model_combo.blockSignals(False)
+        self._update_model_label()
+
+    @Slot(int)
+    def _on_model_changed(self, _index: int) -> None:
+        name = str(self.model_combo.currentText() or "").strip()
+        if not name:
+            return
+        if self.brain.set_runtime_model(name):
+            self._update_model_label()
+
+    @Slot(bool)
+    def _on_think_toggled(self, checked: bool) -> None:
+        self.brain.set_thinking_enabled(bool(checked))
+
     @staticmethod
-    def _history_to_serializable(history: list[tuple[str, str, str | None, int | None]]) -> list[dict]:
+    def _history_to_serializable(history: list[tuple[str, str, str | None, int | None, str | None]]) -> list[dict]:
         out: list[dict] = []
-        for role, text, stat_line, feedback in history:
+        for role, text, stat_line, feedback, thinking in history:
             out.append(
                 {
                     "role": str(role),
                     "text": str(text or ""),
                     "stat_line": None if stat_line is None else str(stat_line),
                     "feedback": None if feedback is None else int(feedback),
+                    "thinking": None if not thinking else str(thinking),
                 }
             )
         return out
 
     @staticmethod
-    def _history_from_serializable(rows: list[dict] | None) -> list[tuple[str, str, str | None, int | None]]:
-        out: list[tuple[str, str, str | None, int | None]] = []
+    def _history_from_serializable(rows: list[dict] | None) -> list[tuple[str, str, str | None, int | None, str | None]]:
+        out: list[tuple[str, str, str | None, int | None, str | None]] = []
         if not isinstance(rows, list):
             return out
         for row in rows:
@@ -886,9 +1224,11 @@ class MainWindow(QMainWindow):
                     feedback = int(feedback_raw)
                 except Exception:
                     feedback = None
+            thinking_raw = row.get("thinking")
+            thinking = None if thinking_raw is None else str(thinking_raw)
             if role == "system" and text.strip().startswith("MMis UI запущен"):
                 continue
-            out.append((role, text, stat_line, feedback))
+            out.append((role, text, stat_line, feedback, thinking))
         return out
 
     def _new_chat_payload(self, title: str | None = None, incognito: bool = False) -> dict:
@@ -1033,10 +1373,8 @@ class MainWindow(QMainWindow):
             active_id = legacy_active
 
         self._chat_sessions = loaded
-        if loaded:
-            self._active_chat_id = active_id if any(c.get("id") == active_id for c in loaded) else str(loaded[0]["id"])
-        else:
-            self._active_chat_id = None
+        # Always start with no active chat selected.
+        self._active_chat_id = None
         self._refresh_chat_selector()
         self._apply_active_chat_to_ui(scroll_to_bottom=True)
         self._save_chat_sessions()
@@ -1072,35 +1410,19 @@ class MainWindow(QMainWindow):
                 title = str(chat.get("title") or "Чат")
                 if bool(chat.get("incognito", False)):
                     title = f"{title} (инкогнито)"
-                item = QListWidgetItem(self.chat_list)
-                item.setSizeHint(QSize(180, 30))
-                row = QWidget()
-                row_layout = QHBoxLayout(row)
-                row_layout.setContentsMargins(6, 2, 2, 2)
-                row_layout.setSpacing(6)
+                item = QListWidgetItem(title)
+                item.setData(Qt.UserRole, str(chat.get("id") or ""))
+                item.setSizeHint(QSize(0, 32))
+                self.chat_list.addItem(item)
 
-                title_label = QLabel(title)
-                title_label.setObjectName("chat_title")
-                title_label.setTextInteractionFlags(Qt.NoTextInteraction)
-                row_layout.addWidget(title_label, 1)
-
-                dots_btn = QToolButton()
-                dots_btn.setObjectName("chat_item_menu_btn")
-                dots_btn.setText("⋯")
-                chat_id = str(chat.get("id") or "")
-                dots_btn.clicked.connect(lambda _=False, cid=chat_id, b=dots_btn: self._show_chat_item_menu(cid, b))
-                row_layout.addWidget(dots_btn, 0)
-                self.chat_list.setItemWidget(item, row)
-
-            idx = 0
+            idx = -1
             for i, chat in enumerate(self._chat_sessions):
-                if str(chat.get("id")) == self._active_chat_id:
+                if self._active_chat_id and str(chat.get("id")) == self._active_chat_id:
                     idx = i
                     break
-            if self._chat_sessions:
-                self.chat_list.setCurrentRow(idx)
-            else:
-                self.chat_list.setCurrentRow(-1)
+            self.chat_list.setCurrentRow(idx if self._chat_sessions else -1)
+            if hasattr(self, "chat_count_label"):
+                self.chat_count_label.setText(str(len(self._chat_sessions)))
         finally:
             self._updating_chat_controls = False
         self._update_chat_controls_state()
@@ -1112,6 +1434,7 @@ class MainWindow(QMainWindow):
             self._history = []
             self._stream_ai_index = None
             self._stream_chunk_buffer = ""
+            self._stream_thinking_buffer = ""
             self._last_user_text = None
             self._set_status("Готово")
             self._render_chat(scroll_to_bottom=scroll_to_bottom)
@@ -1120,10 +1443,11 @@ class MainWindow(QMainWindow):
         self._history = list(chat.get("history") or [])
         self._stream_ai_index = None
         self._stream_chunk_buffer = ""
+        self._stream_thinking_buffer = ""
         self._last_user_text = None
         if self._settings_chat_id and self._settings_chat_id != str(chat.get("id") or ""):
             self._close_chat_settings_panel()
-        for role, text, _, _ in reversed(self._history):
+        for role, text, _, _, _thinking in reversed(self._history):
             if role == "user":
                 self._last_user_text = text
                 break
@@ -1135,7 +1459,11 @@ class MainWindow(QMainWindow):
         has_active = self._active_chat() is not None
         is_busy = bool(self._thread and self._thread.isRunning())
         self.btn_new_chat.setEnabled(True)
-        self.btn_send.setEnabled(has_active and not is_busy)
+        self.btn_model_refresh.setEnabled(not is_busy)
+        self.model_combo.setEnabled((self.model_combo.count() > 0) and (not is_busy))
+        self.think_toggle.setEnabled(not is_busy)
+        self.btn_send.setEnabled(not is_busy)
+        self.btn_chat_settings_open.setEnabled(has_active and not is_busy)
         self.btn_voice_input.setEnabled(has_active and not is_busy)
         self.btn_voice_speak.setEnabled(has_active and not is_busy)
         self.voice_tone_combo.setEnabled(has_active and not is_busy)
@@ -1145,6 +1473,13 @@ class MainWindow(QMainWindow):
         self.chat_settings_export.setEnabled(has_active)
         self.chat_settings_delete.setEnabled(has_active)
         self.chat_settings_incognito.setEnabled(has_active)
+
+    @Slot()
+    def _open_active_chat_settings(self) -> None:
+        chat = self._active_chat()
+        if not chat:
+            return
+        self._open_chat_settings(str(chat.get("id") or ""))
 
     def _close_chat_settings_panel(self) -> None:
         self._settings_chat_id = None
@@ -1225,8 +1560,6 @@ class MainWindow(QMainWindow):
         self._active_chat_id = new_id
         self._apply_active_chat_to_ui(scroll_to_bottom=True)
         self._save_chat_sessions()
-        if self._chats_drawer_open:
-            self._set_chats_drawer_open(False, animated=True)
 
     @Slot()
     def _on_new_chat(self) -> None:
@@ -1240,6 +1573,8 @@ class MainWindow(QMainWindow):
         self._refresh_chat_selector()
         self._apply_active_chat_to_ui(scroll_to_bottom=True)
         self._save_chat_sessions()
+        if self._chats_drawer_open:
+            self._set_chats_drawer_open(False, animated=True)
 
     def _set_chat_incognito(self, chat_id: str, checked: bool) -> None:
         chat = self._chat_by_id(chat_id)
@@ -1333,6 +1668,48 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         QTimer.singleShot(0, self._sync_chat_content_geometry)
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        try:
+            self._css_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._rt_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._stream_flush_timer.stop()
+            self._chat_sync_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._media_player.stop()
+        except Exception:
+            pass
+
+        if self._worker:
+            try:
+                self._worker.request_cancel()
+            except Exception:
+                pass
+        if self._thread and self._thread.isRunning():
+            self._thread.quit()
+            if not self._thread.wait(1800):
+                self._thread.terminate()
+                self._thread.wait(500)
+        try:
+            mm = getattr(self.brain, "mm", None)
+            if mm and hasattr(mm, "shutdown"):
+                # Fully stop background memory workers to avoid post-exit CPU load.
+                mm.shutdown(wait=True, cancel_futures=True)
+        except Exception:
+            pass
+        self._save_chat_sessions()
+        super().closeEvent(event)
+        app = QApplication.instance()
+        if app:
+            app.quit()
+
     @Slot()
     def _toggle_chats_drawer(self) -> None:
         self._set_chats_drawer_open(not self._chats_drawer_open, animated=True)
@@ -1349,6 +1726,7 @@ class MainWindow(QMainWindow):
 
         if self._chats_drawer_anim and self._chats_drawer_anim.state() == QAbstractAnimation.Running:
             self._chats_drawer_anim.stop()
+        self.chats_panel.setMinimumWidth(0)
         if target > 0:
             self.chats_panel.setVisible(True)
         anim = QPropertyAnimation(self.chats_panel, b"maximumWidth", self)
@@ -1381,6 +1759,7 @@ class MainWindow(QMainWindow):
 
         if self._stats_drawer_anim and self._stats_drawer_anim.state() == QAbstractAnimation.Running:
             self._stats_drawer_anim.stop()
+        self.stats_panel.setMinimumWidth(0)
         if target > 0:
             self.stats_panel.setVisible(True)
         anim = QPropertyAnimation(self.stats_panel, b"maximumWidth", self)
@@ -1395,6 +1774,39 @@ class MainWindow(QMainWindow):
 
         anim.finished.connect(_finish)
         self._stats_drawer_anim = anim
+        anim.start()
+
+    @Slot()
+    def _toggle_quick_settings(self) -> None:
+        self._set_quick_settings_open(not self._quick_settings_open, animated=True)
+
+    def _set_quick_settings_open(self, is_open: bool, animated: bool = True) -> None:
+        target = int(self._quick_settings_open_height if is_open else 0)
+        self._quick_settings_open = bool(is_open)
+        self.btn_toggle_quick_settings.setText("Скрыть настройки" if is_open else "Настройки")
+        if not animated:
+            self.quick_settings_panel.setMinimumHeight(target)
+            self.quick_settings_panel.setMaximumHeight(target)
+            self.quick_settings_panel.setVisible(target > 0)
+            return
+
+        if self._quick_settings_anim and self._quick_settings_anim.state() == QAbstractAnimation.Running:
+            self._quick_settings_anim.stop()
+        self.quick_settings_panel.setMinimumHeight(0)
+        if target > 0:
+            self.quick_settings_panel.setVisible(True)
+        anim = QPropertyAnimation(self.quick_settings_panel, b"maximumHeight", self)
+        anim.setDuration(180)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(int(self.quick_settings_panel.maximumHeight()))
+        anim.setEndValue(target)
+
+        def _finish():
+            self.quick_settings_panel.setMinimumHeight(target)
+            self.quick_settings_panel.setVisible(target > 0)
+
+        anim.finished.connect(_finish)
+        self._quick_settings_anim = anim
         anim.start()
 
     @staticmethod
@@ -1432,6 +1844,7 @@ class MainWindow(QMainWindow):
         s = str(text or "")
         if not s:
             return ""
+        s = re.sub(r"</?think>", "", s, flags=re.I)
         s = s.replace("\r\n", "\n").replace("\r", "\n")
         # Prevent stream artifacts from inflating bubble height.
         s = re.sub(r"\n{2,}", "\n", s)
@@ -1439,6 +1852,26 @@ class MainWindow(QMainWindow):
         s = re.sub(r"\s*\n\s*", " ", s)
         s = re.sub(r"\s{2,}", " ", s)
         return s.strip()
+
+    @staticmethod
+    def _preview_first_words(text: str, max_words: int = 10) -> str:
+        s = re.sub(r"\s+", " ", str(text or "").strip())
+        if not s:
+            return ""
+        words = s.split(" ")
+        if len(words) <= max_words:
+            return s
+        return " ".join(words[:max_words]) + "..."
+
+    @staticmethod
+    def _preview_last_words(text: str, max_words: int = 7) -> str:
+        s = re.sub(r"\s+", " ", str(text or "").strip())
+        if not s:
+            return ""
+        words = s.split(" ")
+        if len(words) <= max_words:
+            return s
+        return "..." + " ".join(words[-max_words:])
 
     @staticmethod
     def _is_pending_stat_line(stat_line: str | None) -> bool:
@@ -1516,6 +1949,26 @@ class MainWindow(QMainWindow):
             widget = item.widget()
             if widget:
                 widget.deleteLater()
+        self._message_row_widgets = {}
+
+    def _schedule_chat_sync(self, scroll_to_bottom: bool) -> None:
+        if scroll_to_bottom:
+            self._chat_sync_pending_scroll_bottom = True
+        if not self._chat_sync_timer.isActive():
+            self._chat_sync_timer.start()
+
+    @Slot()
+    def _on_deferred_chat_sync(self) -> None:
+        if self._thread and self._thread.isRunning():
+            self.chat_layout.invalidate()
+            self.chat_layout.activate()
+            self.chat_root.adjustSize()
+        else:
+            self._sync_chat_content_geometry()
+        if self._chat_sync_pending_scroll_bottom:
+            bar = self.chat_scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        self._chat_sync_pending_scroll_bottom = False
 
     def _sync_chat_content_geometry(self) -> None:
         layout = self.chat_layout
@@ -1567,15 +2020,17 @@ class MainWindow(QMainWindow):
 
     def _install_base_button_animations(self, style: dict | None = None) -> None:
         for btn in (
+            self.btn_model_refresh,
             self.btn_toggle_chats,
             self.btn_toggle_stats,
+            self.btn_toggle_quick_settings,
             self.btn_stop,
             self.btn_clear,
             self.btn_new_chat,
+            self.btn_chat_settings_open,
             self.chat_settings_export,
             self.chat_settings_delete,
             self.chat_settings_close,
-            self.btn_regen,
             self.btn_voice_input,
             self.btn_voice_speak,
             self.btn_send,
@@ -1593,6 +2048,7 @@ class MainWindow(QMainWindow):
         return {
             "msg_gap_top": self._px(vars_map.get("--msg-gap-top"), 10),
             "msg_gap_bottom": self._px(vars_map.get("--msg-gap-bottom"), 18),
+            "msg_card_margin_x": self._px(vars_map.get("--msg-card-margin-x"), 8),
             "msg_radius": self._px(vars_map.get("--msg-radius"), 10),
             "name_size": self._px(vars_map.get("--name-size"), 12),
             "name_weight": self._font_weight(name_weight_css),
@@ -1617,8 +2073,8 @@ class MainWindow(QMainWindow):
             "panel_radius": self._px(vars_map.get("--panel-radius"), 12),
             "panel_padding": self._px(vars_map.get("--panel-padding"), 8),
             "panel_shadow": self._shadow_from_css(vars_map.get("--panel-shadow")),
-            "chats_drawer_width": self._px(vars_map.get("--chats-drawer-width"), 240),
-            "stats_drawer_width": self._px(vars_map.get("--stats-drawer-width"), 300),
+            "chats_drawer_width": self._px(vars_map.get("--chats-drawer-width"), 250),
+            "stats_drawer_width": self._px(vars_map.get("--stats-drawer-width"), 320),
             "chat_min_width": self._px(vars_map.get("--chat-min-width"), 560),
             "chat_settings_bg": self._color(vars_map.get("--chat-settings-bg"), "rgba(20, 21, 25, 0.75)"),
             "chat_settings_border": self._color(vars_map.get("--chat-settings-border"), "rgba(255, 255, 255, 0.10)"),
@@ -1706,8 +2162,8 @@ class MainWindow(QMainWindow):
     def _apply_panel_styles(self, style: dict) -> None:
         self._feedback_reveal_show_ms = int(style.get("anim_feedback_reveal_show_ms", 170))
         self._feedback_reveal_hide_ms = int(style.get("anim_feedback_reveal_hide_ms", 130))
-        self._chats_open_width = max(170, int(style.get("chats_drawer_width", 240)))
-        self._stats_open_width = max(220, int(style.get("stats_drawer_width", 300)))
+        self._chats_open_width = max(190, int(style.get("chats_drawer_width", 250)) + 16)
+        self._stats_open_width = max(250, int(style.get("stats_drawer_width", 320)) + 20)
         self._chat_min_width = max(360, int(style.get("chat_min_width", 560)))
         self.chat_scroll.setMinimumWidth(self._chat_min_width)
         panel_bg = self._qss_rgba(style["panel_bg"])
@@ -1778,6 +2234,23 @@ class MainWindow(QMainWindow):
             f"background: {self._qss_rgba(style['app_bg'])};"
             f"color: {self._qss_rgba(style['ui_text'])};"
             "}"
+            "QFrame#composer_panel {"
+            f"background: {self._qss_rgba(style['panel_bg'])};"
+            f"border: 1px solid {self._qss_rgba(style['panel_border'])};"
+            f"border-radius: {max(8, int(style['panel_radius']) - 2)}px;"
+            "padding: 6px;"
+            "}"
+            "QFrame#quick_settings_panel {"
+            f"background: {self._qss_rgba(style['panel_bg'])};"
+            f"border: 1px solid {self._qss_rgba(style['panel_border'])};"
+            f"border-radius: {max(8, int(style['panel_radius']) - 2)}px;"
+            "padding: 4px;"
+            "}"
+            "QFrame#stats_rt_block, QFrame#stats_avg_block {"
+            f"background: {self._qss_rgba(style['chat_inner_bg'])};"
+            f"border: 1px solid {self._qss_rgba(style['chat_inner_border'])};"
+            f"border-radius: {max(8, int(style['chat_inner_radius']) - 1)}px;"
+            "}"
             f"QLabel#model_label {{ color: {self._qss_rgba(style['model_color'])}; font-weight: {style['model_weight']}; }}"
             f"QLabel#stats_label {{ color: {self._qss_rgba(style['stats_text_color'])}; font-weight: {style['side_stats_weight']}; }}"
             "QPushButton {"
@@ -1835,7 +2308,24 @@ class MainWindow(QMainWindow):
             "}"
         )
         self._apply_text_shadow(self.model_label, style["model_text_shadow"])
-        for w in (self.status_label, self.avg_ms_label, self.avg_decode_label, self.avg_tokens_label, self.avg_tps_label, self.avg_tflops_label):
+        for w in (
+            self.status_label,
+            self.rt_title_label,
+            self.rt_elapsed_label,
+            self.rt_tokens_out_label,
+            self.rt_tokens_think_label,
+            self.rt_tps_label,
+            self.rt_chunks_label,
+            self.rt_flush_label,
+            self.rt_buffer_label,
+            self.avg_title_label,
+            self.avg_ms_label,
+            self.avg_decode_label,
+            self.avg_tokens_label,
+            self.avg_tps_label,
+            self.avg_tflops_label,
+            self.chat_count_label,
+        ):
             self._apply_text_shadow(w, style["side_text_shadow"])
         self.chat_settings_incognito.set_colors(
             track_off=style["btn_disabled_bg"],
@@ -1843,9 +2333,11 @@ class MainWindow(QMainWindow):
             track_border=style["btn_border"],
             text_color=style["ui_text"],
         )
+        self._quick_settings_open_height = max(86, self.quick_settings_panel.sizeHint().height())
         self._install_base_button_animations(style)
         self._set_chats_drawer_open(self._chats_drawer_open, animated=False)
         self._set_stats_drawer_open(self._stats_drawer_open, animated=False)
+        self._set_quick_settings_open(self._quick_settings_open, animated=False)
 
         psx, psy, pblur, pcolor = style["panel_shadow"]
         self._apply_panel_shadow(self.chat_panel, blur=pblur, x=psx, y=psy, color=pcolor)
@@ -1861,6 +2353,7 @@ class MainWindow(QMainWindow):
         text: str,
         stat_line: str | None,
         feedback: int | None,
+        thinking: str | None,
         style: dict,
     ) -> QWidget:
         if role == "user":
@@ -1873,13 +2366,14 @@ class MainWindow(QMainWindow):
             name_text = "SYSTEM"
             bg_color = QColor(0, 0, 0, 0)
 
-        outer = _OverlayHost()
+        outer = _OverlayHost(self.chat_root)
         outer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         outer_layout = QVBoxLayout(outer)
-        outer_layout.setContentsMargins(0, style["msg_gap_top"], 0, style["msg_gap_bottom"])
+        msg_margin_x = max(0, int(style.get("msg_card_margin_x", 0)))
+        outer_layout.setContentsMargins(msg_margin_x, style["msg_gap_top"], msg_margin_x, style["msg_gap_bottom"])
         outer_layout.setSpacing(6)
 
-        card = QFrame()
+        card = QFrame(outer)
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         card.setObjectName("msg_card")
         card.setStyleSheet(
@@ -1896,7 +2390,7 @@ class MainWindow(QMainWindow):
         bubble_font = QFont("Segoe UI", style["text_size"])
         bubble_font.setWeight(style["text_weight"])
 
-        name_label = QLabel(name_text)
+        name_label = QLabel(name_text, card)
         name_label.setTextFormat(Qt.PlainText)
         name_label.setFont(name_font)
         name_label.setStyleSheet(f"color: {self._qss_rgba(style['name_color'])}; background: transparent;")
@@ -1904,7 +2398,73 @@ class MainWindow(QMainWindow):
         self._apply_text_shadow(name_label, style["name_text_shadow"])
         card_layout.addWidget(name_label)
 
-        bubble_label = QLabel(text)
+        think_toggle: QPushButton | None = None
+        think_preview_label: QLabel | None = None
+        think_full_label: QLabel | None = None
+        think_row: QFrame | None = None
+        if role == "ai":
+            think_text = str(thinking or "").strip()
+            has_thinking = bool(think_text)
+            is_open = msg_index in self._thinking_open_by_msg
+            is_streaming_thinking = bool(
+                self._stream_ai_index == msg_index and self._thread and self._thread.isRunning()
+            )
+            compact_text = self._preview_last_words(think_text, max_words=7) if is_streaming_thinking else ""
+
+            think_row = QFrame(card)
+            think_row.setObjectName("think_row")
+            think_row_layout = QVBoxLayout(think_row)
+            think_row_layout.setContentsMargins(0, 0, 0, 0)
+            think_row_layout.setSpacing(2)
+
+            header_wrap = QWidget(think_row)
+            header_layout = QHBoxLayout(header_wrap)
+            header_layout.setContentsMargins(0, 0, 0, 0)
+            header_layout.setSpacing(6)
+
+            think_toggle = QPushButton("Мысли ▾" if is_open else "Мысли ▸", header_wrap)
+            think_toggle.setStyleSheet(
+                "QPushButton {"
+                "background: transparent;"
+                "border: none;"
+                f"color: {self._qss_rgba(QColor(220, 220, 220, 150))};"
+                "padding: 0px;"
+                "text-align: left;"
+                "}"
+                "QPushButton:hover { text-decoration: underline; }"
+            )
+            think_toggle.setCursor(Qt.PointingHandCursor)
+            think_toggle.clicked.connect(lambda _, i=msg_index: self._toggle_thinking(i))
+            think_toggle.setVisible(has_thinking)
+            think_toggle.setEnabled(has_thinking)
+            header_layout.addWidget(think_toggle, 0)
+
+            think_preview_label = QLabel(compact_text, header_wrap)
+            think_preview_label.setTextFormat(Qt.PlainText)
+            think_preview_label.setWordWrap(False)
+            think_preview_label.setStyleSheet(
+                f"color: {self._qss_rgba(QColor(220, 220, 220, 150))};"
+                "background: transparent;"
+            )
+            think_preview_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            think_preview_label.setVisible(bool(has_thinking and is_streaming_thinking))
+            header_layout.addWidget(think_preview_label, 1)
+            think_row_layout.addWidget(header_wrap)
+
+            think_full_label = QLabel(think_text, think_row)
+            think_full_label.setTextFormat(Qt.PlainText)
+            think_full_label.setWordWrap(True)
+            think_full_label.setStyleSheet(
+                f"color: {self._qss_rgba(QColor(220, 220, 220, 175))};"
+                "background: transparent;"
+            )
+            think_full_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            think_full_label.setVisible(bool(has_thinking and is_open))
+            think_row_layout.addWidget(think_full_label)
+            think_row.setVisible(has_thinking)
+            card_layout.addWidget(think_row)
+
+        bubble_label = QLabel(text, card)
         bubble_label.setObjectName("msg_bubble_label")
         bubble_label.setTextFormat(Qt.PlainText)
         bubble_label.setWordWrap(True)
@@ -1925,8 +2485,9 @@ class MainWindow(QMainWindow):
 
         outer_layout.addWidget(card)
 
+        stats_label: QLabel | None = None
         if show_ai_meta:
-            stats_label = QLabel(stat_line or "—")
+            stats_label = QLabel(stat_line or "—", outer)
             stats_label.setTextFormat(Qt.PlainText)
             stats_label.setWordWrap(True)
             stats_label.setStyleSheet(
@@ -1942,7 +2503,7 @@ class MainWindow(QMainWindow):
             self._apply_text_shadow(stats_label, style["msg_stats_text_shadow"])
             outer_layout.addWidget(stats_label)
 
-            actions = QWidget()
+            actions = QWidget(outer)
             actions_layout = QHBoxLayout(actions)
             actions_layout.setContentsMargins(
                 style["feedback_row_margin_left"],
@@ -2030,6 +2591,12 @@ class MainWindow(QMainWindow):
             )
             self._install_hover_reveal(card, actions, require_reenter=feedback is not None)
 
+        outer._bubble_label = bubble_label
+        outer._think_toggle = think_toggle
+        outer._think_row = think_row
+        outer._think_preview_label = think_preview_label
+        outer._think_full_label = think_full_label
+        outer._stats_label = stats_label
         return outer
 
     def _render_chat(self, scroll_to_bottom: bool = False):
@@ -2041,7 +2608,7 @@ class MainWindow(QMainWindow):
         self._clear_chat_widgets()
         self.chat_layout.setAlignment(Qt.AlignTop)
         if not self._history:
-            placeholder = QLabel(style["chat_empty_text"])
+            placeholder = QLabel(style["chat_empty_text"], self.chat_root)
             placeholder.setObjectName("chat_empty_placeholder")
             placeholder.setWordWrap(True)
             align_map = {"left": Qt.AlignLeft, "center": Qt.AlignHCenter, "right": Qt.AlignRight}
@@ -2061,8 +2628,10 @@ class MainWindow(QMainWindow):
             )
             self.chat_layout.setAlignment(Qt.AlignCenter)
             self.chat_layout.addWidget(placeholder, 0, Qt.AlignCenter | h_align)
-        for i, (role, text, stat_line, feedback) in enumerate(self._history):
-            self.chat_layout.addWidget(self._message_widget(i, role, text, stat_line, feedback, style))
+        for i, (role, text, stat_line, feedback, thinking) in enumerate(self._history):
+            row = self._message_widget(i, role, text, stat_line, feedback, thinking, style)
+            self.chat_layout.addWidget(row)
+            self._message_row_widgets[i] = row
         self._sync_chat_content_geometry()
         if scroll_to_bottom or was_at_bottom:
             QTimer.singleShot(
@@ -2079,8 +2648,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._sync_chat_content_geometry)
 
     @staticmethod
-    def _is_empty_ai_placeholder(row: tuple[str, str, str | None, int | None]) -> bool:
-        role, text, stat_line, _ = row
+    def _is_empty_ai_placeholder(row: tuple[str, str, str | None, int | None, str | None]) -> bool:
+        role, text, stat_line, _, _thinking = row
         if role != "ai":
             return False
         if str(text or "").strip():
@@ -2090,7 +2659,7 @@ class MainWindow(QMainWindow):
     def _prune_empty_ai_placeholders(self) -> None:
         if not self._history:
             return
-        keep: list[tuple[str, str, str | None, int | None]] = []
+        keep: list[tuple[str, str, str | None, int | None, str | None]] = []
         active_idx = self._stream_ai_index
         for i, row in enumerate(self._history):
             if active_idx is not None and i == active_idx:
@@ -2113,25 +2682,73 @@ class MainWindow(QMainWindow):
                     self._stream_ai_index = None
             self._history = keep
 
+    def _toggle_thinking(self, msg_index: int) -> None:
+        if msg_index in self._thinking_open_by_msg:
+            self._thinking_open_by_msg.remove(msg_index)
+        else:
+            self._thinking_open_by_msg.add(msg_index)
+        self._render_chat(scroll_to_bottom=False)
+
+    def _update_stream_row_widgets(self, msg_index: int, text: str, thinking: str | None) -> bool:
+        row = self._message_row_widgets.get(msg_index)
+        if row is None or not isValid(row):
+            return False
+        bar = self.chat_scroll.verticalScrollBar()
+        was_near_bottom = bar.value() >= max(0, bar.maximum() - 10)
+        bubble_label = getattr(row, "_bubble_label", None)
+        if not isinstance(bubble_label, QLabel) or not isValid(bubble_label):
+            return False
+        if bubble_label.text() != text:
+            bubble_label.setText(text)
+
+        think_toggle = getattr(row, "_think_toggle", None)
+        think_row = getattr(row, "_think_row", None)
+        think_preview_label = getattr(row, "_think_preview_label", None)
+        think_full_label = getattr(row, "_think_full_label", None)
+        if isinstance(think_toggle, QPushButton) and isValid(think_toggle):
+            think_text = str(thinking or "").strip()
+            has_thinking = bool(think_text)
+            is_open = msg_index in self._thinking_open_by_msg
+            is_streaming_thinking = bool(
+                self._stream_ai_index == msg_index and self._thread and self._thread.isRunning()
+            )
+            think_toggle.setVisible(has_thinking)
+            think_toggle.setEnabled(has_thinking)
+            think_toggle.setText("Мысли ▾" if is_open else "Мысли ▸")
+            compact_text = self._preview_last_words(think_text, max_words=7) if is_streaming_thinking else ""
+            if isinstance(think_preview_label, QLabel) and isValid(think_preview_label):
+                if think_preview_label.text() != compact_text:
+                    think_preview_label.setText(compact_text)
+                think_preview_label.setVisible(bool(has_thinking and is_streaming_thinking))
+            if isinstance(think_full_label, QLabel) and isValid(think_full_label):
+                if think_full_label.text() != think_text:
+                    think_full_label.setText(think_text)
+                think_full_label.setVisible(bool(has_thinking and is_open))
+            if isinstance(think_row, QFrame) and isValid(think_row):
+                think_row.setVisible(has_thinking)
+
+        self._schedule_chat_sync(scroll_to_bottom=was_near_bottom)
+        return True
+
     def _append_system(self, text: str):
-        self._history.append(("system", text, None, None))
+        self._history.append(("system", text, None, None, None))
         self._render_chat(scroll_to_bottom=True)
         self._save_chat_sessions()
 
     def _append_user(self, text: str):
-        self._history.append(("user", text, None, None))
+        self._history.append(("user", text, None, None, None))
         self._render_chat(scroll_to_bottom=True)
         self._save_chat_sessions()
 
-    def _append_ai(self, text: str, stat_line: str):
-        self._history.append(("ai", text, stat_line, None))
+    def _append_ai(self, text: str, stat_line: str, thinking: str | None = None):
+        self._history.append(("ai", text, stat_line, None, thinking))
         self._render_chat(scroll_to_bottom=True)
         self._save_chat_sessions()
 
     def _nearest_user_text_before(self, idx: int) -> str:
         i = idx - 1
         while i >= 0:
-            role, text, _, _ = self._history[i]
+            role, text, _, _, _thinking = self._history[i]
             if role == "user":
                 return text
             i -= 1
@@ -2140,13 +2757,13 @@ class MainWindow(QMainWindow):
     def _set_feedback(self, msg_index: int, rating: int) -> None:
         if msg_index < 0 or msg_index >= len(self._history):
             return
-        role, text, stat_line, current = self._history[msg_index]
+        role, text, stat_line, current, thinking = self._history[msg_index]
         if role != "ai":
             return
         norm_rating = 1 if int(rating) > 0 else -1
         if current == norm_rating:
             return
-        self._history[msg_index] = (role, text, stat_line, norm_rating)
+        self._history[msg_index] = (role, text, stat_line, norm_rating, thinking)
         chat = self._active_chat()
         is_incognito = bool(chat.get("incognito", False)) if chat else False
         if not is_incognito:
@@ -2215,6 +2832,11 @@ class MainWindow(QMainWindow):
     def _set_status(self, status: str):
         self.status_label.setText(f"\u0421\u0442\u0430\u0442\u0443\u0441: <b>{status}</b>")
 
+    @staticmethod
+    def _set_label_text_if_changed(label: QLabel, text: str) -> None:
+        if label.text() != text:
+            label.setText(text)
+
     def _format_stats_line(self, stats: dict) -> tuple[str, float, float, int, int, float]:
         ms = stats.get("answer_ms") or stats.get("ms")
         gen = stats.get("eval_count")
@@ -2254,24 +2876,53 @@ class MainWindow(QMainWindow):
         avg_tps = self.sum_tps / n if self.sum_tps else 0.0
         dash = "\u2014"
 
-        self.avg_ms_label.setText(
-            f"\u0421\u0440\u0435\u0434\u043d\u0435\u0435: \u0432\u0440\u0435\u043c\u044f {ms_to_s_text(avg_ms) if avg_ms else dash}"
+        self._set_label_text_if_changed(self.avg_ms_label, f"Время {ms_to_s_text(avg_ms) if avg_ms else dash}")
+        self._set_label_text_if_changed(self.avg_decode_label, f"Decode {ms_to_s_text(avg_decode_ms) if avg_decode_ms else dash}")
+        self._set_label_text_if_changed(self.avg_tokens_label, f"Gen {avg_gen:.0f} / Prompt {avg_prompt:.0f}")
+        self._set_label_text_if_changed(self.avg_tps_label, f"Tok/s {avg_tps:.1f}" if avg_tps else "Tok/s —")
+        self._set_label_text_if_changed(
+            self.avg_tflops_label,
+            f"TFLOPs ~{est_tflops(avg_tps):.2f}" if (SHOW_TFLOPS_EST and avg_tps) else "TFLOPs —",
         )
-        self.avg_decode_label.setText(
-            f"\u0421\u0440\u0435\u0434\u043d\u0435\u0435: decode {ms_to_s_text(avg_decode_ms) if avg_decode_ms else dash}"
+
+    def _tick_realtime_stats(self) -> None:
+        running = bool(self._thread and self._thread.isRunning() and self._request_started_perf is not None)
+        if not running:
+            self._set_label_text_if_changed(
+                self.rt_buffer_label,
+                f"Буфер: out {len(self._stream_chunk_buffer)} / think {len(self._stream_thinking_buffer)}"
+            )
+            return
+
+        elapsed = max(0.001, time.perf_counter() - float(self._request_started_perf or 0.0))
+        out_chars = self._rt_output_chars
+        approx_tokens = max(1, int(out_chars / 4.0)) if out_chars else 0
+        tps_est = safe_div(float(approx_tokens), elapsed)
+        chunk_rate = safe_div(float(self._rt_chunk_count), elapsed)
+
+        self._set_label_text_if_changed(self.rt_elapsed_label, f"Время: {elapsed:.1f} с")
+        self._set_label_text_if_changed(self.rt_tokens_out_label, f"Токены out (оценка): ~{approx_tokens}")
+        self._set_label_text_if_changed(
+            self.rt_tokens_think_label,
+            f"Токены think (оценка): ~{int(self._rt_thinking_chars / 4.0)}",
         )
-        self.avg_tokens_label.setText(f"\u0421\u0440\u0435\u0434\u043d\u0435\u0435: gen {avg_gen:.0f} / prompt {avg_prompt:.0f}")
-        self.avg_tps_label.setText(f"\u0421\u0440\u0435\u0434\u043d\u0435\u0435: tok/s {avg_tps:.1f}" if avg_tps else "\u0421\u0440\u0435\u0434\u043d\u0435\u0435: tok/s \u2014")
-        self.avg_tflops_label.setText(
-            f"\u0421\u0440\u0435\u0434\u043d\u0435\u0435: TFLOPs ~{est_tflops(avg_tps):.2f}" if (SHOW_TFLOPS_EST and avg_tps) else "\u0421\u0440\u0435\u0434\u043d\u0435\u0435: TFLOPs \u2014"
+        self._set_label_text_if_changed(self.rt_tps_label, f"Tok/s (оценка): {tps_est:.1f}")
+        self._set_label_text_if_changed(self.rt_chunks_label, f"Chunk/s: {chunk_rate:.1f}")
+        self._set_label_text_if_changed(self.rt_flush_label, f"UI flush: {self._rt_last_flush_ms:.1f} мс")
+        self._set_label_text_if_changed(
+            self.rt_buffer_label,
+            f"Буфер: out {len(self._stream_chunk_buffer)} / think {len(self._stream_thinking_buffer)}"
         )
+
+        self.rt_tps_graph.push_value(tps_est)
+        self.rt_chunk_graph.push_value(chunk_rate)
+        self.rt_ui_graph.push_value(self._rt_last_flush_ms)
 
     @Slot()
     def on_clear(self):
         self._history = []
         self._append_system("\u0427\u0430\u0442 \u043e\u0447\u0438\u0449\u0435\u043d.")
         self._last_user_text = None
-        self.btn_regen.setEnabled(False)
 
         self.n_answers = 0
         self.sum_ms = 0.0
@@ -2281,11 +2932,21 @@ class MainWindow(QMainWindow):
         self.sum_tps = 0.0
 
         self._set_status("\u0413\u043e\u0442\u043e\u0432\u043e")
-        self.avg_ms_label.setText("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: \u0432\u0440\u0435\u043c\u044f \u2014")
-        self.avg_decode_label.setText("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: decode \u2014")
-        self.avg_tokens_label.setText("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: gen \u2014 / prompt \u2014")
-        self.avg_tps_label.setText("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: tok/s \u2014")
-        self.avg_tflops_label.setText("\u0421\u0440\u0435\u0434\u043d\u0435\u0435: TFLOPs \u2014")
+        self.avg_ms_label.setText("Время —")
+        self.avg_decode_label.setText("Decode —")
+        self.avg_tokens_label.setText("Gen — / Prompt —")
+        self.avg_tps_label.setText("Tok/s —")
+        self.avg_tflops_label.setText("TFLOPs —")
+        self.rt_elapsed_label.setText("Время: —")
+        self.rt_tokens_out_label.setText("Токены out (оценка): —")
+        self.rt_tokens_think_label.setText("Токены think (оценка): —")
+        self.rt_tps_label.setText("Tok/s (оценка): —")
+        self.rt_chunks_label.setText("Chunk/s: —")
+        self.rt_flush_label.setText("UI flush: —")
+        self.rt_buffer_label.setText("Буфер: out 0 / think 0")
+        self.rt_tps_graph.clear_values()
+        self.rt_chunk_graph.clear_values()
+        self.rt_ui_graph.clear_values()
 
     @Slot()
     def on_stop(self):
@@ -2294,22 +2955,19 @@ class MainWindow(QMainWindow):
         self._set_status("\u041e\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430\u2026 (\u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 \u0431\u0443\u0434\u0435\u0442 \u043f\u0440\u043e\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u043e\u0432\u0430\u043d)")
 
     @Slot()
-    def on_regen(self):
-        if not self._active_chat():
-            QMessageBox.information(self, "Чаты", "Сначала создай чат.")
-            return
-        if not self._last_user_text:
-            return
-        self._start_request(self._last_user_text, show_user=False)
-
-    @Slot()
     def on_send(self):
-        if not self._active_chat():
-            QMessageBox.information(self, "Чаты", "Сначала создай чат кнопкой «Новый».")
-            return
         text = self.input.toPlainText().strip()
         if not text:
             return
+
+        if not self._active_chat():
+            self._sync_active_session_from_history()
+            chat = self._new_chat_payload(incognito=False)
+            self._chat_sessions.append(chat)
+            self._active_chat_id = str(chat["id"])
+            self._refresh_chat_selector()
+            self._apply_active_chat_to_ui(scroll_to_bottom=True)
+            self._save_chat_sessions()
 
         started = self._start_request(text, show_user=True)
         if not started:
@@ -2336,7 +2994,7 @@ class MainWindow(QMainWindow):
         return dst
 
     def _latest_ai_text(self) -> str:
-        for role, text, _, _ in reversed(self._history):
+        for role, text, _, _, _thinking in reversed(self._history):
             if role == "ai" and str(text or "").strip():
                 return str(text).strip()
         return ""
@@ -2438,14 +3096,23 @@ class MainWindow(QMainWindow):
             self._append_user(user_text)
         # Append streaming AI placeholder first, set index, then render.
         # This prevents pruning logic from removing placeholder before index bind.
-        self._history.append(("ai", "", "…", None))
+        self._history.append(("ai", "", "…", None, None))
         self._stream_ai_index = len(self._history) - 1
         self._render_chat(scroll_to_bottom=True)
         self._save_chat_sessions()
         self._stream_chunk_buffer = ""
+        self._stream_thinking_buffer = ""
         self._stream_flush_timer.stop()
+        self._request_started_perf = time.perf_counter()
+        self._rt_chunk_count = 0
+        self._rt_output_chars = 0
+        self._rt_thinking_chars = 0
+        self._rt_last_flush_ms = 0.0
 
         self._set_status("\u0413\u0435\u043d\u0435\u0440\u0430\u0446\u0438\u044f\u2026")
+        self.btn_model_refresh.setEnabled(False)
+        self.model_combo.setEnabled(False)
+        self.think_toggle.setEnabled(False)
         self.btn_send.setEnabled(False)
         self.btn_voice_input.setEnabled(False)
         self.btn_voice_speak.setEnabled(False)
@@ -2453,7 +3120,6 @@ class MainWindow(QMainWindow):
         self.voice_rate_spin.setEnabled(False)
         self.voice_volume_spin.setEnabled(False)
         self.btn_stop.setEnabled(True)
-        self.btn_regen.setEnabled(False)
 
         self._thread = QThread()
         chat = self._active_chat()
@@ -2463,6 +3129,7 @@ class MainWindow(QMainWindow):
 
         self._thread.started.connect(self._worker.run)
         self._worker.chunk.connect(self._on_reply_chunk)
+        self._worker.thinking_chunk.connect(self._on_reply_thinking_chunk)
         self._worker.finished.connect(self._on_reply)
         self._worker.errored.connect(self._on_error)
 
@@ -2475,46 +3142,51 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_reply_chunk(self, piece: str):
-        self._stream_chunk_buffer += piece or ""
+        piece_text = piece or ""
+        self._stream_chunk_buffer += piece_text
+        self._rt_output_chars += len(piece_text)
+        if piece_text:
+            self._rt_chunk_count += 1
+        if not self._stream_flush_timer.isActive():
+            self._stream_flush_timer.start()
+
+    @Slot(str)
+    def _on_reply_thinking_chunk(self, piece: str):
+        piece_text = piece or ""
+        self._stream_thinking_buffer += piece_text
+        self._rt_thinking_chars += len(piece_text)
+        if piece_text:
+            self._rt_chunk_count += 1
         if not self._stream_flush_timer.isActive():
             self._stream_flush_timer.start()
 
     def _flush_stream_chunks(self):
-        if not self._stream_chunk_buffer or self._stream_ai_index is None:
+        t0 = time.perf_counter()
+        if (not self._stream_chunk_buffer and not self._stream_thinking_buffer) or self._stream_ai_index is None:
             self._stream_chunk_buffer = ""
+            self._stream_thinking_buffer = ""
             return
         idx = self._stream_ai_index
         if idx < 0 or idx >= len(self._history):
             self._stream_chunk_buffer = ""
+            self._stream_thinking_buffer = ""
             return
-        role, text, stat_line, feedback = self._history[idx]
+        role, text, stat_line, feedback, thinking = self._history[idx]
         if role != "ai":
             self._stream_chunk_buffer = ""
+            self._stream_thinking_buffer = ""
             self._stream_ai_index = None
             return
-        new_text = self._normalize_stream_text((text or "") + self._stream_chunk_buffer)
-        self._history[idx] = (role, new_text, stat_line, feedback)
+        new_text = self._normalize_stream_text((text or "") + self._stream_chunk_buffer) if self._stream_chunk_buffer else (text or "")
+        new_thinking = ((thinking or "") + self._stream_thinking_buffer).strip()
+        self._history[idx] = (role, new_text, stat_line, feedback, new_thinking or None)
         self._stream_chunk_buffer = ""
+        self._stream_thinking_buffer = ""
 
         # Fast path: update only current streaming label to avoid full rerender flicker.
-        try:
-            item = self.chat_layout.itemAt(idx)
-            w = item.widget() if item else None
-            bubble = w.findChild(QLabel, "msg_bubble_label") if w else None
-            if bubble is not None:
-                bubble.setText(new_text)
-                bubble.updateGeometry()
-                bubble.adjustSize()
-                if w is not None:
-                    w.updateGeometry()
-                    w.adjustSize()
-                self._sync_chat_content_geometry()
-                self.chat_scroll.verticalScrollBar().setValue(self.chat_scroll.verticalScrollBar().maximum())
-                return
-        except Exception:
-            pass
-
-        self._render_chat(scroll_to_bottom=True)
+        if not self._update_stream_row_widgets(idx, new_text, new_thinking or None):
+            self._render_chat(scroll_to_bottom=True)
+        self._rt_last_flush_ms = (time.perf_counter() - t0) * 1000.0
 
     @Slot(object)
     def _on_reply(self, res: ReplyResult):
@@ -2523,17 +3195,18 @@ class MainWindow(QMainWindow):
         stat_line, ms, decode_ms, gen, prompt, tps = self._format_stats_line(stats)
         if self._stream_ai_index is not None and 0 <= self._stream_ai_index < len(self._history):
             i = self._stream_ai_index
-            role, text, _, feedback = self._history[i]
+            role, text, _, feedback, _old_thinking = self._history[i]
             if role == "ai":
                 final_text = res.text or text
-                self._history[i] = (role, final_text, stat_line, feedback)
+                self._history[i] = (role, final_text, stat_line, feedback, (res.thinking or ""))
+                self._stream_ai_index = None
                 self._render_chat(scroll_to_bottom=True)
             else:
                 # Defensive fallback: never overwrite user/system rows with AI output.
-                self._append_ai(res.text, stat_line)
-            self._stream_ai_index = None
+                self._append_ai(res.text, stat_line, thinking=res.thinking)
+                self._stream_ai_index = None
         else:
-            self._append_ai(res.text, stat_line)
+            self._append_ai(res.text, stat_line, thinking=res.thinking)
         self._save_chat_sessions()
 
         if ms:
@@ -2546,12 +3219,11 @@ class MainWindow(QMainWindow):
         self.n_answers += 1
 
         self._update_side_stats()
+        self._tick_realtime_stats()
         self._set_status("\u0413\u043e\u0442\u043e\u0432\u043e")
-        self.btn_regen.setEnabled(bool(self._last_user_text))
         if self.voice_auto_tts.isChecked():
             try:
                 self._set_status("Озвучка ответа…")
-                QApplication.processEvents()
                 self._speak_text_in_app(res.text or self._latest_ai_text())
                 self._set_status("Готово")
             except Exception:
@@ -2562,23 +3234,29 @@ class MainWindow(QMainWindow):
         self._set_status("\u041e\u0448\u0438\u0431\u043a\u0430")
         self._stream_ai_index = None
         self._stream_chunk_buffer = ""
+        self._stream_thinking_buffer = ""
         self._stream_flush_timer.stop()
+        self._request_started_perf = None
         QMessageBox.critical(self, "\u041e\u0448\u0438\u0431\u043a\u0430", tb)
 
     @Slot()
     def _cleanup_thread(self):
         self._stream_flush_timer.stop()
         self._stream_chunk_buffer = ""
+        self._stream_thinking_buffer = ""
         self._stream_ai_index = None
+        self._request_started_perf = None
         self._prune_empty_ai_placeholders()
         self.btn_send.setEnabled(True)
+        self.btn_model_refresh.setEnabled(True)
+        self.model_combo.setEnabled(self.model_combo.count() > 0)
+        self.think_toggle.setEnabled(True)
         self.btn_voice_input.setEnabled(True)
         self.btn_voice_speak.setEnabled(True)
         self.voice_tone_combo.setEnabled(True)
         self.voice_rate_spin.setEnabled(True)
         self.voice_volume_spin.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        self.btn_regen.setEnabled(bool(self._last_user_text))
         if self._worker:
             self._worker.deleteLater()
         if self._thread:
@@ -2591,10 +3269,23 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    lock_dir = QStandardPaths.writableLocation(QStandardPaths.TempLocation) or str(Path.cwd())
+    lock = QLockFile(str(Path(lock_dir) / "mmis_desktop.lock"))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(1):
+        return
     win = MainWindow()
     win.show()
-    sys.exit(app.exec())
+    code = app.exec()
+    try:
+        if lock.isLocked():
+            lock.unlock()
+    except Exception:
+        pass
+    sys.exit(code)
 
 
 if __name__ == "__main__":
     main()
+
+
