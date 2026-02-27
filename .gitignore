@@ -10,10 +10,8 @@ venv/
 .DS_Store
 Thumbs.db
 secrets.json
-*.gitignore
 memory_storage/*
 __init__.py
 ui/__pycache__/
 tools/ffmpeg/
 tools/ffmpeg/*
-.gitignore
