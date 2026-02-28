@@ -7,6 +7,10 @@ from typing import Callable
 from urllib.parse import urlparse
 
 from modules.automation.os_actions import ActionResult, OSActions
+from utils.logger import get_logger
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -150,7 +154,7 @@ def _res(
 ) -> ActionResult:
     from time import perf_counter
 
-    return ActionResult(
+    row = ActionResult(
         ok=bool(ok),
         action=action,
         data=dict(data or {}),
@@ -158,6 +162,11 @@ def _res(
         duration_ms=(perf_counter() - started) * 1000.0,
         requires_confirmation=bool(requires_confirmation),
     )
+    if row.ok:
+        LOGGER.info("browser_action ok action=%s duration_ms=%.1f", row.action, row.duration_ms)
+    else:
+        LOGGER.warning("browser_action failed action=%s error=%s duration_ms=%.1f", row.action, row.error, row.duration_ms)
+    return row
 
 
 _DEFAULT_BROWSER = BrowserController()

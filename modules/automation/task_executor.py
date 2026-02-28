@@ -88,8 +88,10 @@ class TaskExecutor:
     def execute(self, task: Task | dict[str, Any]) -> TaskResult:
         item = _coerce_task(task)
         started = time.time()
+        LOGGER.info("task_execute start id=%s steps=%s goal=%s", item.id, len(item.steps), item.goal)
 
         if item.requires_confirmation and not self._confirm(item.goal):
+            LOGGER.warning("task_execute blocked confirmation id=%s", item.id)
             return TaskResult(
                 id=item.id,
                 goal=item.goal,
@@ -107,10 +109,12 @@ class TaskExecutor:
         for step in item.steps:
             if callable(self.safety_trigger) and self.safety_trigger(step):
                 stopped_reason = "safety_trigger"
+                LOGGER.warning("task_execute safety_trigger id=%s step=%s", item.id, step.id)
                 break
 
             if step.requires_confirmation and not self._confirm(f"step:{step.id}:{step.action}"):
                 stopped_reason = f"step_confirmation_required:{step.id}"
+                LOGGER.warning("task_execute step confirmation blocked id=%s step=%s", item.id, step.id)
                 break
 
             self._log_event("tool_call", {"task_id": item.id, "step_id": step.id, "action": step.action, "params": step.params})
@@ -130,9 +134,17 @@ class TaskExecutor:
 
             if (not result.ok) and stop_on_error:
                 stopped_reason = f"step_failed:{step.id}"
+                LOGGER.warning("task_execute step failed id=%s step=%s error=%s", item.id, step.id, result.error)
                 break
 
         ok = (not stopped_reason) and all(x.ok for x in step_results)
+        LOGGER.info(
+            "task_execute done id=%s ok=%s steps_done=%s stopped_reason=%s",
+            item.id,
+            ok,
+            len(step_results),
+            stopped_reason,
+        )
         return TaskResult(
             id=item.id,
             goal=item.goal,

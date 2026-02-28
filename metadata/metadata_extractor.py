@@ -6,6 +6,7 @@ import time
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from metadata.emotion_detector import EmotionResult, detect as detect_emotion
@@ -13,12 +14,15 @@ from metadata.intent_classifier import IntentResult, classify as classify_intent
 from metadata.language_detector import LanguageResult, analyze as analyze_language
 from metadata.tagger import Tagger
 from prompt_engine.prompt_registry import PromptRegistry
+from utils.cache import DiskTTLCache
+from utils.logger import get_logger
 
 
 PROFILE_FAST = "FAST"
 PROFILE_BALANCED = "BALANCED"
 PROFILE_QUALITY = "QUALITY"
 _PROFILES = {PROFILE_FAST, PROFILE_BALANCED, PROFILE_QUALITY}
+LOGGER = get_logger(__name__)
 
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
 _CODE_RE = re.compile(r"```|`[^`]+`|Traceback|Exception|def\s+\w+\s*\(|class\s+\w+\s*:", re.I | re.S)
@@ -62,12 +66,31 @@ class Metadata:
 
 
 class MetadataExtractor:
-    def __init__(self, *, cache_size: int = 200, prompt_registry: PromptRegistry | None = None):
+    def __init__(
+        self,
+        *,
+        cache_size: int = 200,
+        cache_ttl_s: int = 24 * 3600,
+        cache_dir: str | Path | None = None,
+        use_disk_cache: bool = True,
+        prompt_registry: PromptRegistry | None = None,
+    ):
         self.cache_size = max(50, int(cache_size))
         self._cache: OrderedDict[str, Metadata] = OrderedDict()
         self._tagger = Tagger()
         self._prompt_registry = prompt_registry or PromptRegistry()
         self._prompt_text_cache: dict[str, str] = {}
+        self._disk_cache = DiskTTLCache(
+            namespace="metadata_extractor",
+            root=cache_dir,
+            default_ttl_s=max(60, int(cache_ttl_s)),
+            max_memory_entries=max(64, min(2048, self.cache_size * 2)),
+            enabled=bool(use_disk_cache),
+        )
+        try:
+            self._disk_cache.purge_expired(max_files=800)
+        except Exception as exc:
+            LOGGER.debug("metadata cache purge skipped: %s", exc)
 
     def extract(self, text: str, state, last_messages=None) -> Metadata:
         src = str(text or "").strip()
@@ -77,6 +100,12 @@ class MetadataExtractor:
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
+        disk_hit = self._disk_cache.get(cache_key)
+        if isinstance(disk_hit, dict):
+            restored = _metadata_from_dict(disk_hit)
+            if restored is not None:
+                self._cache_set(cache_key, restored, write_disk=False)
+                return restored
 
         lang_result = analyze_language(src)
         context_tags = _context_tags(state_map=state_map, last_messages=last_messages)
@@ -145,7 +174,7 @@ class MetadataExtractor:
             safety_flags=safety_flags,
             meta=meta_payload,
         )
-        self._cache_set(cache_key, metadata)
+        self._cache_set(cache_key, metadata, write_disk=True)
         return metadata
 
     def _prompt_text(self, key: str) -> str:
@@ -175,11 +204,16 @@ class MetadataExtractor:
         self._cache.move_to_end(key)
         return hit
 
-    def _cache_set(self, key: str, value: Metadata) -> None:
+    def _cache_set(self, key: str, value: Metadata, *, write_disk: bool = True) -> None:
         self._cache[key] = value
         self._cache.move_to_end(key)
         while len(self._cache) > self.cache_size:
             self._cache.popitem(last=False)
+        if write_disk:
+            try:
+                self._disk_cache.set(key, value.to_dict())
+            except Exception as exc:
+                LOGGER.debug("metadata disk cache set failed: %s", exc)
 
     def _entities(self, text: str, *, quality: bool) -> dict[str, Any]:
         people = _dedupe(_PERSON_RE.findall(text))[:12]
@@ -332,3 +366,32 @@ def _extract_bullet_values(text: str) -> set[str]:
             out.add(norm)
             out.add(norm.replace("__", "_"))
     return out
+
+
+def _metadata_from_dict(payload: dict[str, Any]) -> Metadata | None:
+    if not isinstance(payload, dict):
+        return None
+    try:
+        intent_row = dict(payload.get("intent") or {})
+        emotion_row = dict(payload.get("emotion") or {})
+        return Metadata(
+            lang=str(payload.get("lang") or ""),
+            lang_conf=float(payload.get("lang_conf") or 0.0),
+            intent=IntentMeta(
+                label=str(intent_row.get("label") or "chat"),
+                conf=float(intent_row.get("conf") or 0.0),
+                alt_labels=[str(x) for x in list(intent_row.get("alt_labels") or []) if str(x).strip()],
+            ),
+            emotion=EmotionMeta(
+                label=str(emotion_row.get("label") or "neutral"),
+                intensity=float(emotion_row.get("intensity") or 0.0),
+                arousal=float(emotion_row.get("arousal") or 0.0),
+                scores={str(k): float(v) for k, v in dict(emotion_row.get("scores") or {}).items()},
+            ),
+            tags=[str(x) for x in list(payload.get("tags") or []) if str(x).strip()],
+            entities=dict(payload.get("entities") or {}),
+            safety_flags=dict(payload.get("safety_flags") or {}),
+            meta=dict(payload.get("meta") or {}),
+        )
+    except Exception:
+        return None

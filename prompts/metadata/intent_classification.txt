@@ -5,9 +5,9 @@ role: system
 tags: [metadata, intent]
 min_ctx: 64
 ---
-Classify user intent.
+Классифицируй намерение пользователя.
 
-Target labels:
+Целевые метки:
 - chat
 - question
 - task_request
@@ -18,5 +18,5 @@ Target labels:
 - complaint
 - nsfw_flirt
 
-Return JSON:
+Верни JSON:
 {"label":"...", "conf":0..1, "alt_labels":["..."]}

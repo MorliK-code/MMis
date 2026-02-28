@@ -5,9 +5,9 @@ role: system
 tags: [metadata, tagging]
 min_ctx: 64
 ---
-Build practical tags for pipeline routing and UI indicators.
+Построй практические теги для маршрутизации в пайплайне и индикаторов в интерфейсе.
 
-Possible tags:
+Возможные теги:
 - has_code
 - has_json
 - has_link
@@ -20,4 +20,4 @@ Possible tags:
 - topic_ui
 - topic_git
 
-Return JSON array of unique lowercase tags.
+Верни JSON-массив уникальных тегов в нижнем регистре.

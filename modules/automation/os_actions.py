@@ -320,7 +320,7 @@ def _result(
     error: str = "",
     requires_confirmation: bool = False,
 ) -> ActionResult:
-    return ActionResult(
+    row = ActionResult(
         ok=bool(ok),
         action=str(action),
         data=dict(data or {}),
@@ -330,6 +330,11 @@ def _result(
         duration_ms=(time.perf_counter() - started) * 1000.0,
         requires_confirmation=bool(requires_confirmation),
     )
+    if row.ok:
+        LOGGER.info("os_action ok action=%s duration_ms=%.1f", row.action, row.duration_ms)
+    else:
+        LOGGER.warning("os_action failed action=%s error=%s duration_ms=%.1f", row.action, row.error, row.duration_ms)
+    return row
 
 
 _DEFAULT_ACTIONS = OSActions()

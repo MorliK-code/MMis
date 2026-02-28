@@ -5,7 +5,7 @@ role: system
 tags: [memory, merge]
 min_ctx: 64
 ---
-Merge memory updates carefully:
-- prefer recent and higher-confidence facts
-- keep conflicting versions with needs_confirmation flag
-- do not silently overwrite critical profile fields
+Аккуратно объединяй обновления памяти:
+- отдавай приоритет более недавним и более уверенным фактам
+- конфликтующие версии сохраняй обе с флагом needs_confirmation
+- не перезаписывай молча критические поля профиля

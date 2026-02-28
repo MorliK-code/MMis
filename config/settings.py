@@ -10,7 +10,7 @@ from config.paths import BASE_DIR, DATA_DIR, MODELS_DIR, ensure_dirs, resolve_me
 
 
 VALID_PROFILES = {"FAST", "BALANCED", "QUALITY", "ECONOM"}
-VALID_PROVIDERS = {"ollama", "openai", "auto"}
+VALID_PROVIDERS = {"ollama", "auto"}
 VALID_SAFETY_MODES = {"read_only_tools", "allow_os_actions"}
 
 
@@ -27,6 +27,7 @@ class AppSettings:
     host: str
     port: int
     thinking_enabled: bool
+    json_mode_enabled: bool
     internet_enabled: bool
     automation_enabled: bool
     screen_enabled: bool
@@ -83,10 +84,11 @@ def load_config(force_reload: bool = False) -> AppSettings:
         startup_mode=_norm_lower(_pick("MMIS_START_MODE", json_cfg, dotenv_cfg, "api")),
         active_profile=active_profile,
         llm_default_provider=llm_provider,
-        model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qwen3-vl:1.7b")),
+        model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qwen3:8b")),
         host=_norm_str(_pick("MMIS_API_HOST", json_cfg, dotenv_cfg, "127.0.0.1")),
         port=_to_int(_pick("MMIS_API_PORT", json_cfg, dotenv_cfg, 8000), default=8000),
         thinking_enabled=_to_bool(_pick("MMIS_THINKING_ENABLED", json_cfg, dotenv_cfg, True)),
+        json_mode_enabled=_to_bool(_pick("MMIS_JSON_MODE", json_cfg, dotenv_cfg, False)),
         internet_enabled=_to_bool(_pick("MMIS_INTERNET_ENABLED", json_cfg, dotenv_cfg, True)),
         automation_enabled=_to_bool(_pick("MMIS_AUTOMATION_ENABLED", json_cfg, dotenv_cfg, True)),
         screen_enabled=_to_bool(_pick("MMIS_SCREEN_ENABLED", json_cfg, dotenv_cfg, True)),

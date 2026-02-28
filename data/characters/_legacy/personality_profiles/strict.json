@@ -1,10 +1,12 @@
-{
+﻿{
   "id": "strict",
-  "name": "Строгая",
-  "version": "1.1.0",
-  "system_prompt": "system/personality_strict.txt",
-  "style_prompt": "system/style_strict.txt",
-  "rules_prompt": "system/rules_default.txt",
+  "name": "Strict",
+  "version": "1.2.0",
+  "legacy": true,
+  "character_template": "../default/character.json",
+  "system_prompt": "legacy/system/personality_strict.txt",
+  "style_prompt": "legacy/system/style_strict.txt",
+  "rules_prompt": "legacy/system/rules_default.txt",
   "voice_style": "clear",
   "llm_profile": "QUALITY",
   "traits": {

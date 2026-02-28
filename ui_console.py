@@ -11,12 +11,16 @@ from pathlib import Path
 from ui.api_client import ApiClient, ApiClientError
 
 
+CONSOLE_BUILD_ID = "2026-02-28-r2"
+
+
 @dataclass
 class ConsoleState:
     api: ApiClient
     store_turn: bool = True
-    show_thinking: bool = False
+    show_thinking: bool = True
     think_enabled: bool | None = None
+    json_mode_enabled: bool | None = None
     online: bool = False
     auto_start_api: bool = True
     auto_start_ollama: bool = True
@@ -45,18 +49,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=2.5, help="HTTP timeout seconds")
     parser.add_argument("--stream-timeout", type=float, default=600.0, help="Stream timeout seconds")
     parser.add_argument("--no-store", action="store_true", help="Do not store turn in backend memory")
-    parser.add_argument("--show-thinking", action="store_true", help="Print thinking block if backend returns it")
+    think_view_group = parser.add_mutually_exclusive_group()
+    think_view_group.add_argument("--show-thinking", action="store_true", help="Print thinking block (default)")
+    think_view_group.add_argument("--hide-thinking", action="store_true", help="Do not print thinking block")
     parser.add_argument("--no-auto-api", action="store_true", help="Do not auto-start API when offline")
     parser.add_argument("--no-auto-ollama", action="store_true", help="Do not auto-start Ollama when models backend is offline")
 
     think_group = parser.add_mutually_exclusive_group()
     think_group.add_argument("--think", action="store_true", help="Enable think mode on startup")
     think_group.add_argument("--nothink", action="store_true", help="Disable think mode on startup")
+    json_group = parser.add_mutually_exclusive_group()
+    json_group.add_argument("--json", action="store_true", help="Enable JSON mode on startup")
+    json_group.add_argument("--nojson", action="store_true", help="Disable JSON mode on startup")
     return parser
 
 
 def _print_header(state: ConsoleState) -> None:
     print("MMis Console UI")
+    print(f"Build: {CONSOLE_BUILD_ID} (stream-output-render=on)")
     print(f"API: {state.api.base_url}")
     if _ensure_connected(state):
         print("Connected.")
@@ -77,11 +87,16 @@ def _print_header(state: ConsoleState) -> None:
 def _print_help() -> None:
     print("/help                show commands")
     print("/connect [url]       reconnect API (optional custom url)")
+    print("/restartapi          restart local API process")
     print("/models              list available models")
     print("/model               show current runtime model")
     print("/model <name>        set runtime model")
     print("/think               enable thinking")
     print("/nothink             disable thinking")
+    print("/json                enable JSON mode")
+    print("/nojson              disable JSON mode")
+    print("/character ...       backend character command")
+    print("/trait ...           backend trait command")
     print("/health              show API health")
     print("/store on|off        toggle store_turn")
     print("/exit or /quit       exit")
@@ -92,8 +107,10 @@ def _print_health_short(state: ConsoleState) -> None:
         payload = state.api.health()
         state.online = True
         state.think_enabled = bool(payload.get("thinking_enabled", True))
+        state.json_mode_enabled = bool(payload.get("json_mode_enabled", False))
         print(f"Model: {payload.get('model')}")
         print(f"Thinking: {'on' if state.think_enabled else 'off'}")
+        print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
     except ApiClientError as exc:
         state.online = False
         print(f"API error: {exc}")
@@ -127,6 +144,15 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             _ensure_model_backend(state)
             return True
         print("API is still offline.")
+        return True
+
+    if key in {"/restartapi", "/api-restart", "/restart-api"}:
+        if _restart_api_process(state):
+            print("API restarted.")
+            _print_health_short(state)
+            _ensure_model_backend(state)
+        else:
+            print("API restart failed.")
         return True
 
     if key == "/models":
@@ -175,6 +201,19 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             print(f"API error: {exc}")
         return True
 
+    if key in {"/json", "/nojson"}:
+        if not _ensure_connected_or_start(state):
+            return True
+        target = key == "/json"
+        try:
+            actual = bool(state.api.set_json_mode_enabled(target))
+            state.json_mode_enabled = actual
+            print(f"JSON mode: {'on' if actual else 'off'}")
+        except ApiClientError as exc:
+            state.online = False
+            print(f"API error: {exc}")
+        return True
+
     if key == "/health":
         if not _ensure_connected_or_start(state):
             return True
@@ -191,6 +230,13 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             print("Usage: /store on|off")
             return True
         print(f"store_turn: {'on' if state.store_turn else 'off'}")
+        return True
+
+    passthrough_prefixes = {"/character", "/characters", "/trait", "/persona", "/personality", "/mode"}
+    if key in passthrough_prefixes:
+        if not _ensure_connected_or_start(state):
+            return True
+        _send_chat(state, raw)
         return True
 
     print(f"Unknown command: {cmd}. Use /help")
@@ -233,28 +279,219 @@ def _chat_loop(state: ConsoleState) -> int:
         _send_chat(state, line)
 
 
+class _ConsoleChunkRenderer:
+    _OUTPUT_RE = re.compile(r'"output"\s*:\s*"', flags=re.IGNORECASE)
+    _HEX = set("0123456789abcdefABCDEF")
+
+    def __init__(self):
+        self._raw = ""
+        self._mode = "unknown"  # unknown | plain | safety_json
+        self._plain_pos = 0
+        self._in_output = False
+        self._output_done = False
+        self._scan = 0
+        self._escape = False
+        self._unicode_digits: str | None = None
+
+    def feed(self, piece: str) -> str:
+        text = str(piece or "")
+        if not text:
+            return ""
+        self._raw += text
+
+        if self._mode == "plain":
+            return self._drain_plain()
+        if self._mode == "unknown":
+            stripped = self._raw.lstrip()
+            if stripped.startswith("{"):
+                self._mode = "safety_json"
+            elif stripped:
+                self._mode = "plain"
+                return self._drain_plain()
+            return ""
+        return self._drain_safety_json_output()
+
+    def _drain_plain(self) -> str:
+        out = self._raw[self._plain_pos :]
+        self._plain_pos = len(self._raw)
+        return out
+
+    def _drain_safety_json_output(self) -> str:
+        if self._output_done:
+            return ""
+        out: list[str] = []
+
+        if not self._in_output:
+            marker = self._OUTPUT_RE.search(self._raw)
+            if marker is None:
+                # Fallback: if stream does not look like safety envelope, show plain text.
+                if len(self._raw) > 512:
+                    self._mode = "plain"
+                    return self._drain_plain()
+                return ""
+            self._in_output = True
+            self._scan = marker.end()
+
+        while self._scan < len(self._raw):
+            ch = self._raw[self._scan]
+            self._scan += 1
+
+            if self._unicode_digits is not None:
+                if ch in self._HEX:
+                    self._unicode_digits += ch
+                    if len(self._unicode_digits) == 4:
+                        try:
+                            out.append(chr(int(self._unicode_digits, 16)))
+                        except Exception:
+                            out.append("\\u" + self._unicode_digits)
+                        self._unicode_digits = None
+                    continue
+                out.append("\\u" + self._unicode_digits)
+                self._unicode_digits = None
+
+            if self._escape:
+                self._escape = False
+                if ch == "u":
+                    self._unicode_digits = ""
+                    continue
+                mapping = {
+                    '"': '"',
+                    "\\": "\\",
+                    "/": "/",
+                    "b": "\b",
+                    "f": "\f",
+                    "n": "\n",
+                    "r": "\r",
+                    "t": "\t",
+                }
+                out.append(mapping.get(ch, ch))
+                continue
+
+            if ch == "\\":
+                self._escape = True
+                continue
+            if ch == '"':
+                self._output_done = True
+                self._in_output = False
+                break
+            out.append(ch)
+
+        return "".join(out)
+
+
+class _StreamRealtimePrinter:
+    def __init__(
+        self,
+        renderer: _ConsoleChunkRenderer,
+        *,
+        prefer_thinking_first: bool = True,
+        show_thinking: bool = True,
+    ):
+        self.renderer = renderer
+        self.prefer_thinking_first = bool(prefer_thinking_first)
+        self.show_thinking = bool(show_thinking)
+        self.answer_parts: list[str] = []
+        self.thinking_parts: list[str] = []
+        self._pending_answer: list[str] = []
+        self._thinking_started = False
+        self._printed_any = False
+        self._current_channel = ""
+
+    def on_thinking(self, piece: str) -> None:
+        text = _sanitize_stream_text(piece)
+        if not text:
+            return
+        self._thinking_started = True
+        self.thinking_parts.append(text)
+        if not self.show_thinking:
+            return
+        self._start_channel("thinking")
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def on_answer(self, piece: str) -> None:
+        raw = str(piece or "")
+        if not raw:
+            return
+        text = _sanitize_stream_text(self.renderer.feed(raw))
+        if not text:
+            return
+        if self.prefer_thinking_first and not self._thinking_started:
+            self._pending_answer.append(text)
+            return
+        if self._pending_answer:
+            text = "".join(self._pending_answer) + text
+            self._pending_answer = []
+        self._emit_answer(text)
+
+    def finalize(self) -> None:
+        if self._pending_answer:
+            self._emit_answer("".join(self._pending_answer))
+            self._pending_answer = []
+
+    def rendered_answer(self) -> str:
+        return "".join(self.answer_parts)
+
+    def rendered_thinking(self) -> str:
+        return "".join(self.thinking_parts)
+
+    def _emit_answer(self, text: str) -> None:
+        if not text:
+            return
+        self._start_channel("assistant")
+        self.answer_parts.append(text)
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def _start_channel(self, channel: str) -> None:
+        target = "thinking" if str(channel or "").lower() == "thinking" else "assistant"
+        if self._current_channel == target:
+            return
+        if self._printed_any:
+            sys.stdout.write("\n")
+        if target == "thinking":
+            sys.stdout.write("thinking> ")
+        else:
+            sys.stdout.write("assistant> ")
+        self._printed_any = True
+        self._current_channel = target
+
+
+def _sanitize_stream_text(piece: str) -> str:
+    src = str(piece or "")
+    if not src:
+        return ""
+    # Avoid terminal line rewrites from carriage returns in streamed chunks.
+    src = src.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(ch for ch in src if (ch == "\n" or ch == "\t" or ord(ch) >= 32))
+
+
 def _send_chat(state: ConsoleState, text: str) -> int:
     try:
-        print("assistant> ", end="", flush=True)
-        reply = _stream_once(state, text)
+        reply, streamed_text, streamed_thinking = _stream_once(state, text)
         if _is_generation_fallback(reply.answer):
             print()
             print("LLM backend недоступен. Пробую поднять Ollama и повторить запрос...")
             if _ensure_model_backend(state):
-                print("assistant> ", end="", flush=True)
-                reply = _stream_once(state, text)
+                reply, streamed_text, streamed_thinking = _stream_once(state, text)
         if _is_generation_fallback(reply.answer):
             _print_backend_hint(state)
 
+        if not str(streamed_text or "").strip() and str(reply.answer or "").strip():
+            print(f"assistant> {str(reply.answer or '')}", end="")
         print()
         model = str(getattr(reply, "model", "") or "")
         if model:
             print(f"[model: {model}]")
         if state.show_thinking:
-            thinking = str(getattr(reply, "thinking", "") or "").strip()
-            if thinking:
+            thinking = str(getattr(reply, "thinking", "") or "")
+            if str(streamed_thinking or "").strip():
+                pass
+            elif thinking.strip():
                 print("[thinking]")
-                print(thinking)
+                print(thinking.strip())
+            elif state.think_enabled is not False:
+                print("[thinking] —")
         state.online = True
         return 0
     except ApiClientError as exc:
@@ -265,19 +502,36 @@ def _send_chat(state: ConsoleState, text: str) -> int:
 
 
 def _stream_once(state: ConsoleState, text: str):
-    return state.api.stream_chat(
-            text=text,
-            store_turn=state.store_turn,
-            think=state.think_enabled,
-            on_chunk=lambda piece: _print_stream_piece(piece),
-            on_thinking_chunk=(lambda _piece: None),
-        )
+    renderer = _ConsoleChunkRenderer()
+    prefer_thinking_first = bool(state.show_thinking and state.think_enabled is True)
+    printer = _StreamRealtimePrinter(
+        renderer,
+        prefer_thinking_first=prefer_thinking_first,
+        show_thinking=bool(state.show_thinking),
+    )
+    reply = state.api.stream_chat(
+        text=text,
+        store_turn=state.store_turn,
+        think=state.think_enabled,
+        json_mode=state.json_mode_enabled,
+        on_chunk=printer.on_answer,
+        on_thinking_chunk=printer.on_thinking,
+    )
+    printer.finalize()
+    return reply, printer.rendered_answer(), printer.rendered_thinking()
 
 
-def _print_stream_piece(piece: str) -> None:
-    if piece:
-        sys.stdout.write(str(piece))
-        sys.stdout.flush()
+def _print_stream_piece(piece: str, *, sink: list[str] | None = None, renderer: _ConsoleChunkRenderer | None = None) -> None:
+    raw = str(piece or "")
+    if not raw:
+        return
+    text = renderer.feed(raw) if renderer is not None else raw
+    if not text:
+        return
+    if sink is not None:
+        sink.append(text)
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 
 def _ensure_connected(state: ConsoleState) -> bool:
@@ -287,6 +541,7 @@ def _ensure_connected(state: ConsoleState) -> bool:
         payload = state.api.health()
         state.online = True
         state.think_enabled = bool(payload.get("thinking_enabled", True))
+        state.json_mode_enabled = bool(payload.get("json_mode_enabled", False))
         return True
     except ApiClientError:
         state.online = False
@@ -425,21 +680,34 @@ def _wait_for_api(state: ConsoleState, timeout_s: float = 15.0) -> bool:
     return False
 
 
-def _cleanup(state: ConsoleState) -> None:
+def _restart_api_process(state: ConsoleState) -> bool:
+    _stop_api_process(state)
+    state.online = False
+    if not _start_api_process(state):
+        return False
+    return _wait_for_api(state, timeout_s=18.0)
+
+
+def _stop_api_process(state: ConsoleState) -> None:
     proc = state.api_process
     if proc is None:
         return
     if proc.poll() is not None:
-        proc = None
-    if proc is not None:
+        state.api_process = None
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=4.0)
+    except Exception:
         try:
-            proc.terminate()
-            proc.wait(timeout=3.0)
+            proc.kill()
         except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            pass
+    state.api_process = None
+
+
+def _cleanup(state: ConsoleState) -> None:
+    _stop_api_process(state)
 
     # Ollama may already be user-managed service, so do not terminate it aggressively.
 
@@ -465,7 +733,7 @@ def main() -> int:
             stream_timeout_sec=float(args.stream_timeout),
         ),
         store_turn=not bool(args.no_store),
-        show_thinking=bool(args.show_thinking),
+        show_thinking=not bool(args.hide_thinking),
         auto_start_api=not bool(args.no_auto_api),
         auto_start_ollama=not bool(args.no_auto_ollama),
     )
@@ -494,6 +762,23 @@ def main() -> int:
             try:
                 state.think_enabled = bool(state.api.set_thinking_enabled(False))
                 print(f"Thinking: {'on' if state.think_enabled else 'off'}")
+            except ApiClientError as exc:
+                state.online = False
+                print(f"API error: {exc}")
+
+    if bool(args.json):
+        if _ensure_connected_or_start(state):
+            try:
+                state.json_mode_enabled = bool(state.api.set_json_mode_enabled(True))
+                print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
+            except ApiClientError as exc:
+                state.online = False
+                print(f"API error: {exc}")
+    elif bool(args.nojson):
+        if _ensure_connected_or_start(state):
+            try:
+                state.json_mode_enabled = bool(state.api.set_json_mode_enabled(False))
+                print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")

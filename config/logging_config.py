@@ -11,6 +11,29 @@ from config.settings import AppSettings, load_config
 
 
 _IS_CONFIGURED = False
+_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+
+_CHANNEL_PREFIXES: dict[str, tuple[str, ...]] = {
+    "llm": ("llm",),
+    "memory": ("memory", "metadata"),
+    "tools": ("modules", "tools"),
+    "ui": ("ui", "api", "ui_console", "ui_pyside6"),
+}
+
+
+class _LoggerPrefixFilter(logging.Filter):
+    def __init__(self, prefixes: tuple[str, ...]):
+        super().__init__()
+        self.prefixes = tuple(str(x or "").strip().lower() for x in prefixes if str(x or "").strip())
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        name = str(getattr(record, "name", "") or "").strip().lower()
+        if not name:
+            return False
+        for prefix in self.prefixes:
+            if name == prefix or name.startswith(prefix + "."):
+                return True
+        return False
 
 
 def setup_logging(settings: AppSettings | None = None, *, force: bool = False) -> None:
@@ -21,6 +44,8 @@ def setup_logging(settings: AppSettings | None = None, *, force: bool = False) -
     cfg = settings or load_config()
     log_level_name = str(os.getenv("MMIS_LOG_LEVEL", "DEBUG" if cfg.debug else "INFO")).strip().upper()
     level = getattr(logging, log_level_name, logging.INFO)
+    max_bytes = _env_int("MMIS_LOG_MAX_BYTES", 10 * 1024 * 1024, minimum=256 * 1024)
+    backup_count = _env_int("MMIS_LOG_BACKUP_COUNT", 5, minimum=1)
 
     log_dir = Path(str(os.getenv("MMIS_LOG_DIR", str(cfg.log_dir or LOG_DIR)))).expanduser().resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -35,17 +60,24 @@ def setup_logging(settings: AppSettings | None = None, *, force: bool = False) -
             except Exception:
                 pass
 
-    if not root.handlers:
+    if not _has_stream_handler(root):
         root.addHandler(_console_handler(level))
-        root.addHandler(_file_handler(log_dir / "app.log", level))
+    if not _has_file_handler(root, "app.log"):
+        root.addHandler(_file_handler(log_dir / "app.log", level, max_bytes=max_bytes, backup_count=backup_count))
 
-    # Optional category files.
-    for channel, filename in (("llm", "llm.log"), ("memory", "memory.log"), ("tools", "tools.log"), ("ui", "ui.log")):
-        logger = logging.getLogger(channel)
-        logger.setLevel(level)
-        if not _has_file_handler(logger, filename):
-            logger.addHandler(_file_handler(log_dir / filename, level))
-        logger.propagate = True
+    # Category files are attached to root with name-prefix filters.
+    for channel, prefixes in _CHANNEL_PREFIXES.items():
+        filename = f"{channel}.log"
+        if _has_file_handler(root, filename):
+            continue
+        handler = _file_handler(log_dir / filename, level, max_bytes=max_bytes, backup_count=backup_count)
+        handler.addFilter(_LoggerPrefixFilter(prefixes))
+        root.addHandler(handler)
+
+    for channel, prefixes in _CHANNEL_PREFIXES.items():
+        logging.getLogger(channel).setLevel(level)
+        for prefix in prefixes:
+            logging.getLogger(prefix).setLevel(level)
 
     logging.captureWarnings(True)
     _IS_CONFIGURED = True
@@ -54,20 +86,21 @@ def setup_logging(settings: AppSettings | None = None, *, force: bool = False) -
 def _console_handler(level: int) -> logging.Handler:
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
+    handler.setFormatter(logging.Formatter(_FORMAT))
     return handler
 
 
-def _file_handler(path: Path, level: int) -> logging.Handler:
+def _file_handler(path: Path, level: int, *, max_bytes: int, backup_count: int) -> logging.Handler:
     handler = RotatingFileHandler(
         path,
         mode="a",
-        maxBytes=10 * 1024 * 1024,
-        backupCount=5,
+        maxBytes=max(1024, int(max_bytes)),
+        backupCount=max(1, int(backup_count)),
         encoding="utf-8",
+        delay=True,
     )
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
+    handler.setFormatter(logging.Formatter(_FORMAT))
     return handler
 
 
@@ -78,6 +111,24 @@ def _has_file_handler(logger: logging.Logger, filename: str) -> bool:
         if base and str(base).lower().endswith(needle):
             return True
     return False
+
+
+def _has_stream_handler(logger: logging.Logger) -> bool:
+    for handler in logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            return True
+    return False
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return int(default)
+    try:
+        value = int(str(raw).strip())
+    except Exception:
+        return int(default)
+    return max(int(minimum), value)
 
 
 # Backward compatibility alias.

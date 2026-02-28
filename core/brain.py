@@ -114,6 +114,7 @@ class Brain:
         state_map.setdefault("conversation_id", state_snapshot.conversation_id)
         state_map.setdefault("turn_id", state_snapshot.turn_id)
         state_map.setdefault("quality_profile", state_snapshot.quality_profile)
+        state_map.setdefault("active_character_id", state_snapshot.active_character_id)
         state_map.setdefault("active_goal", state_snapshot.active_goal)
         state_map.setdefault("dialog_summary", state_snapshot.dialog_summary)
         state_map.setdefault("active_tasks", state_snapshot.active_tasks)
@@ -229,6 +230,20 @@ class Brain:
                         blend=blend,
                         switch_ts=ts_val,
                     )
+            elif key == "state_character":
+                value = str(op.get("value") or "").strip().lower()
+                if value:
+                    locked = op.get("locked")
+                    ts = op.get("ts")
+                    try:
+                        ts_val = float(ts) if ts is not None else None
+                    except Exception:
+                        ts_val = None
+                    self.state_manager.set_active_character(
+                        value,
+                        locked=(bool(locked) if isinstance(locked, bool) else None),
+                        switch_ts=ts_val,
+                    )
             elif key == "tool_results":
                 items = list(op.get("items") or [])
                 if items:
@@ -318,7 +333,13 @@ class Brain:
         state_snapshot = self.state_manager.snapshot()
         state_map = dict(state_snapshot.raw or {})
         history = list(state_snapshot.history or [])
-        personality_id = str(state_snapshot.active_personality_id or state_map.get("active_personality_id") or "default")
+        personality_id = str(
+            state_snapshot.active_character_id
+            or state_snapshot.active_personality_id
+            or state_map.get("active_character_id")
+            or state_map.get("active_personality_id")
+            or "default"
+        )
 
         user_payload = str(user_text or "").strip()
         if user_payload:

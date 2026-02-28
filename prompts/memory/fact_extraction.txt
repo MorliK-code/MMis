@@ -5,5 +5,12 @@ role: system
 tags: [memory, facts]
 min_ctx: 64
 ---
-Extract stable profile facts from the message.
-Return strict JSON list of facts with: subject,key,value,op,confidence,evidence.
+Извлеки стабильные факты профиля из сообщения.
+
+Верни строгий JSON-список фактов со следующими полями:
+- subject
+- key
+- value
+- op
+- confidence
+- evidence

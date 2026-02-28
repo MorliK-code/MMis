@@ -55,7 +55,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from settings.model_config import (
+from config.model_config import (
     MMIS_VOICE_INPUT_DIR,
     MMIS_VOICE_OUTPUT_DIR,
     MMIS_VOICE_TTS_RATE,
@@ -1307,6 +1307,8 @@ class MainWindow(QMainWindow):
         if not s:
             return ""
         s = re.sub(r"</?think>", "", s, flags=re.I)
+        s = re.sub(r"</?thinking>", "", s, flags=re.I)
+        s = re.sub(r"</?reasoning>", "", s, flags=re.I)
         s = s.replace("\r\n", "\n").replace("\r", "\n")
         # Prevent stream artifacts from inflating bubble height.
         s = re.sub(r"\n{2,}", "\n", s)

@@ -8,6 +8,10 @@ from threading import RLock
 from typing import Any
 
 from config.settings import load_config
+from utils.logger import get_logger
+
+
+LOGGER = get_logger(__name__)
 
 
 def _now_ts() -> float:
@@ -69,6 +73,13 @@ class EventStore:
             self._events.append(row)
             self._index[row["event_id"]] = row
             self._append_jsonl(row)
+        LOGGER.debug(
+            "event append id=%s type=%s tags=%s model=%s",
+            row["event_id"],
+            row["type"],
+            len(list(row.get("tags") or [])),
+            row["model"],
+        )
         return dict(row)
 
     def get(self, event_id: str) -> dict[str, Any] | None:
@@ -145,4 +156,3 @@ class EventStore:
     def _append_jsonl(self, payload: dict[str, Any]) -> None:
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-

@@ -18,11 +18,15 @@ from llm.provider_base import (
     ToolSpec,
     Usage,
 )
+from utils.logger import get_logger, log_json
 
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
     OpenAI = None
+
+
+LOGGER = get_logger(__name__)
 
 
 def _env_str(name: str, default: str) -> str:
@@ -125,6 +129,15 @@ class OpenAIProvider(LLMProviderBase):
         if not model:
             raise RuntimeError("OpenAI model is not configured.")
 
+        log_json(
+            LOGGER,
+            "llm_generate_start",
+            provider="openai",
+            model=model,
+            messages=len(list(req.messages or [])),
+            tools=len(list(req.tools or [])),
+            json_mode=bool(req.json_mode),
+        )
         kwargs = self._build_completion_kwargs(req=req, model=model, stream=False)
         t0 = time.perf_counter()
         resp = self._client.chat.completions.create(**kwargs)
@@ -141,6 +154,18 @@ class OpenAIProvider(LLMProviderBase):
         total_tokens = int(getattr(usage_obj, "total_tokens", prompt_tokens + completion_tokens) or 0)
 
         raw = resp.model_dump() if hasattr(resp, "model_dump") else None
+        log_json(
+            LOGGER,
+            "llm_generate_done",
+            provider="openai",
+            model=str(getattr(resp, "model", model) or model),
+            latency_ms=round(float(latency_ms), 2),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            tool_calls=len(tool_calls),
+            text_chars=len(text),
+        )
         return LLMResponse(
             text=text,
             tool_calls=tool_calls,
@@ -157,8 +182,19 @@ class OpenAIProvider(LLMProviderBase):
         if not model:
             raise RuntimeError("OpenAI model is not configured.")
 
+        log_json(
+            LOGGER,
+            "llm_stream_start",
+            provider="openai",
+            model=model,
+            messages=len(list(req.messages or [])),
+            tools=len(list(req.tools or [])),
+            json_mode=bool(req.json_mode),
+        )
         kwargs = self._build_completion_kwargs(req=req, model=model, stream=True)
         stream = self._client.chat.completions.create(**kwargs)
+        chunk_count = 0
+        chars = 0
         for event in stream:
             choice = (getattr(event, "choices", None) or [None])[0]
             delta = getattr(choice, "delta", None)
@@ -178,6 +214,18 @@ class OpenAIProvider(LLMProviderBase):
                     )
                 )
             finish_reason = str(getattr(choice, "finish_reason", "") or "")
+            chunk_count += 1
+            chars += len(text_delta)
+            if finish_reason:
+                log_json(
+                    LOGGER,
+                    "llm_stream_done",
+                    provider="openai",
+                    model=model,
+                    chunks=chunk_count,
+                    text_chars=chars,
+                    finish_reason=finish_reason,
+                )
             yield LLMChunk(
                 text_delta=text_delta,
                 tool_calls_delta=tool_calls_delta,

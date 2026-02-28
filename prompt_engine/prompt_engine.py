@@ -5,6 +5,7 @@ from typing import Any
 
 from core.personality_engine import PersonalityEngine, ensure_default_personality_files, ensure_default_prompt_files
 from llm.provider_base import Message
+from modules.character.engine import CharacterEngine
 from prompt_engine.prompt_registry import PromptRegistry
 from prompt_engine.token_budget_manager import ContextBlock, TokenBudgetManager
 
@@ -23,12 +24,14 @@ class PromptEngine:
         registry: PromptRegistry | None = None,
         budget_manager: TokenBudgetManager | None = None,
         personality_engine: PersonalityEngine | None = None,
+        character_engine: CharacterEngine | None = None,
     ):
         ensure_default_prompt_files()
         ensure_default_personality_files()
         self.registry = registry or PromptRegistry()
         self.budget_manager = budget_manager or TokenBudgetManager()
         self.personality_engine = personality_engine or PersonalityEngine()
+        self.character_engine = character_engine or CharacterEngine()
 
     def compose(
         self,
@@ -51,6 +54,12 @@ class PromptEngine:
             _resolve_persona_name(traits_map=traits_map, state_map=state_map, policies_map=policies_map),
             "default",
         ).lower()
+        active_character = _pick(
+            state_map.get("active_character_id"),
+            traits_map.get("character"),
+            policies_map.get("character"),
+            active_personality,
+        ).lower()
         personality = self.personality_engine.get_profile(active_personality)
 
         base_doc = self._safe_doc(key="system.base", fallback_text=blocks.get("system_role") or "")
@@ -59,6 +68,13 @@ class PromptEngine:
         rules_doc = self._safe_doc(path=personality.rules_prompt, fallback_text="")
         safety_doc = self._safe_doc(key="response.safety_filter", fallback_text="")
         formatting_doc = self._safe_doc(key="response.formatting", fallback_text="")
+        character_prompt_block = str(state_map.get("character_prompt_block") or "").strip()
+        if not character_prompt_block and active_character:
+            try:
+                character_prompt_block = str(self.character_engine.build_prompt(active_character) or "").strip()
+            except Exception:
+                character_prompt_block = ""
+        personality_core_text = character_prompt_block or _join_non_empty([persona_doc["text"], style_doc["text"]])
 
         blend = _as_dict(state_map.get("personality_blend"))
         blend_old_block = self._build_blend_block(blend)
@@ -78,7 +94,7 @@ class PromptEngine:
             ),
             ContextBlock(
                 id="personality_core",
-                content=_join_non_empty([persona_doc["text"], style_doc["text"]]),
+                content=personality_core_text,
                 bucket="personality",
                 priority=92,
                 required=True,
@@ -193,6 +209,7 @@ class PromptEngine:
             "active_personality_id": personality.id,
             "active_personality_name": personality.name,
             "active_personality_version": personality.version,
+            "active_character_id": active_character,
             "base_prompt_id": base_doc["id"],
             "base_prompt_version": base_doc["version"],
             "persona_prompt_id": persona_doc["id"],
