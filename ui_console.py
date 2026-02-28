@@ -18,7 +18,7 @@ CONSOLE_BUILD_ID = "2026-02-28-r2"
 class ConsoleState:
     api: ApiClient
     store_turn: bool = True
-    show_thinking: bool = True
+    show_thinking: bool = False
     think_enabled: bool | None = None
     json_mode_enabled: bool | None = None
     online: bool = False
@@ -50,7 +50,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stream-timeout", type=float, default=600.0, help="Stream timeout seconds")
     parser.add_argument("--no-store", action="store_true", help="Do not store turn in backend memory")
     think_view_group = parser.add_mutually_exclusive_group()
-    think_view_group.add_argument("--show-thinking", action="store_true", help="Print thinking block (default)")
+    think_view_group.add_argument("--show-thinking", action="store_true", help="Print thinking block")
     think_view_group.add_argument("--hide-thinking", action="store_true", help="Do not print thinking block")
     parser.add_argument("--no-auto-api", action="store_true", help="Do not auto-start API when offline")
     parser.add_argument("--no-auto-ollama", action="store_true", help="Do not auto-start Ollama when models backend is offline")
@@ -733,7 +733,7 @@ def main() -> int:
             stream_timeout_sec=float(args.stream_timeout),
         ),
         store_turn=not bool(args.no_store),
-        show_thinking=not bool(args.hide_thinking),
+        show_thinking=bool(args.show_thinking and not args.hide_thinking),
         auto_start_api=not bool(args.no_auto_api),
         auto_start_ollama=not bool(args.no_auto_ollama),
     )

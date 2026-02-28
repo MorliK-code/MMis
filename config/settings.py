@@ -87,7 +87,7 @@ def load_config(force_reload: bool = False) -> AppSettings:
         model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qwen3:8b")),
         host=_norm_str(_pick("MMIS_API_HOST", json_cfg, dotenv_cfg, "127.0.0.1")),
         port=_to_int(_pick("MMIS_API_PORT", json_cfg, dotenv_cfg, 8000), default=8000),
-        thinking_enabled=_to_bool(_pick("MMIS_THINKING_ENABLED", json_cfg, dotenv_cfg, True)),
+        thinking_enabled=_to_bool(_pick("MMIS_THINKING_ENABLED", json_cfg, dotenv_cfg, False)),
         json_mode_enabled=_to_bool(_pick("MMIS_JSON_MODE", json_cfg, dotenv_cfg, False)),
         internet_enabled=_to_bool(_pick("MMIS_INTERNET_ENABLED", json_cfg, dotenv_cfg, True)),
         automation_enabled=_to_bool(_pick("MMIS_AUTOMATION_ENABLED", json_cfg, dotenv_cfg, True)),
