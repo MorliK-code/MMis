@@ -1,0 +1,12 @@
+﻿{
+  "name": "bge-small-en-v1.5",
+  "version": "1.0.0",
+  "format": "onnx",
+  "path": "./bge-small-en-v1.5/model.onnx",
+  "dim": 384,
+  "max_length": 512,
+  "normalize": true,
+  "recommended_batch": 16,
+  "device_preference": "cpu",
+  "sha256": "<fill-after-download>"
+}

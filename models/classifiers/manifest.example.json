@@ -1,0 +1,11 @@
+﻿{
+  "name": "intent-emotion-lite",
+  "version": "1.0.0",
+  "format": "onnx",
+  "path": "./intent-emotion-lite/model.onnx",
+  "tokenizer": "./intent-emotion-lite/tokenizer.json",
+  "labels": "./intent-emotion-lite/labels.json",
+  "thresholds": "./intent-emotion-lite/thresholds.json",
+  "device_preference": "cpu",
+  "sha256": "<fill-after-download>"
+}

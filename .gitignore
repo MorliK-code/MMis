@@ -1,17 +1,45 @@
-__pycache__/*
-**/__pycache__/*
-*.pyc
+﻿# Python
+__pycache__/
+*.py[cod]
 *.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
 venv/
-.env/
+env/
+
+# IDE
 .vscode/
 .idea/
-*.log
-.DS_Store
-Thumbs.db
-secrets.json
-memory_storage/*
-__init__.py
-ui/__pycache__/
-tools/ffmpeg/
-tools/ffmpeg/*
+
+# Runtime data
+memory_storage/
+data/cache/**
+data/logs/**
+data/memory_storage/**
+!data/**/.gitkeep
+
+# Model artifacts (keep only manifests/templates)
+models/embeddings/**
+models/classifiers/**
+models/quantized/**
+!models/**/.gitkeep
+!models/**/README.md
+!models/**/manifest.json
+!models/**/manifest.yaml
+!models/**/manifest.yml
+!models/**/*.example.json
+
+# Local environment
+.env
+.env.*
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

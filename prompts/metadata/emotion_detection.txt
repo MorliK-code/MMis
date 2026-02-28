@@ -1,0 +1,21 @@
+---
+id: metadata_emotion
+version: 1.0.0
+role: system
+tags: [metadata, emotion]
+min_ctx: 64
+---
+Classify user emotion for response style adaptation.
+
+Labels:
+- neutral
+- positive
+- excited
+- confused
+- frustrated
+- angry
+- sad
+- playful
+
+Return JSON:
+{"label":"...", "intensity":0..1, "scores":{"label":score}}

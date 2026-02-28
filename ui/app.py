@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 import sys
-import traceback
 import json
 import shutil
 import time
-from dataclasses import dataclass
+import os
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -19,7 +19,6 @@ from PySide6.QtCore import (
     QLockFile,
     QObject,
     QPropertyAnimation,
-    QPointF,
     QSize,
     QStandardPaths,
     QThread,
@@ -29,15 +28,13 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QCloseEvent, QColor, QCursor, QFont, QKeyEvent, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QCloseEvent, QColor, QFont, QKeyEvent
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QFileDialog,
     QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect,
-    QCheckBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -58,560 +55,52 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from brain import Brain
-from config import (
+from settings.model_config import (
     MMIS_VOICE_INPUT_DIR,
     MMIS_VOICE_OUTPUT_DIR,
     MMIS_VOICE_TTS_RATE,
     MMIS_VOICE_TTS_VOICE,
     MMIS_VOICE_TTS_VOLUME,
     MemoryStorageDir,
-    SHORT_MEMORY_LIMIT,
 )
-from memory.assistant_profile import AssistantProfile
-from memory.chat_log import ChatLog
-from memory.event_store import EventStore
-from memory.long_memory import LongMemory
-from memory.memory_manager import MemoryManager
-from memory.short_memory import ShortMemory
-from memory.user_profile import UserProfile
-from ui import config as ui_config
+from ui.chat_sessions import (
+    history_from_serializable as chat_history_from_serializable,
+    history_to_serializable as chat_history_to_serializable,
+    load_sessions as load_chat_sessions,
+    make_new_chat_payload,
+    now_iso as chat_now_iso,
+    save_sessions as save_chat_sessions,
+    session_dir as chat_session_dir,
+)
 from ui.livecss import LiveCss
-from voice import build_stt_engine, build_tts_engine
-
-DEFAULT_TEXT_SIZE = getattr(ui_config, "DEFAULT_TEXT_SIZE", 14)
-DEFAULT_BUBBLE_OPACITY = getattr(ui_config, "DEFAULT_BUBBLE_OPACITY", 0.1)
-FLOPS_PER_TOKEN = getattr(ui_config, "FLOPS_PER_TOKEN", 14e9)
-SHOW_TFLOPS_EST = getattr(ui_config, "SHOW_TFLOPS_EST", True)
-FEMALE_TONE_PRESETS = [
-    ("Мягкий RU", "ru-RU-SvetlanaNeural"),
-    ("Нейтральный EN", "en-US-JennyNeural"),
-    ("Теплый EN", "en-GB-SoniaNeural"),
-    ("Энергичный DE", "de-DE-KatjaNeural"),
-    ("Спокойный FR", "fr-FR-DeniseNeural"),
-]
-
-
-def safe_div(a: float, b: float) -> float:
-    return a / b if b else 0.0
-
-
-def est_tflops(tokens_per_sec: float) -> float:
-    return (FLOPS_PER_TOKEN * tokens_per_sec) / 1e12
-
-
-def ms_to_s_text(ms_value: float) -> str:
-    return f"{(float(ms_value) / 1000.0):.1f} с"
-
-
-def build_brain() -> Brain:
-    short = ShortMemory(limit=SHORT_MEMORY_LIMIT)
-    longm = LongMemory(path=MemoryStorageDir / "chroma_db")
-    profile_user = UserProfile(MemoryStorageDir / "user_profile.json")
-    profile_assistant = AssistantProfile(MemoryStorageDir / "assistant_profile.json")
-    events = EventStore(MemoryStorageDir / "events.json")
-    log = ChatLog(MemoryStorageDir / "chat_log.jsonl")
-
-    mm = MemoryManager(short, longm, profile_user, profile_assistant, events, log, distance_threshold=0.65)
-    return Brain(mm)
-
-
-@dataclass
-class ReplyResult:
-    text: str
-    stats: dict
-    thinking: str = ""
-
-
-class ReplyWorker(QObject):
-    finished = Signal(object)
-    errored = Signal(str)
-    chunk = Signal(str)
-    thinking_chunk = Signal(str)
-
-    def __init__(self, brain: Brain, user_text: str, store_turn: bool = True):
-        super().__init__()
-        self.brain = brain
-        self.user_text = user_text
-        self.store_turn = bool(store_turn)
-        self._cancel_requested = False
-
-    def request_cancel(self):
-        self._cancel_requested = True
-
-    @Slot()
-    def run(self):
-        try:
-            answer = self.brain.think_stream(
-                self.user_text,
-                on_chunk=self.chunk.emit,
-                on_thinking_chunk=self.thinking_chunk.emit,
-                store_turn=self.store_turn,
-            )
-            stats = getattr(self.brain, "last_stats", {}) or {}
-            thinking = getattr(self.brain, "last_thinking", "") or ""
-            if self._cancel_requested:
-                return
-            self.finished.emit(ReplyResult(text=answer, stats=stats, thinking=thinking))
-        except Exception as exc:
-            msg = str(exc or "").strip()
-            self.errored.emit(msg if msg else traceback.format_exc())
-
-
-class _HoverRevealFilter(QObject):
-    def __init__(
-        self,
-        owner: QWidget,
-        target: QWidget,
-        show_ms: int = 170,
-        hide_ms: int = 130,
-        require_reenter: bool = False,
-    ):
-        super().__init__(owner)
-        self.owner = owner
-        self.target = target
-        self.show_ms = max(0, int(show_ms))
-        self.hide_ms = max(40, int(hide_ms))
-        self._must_leave_once = bool(require_reenter)
-        self._pressed_inside_target = False
-        self._outside_streak = 0
-        target.setVisible(False)
-        self._sync_timer = QTimer(target)
-        self._sync_timer.setInterval(60)
-        self._sync_timer.timeout.connect(self._sync_visibility)
-        self._sync_timer.start()
-
-    def _contains_global(self, w: QWidget, global_pos, pad: int = 2) -> bool:
-        if not isValid(w):
-            return False
-        local = w.mapFromGlobal(global_pos)
-        rect = w.rect().adjusted(-pad, -pad, pad, pad)
-        return rect.contains(local)
-
-    def _is_cursor_inside_owner_or_target(self) -> bool:
-        if not isValid(self.owner) or not isValid(self.target):
-            return False
-        gpos = QCursor.pos()
-        hovered = QApplication.widgetAt(gpos)
-        if hovered is None:
-            hovered_hit = False
-        else:
-            hovered_hit = (
-                hovered is self.owner
-                or hovered is self.target
-                or (isinstance(hovered, QWidget) and self.owner.isAncestorOf(hovered))
-                or (isinstance(hovered, QWidget) and self.target.isAncestorOf(hovered))
-            )
-        if hovered_hit:
-            return True
-
-        # Fallback: geometry-based check with a tiny tolerance to avoid flicker at edges.
-        if self._contains_global(self.owner, gpos, pad=3):
-            return True
-        if self._contains_global(self.target, gpos, pad=3):
-            return True
-        for child in self.target.findChildren(QWidget):
-            if self._contains_global(child, gpos, pad=3):
-                return True
-        return False
-
-    def _show_if_inside(self) -> None:
-        if not isValid(self.target):
-            return
-        if self._is_cursor_inside_owner_or_target() or self._pressed_inside_target:
-            self._outside_streak = 0
-            self.target.setVisible(True)
-
-    def _show(self) -> None:
-        if not isValid(self.target):
-            return
-        self.target.setVisible(True)
-
-    def _sync_visibility(self) -> None:
-        if not isValid(self.target):
-            return
-        if self._pressed_inside_target:
-            self._outside_streak = 0
-            self.target.setVisible(True)
-            return
-        inside = self._is_cursor_inside_owner_or_target()
-        if self._must_leave_once:
-            if inside:
-                self._outside_streak = 0
-                self.target.setVisible(False)
-                return
-            self._must_leave_once = False
-        if inside:
-            self._outside_streak = 0
-            self.target.setVisible(True)
-            return
-        self._outside_streak += 1
-        if self._outside_streak >= 4:
-            self.target.setVisible(False)
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        et = event.type()
-        if et in (QEvent.Enter, QEvent.HoverEnter, QEvent.MouseMove, QEvent.Show):
-            self._sync_visibility()
-        elif et == QEvent.MouseButtonPress:
-            if watched is self.target or (isinstance(watched, QWidget) and self.target.isAncestorOf(watched)):
-                self._pressed_inside_target = True
-                self._show()
-        elif et == QEvent.MouseButtonRelease:
-            self._pressed_inside_target = False
-            self._sync_visibility()
-        return False
-
-
-class _ButtonAnimFilter(QObject):
-    def __init__(self, button: QPushButton, fade_ms: int = 170, hover_ms: int = 140, press_ms: int = 90):
-        super().__init__(button)
-        self.button = button
-        self.fade_ms = max(50, int(fade_ms))
-        self.hover_ms = max(50, int(hover_ms))
-        self.press_ms = max(40, int(press_ms))
-        self.idle_opacity = 0.94
-
-        self.opacity = QGraphicsOpacityEffect(button)
-        self.opacity.setOpacity(0.0)
-        button.setGraphicsEffect(self.opacity)
-
-        self.anim = QPropertyAnimation(self.opacity, b"opacity", button)
-        self.anim.setEasingCurve(QEasingCurve.OutCubic)
-        self._animate_to(self.idle_opacity, self.fade_ms)
-
-    def set_durations(self, fade_ms: int, hover_ms: int, press_ms: int) -> None:
-        self.fade_ms = max(50, int(fade_ms))
-        self.hover_ms = max(50, int(hover_ms))
-        self.press_ms = max(40, int(press_ms))
-
-    def _animate_to(self, value: float, duration_ms: int) -> None:
-        if not isValid(self.button):
-            return
-        self.anim.stop()
-        self.anim.setDuration(int(duration_ms))
-        self.anim.setStartValue(self.opacity.opacity())
-        self.anim.setEndValue(float(value))
-        self.anim.start()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if not isValid(self.button):
-            return False
-        et = event.type()
-        if et == QEvent.Show:
-            self._animate_to(self.idle_opacity, self.fade_ms)
-        elif et == QEvent.Enter:
-            self._animate_to(1.0, self.hover_ms)
-        elif et == QEvent.Leave:
-            self._animate_to(self.idle_opacity, self.hover_ms)
-        elif et == QEvent.MouseButtonPress:
-            self._animate_to(0.78, self.press_ms)
-        elif et == QEvent.MouseButtonRelease:
-            self._animate_to(1.0 if self.button.underMouse() else self.idle_opacity, self.press_ms)
-        return False
-
-
-class _FeedbackVisualFilter(QObject):
-    def __init__(
-        self,
-        button: QPushButton,
-        base_bg: str,
-        hover_bg: str,
-        active_bg: str,
-        text_color: str,
-        border_color: str,
-        radius_px: int,
-        font_size_px: int,
-        font_weight: int,
-        pad_y_px: int,
-        pad_x_px: int,
-    ):
-        super().__init__(button)
-        self.button = button
-        self.base_bg = base_bg
-        self.hover_bg = hover_bg
-        self.active_bg = active_bg
-        self.text_color = text_color
-        self.border_color = border_color
-        self.radius_px = int(radius_px)
-        self.font_size_px = int(font_size_px)
-        self.font_weight = int(font_weight)
-        self.pad_y_px = int(pad_y_px)
-        self.pad_x_px = int(pad_x_px)
-        self.button.installEventFilter(self)
-        self.refresh()
-
-    def _compose_qss(self, bg: str) -> str:
-        return (
-            "QPushButton {"
-            f"background: {bg};"
-            f"color: {self.text_color};"
-            f"border: 1px solid {self.border_color};"
-            f"border-radius: {self.radius_px}px;"
-            f"font-size: {self.font_size_px}px;"
-            f"font-weight: {self.font_weight};"
-            f"padding: {self.pad_y_px}px {self.pad_x_px}px;"
-            "}"
-        )
-
-    def refresh(self) -> None:
-        if not isValid(self.button):
-            return
-        selected = bool(self.button.property("selected"))
-        if selected:
-            bg = self.active_bg
-        elif self.button.underMouse():
-            bg = self.hover_bg
-        else:
-            bg = self.base_bg
-        self.button.setStyleSheet(self._compose_qss(bg))
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        et = event.type()
-        if et in (
-            QEvent.Enter,
-            QEvent.Leave,
-            QEvent.MouseMove,
-            QEvent.MouseButtonPress,
-            QEvent.MouseButtonRelease,
-            QEvent.Show,
-            QEvent.DynamicPropertyChange,
-        ):
-            self.refresh()
-        return False
-
-
-class _MessageCard(QFrame):
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self._overlay: QWidget | None = None
-        self._overlay_bottom = 6
-        self._overlay_right = 8
-
-    def set_overlay(self, widget: QWidget, bottom: int, right: int) -> None:
-        self._overlay = widget
-        self._overlay_bottom = int(bottom)
-        self._overlay_right = int(right)
-        widget.setParent(self)
-        widget.raise_()
-        widget.adjustSize()
-        self._reposition_overlay()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._reposition_overlay()
-
-    def _reposition_overlay(self) -> None:
-        if not self._overlay or not isValid(self._overlay):
-            return
-        hint = self._overlay.sizeHint()
-        max_x = max(0, self.width() - hint.width())
-        max_y = max(0, self.height() - hint.height())
-        x = self.width() - hint.width() - self._overlay_right
-        y = self.height() - hint.height() - self._overlay_bottom
-        x = max(0, min(max_x, x))
-        y = max(0, min(max_y, y))
-        self._overlay.move(x, y)
-
-
-class _ToggleSwitch(QCheckBox):
-    def __init__(self, text: str = "", parent: QWidget | None = None):
-        super().__init__(text, parent)
-        self._track_off = QColor(95, 95, 105, 180)
-        self._track_on = QColor(58, 102, 163, 240)
-        self._track_border = QColor(255, 255, 255, 45)
-        self._knob = QColor(240, 240, 240)
-        self._text_color = QColor(240, 240, 240)
-        self._offset = 0.0
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(24)
-        self.toggled.connect(self._on_toggled)
-
-    def sizeHint(self):
-        return self.minimumSizeHint()
-
-    def minimumSizeHint(self):
-        fm = self.fontMetrics()
-        text_w = fm.horizontalAdvance(self.text())
-        return QSize(38 + 8 + text_w + 6, 24)
-
-    def set_colors(self, track_off: QColor, track_on: QColor, track_border: QColor, text_color: QColor) -> None:
-        self._track_off = QColor(track_off)
-        self._track_on = QColor(track_on)
-        self._track_border = QColor(track_border)
-        self._text_color = QColor(text_color)
-        self.update()
-
-    def _on_toggled(self, checked: bool) -> None:
-        self._offset = 1.0 if checked else 0.0
-        self.update()
-
-    def paintEvent(self, event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-
-        h = max(18, self.height() - 4)
-        w = 38
-        x = 0
-        y = int((self.height() - h) / 2)
-        r = h / 2.0
-
-        track_rect = self.rect().adjusted(x, y, -(self.width() - (x + w)), -(self.height() - (y + h)))
-        track_color = self._track_on if self.isChecked() else self._track_off
-        p.setPen(QPen(self._track_border, 1))
-        p.setBrush(track_color)
-        p.drawRoundedRect(track_rect, r, r)
-
-        knob_d = h - 4
-        knob_y = y + 2
-        knob_min_x = x + 2
-        knob_max_x = x + w - knob_d - 2
-        knob_x = knob_max_x if self.isChecked() else knob_min_x
-        p.setPen(Qt.NoPen)
-        p.setBrush(self._knob)
-        p.drawEllipse(knob_x, knob_y, knob_d, knob_d)
-
-        p.setPen(self._text_color)
-        p.drawText(w + 8, 0, self.width() - (w + 8), self.height(), Qt.AlignVCenter | Qt.AlignLeft, self.text())
-
-class _OverlayHost(QWidget):
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self._overlay: QWidget | None = None
-        self._overlay_bottom = 6
-        self._overlay_right = 8
-
-    def set_overlay(self, widget: QWidget, bottom: int, right: int) -> None:
-        self._overlay = widget
-        self._overlay_bottom = int(bottom)
-        self._overlay_right = int(right)
-        widget.setParent(self)
-        widget.raise_()
-        widget.adjustSize()
-        self._reposition_overlay()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._reposition_overlay()
-
-    def _reposition_overlay(self) -> None:
-        if not self._overlay or not isValid(self._overlay):
-            return
-        hint = self._overlay.sizeHint()
-        x = max(0, self.width() - hint.width() - self._overlay_right)
-        y = max(0, self.height() - hint.height() - self._overlay_bottom)
-        self._overlay.move(x, y)
-
-
-class _MiniSparkline(QWidget):
-    def __init__(self, title: str, parent: QWidget | None = None):
-        super().__init__(parent)
-        self._title = str(title)
-        self._values: list[float] = []
-        self._max_points = 80
-        self._line_color = QColor(110, 175, 255, 230)
-        self._fill_color = QColor(110, 175, 255, 40)
-        self._grid_color = QColor(255, 255, 255, 28)
-        self._title_color = QColor(220, 220, 220, 190)
-        self.setMinimumHeight(96)
-        self.setMaximumHeight(122)
-
-    def clear_values(self) -> None:
-        self._values.clear()
-        self.update()
-
-    def push_value(self, value: float) -> None:
-        v = max(0.0, float(value))
-        self._values.append(v)
-        if len(self._values) > self._max_points:
-            self._values = self._values[-self._max_points :]
-        self.update()
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        base_font = p.font()
-        base_size = base_font.pointSizeF() if base_font.pointSizeF() > 0 else 10.0
-        label_font = QFont(base_font)
-        label_font.setPointSizeF(max(5.0, base_size * 0.5))
-        p.setFont(label_font)
-
-        plot = self.rect().adjusted(8, 20, -36, -20)
-        if plot.width() <= 8 or plot.height() <= 8:
-            return
-
-        p.setPen(self._title_color)
-        p.drawText(6, 13, self._title)
-
-        p.setPen(self._grid_color)
-        p.drawLine(plot.left(), plot.top(), plot.right(), plot.top())
-        p.drawLine(plot.left(), plot.top() + plot.height() // 2, plot.right(), plot.top() + plot.height() // 2)
-        p.drawLine(plot.left(), plot.bottom(), plot.right(), plot.bottom())
-
-        if self._values:
-            vmax = max(max(self._values), 1e-6)
-        else:
-            vmax = 1.0
-        vmid = vmax / 2.0
-
-        # Right-side vertical scale labels and tick marks.
-        p.setPen(self._title_color)
-        rx = plot.right() + 5
-        y_top = plot.top()
-        y_mid = plot.top() + plot.height() // 2
-        y_bot = plot.bottom()
-        for yy in (y_top, y_mid, y_bot):
-            p.setPen(self._grid_color)
-            p.drawLine(plot.right(), yy, plot.right() + 4, yy)
-        p.setPen(self._title_color)
-        p.drawText(rx, y_top + 4, f"{vmax:.1f}")
-        p.drawText(rx, y_mid + 4, f"{vmid:.1f}")
-        p.drawText(rx, y_bot + 4, "0.0")
-
-        # Bottom horizontal scale labels and tick marks.
-        x_left = plot.left()
-        x_mid = plot.left() + plot.width() // 2
-        x_right = plot.right()
-        for xx in (x_left, x_mid, x_right):
-            p.setPen(self._grid_color)
-            p.drawLine(xx, plot.bottom(), xx, plot.bottom() + 4)
-        p.setPen(self._title_color)
-        y_axis_text = self.height() - 5
-        p.drawText(x_left - 2, y_axis_text, "0")
-        p.drawText(x_mid - 7, y_axis_text, "50")
-        p.drawText(x_right - 14, y_axis_text, "100")
-
-        if len(self._values) < 2:
-            return
-
-        n = len(self._values) - 1
-        points: list[tuple[int, int]] = []
-        for i, v in enumerate(self._values):
-            x = plot.left() + int((i / n) * plot.width())
-            y = plot.bottom() - int((v / vmax) * plot.height())
-            points.append((x, y))
-
-        p.setPen(Qt.NoPen)
-        p.setBrush(self._fill_color)
-        poly = [*points, (plot.right(), plot.bottom()), (plot.left(), plot.bottom())]
-        p.drawPolygon(QPolygonF([QPointF(x, y) for x, y in poly]))
-
-        p.setPen(QPen(self._line_color, 2))
-        for i in range(1, len(points)):
-            x1, y1 = points[i - 1]
-            x2, y2 = points[i]
-            p.drawLine(x1, y1, x2, y2)
-
-        # Keep chart compact: no extra top metrics text to avoid overlap.
+from ui.voice_adapter import build_stt_engine, build_tts_engine
+
+from ui.api_client import ApiClient, ApiClientError
+from ui.constants import DEFAULT_BUBBLE_OPACITY, DEFAULT_TEXT_SIZE, FEMALE_TONE_PRESETS, SHOW_TFLOPS_EST
+from ui.metrics import est_tflops, ms_to_s_text, safe_div
+from ui.widgets import (
+    _ButtonAnimFilter,
+    _FeedbackVisualFilter,
+    _HoverRevealFilter,
+    _MessageCard,
+    _MiniSparkline,
+    _OverlayHost,
+    _ToggleSwitch,
+)
+from ui.workers import ReplyResult, ReplyWorker
 
 
 class MainWindow(QMainWindow):
+    _models_refresh_done = Signal(object, bool)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MMis \u2014 Desktop")
         self.resize(1080, 760)
 
-        self.brain = build_brain()
+        self.api = ApiClient()
+        self._models_refresh_inflight = False
+        self._models_refresh_done.connect(self._apply_models_refresh_result)
 
         self._thread: QThread | None = None
         self._worker: ReplyWorker | None = None
@@ -647,6 +136,7 @@ class MainWindow(QMainWindow):
         self.sum_eval = 0
         self.sum_prompt = 0
         self.sum_tps = 0.0
+        self._request_primary_model: str = ""
 
         self._text_size = DEFAULT_TEXT_SIZE
         self._bubble_opacity = DEFAULT_BUBBLE_OPACITY
@@ -656,8 +146,11 @@ class MainWindow(QMainWindow):
         self._sessions_dir = MemoryStorageDir / "ui_chats"
         self._sessions_index_path = self._sessions_dir / "index.json"
         self._legacy_sessions_path = MemoryStorageDir / "ui_chats.json"
+        self._ui_state_path = MemoryStorageDir / "ui_state.json"
         self._chat_sessions: list[dict] = []
         self._active_chat_id: str | None = None
+        self._saved_think_enabled: bool | None = None
+        self._pending_think_sync_from_saved = False
         self._updating_chat_controls = False
         self._chats_open_width = 240
         self._stats_open_width = 300
@@ -677,12 +170,13 @@ class MainWindow(QMainWindow):
         self._voice_volume_percent = self._percent_to_int(MMIS_VOICE_TTS_VOLUME, default=0)
         self._voice_cache_dir = MMIS_VOICE_OUTPUT_DIR / ".cache"
         self._voice_cache_dir.mkdir(parents=True, exist_ok=True)
-        self._voice_reply_cache_path = self._voice_cache_dir / "reply_live.mp3"
+        self._voice_reply_cache_path = self._voice_cache_dir / "reply_live.wav"
         self._audio_output = QAudioOutput(self)
         self._audio_output.setVolume(1.0)
         self._media_player = QMediaPlayer(self)
         self._media_player.setAudioOutput(self._audio_output)
         self._media_player.errorOccurred.connect(self._on_media_error)
+        self._load_ui_state()
 
         self._build_ui()
         self._load_or_init_chat_sessions()
@@ -747,7 +241,7 @@ class MainWindow(QMainWindow):
 
         self.btn_model_refresh = QPushButton("Обновить модели")
         self.btn_model_refresh.setObjectName("btn_model_refresh")
-        self.btn_model_refresh.clicked.connect(self._refresh_models_in_ui)
+        self.btn_model_refresh.clicked.connect(self._on_model_refresh_clicked)
         top_bar_layout.addWidget(self.btn_model_refresh)
 
         self.btn_new_chat = QPushButton("Новый чат")
@@ -986,7 +480,7 @@ class MainWindow(QMainWindow):
 
         self.think_toggle = _ToggleSwitch("Думать")
         self.think_toggle.setObjectName("think_toggle")
-        self.think_toggle.setChecked(self.brain.is_thinking_enabled())
+        self.think_toggle.setChecked(True if self._saved_think_enabled is None else bool(self._saved_think_enabled))
         self.think_toggle.toggled.connect(self._on_think_toggled)
         quick_row_2.addWidget(self.think_toggle)
 
@@ -1128,13 +622,13 @@ class MainWindow(QMainWindow):
 
         self.input.installEventFilter(self)
 
-        self._refresh_models_in_ui()
+        QTimer.singleShot(0, lambda: self._refresh_models_in_ui(show_popup=False))
         self._apply_panel_styles(self._resolve_style())
         self._render_chat()
 
     @staticmethod
     def _now_iso() -> str:
-        return datetime.now().isoformat(timespec="seconds")
+        return chat_now_iso()
 
     @staticmethod
     def _percent_to_int(value: str, default: int = 0) -> int:
@@ -1151,18 +645,82 @@ class MainWindow(QMainWindow):
         v = int(value)
         return f"{v:+d}%"
 
-    def _update_model_label(self) -> None:
-        current = ""
-        if hasattr(self, "model_combo") and self.model_combo.count() > 0:
-            current = str(self.model_combo.currentText() or "")
+    def _sync_model_combo_to(self, model_name: str | None) -> None:
+        target = str(model_name or "").strip()
+        if not target or not hasattr(self, "model_combo") or self.model_combo.count() <= 0:
+            return
+        idx = self.model_combo.findText(target)
+        if idx < 0 or idx == self.model_combo.currentIndex():
+            return
+        self.model_combo.blockSignals(True)
+        self.model_combo.setCurrentIndex(idx)
+        self.model_combo.blockSignals(False)
+
+    def _update_model_label(self, current_model: str | None = None) -> None:
+        current = str(current_model or "").strip()
         if not current:
-            current = self.brain.get_runtime_model()
+            current = str(self.api.get_runtime_model() or "").strip()
+        if not current and hasattr(self, "model_combo") and self.model_combo.count() > 0:
+            current = str(self.model_combo.currentText() or "").strip()
         self.model_label.setText(f"Model: <b>{current}</b>" if current else "Model: <b>—</b>")
 
     @Slot()
-    def _refresh_models_in_ui(self) -> None:
-        models = self.brain.list_local_models()
-        current = self.brain.get_runtime_model()
+    def _on_model_refresh_clicked(self) -> None:
+        self._refresh_models_in_ui(show_popup=True)
+
+    def _refresh_models_in_ui(self, show_popup: bool = True) -> None:
+        if self._models_refresh_inflight:
+            return
+        self._models_refresh_inflight = True
+        self.btn_model_refresh.setEnabled(False)
+        self._set_status("Обновляю модели…")
+
+        def _worker():
+            payload: dict = {"ok": False}
+            try:
+                models_payload = self.api.list_models()
+                health_payload = self.api.health()
+                payload = {
+                    "ok": True,
+                    "models_payload": models_payload,
+                    "health_payload": health_payload,
+                }
+            except ApiClientError as exc:
+                payload = {"ok": False, "error": str(exc)}
+            except Exception as exc:
+                payload = {"ok": False, "error": str(exc)}
+            self._models_refresh_done.emit(payload, bool(show_popup))
+
+        threading.Thread(target=_worker, name="ui-models-refresh", daemon=True).start()
+
+    @Slot(object, bool)
+    def _apply_models_refresh_result(self, payload: object, show_popup: bool) -> None:
+        self._models_refresh_inflight = False
+        self.btn_model_refresh.setEnabled(not bool(self._thread and self._thread.isRunning()))
+        data = payload if isinstance(payload, dict) else {}
+        if not bool(data.get("ok")):
+            self._set_status("API недоступен")
+            cached = str(self.api.get_runtime_model() or "").strip()
+            self.model_combo.blockSignals(True)
+            self.model_combo.clear()
+            if cached:
+                self.model_combo.addItem(cached)
+                self.model_combo.setCurrentIndex(0)
+            self.model_combo.blockSignals(False)
+            self._update_model_label(cached)
+            if show_popup:
+                QMessageBox.warning(self, "API", str(data.get("error") or "Не удалось обновить список моделей"))
+            self._update_chat_controls_state()
+            return
+
+        models_payload = data.get("models_payload") if isinstance(data.get("models_payload"), dict) else {}
+        health_payload = data.get("health_payload") if isinstance(data.get("health_payload"), dict) else {}
+        models = [str(x) for x in (models_payload.get("models") or []) if str(x).strip()]
+        current = str(models_payload.get("runtime_model") or health_payload.get("model") or "")
+        thinking_enabled = bool(health_payload.get("thinking_enabled", True))
+
+        if not models and current:
+            models = [current]
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
         for m in models:
@@ -1172,206 +730,107 @@ class MainWindow(QMainWindow):
         elif models:
             chosen = models[0]
             self.model_combo.setCurrentIndex(0)
-            self.brain.set_runtime_model(chosen)
+            try:
+                self.api.set_model(chosen)
+            except ApiClientError:
+                pass
         self.model_combo.blockSignals(False)
-        self._update_model_label()
+        self.think_toggle.blockSignals(True)
+        self.think_toggle.setChecked(thinking_enabled)
+        self.think_toggle.blockSignals(False)
+        if self._pending_think_sync_from_saved and self._saved_think_enabled is not None:
+            try:
+                actual = self.api.set_thinking_enabled(bool(self._saved_think_enabled))
+            except ApiClientError:
+                actual = bool(thinking_enabled)
+            self._pending_think_sync_from_saved = False
+            self.think_toggle.blockSignals(True)
+            self.think_toggle.setChecked(bool(actual))
+            self.think_toggle.blockSignals(False)
+            self._save_ui_state()
+        self._update_model_label(current)
+        self._set_status("Готово")
+        self._update_chat_controls_state()
 
     @Slot(int)
     def _on_model_changed(self, _index: int) -> None:
         name = str(self.model_combo.currentText() or "").strip()
         if not name:
             return
-        if self.brain.set_runtime_model(name):
-            self._update_model_label()
+        try:
+            self.api.set_model(name)
+            actual = self.api.get_runtime_model()
+            self._sync_model_combo_to(actual)
+            self._update_model_label(actual)
+        except ApiClientError as exc:
+            QMessageBox.warning(self, "Модель", str(exc))
 
     @Slot(bool)
     def _on_think_toggled(self, checked: bool) -> None:
-        self.brain.set_thinking_enabled(bool(checked))
+        try:
+            actual = self.api.set_thinking_enabled(bool(checked))
+            if actual != bool(checked):
+                self.think_toggle.blockSignals(True)
+                self.think_toggle.setChecked(actual)
+                self.think_toggle.blockSignals(False)
+            self._save_ui_state()
+        except ApiClientError as exc:
+            self.think_toggle.blockSignals(True)
+            self.think_toggle.setChecked(not bool(checked))
+            self.think_toggle.blockSignals(False)
+            QMessageBox.warning(self, "API", str(exc))
 
     @staticmethod
     def _history_to_serializable(history: list[tuple[str, str, str | None, int | None, str | None]]) -> list[dict]:
-        out: list[dict] = []
-        for role, text, stat_line, feedback, thinking in history:
-            out.append(
-                {
-                    "role": str(role),
-                    "text": str(text or ""),
-                    "stat_line": None if stat_line is None else str(stat_line),
-                    "feedback": None if feedback is None else int(feedback),
-                    "thinking": None if not thinking else str(thinking),
-                }
-            )
-        return out
+        return chat_history_to_serializable(history)
 
     @staticmethod
     def _history_from_serializable(rows: list[dict] | None) -> list[tuple[str, str, str | None, int | None, str | None]]:
-        out: list[tuple[str, str, str | None, int | None, str | None]] = []
-        if not isinstance(rows, list):
-            return out
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            role = str(row.get("role") or "")
-            if role not in {"system", "user", "ai"}:
-                continue
-            text = str(row.get("text") or "")
-            stat_line_raw = row.get("stat_line")
-            stat_line = None if stat_line_raw is None else str(stat_line_raw)
-            feedback_raw = row.get("feedback")
-            feedback = None
-            if feedback_raw is not None:
-                try:
-                    feedback = int(feedback_raw)
-                except Exception:
-                    feedback = None
-            thinking_raw = row.get("thinking")
-            thinking = None if thinking_raw is None else str(thinking_raw)
-            if role == "system" and text.strip().startswith("MMis UI запущен"):
-                continue
-            out.append((role, text, stat_line, feedback, thinking))
-        return out
+        return chat_history_from_serializable(rows)
 
     def _new_chat_payload(self, title: str | None = None, incognito: bool = False) -> dict:
-        ts = self._now_iso()
-        next_num = len(self._chat_sessions) + 1
-        return {
-            "id": f"chat-{int(datetime.now().timestamp() * 1000)}-{next_num}",
-            "title": title or f"Чат {next_num}",
-            "incognito": bool(incognito),
-            "created_at": ts,
-            "updated_at": ts,
-            "history": [],
-        }
+        return make_new_chat_payload(existing_count=len(self._chat_sessions), title=title, incognito=incognito)
 
     def _chat_dir(self, chat_id: str) -> Path:
-        return self._sessions_dir / str(chat_id)
+        return chat_session_dir(self._sessions_dir, chat_id)
 
-    def _chat_payload_path(self, chat_id: str) -> Path:
-        return self._chat_dir(chat_id) / "chat.json"
-
-    def _load_legacy_sessions(self) -> tuple[list[dict], str | None]:
-        loaded: list[dict] = []
-        active_id: str | None = None
-        if not self._legacy_sessions_path.exists():
-            return loaded, active_id
+    def _load_ui_state(self) -> None:
+        self._saved_think_enabled = None
+        self._pending_think_sync_from_saved = False
         try:
-            payload = json.loads(self._legacy_sessions_path.read_text(encoding="utf-8-sig"))
-            rows = payload.get("chats", []) if isinstance(payload, dict) else []
-            active_id_raw = payload.get("active_chat_id") if isinstance(payload, dict) else None
-            active_id = str(active_id_raw) if active_id_raw else None
-            if isinstance(rows, list):
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    chat_id = str(row.get("id") or "").strip()
-                    if not chat_id:
-                        continue
-                    loaded.append(
-                        {
-                            "id": chat_id,
-                            "title": str(row.get("title") or "Чат"),
-                            "incognito": bool(row.get("incognito", False)),
-                            "created_at": str(row.get("created_at") or self._now_iso()),
-                            "updated_at": str(row.get("updated_at") or self._now_iso()),
-                            "history": self._history_from_serializable(row.get("history")),
-                        }
-                    )
-            loaded = [c for c in loaded if not bool(c.get("incognito", False))]
-            if active_id and not any(str(c.get("id")) == active_id for c in loaded):
-                active_id = None
+            if not self._ui_state_path.exists():
+                return
+            payload = json.loads(self._ui_state_path.read_text(encoding="utf-8-sig") or "{}")
+            if not isinstance(payload, dict):
+                return
+            if "think_enabled" in payload:
+                self._saved_think_enabled = bool(payload.get("think_enabled"))
+                self._pending_think_sync_from_saved = True
         except Exception:
-            loaded = []
-            active_id = None
-        return loaded, active_id
+            self._saved_think_enabled = None
+            self._pending_think_sync_from_saved = False
+
+    def _save_ui_state(self) -> None:
+        try:
+            self._ui_state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"think_enabled": bool(self.think_toggle.isChecked())}
+            self._ui_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
     def _save_chat_sessions(self) -> None:
         self._sync_active_session_from_history()
         try:
-            self._sessions_dir.mkdir(parents=True, exist_ok=True)
-            persisted_ids: set[str] = set()
-            persisted_meta: list[dict] = []
-
-            for chat in self._chat_sessions:
-                if bool(chat.get("incognito", False)):
-                    continue
-                chat_id = str(chat.get("id") or "").strip()
-                if not chat_id:
-                    continue
-                persisted_ids.add(chat_id)
-                payload = {
-                    "id": chat_id,
-                    "title": str(chat.get("title") or "Чат"),
-                    "incognito": False,
-                    "created_at": str(chat.get("created_at") or self._now_iso()),
-                    "updated_at": str(chat.get("updated_at") or self._now_iso()),
-                    "history": self._history_to_serializable(chat.get("history") or []),
-                }
-                chat_path = self._chat_payload_path(chat_id)
-                chat_path.parent.mkdir(parents=True, exist_ok=True)
-                chat_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-                persisted_meta.append(
-                    {
-                        "id": payload["id"],
-                        "title": payload["title"],
-                        "created_at": payload["created_at"],
-                        "updated_at": payload["updated_at"],
-                    }
-                )
-
-            for child in self._sessions_dir.iterdir():
-                if not child.is_dir():
-                    continue
-                if child.name in persisted_ids:
-                    continue
-                shutil.rmtree(child, ignore_errors=True)
-
             active_chat = self._active_chat()
             active_id = None
             if active_chat and not bool(active_chat.get("incognito", False)):
                 active_id = str(active_chat.get("id") or "") or None
-            index_payload = {"version": 2, "active_chat_id": active_id, "chats": persisted_meta}
-            self._sessions_index_path.write_text(json.dumps(index_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            save_chat_sessions(self._sessions_dir, self._sessions_index_path, self._chat_sessions, active_id)
         except Exception:
             pass
 
     def _load_or_init_chat_sessions(self) -> None:
-        loaded: list[dict] = []
-        active_id: str | None = None
-        if self._sessions_index_path.exists():
-            try:
-                payload = json.loads(self._sessions_index_path.read_text(encoding="utf-8-sig"))
-                rows = payload.get("chats", []) if isinstance(payload, dict) else []
-                active_id_raw = payload.get("active_chat_id") if isinstance(payload, dict) else None
-                active_id = str(active_id_raw) if active_id_raw else None
-                if isinstance(rows, list):
-                    for row in rows:
-                        if not isinstance(row, dict):
-                            continue
-                        chat_id = str(row.get("id") or "").strip()
-                        if not chat_id:
-                            continue
-                        chat_payload_path = self._chat_payload_path(chat_id)
-                        if not chat_payload_path.exists():
-                            continue
-                        chat_payload = json.loads(chat_payload_path.read_text(encoding="utf-8-sig"))
-                        loaded.append(
-                            {
-                                "id": chat_id,
-                                "title": str(chat_payload.get("title") or row.get("title") or "Чат"),
-                                "incognito": False,
-                                "created_at": str(chat_payload.get("created_at") or row.get("created_at") or self._now_iso()),
-                                "updated_at": str(chat_payload.get("updated_at") or row.get("updated_at") or self._now_iso()),
-                                "history": self._history_from_serializable(chat_payload.get("history")),
-                            }
-                        )
-            except Exception:
-                loaded = []
-
-        if not loaded:
-            legacy_loaded, legacy_active = self._load_legacy_sessions()
-            loaded = legacy_loaded
-            active_id = legacy_active
-
+        loaded, _active_id = load_chat_sessions(self._sessions_dir, self._sessions_index_path, self._legacy_sessions_path)
         self._chat_sessions = loaded
         # Always start with no active chat selected.
         self._active_chat_id = None
@@ -1483,6 +942,7 @@ class MainWindow(QMainWindow):
 
     def _close_chat_settings_panel(self) -> None:
         self._settings_chat_id = None
+        self.chat_settings_title.setText("Настройки чата")
         self.chat_settings_panel.setVisible(False)
 
     def _show_chat_item_menu(self, chat_id: str, anchor: QWidget) -> None:
@@ -1566,12 +1026,14 @@ class MainWindow(QMainWindow):
         if self._thread and self._thread.isRunning():
             QMessageBox.information(self, "Подожди", "Сначала останови или дождись завершения генерации.")
             return
+        self._close_chat_settings_panel()
         self._sync_active_session_from_history()
         chat = self._new_chat_payload(incognito=False)
         self._chat_sessions.append(chat)
         self._active_chat_id = str(chat["id"])
         self._refresh_chat_selector()
         self._apply_active_chat_to_ui(scroll_to_bottom=True)
+        self._close_chat_settings_panel()
         self._save_chat_sessions()
         if self._chats_drawer_open:
             self._set_chats_drawer_open(False, animated=True)
@@ -1694,21 +1156,21 @@ class MainWindow(QMainWindow):
                 pass
         if self._thread and self._thread.isRunning():
             self._thread.quit()
-            if not self._thread.wait(1800):
+            if not self._thread.wait(650):
                 self._thread.terminate()
-                self._thread.wait(500)
-        try:
-            mm = getattr(self.brain, "mm", None)
-            if mm and hasattr(mm, "shutdown"):
-                # Fully stop background memory workers to avoid post-exit CPU load.
-                mm.shutdown(wait=True, cancel_futures=True)
-        except Exception:
-            pass
+                self._thread.wait(180)
         self._save_chat_sessions()
         super().closeEvent(event)
         app = QApplication.instance()
         if app:
             app.quit()
+        try:
+            # Safety net: force process exit if non-daemon background threads keep it alive.
+            killer = threading.Timer(1.2, lambda: os._exit(0))
+            killer.daemon = True
+            killer.start()
+        except Exception:
+            pass
 
     @Slot()
     def _toggle_chats_drawer(self) -> None:
@@ -2768,7 +2230,7 @@ class MainWindow(QMainWindow):
         is_incognito = bool(chat.get("incognito", False)) if chat else False
         if not is_incognito:
             try:
-                self.brain.mm.register_assistant_feedback(
+                self.api.register_feedback(
                     user_text=self._nearest_user_text_before(msg_index),
                     assistant_text=text,
                     feedback=norm_rating,
@@ -2960,6 +2422,22 @@ class MainWindow(QMainWindow):
         if not text:
             return
 
+        cmd = text.lower()
+        if cmd in {"/nothink", "/think"}:
+            target = cmd == "/think"
+            try:
+                actual = self.api.set_thinking_enabled(target)
+                self.think_toggle.blockSignals(True)
+                self.think_toggle.setChecked(bool(actual))
+                self.think_toggle.blockSignals(False)
+                self._save_ui_state()
+                self._append_system("Мысли: включены." if actual else "Мысли: выключены.")
+                self.input.clear()
+                self._set_status("Готово")
+            except ApiClientError as exc:
+                QMessageBox.warning(self, "API", str(exc))
+            return
+
         if not self._active_chat():
             self._sync_active_session_from_history()
             chat = self._new_chat_payload(incognito=False)
@@ -3124,7 +2602,13 @@ class MainWindow(QMainWindow):
         self._thread = QThread()
         chat = self._active_chat()
         store_turn = not bool(chat.get("incognito", False)) if chat else True
-        self._worker = ReplyWorker(self.brain, user_text=user_text, store_turn=store_turn)
+        self._request_primary_model = str(self.model_combo.currentText() or self.api.get_runtime_model() or "").strip()
+        self._worker = ReplyWorker(
+            self.api,
+            user_text=user_text,
+            store_turn=store_turn,
+            think=bool(self.think_toggle.isChecked()),
+        )
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
@@ -3209,17 +2693,24 @@ class MainWindow(QMainWindow):
             self._append_ai(res.text, stat_line, thinking=res.thinking)
         self._save_chat_sessions()
 
-        if ms:
-            self.sum_ms += ms
-        if decode_ms:
-            self.sum_decode_ms += decode_ms
-        self.sum_eval += gen
-        self.sum_prompt += prompt
-        self.sum_tps += tps
-        self.n_answers += 1
+        served_model = str(res.model or stats.get("served_model") or "").strip()
+        primary_model = str(self._request_primary_model or self.model_combo.currentText() or "").strip()
+        should_count = (not primary_model) or (not served_model) or (served_model == primary_model)
+        if should_count:
+            if ms:
+                self.sum_ms += ms
+            if decode_ms:
+                self.sum_decode_ms += decode_ms
+            self.sum_eval += gen
+            self.sum_prompt += prompt
+            self.sum_tps += tps
+            self.n_answers += 1
 
         self._update_side_stats()
         self._tick_realtime_stats()
+        actual_model = served_model
+        self._sync_model_combo_to(actual_model)
+        self._update_model_label(actual_model)
         self._set_status("\u0413\u043e\u0442\u043e\u0432\u043e")
         if self.voice_auto_tts.isChecked():
             try:
@@ -3287,5 +2778,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
 

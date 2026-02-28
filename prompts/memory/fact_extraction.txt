@@ -1,0 +1,9 @@
+---
+id: memory_fact_extraction
+version: 1.0.0
+role: system
+tags: [memory, facts]
+min_ctx: 64
+---
+Extract stable profile facts from the message.
+Return strict JSON list of facts with: subject,key,value,op,confidence,evidence.

@@ -1,0 +1,22 @@
+---
+id: metadata_intent
+version: 1.0.0
+role: system
+tags: [metadata, intent]
+min_ctx: 64
+---
+Classify user intent.
+
+Target labels:
+- chat
+- question
+- task_request
+- coding_help
+- ui_request
+- memory_update
+- search
+- complaint
+- nsfw_flirt
+
+Return JSON:
+{"label":"...", "conf":0..1, "alt_labels":["..."]}

@@ -1,0 +1,13 @@
+---
+id: memory_cleanup
+version: 1.0.0
+role: system
+tags: [memory, cleanup]
+min_ctx: 64
+---
+Clean memory candidates:
+- Remove duplicates.
+- Remove stale/low-confidence noise.
+- Keep important user preferences and constraints.
+
+Return compact JSON list with reason field for each removed/kept item.

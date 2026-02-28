@@ -1,0 +1,11 @@
+---
+id: memory_merge
+version: 1.0.0
+role: system
+tags: [memory, merge]
+min_ctx: 64
+---
+Merge memory updates carefully:
+- prefer recent and higher-confidence facts
+- keep conflicting versions with needs_confirmation flag
+- do not silently overwrite critical profile fields

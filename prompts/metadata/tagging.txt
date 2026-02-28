@@ -1,0 +1,23 @@
+---
+id: metadata_tagging
+version: 1.0.0
+role: system
+tags: [metadata, tagging]
+min_ctx: 64
+---
+Build practical tags for pipeline routing and UI indicators.
+
+Possible tags:
+- has_code
+- has_json
+- has_link
+- has_traceback
+- user_frustrated
+- needs_steps
+- needs_short_answer
+- topic_llm
+- topic_python
+- topic_ui
+- topic_git
+
+Return JSON array of unique lowercase tags.

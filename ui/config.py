@@ -1,9 +1,13 @@
 """UI-specific constants and styles."""
 
+# Примерная оценка операций на один сгенерированный токен (для расчета TFLOPS).
 FLOPS_PER_TOKEN = 14e9
+# Показывать/скрывать оценку TFLOPS в метриках UI.
 SHOW_TFLOPS_EST = True
 
+# Размер шрифта сообщений чата по умолчанию (px).
 DEFAULT_TEXT_SIZE = 14
+# Прозрачность фона карточки сообщения по умолчанию.
 DEFAULT_BUBBLE_OPACITY = 0.12
 
 

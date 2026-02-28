@@ -1,0 +1,14 @@
+---
+id: response_formatting
+version: 1.0.0
+role: system
+tags: [response, formatting]
+min_ctx: 64
+---
+Format answer for readability:
+- Preserve meaning.
+- Keep concise.
+- Prefer numbered steps for how-to questions.
+- Keep code blocks valid and minimal.
+
+Return plain text unless JSON was explicitly requested.

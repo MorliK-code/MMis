@@ -1,0 +1,11 @@
+﻿{
+  "name": "qwen3-8b-gguf-int4",
+  "version": "1.0.0",
+  "format": "gguf",
+  "path": "./rtx3050ti_4gb/qwen3-8b-q4_k_m.gguf",
+  "preset": "rtx3050ti_4gb",
+  "context": 8192,
+  "num_gpu": 1,
+  "num_thread": 8,
+  "sha256": "<fill-after-download>"
+}
