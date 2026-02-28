@@ -7,6 +7,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from config.logging_config import setup_logging
 from config.paths import LOGS_DIR
 
 
@@ -22,13 +23,19 @@ _CONFIGURED = False
 
 def get_logger(name: str) -> logging.Logger:
     """Return project logger (kept for backward compatibility)."""
-    return logging.getLogger(name)
+    raw = str(name or "").strip()
+    return logging.getLogger(_map_logger_name(raw))
 
 
 def configure_logging(config: LoggingConfig | None = None) -> None:
     """Configure root logging once with sane defaults."""
     global _CONFIGURED
     if _CONFIGURED:
+        return
+
+    if config is None:
+        setup_logging()
+        _CONFIGURED = True
         return
 
     cfg = config or _config_from_env()
@@ -74,6 +81,25 @@ def _config_from_env() -> LoggingConfig:
     use_colors = use_colors_raw in {"1", "true", "yes", "on"}
     log_file: str | Path | None = Path(file_raw).expanduser() if file_raw else None
     return LoggingConfig(level=level, log_file=log_file, use_colors=use_colors)
+
+
+def _map_logger_name(name: str) -> str:
+    raw = str(name or "").strip()
+    if not raw:
+        return "app"
+
+    low = raw.lower()
+    for prefix in ("llm", "memory", "tools", "ui"):
+        if low == prefix or low.startswith(prefix + "."):
+            return raw
+
+    if low.startswith("modules."):
+        return f"tools.{raw}"
+    if low.startswith("metadata.") or low.startswith("memory."):
+        return f"memory.{raw}"
+    if low.startswith("api.") or low == "api" or low.startswith("ui.") or low in {"ui_console", "ui_pyside6"}:
+        return f"ui.{raw}"
+    return raw
 
 
 def _build_formatter(*, use_colors: bool) -> logging.Formatter:

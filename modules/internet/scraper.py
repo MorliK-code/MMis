@@ -5,12 +5,17 @@ import re
 import time
 import urllib.robotparser
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from utils.cache import DiskTTLCache
+from utils.logger import get_logger
+
 
 _USER_AGENT = "MMisBot/1.0 (+https://local.mmis)"
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -56,11 +61,26 @@ class WebScraper:
         retries: int = 1,
         max_bytes: int = 1_500_000,
         respect_robots: bool = True,
+        cache_ttl_s: int = 1800,
+        cache_dir: str | Path | None = None,
+        use_disk_cache: bool = True,
     ):
         self.timeout_s = max(3, int(timeout_s))
         self.retries = max(0, int(retries))
         self.max_bytes = max(50_000, int(max_bytes))
         self.respect_robots = bool(respect_robots)
+        self.cache_ttl_s = max(60, int(cache_ttl_s))
+        self._disk_cache = DiskTTLCache(
+            namespace="internet_scraper_fetch",
+            root=cache_dir,
+            default_ttl_s=self.cache_ttl_s,
+            max_memory_entries=512,
+            enabled=bool(use_disk_cache),
+        )
+        try:
+            self._disk_cache.purge_expired(max_files=800)
+        except Exception as exc:
+            LOGGER.debug("scraper cache purge skipped: %s", exc)
 
     def fetch(self, url: str) -> str:
         html_text, _, _, _ = self._fetch_with_meta(url)
@@ -131,6 +151,17 @@ class WebScraper:
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("only http/https URLs are allowed")
 
+        cache_key = f"{target}|{self.max_bytes}|{int(self.respect_robots)}"
+        cached = self._disk_cache.get(cache_key)
+        if isinstance(cached, dict):
+            html_text = str(cached.get("html") or "")
+            status = int(cached.get("status") or 200)
+            content_type = str(cached.get("content_type") or "")
+            final_url = str(cached.get("final_url") or target)
+            if html_text:
+                LOGGER.debug("scraper cache hit disk url=%s", target)
+                return html_text, status, content_type, final_url
+
         if self.respect_robots and not self._is_allowed_by_robots(target):
             raise PermissionError(f"robots.txt disallows URL: {target}")
 
@@ -148,6 +179,19 @@ class WebScraper:
                     status = int(getattr(resp, "status", 200) or 200)
                     content_type = str(resp.headers.get("Content-Type", ""))
                     html_text = payload.decode("utf-8", errors="ignore")
+                    try:
+                        self._disk_cache.set(
+                            cache_key,
+                            {
+                                "html": html_text,
+                                "status": status,
+                                "content_type": content_type,
+                                "final_url": final_url,
+                            },
+                            ttl_s=self.cache_ttl_s,
+                        )
+                    except Exception as exc:
+                        LOGGER.debug("scraper disk cache set failed: %s", exc)
                     return html_text, status, content_type, final_url
             except Exception as exc:
                 last_error = exc

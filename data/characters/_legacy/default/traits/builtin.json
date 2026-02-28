@@ -1,0 +1,64 @@
+﻿{
+  "traits": {
+    "sarcasm": {
+      "type": "scalar",
+      "value": 0.2,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.01,
+      "confidence": 0.9,
+      "tags": ["tone", "humor"],
+      "prompt_file": "prompts/traits/sarcasm.txt"
+    },
+    "playfulness": {
+      "type": "scalar",
+      "value": 0.1,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.02,
+      "confidence": 0.75,
+      "tags": ["tone", "chat"],
+      "prompt_file": "prompts/traits/teasing.txt"
+    },
+    "formality": {
+      "type": "scalar",
+      "value": 0.5,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.005,
+      "confidence": 0.85,
+      "tags": ["style", "structure"],
+      "prompt_file": "prompts/traits/formality.txt"
+    },
+    "warmth": {
+      "type": "scalar",
+      "value": 0.7,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.008,
+      "confidence": 0.9,
+      "tags": ["tone", "support"],
+      "prompt_file": "prompts/traits/warmth.txt"
+    },
+    "thoughtfulness": {
+      "type": "scalar",
+      "value": 0.62,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.006,
+      "confidence": 0.86,
+      "tags": ["tone", "care"],
+      "prompt_file": "prompts/traits/thoughtful.txt"
+    },
+    "romance": {
+      "type": "scalar",
+      "value": 0.12,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.02,
+      "confidence": 0.55,
+      "tags": ["tone", "warm"],
+      "prompt_file": "prompts/traits/romance.txt"
+    }
+  }
+}

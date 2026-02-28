@@ -11,6 +11,10 @@ from memory.profile_store import AssistantProfileStore, UserProfileStore
 from memory.short_memory import ShortMemory
 from memory.vector_store import VectorStore
 from prompt_engine.prompt_registry import PromptRegistry
+from utils.logger import get_logger, log_json
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,19 @@ class MemoryManager:
             }
         )
         event_id = str(event.get("event_id") or "")
+        log_json(
+            LOGGER,
+            "memory_ingest_message",
+            event_id=event_id,
+            role=role_norm,
+            text_chars=len(content),
+            tags=len(tags),
+            lang=lang,
+            intent=intent,
+            emotion=emotion,
+            model=model,
+            source=source,
+        )
 
         self.short_memory.append(
             {
@@ -238,9 +255,21 @@ class MemoryManager:
         combined = self._dedupe_items(short_ranked + long_ranked)
         combined = self._apply_retrieval_prompt(combined, threshold=threshold)
         combined.sort(key=lambda x: float(x.score), reverse=True)
-        return combined[:limit]
+        out = combined[:limit]
+        log_json(
+            LOGGER,
+            "memory_retrieve",
+            query_chars=len(text),
+            requested_k=limit,
+            threshold=round(float(threshold), 3),
+            short_hits=len(short_ranked),
+            vector_hits=len(long_ranked),
+            returned=len(out),
+        )
+        return out
 
     def write_facts(self, facts: list[Fact]) -> None:
+        wrote = 0
         for fact in list(facts or []):
             if not isinstance(fact, Fact):
                 continue
@@ -297,6 +326,9 @@ class MemoryManager:
                     "tags": tags,
                 }
             )
+            wrote += 1
+        if wrote:
+            log_json(LOGGER, "memory_write_facts", facts=wrote)
 
     def build_context_pack(
         self,

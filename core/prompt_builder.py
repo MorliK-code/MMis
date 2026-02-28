@@ -310,6 +310,8 @@ class PromptBuilder:
         ]
         personality = _normalize_text(state.get("active_personality_id") or state.get("personality") or "default")
         lines.append(f"- active_personality: {personality}")
+        character = _normalize_text(state.get("active_character_id") or state.get("character") or personality)
+        lines.append(f"- active_character: {character}")
         blend = _as_dict(state.get("personality_blend"))
         if blend and bool(blend.get("active")):
             lines.append(

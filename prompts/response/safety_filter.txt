@@ -5,14 +5,14 @@ role: system
 tags: [response, safety]
 min_ctx: 64
 ---
-Check response draft for policy and safety issues.
+Проверь черновик ответа на соответствие политике и требованиям безопасности.
 
-If unsafe:
-- explain short reason
-- provide safe alternative
+Если ответ небезопасен:
+- кратко объясни причину
+- предложи безопасную альтернативу
 
-If safe:
-- return unchanged content
+Если ответ безопасен:
+- верни содержимое без изменений
 
-Return JSON:
+Возврат JSON:
 {"safe":true|false, "reason":"", "output":"..."}

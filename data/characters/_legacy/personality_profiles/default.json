@@ -1,10 +1,12 @@
-{
+﻿{
   "id": "default",
-  "name": "Базовая",
-  "version": "1.0.0",
-  "system_prompt": "system/personality_default.txt",
-  "style_prompt": "system/style_default.txt",
-  "rules_prompt": "system/rules_default.txt",
+  "name": "Default",
+  "version": "1.1.0",
+  "legacy": true,
+  "character_template": "../default/character.json",
+  "system_prompt": "legacy/system/personality_default.txt",
+  "style_prompt": "legacy/system/style_default.txt",
+  "rules_prompt": "legacy/system/rules_default.txt",
   "voice_style": "neutral",
   "llm_profile": "BALANCED",
   "traits": {

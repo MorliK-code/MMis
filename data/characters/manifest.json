@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "active_character_id": "asya",
+  "characters": [
+    {
+      "id": "asya",
+      "name": "Asya",
+      "enabled": true
+    }
+  ],
+  "updated_at": 1772265684.1994836
+}

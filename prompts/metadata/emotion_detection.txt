@@ -5,9 +5,9 @@ role: system
 tags: [metadata, emotion]
 min_ctx: 64
 ---
-Classify user emotion for response style adaptation.
+Классифицируй эмоцию пользователя для адаптации стиля ответа.
 
-Labels:
+Метки:
 - neutral
 - positive
 - excited
@@ -16,6 +16,17 @@ Labels:
 - angry
 - sad
 - playful
+- tired
+- stressed
+- anxious
+- disappointed
+- sarcastic
+- curious
+- focused
+- overwhelmed
+- grateful
+- bored
 
-Return JSON:
-{"label":"...", "intensity":0..1, "scores":{"label":score}}
+Верни JSON: 
+
+{"label": "...","intensity": 0..1,"scores": {"label": score}}

@@ -7,12 +7,17 @@ import re
 import threading
 import time
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
 
+from utils.cache import DiskTTLCache
+from utils.logger import get_logger
+
 
 _USER_AGENT = "MMisBot/1.0 (+https://local.mmis)"
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -32,11 +37,29 @@ class SearchResult:
 
 
 class SearchClient:
-    def __init__(self, *, cache_ttl_s: int = 900, endpoint: str | None = None):
+    def __init__(
+        self,
+        *,
+        cache_ttl_s: int = 900,
+        endpoint: str | None = None,
+        cache_dir: str | Path | None = None,
+        use_disk_cache: bool = True,
+    ):
         self.cache_ttl_s = max(60, int(cache_ttl_s))
         self.endpoint = str(endpoint or "").strip()
         self._cache: dict[str, tuple[float, list[SearchResult]]] = {}
         self._lock = threading.RLock()
+        self._disk_cache = DiskTTLCache(
+            namespace="internet_search",
+            root=cache_dir,
+            default_ttl_s=self.cache_ttl_s,
+            max_memory_entries=1024,
+            enabled=bool(use_disk_cache),
+        )
+        try:
+            self._disk_cache.purge_expired(max_files=800)
+        except Exception as exc:
+            LOGGER.debug("search cache purge skipped: %s", exc)
 
     def search(
         self,
@@ -145,16 +168,39 @@ class SearchClient:
         with self._lock:
             row = self._cache.get(key)
             if row is None:
-                return None
-            expires, data = row
-            if expires < now:
-                self._cache.pop(key, None)
-                return None
-            return list(data)
+                data = None
+            else:
+                expires, data = row
+                if expires < now:
+                    self._cache.pop(key, None)
+                    data = None
+                else:
+                    LOGGER.debug("search cache hit memory")
+                    return list(data)
+
+        disk_hit = self._disk_cache.get(key)
+        if not isinstance(disk_hit, list):
+            return None
+        out: list[SearchResult] = []
+        for row in disk_hit:
+            if isinstance(row, dict):
+                item = _search_result_from_dict(row)
+                if item is not None:
+                    out.append(item)
+        if not out:
+            return None
+        with self._lock:
+            self._cache[key] = (time.time() + self.cache_ttl_s, list(out))
+        LOGGER.debug("search cache hit disk")
+        return out
 
     def _cache_set(self, key: str, data: list[SearchResult]) -> None:
         with self._lock:
             self._cache[key] = (time.time() + self.cache_ttl_s, list(data))
+        try:
+            self._disk_cache.set(key, [x.to_dict() for x in list(data or [])], ttl_s=self.cache_ttl_s)
+        except Exception as exc:
+            LOGGER.debug("search disk cache set failed: %s", exc)
 
 
 def search(query: str, recency_days: int | None = None, domain_filter: list[str] | None = None, k: int = 5) -> list[SearchResult]:
@@ -209,6 +255,23 @@ def _domain_match(host: str, domains: list[str]) -> bool:
     if not target:
         return False
     return any(target == d or target.endswith(f".{d}") for d in domains)
+
+
+def _search_result_from_dict(row: dict[str, Any]) -> SearchResult | None:
+    if not isinstance(row, dict):
+        return None
+    url = str(row.get("url") or "").strip()
+    if not url:
+        return None
+    return SearchResult(
+        title=str(row.get("title") or ""),
+        snippet=str(row.get("snippet") or ""),
+        url=url,
+        source=str(row.get("source") or ""),
+        published_date=str(row.get("published_date") or ""),
+        score=float(row.get("score") or 0.0),
+        raw=dict(row.get("raw") or {}),
+    )
 
 
 def _rank_results(items: list[SearchResult], query: str, recency_days: int | None) -> list[SearchResult]:

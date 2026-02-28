@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,8 @@ from config.paths import BASE_DIR, DATA_DIR
 DEFAULT_COOLDOWN_SEC = 90.0
 DEFAULT_MIN_CONFIDENCE = 0.65
 DEFAULT_BLEND_STEPS = 4
+LEGACY_PERSONALITIES_DIR = DATA_DIR / "personalities"
+DEFAULT_PERSONALITIES_DIR = DATA_DIR / "characters" / "_legacy" / "personality_profiles"
 
 
 @dataclass(frozen=True)
@@ -77,11 +80,12 @@ class PersonalityEngine:
         min_confidence: float = DEFAULT_MIN_CONFIDENCE,
         blend_steps: int = DEFAULT_BLEND_STEPS,
     ):
-        self.profiles_dir = Path(profiles_dir).expanduser() if profiles_dir is not None else (DATA_DIR / "personalities")
+        self.profiles_dir = Path(profiles_dir).expanduser() if profiles_dir is not None else DEFAULT_PERSONALITIES_DIR
         self.default_personality_id = str(default_personality_id or "default").strip().lower() or "default"
         self.cooldown_sec = max(0.0, float(cooldown_sec))
         self.min_confidence = max(0.0, min(1.0, float(min_confidence)))
         self.blend_steps = max(1, int(blend_steps))
+        self._migrate_legacy_profiles()
         self._profiles = self._load_profiles()
 
     def reload(self) -> None:
@@ -247,6 +251,30 @@ class PersonalityEngine:
             loaded[self.default_personality_id] = defaults["default"]
         return loaded
 
+    def _migrate_legacy_profiles(self) -> None:
+        legacy = LEGACY_PERSONALITIES_DIR
+        target = self.profiles_dir
+        if not legacy.exists() or not legacy.is_dir():
+            return
+        target.mkdir(parents=True, exist_ok=True)
+        for path in sorted(legacy.glob("*.json")):
+            dst = target / path.name
+            if dst.exists():
+                continue
+            try:
+                shutil.move(str(path), str(dst))
+            except Exception:
+                try:
+                    dst.write_text(path.read_text(encoding="utf-8-sig"), encoding="utf-8")
+                    path.unlink()
+                except Exception:
+                    continue
+        try:
+            if legacy.exists() and legacy.is_dir() and not any(legacy.iterdir()):
+                legacy.rmdir()
+        except Exception:
+            pass
+
     def _parse_profile_file(self, path: Path) -> PersonalityProfile | None:
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -277,9 +305,9 @@ class PersonalityEngine:
             id=pid,
             name=str(payload.get("name") or pid).strip() or pid,
             version=str(payload.get("version") or "0.0.0").strip() or "0.0.0",
-            system_prompt=_normalize_prompt_ref(payload.get("system_prompt"), "system/personality_default.txt"),
-            style_prompt=_normalize_prompt_ref(payload.get("style_prompt"), "system/style_default.txt"),
-            rules_prompt=_normalize_prompt_ref(payload.get("rules_prompt"), "system/rules_default.txt"),
+            system_prompt=_normalize_prompt_ref(payload.get("system_prompt"), "legacy/system/personality_default.txt"),
+            style_prompt=_normalize_prompt_ref(payload.get("style_prompt"), "legacy/system/style_default.txt"),
+            rules_prompt=_normalize_prompt_ref(payload.get("rules_prompt"), "legacy/system/rules_default.txt"),
             voice_style=str(payload.get("voice_style") or "neutral").strip() or "neutral",
             llm_profile=str(payload.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED",
             traits=traits,
@@ -393,9 +421,9 @@ def _built_in_profiles() -> dict[str, PersonalityProfile]:
             id="default",
             name="Default",
             version="1.0.0",
-            system_prompt="system/personality_default.txt",
-            style_prompt="system/style_default.txt",
-            rules_prompt="system/rules_default.txt",
+            system_prompt="legacy/system/personality_default.txt",
+            style_prompt="legacy/system/style_default.txt",
+            rules_prompt="legacy/system/rules_default.txt",
             voice_style="neutral",
             llm_profile="BALANCED",
             traits={"sarcasm": 0.2, "flirt": 0.1, "formality": 0.5, "empathy": 0.7},
@@ -408,9 +436,9 @@ def _built_in_profiles() -> dict[str, PersonalityProfile]:
             id="flirty",
             name="Flirty",
             version="1.2.0",
-            system_prompt="system/personality_flirty.txt",
-            style_prompt="system/style_flirty.txt",
-            rules_prompt="system/rules_default.txt",
+            system_prompt="legacy/system/personality_flirty.txt",
+            style_prompt="legacy/system/style_flirty.txt",
+            rules_prompt="legacy/system/rules_default.txt",
             voice_style="warm",
             llm_profile="FAST",
             traits={"sarcasm": 0.55, "flirt": 0.8, "formality": 0.2, "empathy": 0.7},
@@ -423,9 +451,9 @@ def _built_in_profiles() -> dict[str, PersonalityProfile]:
             id="strict",
             name="Strict",
             version="1.1.0",
-            system_prompt="system/personality_strict.txt",
-            style_prompt="system/style_strict.txt",
-            rules_prompt="system/rules_default.txt",
+            system_prompt="legacy/system/personality_strict.txt",
+            style_prompt="legacy/system/style_strict.txt",
+            rules_prompt="legacy/system/rules_default.txt",
             voice_style="clear",
             llm_profile="QUALITY",
             traits={"sarcasm": 0.05, "flirt": 0.0, "formality": 0.85, "empathy": 0.55},
@@ -438,9 +466,9 @@ def _built_in_profiles() -> dict[str, PersonalityProfile]:
             id="supportive",
             name="Supportive",
             version="1.0.0",
-            system_prompt="system/personality_default.txt",
-            style_prompt="system/style_supportive.txt",
-            rules_prompt="system/rules_default.txt",
+            system_prompt="legacy/system/personality_default.txt",
+            style_prompt="legacy/system/style_supportive.txt",
+            rules_prompt="legacy/system/rules_default.txt",
             voice_style="soft",
             llm_profile="BALANCED",
             traits={"sarcasm": 0.0, "flirt": 0.05, "formality": 0.35, "empathy": 0.92},
@@ -453,7 +481,7 @@ def _built_in_profiles() -> dict[str, PersonalityProfile]:
 
 
 def ensure_default_personality_files(profiles_dir: str | Path | None = None) -> None:
-    path = Path(profiles_dir).expanduser() if profiles_dir is not None else (DATA_DIR / "personalities")
+    path = Path(profiles_dir).expanduser() if profiles_dir is not None else DEFAULT_PERSONALITIES_DIR
     path.mkdir(parents=True, exist_ok=True)
     defaults = _built_in_profiles()
     for pid, profile in defaults.items():
@@ -464,20 +492,23 @@ def ensure_default_personality_files(profiles_dir: str | Path | None = None) -> 
 
 
 def ensure_default_prompt_files() -> None:
-    root = BASE_DIR / "prompts" / "system"
+    root = BASE_DIR / "prompts" / "legacy" / "system"
     root.mkdir(parents=True, exist_ok=True)
     templates = {
-        "style_default.txt": "Tone: balanced and practical.\\nStyle: concise and clear.",
-        "style_flirty.txt": "Tone: playful but respectful.\\nStyle: short, warm, and light.",
-        "style_strict.txt": "Tone: formal and technical.\\nStyle: structured steps and precise wording.",
-        "style_supportive.txt": "Tone: calm and empathetic.\\nStyle: reassuring and practical.",
-        "rules_default.txt": "Rules:\\n- Follow safety.\\n- Be accurate.\\n- Keep answers useful.",
+        "personality_default.txt": "Persona: default.\nStyle: warm, direct, and respectful.",
+        "personality_flirty.txt": "Persona: flirty.\nStyle: playful but respectful.",
+        "personality_strict.txt": "Persona: strict.\nStyle: formal and technical.",
+        "style_default.txt": "Tone: balanced and practical.\nStyle: concise and clear.",
+        "style_flirty.txt": "Tone: playful but respectful.\nStyle: short, warm, and light.",
+        "style_strict.txt": "Tone: formal and technical.\nStyle: structured steps and precise wording.",
+        "style_supportive.txt": "Tone: calm and empathetic.\nStyle: reassuring and practical.",
+        "rules_default.txt": "Rules:\n- Follow safety.\n- Be accurate.\n- Keep answers useful.",
     }
     for name, text in templates.items():
         out = root / name
         if out.exists():
             continue
-        out.write_text(text + "\\n", encoding="utf-8")
+        out.write_text(text + "\n", encoding="utf-8")
 
 
 __all__ = [

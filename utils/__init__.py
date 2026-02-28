@@ -1,11 +1,13 @@
 ﻿from __future__ import annotations
 
+from utils.cache import DiskTTLCache
 from utils.logger import LoggingConfig, configure_logging, get_logger
 from utils.metrics import MetricsRegistry, dump_jsonl, inc, observe, reset, safe_div, set_gauge, snapshot
 from utils.timers import Timer, measure_time, now_ms, timed_block, timeit
 from utils.validators import clamp_params, non_empty, safe_path, validate_profile_update, validate_tool_call_schema
 
 __all__ = [
+    "DiskTTLCache",
     "get_logger",
     "configure_logging",
     "LoggingConfig",

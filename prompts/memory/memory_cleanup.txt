@@ -5,9 +5,9 @@ role: system
 tags: [memory, cleanup]
 min_ctx: 64
 ---
-Clean memory candidates:
-- Remove duplicates.
-- Remove stale/low-confidence noise.
-- Keep important user preferences and constraints.
+Очисти кандидаты памяти:
+- Удали дубликаты.
+- Удали устаревший или низкоуверенный шум.
+- Сохрани важные предпочтения и ограничения пользователя.
 
-Return compact JSON list with reason field for each removed/kept item.
+Верни компактный JSON-список с полем reason для каждого удалённого или сохранённого элемента.

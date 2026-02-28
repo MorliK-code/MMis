@@ -5,10 +5,11 @@ role: system
 tags: [response, formatting]
 min_ctx: 64
 ---
-Format answer for readability:
-- Preserve meaning.
-- Keep concise.
-- Prefer numbered steps for how-to questions.
-- Keep code blocks valid and minimal.
+Отформатируй ответ для удобства чтения:
+- Размышляй коротко.
+- Сохраняй исходный смысл.
+- Пиши кратко.
+- Для вопросов формата «как сделать» предпочитай нумерованные шаги.
+- Сохраняй кодовые блоки корректными и минимальными.
 
-Return plain text unless JSON was explicitly requested.
+Возвращай обычный текст, если явно не был запрошен JSON.

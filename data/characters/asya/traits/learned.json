@@ -1,0 +1,22 @@
+{
+  "traits": {
+    "playfulness": {
+      "type": "scalar",
+      "value": 1.0,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.01,
+      "confidence": 1.0,
+      "tags": [
+        "tone",
+        "humor"
+      ],
+      "prompt_file": "prompts/traits/teasing.txt",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": 1772277987.4922352,
+      "last_used_ts": 1772277987.4922352,
+      "decay_ts": 0.0
+    }
+  }
+}

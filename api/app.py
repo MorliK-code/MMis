@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import queue
+import re
+import threading
 import time
 from pathlib import Path
 from threading import Lock
@@ -14,6 +17,7 @@ from api.schemas import (
     ChatResponse,
     FeedbackRequest,
     HealthResponse,
+    JsonModeRequest,
     MetadataResponse,
     ModelSetRequest,
     ModelsResponse,
@@ -22,10 +26,12 @@ from api.schemas import (
 from config.settings import load_config
 from core.brain import Brain
 from llm import build_provider
+from utils.logger import get_logger, log_json
 
 
 cfg = load_config()
 app = FastAPI(title="MMis API", version="2.1.0")
+LOGGER = get_logger(__name__)
 
 
 class _Runtime:
@@ -35,6 +41,7 @@ class _Runtime:
         self.brain = Brain(provider=self.provider)
         self.model = str(cfg.model_name or "").strip()
         self.thinking_enabled = bool(cfg.thinking_enabled)
+        self.json_mode_enabled = bool(cfg.json_mode_enabled)
 
         self.meta_root = Path(cfg.memory_dir) / "metadata"
         self.meta_root.mkdir(parents=True, exist_ok=True)
@@ -80,6 +87,7 @@ def health() -> HealthResponse:
             status="ok",
             model=_runtime.model,
             thinking_enabled=bool(_runtime.thinking_enabled),
+            json_mode_enabled=bool(_runtime.json_mode_enabled),
         )
 
 
@@ -97,17 +105,9 @@ def set_model(req: ModelSetRequest) -> ModelsResponse:
         raise HTTPException(status_code=400, detail="Model name is empty")
 
     with _runtime.lock:
-        models = _safe_list_models(_runtime.provider)
-        if models and target not in models:
-            raise HTTPException(status_code=404, detail=f"Model '{target}' is not available")
-
-        _runtime.model = target
-        try:
-            if hasattr(_runtime.provider, "default_model"):
-                setattr(_runtime.provider, "default_model", target)
-        except Exception:
-            pass
-
+        ok, error_text, models = _apply_runtime_model(target)
+        if not ok:
+            raise HTTPException(status_code=404, detail=error_text or f"Model '{target}' is not available")
         return ModelsResponse(runtime_model=_runtime.model, models=models)
 
 
@@ -115,7 +115,24 @@ def set_model(req: ModelSetRequest) -> ModelsResponse:
 def set_thinking(req: ThinkingRequest) -> HealthResponse:
     with _runtime.lock:
         _runtime.thinking_enabled = bool(req.enabled)
-        return HealthResponse(status="ok", model=_runtime.model, thinking_enabled=_runtime.thinking_enabled)
+        return HealthResponse(
+            status="ok",
+            model=_runtime.model,
+            thinking_enabled=_runtime.thinking_enabled,
+            json_mode_enabled=bool(_runtime.json_mode_enabled),
+        )
+
+
+@app.post("/json-mode", response_model=HealthResponse)
+def set_json_mode(req: JsonModeRequest) -> HealthResponse:
+    with _runtime.lock:
+        _runtime.json_mode_enabled = bool(req.enabled)
+        return HealthResponse(
+            status="ok",
+            model=_runtime.model,
+            thinking_enabled=bool(_runtime.thinking_enabled),
+            json_mode_enabled=_runtime.json_mode_enabled,
+        )
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -125,27 +142,55 @@ def chat(req: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Text is empty")
 
     with _runtime.lock:
+        native = _handle_native_chat_command(text)
+        if native is not None:
+            answer = str(native.get("answer") or "")
+            stats = {"served_model": _runtime.model, "native_command": True}
+            if bool(req.store_turn):
+                _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+                _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+            return ChatResponse(answer=answer, thinking="", stats=stats, model=_runtime.model)
+
+        log_json(
+            LOGGER,
+            "api_chat_start",
+            model=_runtime.model,
+            text_chars=len(text),
+            store_turn=bool(req.store_turn),
+            think=_runtime.thinking_enabled if req.think is None else bool(req.think),
+            json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
+        )
         result = _runtime.brain.handle_message(
             text,
             meta={
                 "model": _runtime.model,
                 "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
+                "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                 "store_turn": bool(req.store_turn),
                 "source": "api",
             },
         )
 
-        answer = str(result.text or "")
+        answer_raw = str(result.text or "")
+        answer, thinking = _split_visible_and_thinking(answer_raw)
         stats = dict(result.stats or {})
         stats.setdefault("served_model", _runtime.model)
         _runtime.last_stats = stats
-        _runtime.last_thinking = ""
+        _runtime.last_thinking = thinking
 
         if bool(req.store_turn):
             _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
             _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
 
-        return ChatResponse(answer=answer, thinking="", stats=stats, model=_runtime.model)
+        log_json(
+            LOGGER,
+            "api_chat_done",
+            model=_runtime.model,
+            answer_chars=len(answer),
+            thinking_chars=len(thinking),
+            stats_keys=len(list(stats.keys())),
+        )
+        return ChatResponse(answer=answer, thinking=thinking, stats=stats, model=_runtime.model)
 
 
 @app.post("/chat/stream")
@@ -156,26 +201,120 @@ def chat_stream(req: ChatRequest):
 
     def generate():
         with _runtime.lock:
-            result = _runtime.brain.handle_message(
-                text,
-                meta={
-                    "model": _runtime.model,
-                    "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
-                    "store_turn": bool(req.store_turn),
-                    "source": "api",
-                },
-            )
-            answer = str(result.text or "")
-            stats = dict(result.stats or {})
-            stats.setdefault("served_model", _runtime.model)
-            payload = {"answer": answer, "thinking": "", "stats": stats, "model": _runtime.model}
+            native = _handle_native_chat_command(text)
+            if native is not None:
+                answer = str(native.get("answer") or "")
+                stats = {"served_model": _runtime.model, "native_command": True}
+                payload = {"answer": answer, "thinking": "", "stats": stats, "model": _runtime.model}
+                if bool(req.store_turn):
+                    _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+                    _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+                for chunk in _split_chunks(answer, chunk_size=48):
+                    if chunk:
+                        yield _ndjson("chunk", chunk)
+                yield _ndjson("final", payload)
+                return
 
-            if bool(req.store_turn):
-                _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
-                _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+        events: queue.Queue[tuple[str, str]] = queue.Queue()
+        done = threading.Event()
+        state: dict[str, Any] = {"result": None, "error": ""}
+        sent_answer = 0
+        sent_thinking = 0
 
-        for chunk in _split_chunks(answer, chunk_size=48):
-            yield _ndjson("chunk", chunk)
+        def _on_answer(piece: str) -> None:
+            chunk = str(piece or "")
+            if chunk:
+                events.put(("chunk", chunk))
+
+        def _on_thinking(piece: str) -> None:
+            chunk = str(piece or "")
+            if chunk:
+                events.put(("thinking", chunk))
+
+        def _worker() -> None:
+            try:
+                with _runtime.lock:
+                    log_json(
+                        LOGGER,
+                        "api_chat_stream_start",
+                        model=_runtime.model,
+                        text_chars=len(text),
+                        store_turn=bool(req.store_turn),
+                        think=_runtime.thinking_enabled if req.think is None else bool(req.think),
+                        json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
+                    )
+                    result = _runtime.brain.handle_message(
+                        text,
+                        meta={
+                            "model": _runtime.model,
+                            "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
+                            "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
+                            "store_turn": bool(req.store_turn),
+                            "source": "api",
+                            "stream_on_answer_chunk": _on_answer,
+                            "stream_on_thinking_chunk": _on_thinking,
+                        },
+                    )
+                    state["result"] = result
+            except Exception as exc:
+                state["error"] = str(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=_worker, name="mmis-api-stream", daemon=True)
+        thread.start()
+
+        while not done.is_set() or not events.empty():
+            try:
+                kind, payload = events.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if kind == "chunk":
+                sent_answer += len(payload)
+            elif kind == "thinking":
+                sent_thinking += len(payload)
+            yield _ndjson(kind, payload)
+
+        thread.join(timeout=0.5)
+        err = str(state.get("error") or "").strip()
+        if err:
+            yield _ndjson("error", err)
+            return
+
+        result = state.get("result")
+        if result is None:
+            yield _ndjson("error", "empty_stream_result")
+            return
+
+        answer_raw = str(result.text or "")
+        answer, thinking = _split_visible_and_thinking(answer_raw)
+        stats = dict(result.stats or {})
+        stats.setdefault("served_model", _runtime.model)
+        payload = {"answer": answer, "thinking": thinking, "stats": stats, "model": _runtime.model}
+        _runtime.last_thinking = thinking
+
+        if bool(req.store_turn):
+            _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+            _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+
+        if sent_thinking == 0:
+            for t_chunk in _split_chunks(thinking, chunk_size=48):
+                if t_chunk:
+                    yield _ndjson("thinking", t_chunk)
+        if sent_answer == 0:
+            for chunk in _split_chunks(answer, chunk_size=48):
+                if chunk:
+                    yield _ndjson("chunk", chunk)
+
+        log_json(
+            LOGGER,
+            "api_chat_stream_done",
+            model=_runtime.model,
+            answer_chars=len(answer),
+            thinking_chars=len(thinking),
+            streamed_answer_chars=sent_answer,
+            streamed_thinking_chars=sent_thinking,
+        )
         yield _ndjson("final", payload)
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
@@ -211,11 +350,114 @@ def _safe_list_models(provider_obj) -> list[str]:
         return []
 
 
+def _apply_runtime_model(target: str) -> tuple[bool, str, list[str]]:
+    model = str(target or "").strip()
+    if not model:
+        return False, "Model name is empty", _safe_list_models(_runtime.provider)
+    models = _safe_list_models(_runtime.provider)
+    if models and model not in models:
+        return False, f"Model '{model}' is not available", models
+    _runtime.model = model
+    try:
+        if hasattr(_runtime.provider, "default_model"):
+            setattr(_runtime.provider, "default_model", model)
+    except Exception:
+        pass
+    if model and model not in models:
+        models = [model, *models]
+    return True, "", models
+
+
+def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
+    src = str(text or "").strip()
+    if not src.startswith("/"):
+        return None
+
+    parts = src.split(maxsplit=1)
+    cmd = str(parts[0] or "").strip().lower()
+    arg = str(parts[1] or "").strip() if len(parts) > 1 else ""
+
+    if cmd in {"/help", "/commands"}:
+        return {
+            "answer": (
+                "Native API commands:\n"
+                "/health\n/models\n/model [name]\n/think\n/nothink\n/json\n/nojson\n/help"
+            )
+        }
+    if cmd == "/health":
+        return {
+            "answer": (
+                f"status: ok\n"
+                f"model: {_runtime.model}\n"
+                f"thinking: {'on' if _runtime.thinking_enabled else 'off'}\n"
+                f"json_mode: {'on' if _runtime.json_mode_enabled else 'off'}"
+            )
+        }
+    if cmd == "/models":
+        models = _safe_list_models(_runtime.provider)
+        current = str(_runtime.model or "").strip()
+        if current and current not in models:
+            models = [current, *models]
+        if not models:
+            return {"answer": "No models available."}
+        lines = ["Models:"]
+        for name in models:
+            mark = "*" if current and name == current else " "
+            lines.append(f"{mark} {name}")
+        return {"answer": "\n".join(lines)}
+    if cmd == "/model":
+        if not arg:
+            return {"answer": f"Current model: {_runtime.model or '—'}"}
+        ok, error_text, _models = _apply_runtime_model(arg)
+        if not ok:
+            return {"answer": error_text or "Model switch failed."}
+        return {"answer": f"Model switched to: {_runtime.model}"}
+    if cmd == "/think":
+        _runtime.thinking_enabled = True
+        return {"answer": "Thinking: on"}
+    if cmd == "/nothink":
+        _runtime.thinking_enabled = False
+        return {"answer": "Thinking: off"}
+    if cmd == "/json":
+        _runtime.json_mode_enabled = True
+        return {"answer": "JSON mode: on"}
+    if cmd == "/nojson":
+        _runtime.json_mode_enabled = False
+        return {"answer": "JSON mode: off"}
+    return None
+
+
 def _split_chunks(text: str, chunk_size: int = 64) -> list[str]:
     src = str(text or "")
     if not src:
         return [""]
     return [src[i : i + chunk_size] for i in range(0, len(src), max(1, int(chunk_size)))]
+
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", flags=re.IGNORECASE | re.DOTALL)
+_THINKING_RE = re.compile(r"<thinking>(.*?)</thinking>", flags=re.IGNORECASE | re.DOTALL)
+_REASONING_RE = re.compile(r"<reasoning>(.*?)</reasoning>", flags=re.IGNORECASE | re.DOTALL)
+
+
+def _split_visible_and_thinking(text: str) -> tuple[str, str]:
+    src = str(text or "")
+    if not src.strip():
+        return "", ""
+
+    thoughts: list[str] = []
+
+    def _collect(match: re.Match) -> str:
+        block = str(match.group(1) or "").strip()
+        if block:
+            thoughts.append(block)
+        return ""
+
+    visible = _THINK_RE.sub(_collect, src)
+    visible = _THINKING_RE.sub(_collect, visible)
+    visible = _REASONING_RE.sub(_collect, visible)
+    visible = visible.strip()
+    thinking = "\n\n".join([x for x in thoughts if x]).strip()
+    return visible, thinking
 
 
 def _ndjson(event: str, data: Any) -> bytes:

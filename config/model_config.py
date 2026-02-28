@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -31,3 +31,4 @@ MODEL_FALLBACKS = [x.strip() for x in str(os.getenv("MMIS_MODEL_FALLBACKS", ""))
 def build_ollama_options(task_type: str) -> dict:
     _ = task_type
     return {"temperature": 0.7, "num_predict": 768}
+

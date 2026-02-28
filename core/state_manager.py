@@ -21,6 +21,9 @@ class StateSnapshot:
     conversation_id: str
     turn_id: int
     mode: str
+    active_character_id: str
+    character_locked: bool
+    character_last_switch_ts: float
     active_personality_id: str
     personality_blend: dict[str, Any]
     personality_locked: bool
@@ -45,6 +48,7 @@ class StateManager:
         self,
         *,
         state_path: str | Path | None = None,
+        state_store_dir: str | Path | None = None,
         autosave: bool = True,
         history_limit: int = 120,
     ):
@@ -52,6 +56,12 @@ class StateManager:
         default_path = cfg.memory_dir / "brain_state.json"
         self.state_path = Path(state_path).expanduser() if state_path is not None else default_path
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        default_store_dir = cfg.memory_dir / "brain_state_store"
+        if state_store_dir is not None:
+            self.state_store_dir = Path(state_store_dir).expanduser()
+        else:
+            self.state_store_dir = default_store_dir
+        self.state_store_dir.mkdir(parents=True, exist_ok=True)
 
         self.autosave = bool(autosave)
         self.history_limit = max(20, int(history_limit))
@@ -64,6 +74,9 @@ class StateManager:
             "conversation_id": self._new_conversation_id(),
             "turn_id": 0,
             "mode": "chat",
+            "active_character_id": "asya",
+            "character_locked": False,
+            "character_last_switch_ts": 0.0,
             "active_personality_id": "default",
             "personality_blend": {
                 "active": False,
@@ -102,12 +115,7 @@ class StateManager:
 
     def load(self) -> None:
         with self._lock:
-            if not self.state_path.exists():
-                return
-            try:
-                payload = json.loads(self.state_path.read_text(encoding="utf-8-sig"))
-            except Exception:
-                return
+            payload = self._load_payload()
             if not isinstance(payload, dict):
                 return
             merged = self._default_state()
@@ -123,6 +131,12 @@ class StateManager:
             merged["context_tags"] = self._coerce_string_dict(merged.get("context_tags"))
             merged["cooldowns"] = self._coerce_cooldowns(merged.get("cooldowns"))
             merged["active_personality_id"] = str(merged.get("active_personality_id") or "default").strip().lower() or "default"
+            merged["active_character_id"] = str(merged.get("active_character_id") or "asya").strip().lower() or "asya"
+            merged["character_locked"] = bool(merged.get("character_locked", False))
+            try:
+                merged["character_last_switch_ts"] = float(merged.get("character_last_switch_ts") or 0.0)
+            except Exception:
+                merged["character_last_switch_ts"] = 0.0
             merged["personality_blend"] = self._coerce_personality_blend(merged.get("personality_blend"))
             merged["personality_locked"] = bool(merged.get("personality_locked", False))
             try:
@@ -138,10 +152,80 @@ class StateManager:
     def save(self) -> None:
         with self._lock:
             payload = self._to_json_safe(self._state)
+            self._save_split_state(payload)
             self.state_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+
+    def _load_payload(self) -> dict[str, Any]:
+        split_payload = self._load_split_state()
+        if split_payload:
+            return split_payload
+        if not self.state_path.exists():
+            return {}
+        try:
+            payload = json.loads(self.state_path.read_text(encoding="utf-8-sig"))
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _load_split_state(self) -> dict[str, Any]:
+        root = self.state_store_dir
+        if not root.exists():
+            return {}
+        index_path = root / "_index.json"
+        if index_path.exists():
+            try:
+                index = json.loads(index_path.read_text(encoding="utf-8-sig"))
+                keys = [str(x) for x in list(index.get("keys") or []) if str(x).strip()]
+            except Exception:
+                keys = []
+        else:
+            keys = []
+
+        if not keys:
+            keys = [p.stem for p in sorted(root.glob("*.json")) if p.name != "_index.json"]
+        if not keys:
+            return {}
+
+        payload: dict[str, Any] = {}
+        for key in keys:
+            if key.startswith("_"):
+                continue
+            part_path = root / f"{key}.json"
+            if not part_path.exists():
+                continue
+            try:
+                value = json.loads(part_path.read_text(encoding="utf-8-sig"))
+            except Exception:
+                continue
+            payload[key] = value
+        return payload
+
+    def _save_split_state(self, payload: dict[str, Any]) -> None:
+        root = self.state_store_dir
+        root.mkdir(parents=True, exist_ok=True)
+        keys = sorted(str(k) for k in payload.keys())
+        for key in keys:
+            part_path = root / f"{key}.json"
+            part_path.write_text(json.dumps(payload.get(key), ensure_ascii=False, indent=2), encoding="utf-8")
+
+        for old_path in root.glob("*.json"):
+            if old_path.name == "_index.json":
+                continue
+            if old_path.stem not in payload:
+                try:
+                    old_path.unlink()
+                except Exception:
+                    pass
+
+        index = {
+            "version": 1,
+            "updated_at": time.time(),
+            "keys": keys,
+        }
+        (root / "_index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def get(self, key: str, default=None):
         with self._lock:
@@ -177,6 +261,34 @@ class StateManager:
     def get_mode(self) -> str:
         with self._lock:
             return str(self._state.get("mode") or "chat")
+
+    def set_active_character(self, character_id: str, *, locked: bool | None = None, switch_ts: float | None = None) -> None:
+        cid = str(character_id or "asya").strip().lower() or "asya"
+        with self._lock:
+            self._state["active_character_id"] = cid
+            if locked is not None:
+                self._state["character_locked"] = bool(locked)
+            if switch_ts is not None:
+                try:
+                    self._state["character_last_switch_ts"] = float(switch_ts)
+                except Exception:
+                    self._state["character_last_switch_ts"] = time.time()
+            self._touch_action(f"character:{cid}")
+        self._autosave()
+
+    def get_active_character(self) -> str:
+        with self._lock:
+            return str(self._state.get("active_character_id") or "asya").strip().lower() or "asya"
+
+    def set_character_lock(self, locked: bool) -> None:
+        with self._lock:
+            self._state["character_locked"] = bool(locked)
+            self._touch_action("character_lock" if locked else "character_unlock")
+        self._autosave()
+
+    def get_character_lock(self) -> bool:
+        with self._lock:
+            return bool(self._state.get("character_locked", False))
 
     def set_active_personality(
         self,
@@ -397,6 +509,9 @@ class StateManager:
                 conversation_id=str(self._state.get("conversation_id") or self._new_conversation_id()),
                 turn_id=int(self._state.get("turn_id") or 0),
                 mode=self._normalize_mode(self._state.get("mode")),
+                active_character_id=str(self._state.get("active_character_id") or "asya"),
+                character_locked=bool(self._state.get("character_locked", False)),
+                character_last_switch_ts=float(self._state.get("character_last_switch_ts") or 0.0),
                 active_personality_id=str(self._state.get("active_personality_id") or "default"),
                 personality_blend=self._coerce_personality_blend(self._state.get("personality_blend")),
                 personality_locked=bool(self._state.get("personality_locked", False)),

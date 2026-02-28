@@ -20,6 +20,10 @@ from llm.provider_base import (
     ToolSpec,
     Usage,
 )
+from utils.logger import get_logger, log_json
+
+
+LOGGER = get_logger(__name__)
 
 
 def _env_str(name: str, default: str) -> str:
@@ -165,6 +169,73 @@ def _extract_tool_calls_from_text(text: str) -> list[ToolCall]:
     return []
 
 
+def _extract_thinking(message: dict[str, Any], payload: dict[str, Any] | None = None) -> str:
+    msg = dict(message or {})
+    root = dict(payload or {})
+    for key in ("thinking", "thought", "reasoning"):
+        text = _as_text(msg.get(key))
+        if text:
+            return text
+    for key in ("thinking", "thought", "reasoning"):
+        text = _as_text(root.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _wrap_thinking(text: str, thinking: str, *, trim: bool = True) -> str:
+    visible = str(text or "")
+    think = str(thinking or "")
+    if trim:
+        think = think.strip()
+    if not think:
+        return visible
+    low = visible.lower()
+    if "<think>" in low or "<thinking>" in low or "<reasoning>" in low:
+        return visible
+    if not visible.strip():
+        return f"<think>{think}</think>"
+    return f"{visible}\n<think>{think}</think>"
+
+
+def _as_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("text", "content", "value", "reasoning", "thinking"):
+            if key in value:
+                inner = _as_text(value.get(key))
+                if inner:
+                    return inner
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return ""
+    if isinstance(value, list):
+        parts = []
+        for row in value:
+            text = _as_text(row)
+            if text:
+                parts.append(text)
+        return "\n".join(parts).strip()
+    return str(value).strip()
+
+
+def _stitch_thinking_delta(prev_char: str, delta: str) -> tuple[str, str]:
+    text = str(delta or "")
+    if not text:
+        return "", str(prev_char or "")
+
+    next_prev = str(prev_char or "")
+    for ch in reversed(text):
+        if not ch.isspace():
+            next_prev = ch
+            break
+    return text, next_prev
+
+
 class OllamaProvider(LLMProviderBase):
     def __init__(
         self,
@@ -189,12 +260,37 @@ class OllamaProvider(LLMProviderBase):
         if not model:
             raise RuntimeError("Ollama model is not configured.")
 
+        log_json(
+            LOGGER,
+            "llm_generate_start",
+            provider="ollama",
+            model=model,
+            messages=len(list(req.messages or [])),
+            tools=len(list(req.tools or [])),
+            json_mode=bool(req.json_mode),
+            think=bool(req.metadata.get("think", False)),
+        )
         payload = self._chat_with_retry(req=req, model=model, stream=False)
         msg = dict(payload.get("message") or {})
         text = str(msg.get("content") or "")
+        thinking = _extract_thinking(msg, payload)
+        text = _wrap_thinking(text, thinking, trim=True)
         tool_calls = _parse_tool_calls_from_message(msg, text_fallback=text)
         usage = self._extract_usage(payload)
         timings = self._extract_timings(payload)
+        log_json(
+            LOGGER,
+            "llm_generate_done",
+            provider="ollama",
+            model=str(payload.get("model") or model),
+            latency_ms=round(float(timings.latency_ms or 0.0), 2),
+            prompt_tokens=int(usage.prompt_tokens or 0),
+            completion_tokens=int(usage.completion_tokens or 0),
+            total_tokens=int(usage.total_tokens or 0),
+            tool_calls=len(tool_calls),
+            text_chars=len(text),
+            thinking_chars=len(thinking),
+        )
 
         return LLMResponse(
             text=text,
@@ -210,13 +306,40 @@ class OllamaProvider(LLMProviderBase):
         if not model:
             raise RuntimeError("Ollama model is not configured.")
 
+        log_json(
+            LOGGER,
+            "llm_stream_start",
+            provider="ollama",
+            model=model,
+            messages=len(list(req.messages or [])),
+            tools=len(list(req.tools or [])),
+            json_mode=bool(req.json_mode),
+            think=bool(req.metadata.get("think", False)),
+        )
         stream = self._chat_with_retry(req=req, model=model, stream=True)
+        chunk_count = 0
+        chars = 0
+        prev_thinking_char = ""
         for raw_chunk in stream:
             chunk = _as_dict(raw_chunk)
             msg = dict(chunk.get("message") or {})
             text_delta = str(msg.get("content") or "")
+            thinking_delta = _extract_thinking(msg, chunk)
+            thinking_delta, prev_thinking_char = _stitch_thinking_delta(prev_thinking_char, thinking_delta)
+            text_delta = _wrap_thinking(text_delta, thinking_delta, trim=False)
             tool_calls_delta = _parse_tool_calls_from_message(msg, text_fallback=text_delta)
             done = bool(chunk.get("done", False))
+            chunk_count += 1
+            chars += len(text_delta)
+            if done:
+                log_json(
+                    LOGGER,
+                    "llm_stream_done",
+                    provider="ollama",
+                    model=str(chunk.get("model") or model),
+                    chunks=chunk_count,
+                    text_chars=chars,
+                )
             yield LLMChunk(
                 text_delta=text_delta,
                 tool_calls_delta=tool_calls_delta,
@@ -328,6 +451,14 @@ class OllamaProvider(LLMProviderBase):
                 return self._chat_once(req=req, model=model, stream=stream)
             except Exception as exc:
                 last_exc = exc
+                LOGGER.warning(
+                    "ollama request failed attempt=%s/%s model=%s stream=%s error=%s",
+                    attempt + 1,
+                    attempts,
+                    model,
+                    bool(stream),
+                    exc,
+                )
                 if attempt >= attempts - 1:
                     break
                 time.sleep(0.25 * (attempt + 1))
