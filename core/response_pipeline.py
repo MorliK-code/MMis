@@ -794,9 +794,14 @@ class PostprocessStage(PipelineStage):
             ctx.logs.append("stage=postprocess unwrap=safety_output")
 
         if not _looks_like_json(text):
+            before_hygiene = text
+            text = _enforce_response_hygiene(text)
+            if text != before_hygiene:
+                ctx.logs.append("stage=postprocess hygiene=applied")
             profile = str(ctx.traits.get("profile") or ctx.state.get("profile") or "default")
             text = apply_personality(text, profile=profile)
             text = _normalize_text(text)
+            text = _enforce_response_hygiene(text)
 
             add_emoji = bool(_as_dict(ctx.policies.get("postprocess")).get("add_emoji", False))
             if add_emoji:
@@ -1333,6 +1338,93 @@ def _unwrap_safety_output_json(text: str, *, preserve_json: bool) -> tuple[str, 
     if thinking:
         return f"{unwrapped}\n<think>{thinking}</think>", True
     return unwrapped, True
+
+
+_DROP_ROLE_LINE_RE = re.compile(r"^\s*(?:thinking|you|user|system)\s*>\s*", flags=re.IGNORECASE)
+_ASSISTANT_LINE_PREFIX_RE = re.compile(r"^\s*assistant\s*>\s*", flags=re.IGNORECASE)
+_MODEL_LINE_RE = re.compile(r"^\s*\[model:[^\]]+\]\s*$", flags=re.IGNORECASE)
+_THINKING_HEADER_RE = re.compile(r"^\s*\[thinking\](?:\s*[—-]\s*)?$", flags=re.IGNORECASE)
+
+
+def _enforce_response_hygiene(text: str) -> str:
+    src = _normalize_text(text)
+    if not src:
+        return ""
+    cleaned = _strip_service_markers(src)
+    cleaned = _dedupe_adjacent_blocks(cleaned)
+    return _normalize_text(cleaned)
+
+
+def _strip_service_markers(text: str) -> str:
+    out_lines: list[str] = []
+    for raw_line in str(text or "").split("\n"):
+        line = str(raw_line or "")
+        stripped = line.strip()
+        if not stripped:
+            out_lines.append("")
+            continue
+        if _MODEL_LINE_RE.match(stripped):
+            continue
+        if _THINKING_HEADER_RE.match(stripped):
+            continue
+        if _DROP_ROLE_LINE_RE.match(line):
+            continue
+        if _ASSISTANT_LINE_PREFIX_RE.match(line):
+            line = _ASSISTANT_LINE_PREFIX_RE.sub("", line, count=1)
+            if not line.strip():
+                continue
+        out_lines.append(line.rstrip())
+    return "\n".join(out_lines)
+
+
+def _dedupe_adjacent_blocks(text: str) -> str:
+    src = str(text or "").strip()
+    if not src:
+        return ""
+
+    paragraphs = re.split(r"\n\s*\n+", src)
+    kept: list[str] = []
+    prev_key = ""
+    for para in paragraphs:
+        p = _dedupe_adjacent_lines(para)
+        if not p:
+            continue
+        key = _dedupe_key(p)
+        if key and key == prev_key:
+            continue
+        kept.append(p)
+        prev_key = key
+
+    if not kept:
+        return ""
+    if len(kept) == 1:
+        return kept[0]
+    return "\n\n".join(kept)
+
+
+def _dedupe_adjacent_lines(text: str) -> str:
+    lines = str(text or "").split("\n")
+    kept: list[str] = []
+    prev_key = ""
+    for raw in lines:
+        line = str(raw or "").strip()
+        if not line:
+            continue
+        key = _dedupe_key(line)
+        if key and key == prev_key:
+            continue
+        kept.append(line)
+        prev_key = key
+    return _normalize_text("\n".join(kept))
+
+
+def _dedupe_key(text: str) -> str:
+    src = _normalize_text(text).lower()
+    if not src:
+        return ""
+    src = re.sub(r"[\"'`«»„“”]", "", src)
+    src = re.sub(r"[\s\.,;:!?()\[\]{}\-_/\\]+", " ", src)
+    return src.strip()
 
 
 def _as_dict(value) -> dict[str, Any]:
