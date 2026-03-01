@@ -183,7 +183,6 @@ def _extract_thinking(message: dict[str, Any], payload: dict[str, Any] | None = 
     return ""
 
 
-<<<<<<< HEAD
 def _message_log_fields(messages: list[dict[str, Any]]) -> dict[str, Any]:
     rows = list(messages or [])
     roles = [str(m.get("role") or "") for m in rows]
@@ -201,8 +200,6 @@ def _message_log_fields(messages: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 def _wrap_thinking(text: str, thinking: str, *, trim: bool = True) -> str:
     visible = str(text or "")
     think = str(thinking or "")
@@ -215,11 +212,7 @@ def _wrap_thinking(text: str, thinking: str, *, trim: bool = True) -> str:
         return visible
     if not visible.strip():
         return f"<think>{think}</think>"
-<<<<<<< HEAD
     return f"<think>{think}</think>\n{visible}"
-=======
-    return f"{visible}\n<think>{think}</think>"
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 def _as_text(value: Any) -> str:
