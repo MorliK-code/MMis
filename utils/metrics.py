@@ -1,13 +1,13 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from config.paths import LOGS_DIR
+from utils.datetime_local import now_local_ts
 
 
 def safe_div(n: float, d: float) -> float:
@@ -77,7 +77,7 @@ class MetricsRegistry:
             gauges = {k: float(v) for k, v in self._gauges.items()}
             hist = {k: _summarize(v).to_dict() for k, v in self._histograms.items()}
         return {
-            "ts": time.time(),
+            "ts": now_local_ts(),
             "counters": counters,
             "gauges": gauges,
             "histograms": hist,

@@ -9,6 +9,11 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from modules.character.dialog_policies import (
+    local_date_kyiv as dialog_local_date,
+    starts_with_greeting as dialog_starts_with_greeting,
+)
+from utils.datetime_local import now_local_iso, now_local_ts, parse_time_to_epoch, to_local_iso
 from config.settings import load_config
 
 
@@ -40,6 +45,7 @@ class StateSnapshot:
     context_stack: list[dict[str, Any]]
     last_tool_result: Any
     cooldowns: dict[str, Any]
+    address_terms: dict[str, Any]
     raw: dict[str, Any]
 
 
@@ -76,7 +82,7 @@ class StateManager:
             "mode": "chat",
             "active_character_id": "asya",
             "character_locked": False,
-            "character_last_switch_ts": 0.0,
+            "character_last_switch_ts": "",
             "active_personality_id": "default",
             "personality_blend": {
                 "active": False,
@@ -88,7 +94,7 @@ class StateManager:
                 "new_weight": 1.0,
             },
             "personality_locked": False,
-            "personality_last_switch_ts": 0.0,
+            "personality_last_switch_ts": "",
             "personality_cooldown_sec": 90.0,
             "active_goal": "",
             "quality_profile": "BALANCED",
@@ -104,12 +110,27 @@ class StateManager:
             "cooldowns": {
                 "last_user_message": "",
                 "last_user_hash": "",
-                "last_user_ts": 0.0,
+                "last_user_ts": "",
+                "prev_user_ts": "",
                 "last_assistant_message": "",
-                "last_assistant_ts": 0.0,
+                "last_assistant_ts": "",
                 "last_action": "",
-                "last_action_ts": 0.0,
+                "last_action_ts": "",
                 "repeat_count": 0,
+                "session_id": "",
+                "prev_session_id": "",
+                "greeting_date_local": "",
+                "greeting_ts": "",
+            },
+            "address_terms": {
+                "last_term_used_at": "",
+                "term_used_turn_index": 0,
+                "terms_used_count_session": 0,
+                "session_id_snapshot": "",
+                "banned_terms": [],
+                "banned_terms_until": {},
+                "last_disable_directive_ts": "",
+                "last_enable_directive_ts": "",
             },
         }
 
@@ -130,19 +151,17 @@ class StateManager:
             merged["context_stack"] = self._coerce_dict_list(merged.get("context_stack"))
             merged["context_tags"] = self._coerce_string_dict(merged.get("context_tags"))
             merged["cooldowns"] = self._coerce_cooldowns(merged.get("cooldowns"))
+            merged["address_terms"] = self._coerce_address_terms(
+                merged.get("address_terms"),
+                conversation_id=str(merged.get("conversation_id") or ""),
+            )
             merged["active_personality_id"] = str(merged.get("active_personality_id") or "default").strip().lower() or "default"
             merged["active_character_id"] = str(merged.get("active_character_id") or "asya").strip().lower() or "asya"
             merged["character_locked"] = bool(merged.get("character_locked", False))
-            try:
-                merged["character_last_switch_ts"] = float(merged.get("character_last_switch_ts") or 0.0)
-            except Exception:
-                merged["character_last_switch_ts"] = 0.0
+            merged["character_last_switch_ts"] = to_local_iso(merged.get("character_last_switch_ts"), default="")
             merged["personality_blend"] = self._coerce_personality_blend(merged.get("personality_blend"))
             merged["personality_locked"] = bool(merged.get("personality_locked", False))
-            try:
-                merged["personality_last_switch_ts"] = float(merged.get("personality_last_switch_ts") or 0.0)
-            except Exception:
-                merged["personality_last_switch_ts"] = 0.0
+            merged["personality_last_switch_ts"] = to_local_iso(merged.get("personality_last_switch_ts"), default="")
             try:
                 merged["personality_cooldown_sec"] = max(0.0, float(merged.get("personality_cooldown_sec") or 90.0))
             except Exception:
@@ -222,7 +241,7 @@ class StateManager:
 
         index = {
             "version": 1,
-            "updated_at": time.time(),
+            "updated_at": now_local_iso(),
             "keys": keys,
         }
         (root / "_index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -249,6 +268,7 @@ class StateManager:
             self._state["turn_id"] = 0
             self._state["history"] = []
             self._state["dialog_summary"] = ""
+            self._state["address_terms"] = self._coerce_address_terms({}, conversation_id=conv_id)
         self._autosave()
         return conv_id
 
@@ -269,10 +289,9 @@ class StateManager:
             if locked is not None:
                 self._state["character_locked"] = bool(locked)
             if switch_ts is not None:
-                try:
-                    self._state["character_last_switch_ts"] = float(switch_ts)
-                except Exception:
-                    self._state["character_last_switch_ts"] = time.time()
+                self._state["character_last_switch_ts"] = to_local_iso(switch_ts, default=now_local_ts())
+            elif not str(self._state.get("character_last_switch_ts") or "").strip():
+                self._state["character_last_switch_ts"] = now_local_ts()
             self._touch_action(f"character:{cid}")
         self._autosave()
 
@@ -306,10 +325,9 @@ class StateManager:
             if blend is not None:
                 self._state["personality_blend"] = self._coerce_personality_blend(blend)
             if switch_ts is not None:
-                try:
-                    self._state["personality_last_switch_ts"] = float(switch_ts)
-                except Exception:
-                    self._state["personality_last_switch_ts"] = time.time()
+                self._state["personality_last_switch_ts"] = to_local_iso(switch_ts, default=now_local_ts())
+            elif not str(self._state.get("personality_last_switch_ts") or "").strip():
+                self._state["personality_last_switch_ts"] = now_local_ts()
             self._touch_action(f"personality:{pid}")
         self._autosave()
 
@@ -395,6 +413,14 @@ class StateManager:
         with self._lock:
             return self._state.get("last_tool_result")
 
+    def set_address_terms(self, value: dict[str, Any]) -> None:
+        with self._lock:
+            self._state["address_terms"] = self._coerce_address_terms(
+                value,
+                conversation_id=str(self._state.get("conversation_id") or ""),
+            )
+        self._autosave()
+
     def push_context(self, ctx: dict[str, Any]) -> int:
         item = dict(ctx or {})
         with self._lock:
@@ -452,15 +478,27 @@ class StateManager:
 
             cooldowns = self._coerce_cooldowns(self._state.get("cooldowns"))
             digest = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
-            now = time.time()
+            now_epoch = time.time()
+            now_iso = now_local_ts()
             prev_hash = str(cooldowns.get("last_user_hash") or "")
-            prev_ts = float(cooldowns.get("last_user_ts") or 0.0)
-            repeated = digest == prev_hash and (now - prev_ts) < 3.0
+            prev_raw = cooldowns.get("last_user_ts")
+            prev_ts = parse_time_to_epoch(prev_raw, 0.0)
+            prev_session = str(cooldowns.get("session_id") or "")
+            current_session = str(self._state.get("conversation_id") or "")
+            repeated = digest == prev_hash and (now_epoch - prev_ts) < 3.0
             cooldowns["repeat_count"] = int(cooldowns.get("repeat_count") or 0) + 1 if repeated else 0
+            cooldowns["prev_user_ts"] = to_local_iso(prev_raw, default="")
+            cooldowns["prev_session_id"] = prev_session
+            cooldowns["session_id"] = current_session
             cooldowns["last_user_message"] = text
             cooldowns["last_user_hash"] = digest
-            cooldowns["last_user_ts"] = now
+            cooldowns["last_user_ts"] = now_iso
             self._state["cooldowns"] = cooldowns
+            address_terms = self._coerce_address_terms(
+                self._state.get("address_terms"),
+                conversation_id=current_session,
+            )
+            self._state["address_terms"] = address_terms
             self._touch_action("user_message")
             turn_id = int(self._state.get("turn_id") or 0)
         self._autosave()
@@ -471,6 +509,7 @@ class StateManager:
         if not text:
             return
         meta_map = dict(meta or {})
+        now_iso = now_local_ts()
         with self._lock:
             self._append_history_item(role="assistant", content=text)
             if meta_map.get("summary"):
@@ -479,8 +518,21 @@ class StateManager:
                 self._state["last_tool_result"] = meta_map.get("last_tool_result")
             cooldowns = self._coerce_cooldowns(self._state.get("cooldowns"))
             cooldowns["last_assistant_message"] = text
-            cooldowns["last_assistant_ts"] = time.time()
+            cooldowns["last_assistant_ts"] = now_iso
+            if _starts_with_greeting(text):
+                cooldowns["greeting_date_local"] = _local_today()
+                cooldowns["greeting_ts"] = now_iso
             self._state["cooldowns"] = cooldowns
+            address_terms = self._coerce_address_terms(
+                self._state.get("address_terms"),
+                conversation_id=str(self._state.get("conversation_id") or ""),
+            )
+            if isinstance(meta_map.get("address_terms"), dict):
+                address_terms = self._coerce_address_terms(
+                    meta_map.get("address_terms"),
+                    conversation_id=str(self._state.get("conversation_id") or ""),
+                )
+            self._state["address_terms"] = address_terms
             self._touch_action("assistant_message")
         self._autosave()
 
@@ -511,11 +563,11 @@ class StateManager:
                 mode=self._normalize_mode(self._state.get("mode")),
                 active_character_id=str(self._state.get("active_character_id") or "asya"),
                 character_locked=bool(self._state.get("character_locked", False)),
-                character_last_switch_ts=float(self._state.get("character_last_switch_ts") or 0.0),
+                character_last_switch_ts=parse_time_to_epoch(self._state.get("character_last_switch_ts"), 0.0),
                 active_personality_id=str(self._state.get("active_personality_id") or "default"),
                 personality_blend=self._coerce_personality_blend(self._state.get("personality_blend")),
                 personality_locked=bool(self._state.get("personality_locked", False)),
-                personality_last_switch_ts=float(self._state.get("personality_last_switch_ts") or 0.0),
+                personality_last_switch_ts=parse_time_to_epoch(self._state.get("personality_last_switch_ts"), 0.0),
                 active_goal=str(self._state.get("active_goal") or ""),
                 quality_profile=self._normalize_profile(self._state.get("quality_profile")),
                 active_tasks=[dict(x) for x in self._coerce_dict_list(self._state.get("active_tasks"))],
@@ -528,6 +580,10 @@ class StateManager:
                 context_stack=[dict(x) for x in self._coerce_dict_list(self._state.get("context_stack"))],
                 last_tool_result=self._state.get("last_tool_result"),
                 cooldowns=self._coerce_cooldowns(self._state.get("cooldowns")),
+                address_terms=self._coerce_address_terms(
+                    self._state.get("address_terms"),
+                    conversation_id=str(self._state.get("conversation_id") or ""),
+                ),
                 raw=raw,
             )
 
@@ -545,7 +601,7 @@ class StateManager:
     def _touch_action(self, action: str) -> None:
         cooldowns = self._coerce_cooldowns(self._state.get("cooldowns"))
         cooldowns["last_action"] = str(action or "")
-        cooldowns["last_action_ts"] = time.time()
+        cooldowns["last_action_ts"] = now_local_ts()
         self._state["cooldowns"] = cooldowns
 
     def _autosave(self) -> None:
@@ -616,34 +672,104 @@ class StateManager:
         base = {
             "last_user_message": "",
             "last_user_hash": "",
-            "last_user_ts": 0.0,
+            "last_user_ts": "",
+            "prev_user_ts": "",
             "last_assistant_message": "",
-            "last_assistant_ts": 0.0,
+            "last_assistant_ts": "",
             "last_action": "",
-            "last_action_ts": 0.0,
+            "last_action_ts": "",
             "repeat_count": 0,
+            "session_id": "",
+            "prev_session_id": "",
+            "greeting_date_local": "",
+            "greeting_ts": "",
         }
         data = dict(value or {})
         for key in base:
             if key in data:
                 base[key] = data.get(key)
-        try:
-            base["last_user_ts"] = float(base["last_user_ts"] or 0.0)
-        except Exception:
-            base["last_user_ts"] = 0.0
-        try:
-            base["last_assistant_ts"] = float(base["last_assistant_ts"] or 0.0)
-        except Exception:
-            base["last_assistant_ts"] = 0.0
-        try:
-            base["last_action_ts"] = float(base["last_action_ts"] or 0.0)
-        except Exception:
-            base["last_action_ts"] = 0.0
+        base["last_user_ts"] = to_local_iso(base.get("last_user_ts"), default="")
+        base["last_assistant_ts"] = to_local_iso(base.get("last_assistant_ts"), default="")
+        base["prev_user_ts"] = to_local_iso(base.get("prev_user_ts"), default="")
+        base["last_action_ts"] = to_local_iso(base.get("last_action_ts"), default="")
+        base["greeting_ts"] = to_local_iso(base.get("greeting_ts"), default="")
         try:
             base["repeat_count"] = int(base["repeat_count"] or 0)
         except Exception:
             base["repeat_count"] = 0
+        base["session_id"] = str(base.get("session_id") or "").strip()
+        base["prev_session_id"] = str(base.get("prev_session_id") or "").strip()
+        base["greeting_date_local"] = str(base.get("greeting_date_local") or "").strip()
         return base
+
+    @staticmethod
+    def _coerce_address_terms(value, *, conversation_id: str) -> dict[str, Any]:
+        row = dict(value or {})
+        out = {
+            "last_term_used_at": "",
+            "term_used_turn_index": 0,
+            "terms_used_count_session": 0,
+            "session_id_snapshot": "",
+            "banned_terms": [],
+            "banned_terms_until": {},
+            "last_disable_directive_ts": "",
+            "last_enable_directive_ts": "",
+        }
+        for key in out:
+            if key in row:
+                out[key] = row.get(key)
+
+        out["last_term_used_at"] = to_local_iso(out.get("last_term_used_at"), default="")
+        try:
+            out["term_used_turn_index"] = int(out.get("term_used_turn_index") or 0)
+        except Exception:
+            out["term_used_turn_index"] = 0
+        try:
+            out["terms_used_count_session"] = max(0, int(out.get("terms_used_count_session") or 0))
+        except Exception:
+            out["terms_used_count_session"] = 0
+        out["last_disable_directive_ts"] = to_local_iso(out.get("last_disable_directive_ts"), default="")
+        out["last_enable_directive_ts"] = to_local_iso(out.get("last_enable_directive_ts"), default="")
+
+        banned_terms: list[str] = []
+        seen_terms: set[str] = set()
+        for term in list(out.get("banned_terms") or []):
+            item = str(term or "").strip().lower()
+            if not item or item in seen_terms:
+                continue
+            seen_terms.add(item)
+            banned_terms.append(item)
+        out["banned_terms"] = banned_terms
+
+        banned_until: dict[str, Any] = {}
+        for term, marker in dict(out.get("banned_terms_until") or {}).items():
+            key = str(term or "").strip().lower()
+            if not key:
+                continue
+            banned_until[key] = marker
+        out["banned_terms_until"] = banned_until
+
+        current_session = str(conversation_id or "").strip()
+        previous_session = str(out.get("session_id_snapshot") or "").strip()
+        if current_session and previous_session and current_session != previous_session:
+            out["terms_used_count_session"] = 0
+            keep_terms: list[str] = []
+            keep_markers: dict[str, Any] = {}
+            for term in list(out.get("banned_terms") or []):
+                marker = str(out["banned_terms_until"].get(term) or "").strip()
+                if marker.startswith("session:"):
+                    continue
+                keep_terms.append(term)
+                if marker:
+                    keep_markers[term] = marker
+            out["banned_terms"] = keep_terms
+            out["banned_terms_until"] = keep_markers
+
+        if current_session:
+            out["session_id_snapshot"] = current_session
+        else:
+            out["session_id_snapshot"] = previous_session
+        return out
 
     @staticmethod
     def _coerce_personality_blend(value) -> dict[str, Any]:
@@ -689,3 +815,11 @@ class StateManager:
         if isinstance(value, (list, tuple)):
             return [cls._to_json_safe(x) for x in value]
         return str(value)
+
+
+def _local_today() -> str:
+    return str(dialog_local_date(time.time()))
+
+
+def _starts_with_greeting(text: str) -> bool:
+    return bool(dialog_starts_with_greeting(str(text or "")))

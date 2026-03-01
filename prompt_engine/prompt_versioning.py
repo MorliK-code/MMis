@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from prompt_engine.prompt_loader import PromptLoader
 from prompt_engine.prompt_registry import PromptRegistry
+from utils.datetime_local import now_local_ts, to_local_iso
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class PromptVersion:
     prompt_id: str
     version: str
     sha1: str
-    ts: float
+    ts: str
 
 
 class PromptVersioning:
@@ -37,7 +37,7 @@ class PromptVersioning:
 
     def snapshot(self) -> list[PromptVersion]:
         out: list[PromptVersion] = []
-        now = time.time()
+        now = now_local_ts()
         for key in self.registry.keys():
             entry = self.registry.get_entry(key)
             prompt = self.registry.get_prompt(key, use_cache=False, hot_reload=True)
@@ -89,7 +89,7 @@ class PromptVersioning:
             prompt_id = str(row.get("prompt_id") or "").strip()
             version = str(row.get("version") or "0.0.0").strip() or "0.0.0"
             sha1 = str(row.get("sha1") or "").strip()
-            ts = float(row.get("ts") or 0.0)
+            ts = to_local_iso(row.get("ts"), default="")
             if not key or not rel or not sha1:
                 continue
             out[key] = PromptVersion(

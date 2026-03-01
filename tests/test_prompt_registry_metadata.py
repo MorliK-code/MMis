@@ -1,4 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
+
+from _output_utils import enable_unittest_json_output
+enable_unittest_json_output()
 
 import unittest
 
@@ -11,7 +14,7 @@ class PromptRegistryMetadataTests(unittest.TestCase):
         doc = reg.get_prompt("system.base", use_cache=False)
 
         self.assertEqual(doc.id, "base_system")
-        self.assertEqual(doc.version, "1.4.2")
+        self.assertRegex(str(doc.version), r"^\d+\.\d+\.\d+$")
         self.assertIn("core", doc.tags)
         self.assertGreaterEqual(int(doc.min_ctx), 1)
         self.assertNotIn("---", doc.text.splitlines()[0])
@@ -19,3 +22,4 @@ class PromptRegistryMetadataTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

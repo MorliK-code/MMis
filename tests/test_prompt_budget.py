@@ -1,5 +1,8 @@
 ﻿from __future__ import annotations
 
+from _output_utils import enable_unittest_json_output
+enable_unittest_json_output()
+
 import unittest
 
 from core.prompt_builder import PromptBuilder
@@ -52,3 +55,4 @@ class PromptBudgetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

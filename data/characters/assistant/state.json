@@ -1,0 +1,13 @@
+{
+  "mood": "thoughtful",
+  "last_update_ts": "",
+  "active_traits": [
+    "warmth",
+    "thoughtfulness"
+  ],
+  "disabled_traits": [],
+  "counters": {
+    "banter_hits": 0,
+    "comfort_hits": 0
+  }
+}

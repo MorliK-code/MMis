@@ -190,6 +190,16 @@ class TokenBudgetManager:
         stats["total_tokens"] = _total_tokens()
         return out, stats
 
+    def apply_verbosity(self, verbosity_level: float) -> dict[str, int]:
+        """Scale selected bucket limits by dialog verbosity (0..1)."""
+        level = max(0.0, min(1.0, float(verbosity_level)))
+        return {
+            "user_profile": max(60, int(self.budget.user_profile * (0.8 + (0.6 * level)))),
+            "history": max(120, int(self.budget.recent_chat * (0.62 + (0.78 * level)))),
+            "long_summary": max(80, int(self.budget.long_summary * (0.7 + (0.7 * level)))),
+            "output": max(70, int(self.budget.output * (0.7 + (1.0 * level)))),
+        }
+
     def _bucket_limits(self) -> dict[str, int]:
         return {
             "system": int(self.budget.system_core),

@@ -92,7 +92,6 @@ def _print_help() -> None:
     print("/model               show current runtime model")
     print("/model <name>        set runtime model")
     print("/think               enable thinking")
-    print("/nothink             disable thinking")
     print("/json                enable JSON mode")
     print("/nojson              disable JSON mode")
     print("/character ...       backend character command")
@@ -188,14 +187,16 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             print(f"API error: {exc}")
         return True
 
-    if key in {"/think", "/nothink"}:
+    if key in {"/think"}:
         if not _ensure_connected_or_start(state):
             return True
         target = key == "/think"
         try:
             actual = bool(state.api.set_thinking_enabled(target))
             state.think_enabled = actual
+            state.show_thinking = actual
             print(f"Thinking: {'on' if actual else 'off'}")
+
         except ApiClientError as exc:
             state.online = False
             print(f"API error: {exc}")
@@ -450,7 +451,7 @@ class _StreamRealtimePrinter:
         if self._printed_any:
             sys.stdout.write("\n")
         if target == "thinking":
-            sys.stdout.write("thinking> ")
+            sys.stdout.write("[Thinking] ")
         else:
             sys.stdout.write("assistant> ")
         self._printed_any = True
@@ -461,7 +462,6 @@ def _sanitize_stream_text(piece: str) -> str:
     src = str(piece or "")
     if not src:
         return ""
-    # Avoid terminal line rewrites from carriage returns in streamed chunks.
     src = src.replace("\r\n", "\n").replace("\r", "\n")
     return "".join(ch for ch in src if (ch == "\n" or ch == "\t" or ord(ch) >= 32))
 

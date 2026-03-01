@@ -11,6 +11,7 @@ from memory.profile_store import AssistantProfileStore, UserProfileStore
 from memory.short_memory import ShortMemory
 from memory.vector_store import VectorStore
 from prompt_engine.prompt_registry import PromptRegistry
+from utils.datetime_local import now_local_ts, to_local_iso
 from utils.logger import get_logger, log_json
 
 
@@ -68,7 +69,7 @@ class MemoryManager:
         role: str,
         text: str,
         metadata: dict | None = None,
-        ts: float | None = None,
+        ts: float | str | None = None,
         **ids,
     ) -> None:
         content = str(text or "").strip()
@@ -76,7 +77,7 @@ class MemoryManager:
             return
         role_norm = _normalize_role(role)
         meta = dict(metadata or {})
-        now = float(ts or time.time())
+        now_iso = to_local_iso(ts, default=now_local_ts())
         tags = [str(x) for x in list(meta.get("tags") or []) if str(x).strip()]
         lang = str(meta.get("lang") or "")
         intent = str(meta.get("intent") or "")
@@ -90,7 +91,7 @@ class MemoryManager:
 
         event = self.event_store.append(
             {
-                "ts": now,
+                "ts": now_iso,
                 "type": f"{role_norm}_message",
                 "payload": {
                     "role": role_norm,
@@ -125,7 +126,7 @@ class MemoryManager:
                 "role": role_norm,
                 "type": "message",
                 "text": content,
-                "ts": now,
+                "ts": now_iso,
                 "lang": lang,
                 "intent": intent,
                 "emotion": emotion,
@@ -154,7 +155,7 @@ class MemoryManager:
                 "user_id": profile_id,
                 "event_id": event_id,
                 "source": source,
-                "ts": now,
+                "ts": now_iso,
                 "tags": tags,
             },
         )
@@ -182,7 +183,7 @@ class MemoryManager:
                     "doc_id": doc.id,
                     "event_id": event_id,
                     "source": "chat",
-                    "ts": now,
+                    "ts": now_iso,
                     "tags": tags,
                     "importance": doc.importance,
                     "confidence": doc.confidence,
@@ -307,7 +308,7 @@ class MemoryManager:
                     "user_id": "default",
                     "doc_id": doc.id,
                     "source": "fact",
-                    "ts": time.time(),
+                    "ts": now_local_ts(),
                     "tags": tags,
                     "status": status,
                     "needs_confirmation": needs_confirmation,

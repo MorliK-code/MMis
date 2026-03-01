@@ -6,7 +6,6 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.personality_engine import apply_personality
 from llm.tokenizer import estimate_tokens
 
 
@@ -107,6 +106,8 @@ class PromptBuilder:
         "Follow system rules and active policies strictly.",
         "Prefer concise, clear, and actionable replies.",
         "If context is insufficient, ask a clarifying question.",
+        "If use_term_now is false, do not use endearment address terms.",
+        "If use_term_now is true, you may use at most one short address term.",
     ]
     DEFAULT_OUTPUT_SCHEMA = (
         "Return plain text by default. "
@@ -257,36 +258,23 @@ class PromptBuilder:
         traits: dict[str, Any],
         policies: dict[str, Any],
     ) -> str:
-        profile = str(
-            traits.get("profile")
-            or state.get("profile")
-            or policies.get("profile")
+        character_prompt = _normalize_text(state.get("character_prompt_block"))
+        if character_prompt:
+            return character_prompt
+
+        character = _normalize_text(
+            state.get("active_character_id")
+            or state.get("character")
+            or traits.get("character")
+            or policies.get("character")
             or "default"
-        ).strip()
-        lines: list[str] = []
-        for key, label in (
-            ("name", "name"),
-            ("tone", "tone"),
-            ("style", "style"),
-            ("character", "character"),
-            ("boundaries", "boundaries"),
-            ("speaking_style", "speaking_style"),
-        ):
-            value = _normalize_text(traits.get(key))
-            if value:
-                lines.append(f"{label}: {value}")
-
-        extras = _as_list(traits.get("notes")) + _as_list(traits.get("traits"))
-        for item in extras:
-            value = _normalize_text(item)
-            if value:
-                lines.append(value)
-
-        if not lines:
-            lines = ["tone: balanced", "style: concise", "character: supportive"]
-
-        raw = "\n".join(f"- {line}" for line in lines)
-        return _normalize_text(apply_personality(raw, profile=profile))
+        )
+        lines = [
+            f"- character: {character}",
+            "- style_source: data/characters/<character_id>",
+            "- note: no legacy personality profile overlays.",
+        ]
+        return _normalize_text("\n".join(lines))
 
     def _build_state_summary_block(self, state: dict[str, Any]) -> str:
         mode = _normalize_text(state.get("mode")) or "default"
@@ -365,6 +353,114 @@ class PromptBuilder:
                 state.get("current_topic"),
                 policy_tags.get("topic"),
                 trait_tags.get("topic"),
+            ),
+            "user_greeting": _pick(
+                state_tags.get("user_greeting"),
+                state.get("user_greeting"),
+                policy_tags.get("user_greeting"),
+                trait_tags.get("user_greeting"),
+            ),
+            "allow_greeting": _pick(
+                state_tags.get("allow_greeting"),
+                state.get("allow_greeting"),
+                policy_tags.get("allow_greeting"),
+                trait_tags.get("allow_greeting"),
+            ),
+            "new_session": _pick(
+                state_tags.get("new_session"),
+                state.get("new_session"),
+                policy_tags.get("new_session"),
+                trait_tags.get("new_session"),
+            ),
+            "greeted_today": _pick(
+                state_tags.get("greeted_today"),
+                state.get("greeted_today"),
+                policy_tags.get("greeted_today"),
+                trait_tags.get("greeted_today"),
+            ),
+            "conversation_state": _pick(
+                state_tags.get("conversation_state"),
+                state.get("conversation_state"),
+                policy_tags.get("conversation_state"),
+                trait_tags.get("conversation_state"),
+            ),
+            "smalltalk_allowed": _pick(
+                state_tags.get("smalltalk_allowed"),
+                state.get("smalltalk_allowed"),
+                policy_tags.get("smalltalk_allowed"),
+                trait_tags.get("smalltalk_allowed"),
+            ),
+            "greeting_allowed": _pick(
+                state_tags.get("greeting_allowed"),
+                state.get("greeting_allowed"),
+                policy_tags.get("greeting_allowed"),
+                trait_tags.get("greeting_allowed"),
+            ),
+            "dialog_sarcasm_level": _pick(
+                state_tags.get("dialog_sarcasm_level"),
+                state.get("dialog_sarcasm_level"),
+                policy_tags.get("dialog_sarcasm_level"),
+                trait_tags.get("dialog_sarcasm_level"),
+            ),
+            "dialog_warmth_level": _pick(
+                state_tags.get("dialog_warmth_level"),
+                state.get("dialog_warmth_level"),
+                policy_tags.get("dialog_warmth_level"),
+                trait_tags.get("dialog_warmth_level"),
+            ),
+            "dialog_strictness_level": _pick(
+                state_tags.get("dialog_strictness_level"),
+                state.get("dialog_strictness_level"),
+                policy_tags.get("dialog_strictness_level"),
+                trait_tags.get("dialog_strictness_level"),
+            ),
+            "dialog_verbosity_level": _pick(
+                state_tags.get("dialog_verbosity_level"),
+                state.get("dialog_verbosity_level"),
+                policy_tags.get("dialog_verbosity_level"),
+                trait_tags.get("dialog_verbosity_level"),
+            ),
+            "is_technical": _pick(
+                state_tags.get("is_technical"),
+                state.get("is_technical"),
+                policy_tags.get("is_technical"),
+                trait_tags.get("is_technical"),
+            ),
+            "should_ask_back": _pick(
+                state_tags.get("should_ask_back"),
+                state.get("should_ask_back"),
+                policy_tags.get("should_ask_back"),
+                trait_tags.get("should_ask_back"),
+            ),
+            "local_date": _pick(
+                state_tags.get("local_date"),
+                state.get("local_date"),
+                policy_tags.get("local_date"),
+                trait_tags.get("local_date"),
+            ),
+            "local_region": _pick(
+                state_tags.get("local_region"),
+                state.get("local_region"),
+                policy_tags.get("local_region"),
+                trait_tags.get("local_region"),
+            ),
+            "allowed_term": _pick(
+                state_tags.get("allowed_term"),
+                state.get("allowed_term"),
+                policy_tags.get("allowed_term"),
+                trait_tags.get("allowed_term"),
+            ),
+            "use_term_now": _pick(
+                state_tags.get("use_term_now"),
+                state.get("use_term_now"),
+                policy_tags.get("use_term_now"),
+                trait_tags.get("use_term_now"),
+            ),
+            "address_terms_policy": _pick(
+                state_tags.get("address_terms_policy"),
+                state.get("address_terms_policy"),
+                policy_tags.get("address_terms_policy"),
+                trait_tags.get("address_terms_policy"),
             ),
         }
         return {k: v for k, v in tags.items() if v}

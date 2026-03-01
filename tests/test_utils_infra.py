@@ -1,10 +1,22 @@
 ﻿from __future__ import annotations
 
+try:
+    from _output_utils import enable_unittest_json_output
+except ModuleNotFoundError:
+    from tests._output_utils import enable_unittest_json_output
+enable_unittest_json_output()
+
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from modules.character.dialog_policies import deterministic_term_gate_score
 from utils.logger import configure_logging, get_logger, log_json
 from utils.metrics import inc, observe, reset, set_gauge, snapshot
 from utils.timers import Timer, measure_time
@@ -53,6 +65,23 @@ class UtilsInfraTests(unittest.TestCase):
         log_json(logger, "evt", x=1)
         logger.info("plain")
 
+    def test_deterministic_gate_helper_stable(self) -> None:
+        score_a = deterministic_term_gate_score(
+            conversation_id="conv-1",
+            turn_id=7,
+            allowed_term="милашка",
+            user_text="тест",
+        )
+        score_b = deterministic_term_gate_score(
+            conversation_id="conv-1",
+            turn_id=7,
+            allowed_term="милашка",
+            user_text="тест",
+        )
+        self.assertEqual(score_a, score_b)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

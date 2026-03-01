@@ -8,6 +8,7 @@ from typing import Any
 
 from config.settings import load_config
 from memory.fact_extractor import Fact
+from utils.datetime_local import now_local_iso, now_local_ts, parse_time_to_epoch
 
 
 SENSITIVE_KEYS = {"age", "birth_year", "birthday", "location"}
@@ -54,7 +55,7 @@ class _BaseProfileStore:
             entry = dict(profile_row.get(name) or {})
             old_value = entry.get("value") if entry else None
             old_conf = float(entry.get("confidence") or 0.0)
-            old_ts = float(entry.get("updated_at") or 0.0)
+            old_ts = parse_time_to_epoch(entry.get("updated_at"), 0.0)
 
             resolution = self._resolve_conflict(
                 key=name,
@@ -75,7 +76,7 @@ class _BaseProfileStore:
                     "confidence": conf,
                     "source_event_id": str(source_event_id or ""),
                     "source": str(source or ""),
-                    "updated_at": now,
+                    "updated_at": now_local_iso(),
                     "needs_confirmation": bool(resolution.get("needs_confirmation", False)),
                     "pending": list(entry.get("pending") or []),
                 }
@@ -88,7 +89,7 @@ class _BaseProfileStore:
                         "confidence": conf,
                         "source_event_id": str(source_event_id or ""),
                         "source": str(source or ""),
-                        "ts": now,
+                        "ts": now_local_ts(),
                     }
                 )
                 entry["pending"] = pending[-6:]
@@ -98,7 +99,7 @@ class _BaseProfileStore:
             history_row = profile_versions.setdefault(name, [])
             history_row.append(
                 {
-                    "ts": now,
+                    "ts": now_local_ts(),
                     "op": op,
                     "old": old_value,
                     "new": value,
@@ -262,4 +263,3 @@ def _deepcopy(value):
         return json.loads(json.dumps(value, ensure_ascii=False))
     except Exception:
         return value
-

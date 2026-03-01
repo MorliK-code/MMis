@@ -1,5 +1,8 @@
 ﻿from __future__ import annotations
 
+from _output_utils import enable_unittest_json_output
+enable_unittest_json_output()
+
 import unittest
 
 from metadata.metadata_extractor import MetadataExtractor
@@ -32,3 +35,4 @@ class MetadataTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

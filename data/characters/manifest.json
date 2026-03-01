@@ -3,10 +3,20 @@
   "active_character_id": "asya",
   "characters": [
     {
+      "id": "assistant",
+      "name": "Assistant",
+      "enabled": true
+    },
+    {
       "id": "asya",
       "name": "Asya",
       "enabled": true
+    },
+    {
+      "id": "default",
+      "name": "Default",
+      "enabled": true
     }
   ],
-  "updated_at": 1772265684.1994836
+  "updated_at": "2026-03-01T16:54:31.980+02:00"
 }

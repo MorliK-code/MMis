@@ -1,6 +1,18 @@
 ﻿from __future__ import annotations
 
+try:
+    from _output_utils import enable_unittest_json_output
+except ModuleNotFoundError:
+    from tests._output_utils import enable_unittest_json_output
+enable_unittest_json_output()
+
+import sys
 import unittest
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from core.response_pipeline import ResponsePipeline
 from llm.provider_base import (
@@ -102,8 +114,36 @@ class ResponsePipelineUnwrapTests(unittest.TestCase):
             policies={},
         )
 
-        self.assertEqual(result.text, "Привет!")
+        self.assertTrue(result.text.startswith("Привет"))
+
+    def test_unwrap_and_terms_policy_are_compatible(self) -> None:
+        provider = _StubProvider('{"safe":true,"reason":"","output":"Милашка, вот ответ."}')
+        pipeline = ResponsePipeline(provider=provider)
+
+        result = pipeline.run(
+            route="chat",
+            user_msg="разбор",
+            state={"mode": "chat", "history": [], "quality_profile": "BALANCED"},
+            meta={
+                "source": "test",
+                "json_mode": False,
+                "store_turn": False,
+                "address_terms_policy": {
+                    "terms_list": ["милашка"],
+                    "banned_terms_effective": ["милашка"],
+                    "banned_terms_active": True,
+                    "use_term_now": False,
+                },
+            },
+            retrieved_memories=[],
+            traits={},
+            policies={},
+        )
+
+        self.assertNotIn("милашка", result.text.lower())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+

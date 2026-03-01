@@ -8,22 +8,21 @@ from threading import RLock
 from typing import Any
 
 from config.settings import load_config
+from utils.datetime_local import now_local_ts, parse_time_to_epoch, to_local_iso
 from utils.logger import get_logger
 
 
 LOGGER = get_logger(__name__)
 
 
-def _now_ts() -> float:
-    import time
-
-    return float(time.time())
+def _now_ts() -> str:
+    return now_local_ts()
 
 
 @dataclass(frozen=True)
 class Event:
     event_id: str
-    ts: float
+    ts: str
     type: str
     payload: dict[str, Any] = field(default_factory=dict)
     tags: list[str] = field(default_factory=list)
@@ -34,7 +33,7 @@ class Event:
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
-            "ts": self.ts,
+            "ts": str(self.ts or ""),
             "type": self.type,
             "payload": dict(self.payload or {}),
             "tags": list(self.tags or []),
@@ -61,7 +60,7 @@ class EventStore:
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         row = dict(event or {})
         row["event_id"] = str(row.get("event_id") or f"evt-{uuid.uuid4().hex[:16]}")
-        row["ts"] = float(row.get("ts") or _now_ts())
+        row["ts"] = to_local_iso(row.get("ts"), default=_now_ts())
         row["type"] = str(row.get("type") or "system")
         row["payload"] = dict(row.get("payload") or {})
         row["tags"] = [str(x) for x in list(row.get("tags") or []) if str(x).strip()]
@@ -90,13 +89,13 @@ class EventStore:
             row = self._index.get(key)
             return dict(row) if isinstance(row, dict) else None
 
-    def range(self, time_from: float | None = None, time_to: float | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    def range(self, time_from: float | str | None = None, time_to: float | str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         with self._lock:
             out = []
-            tf = float(time_from) if time_from is not None else None
-            tt = float(time_to) if time_to is not None else None
+            tf = parse_time_to_epoch(time_from, 0.0) if time_from is not None else None
+            tt = parse_time_to_epoch(time_to, 0.0) if time_to is not None else None
             for row in self._events:
-                ts = float(row.get("ts") or 0.0)
+                ts = parse_time_to_epoch(row.get("ts"), 0.0)
                 if tf is not None and ts < tf:
                     continue
                 if tt is not None and ts > tt:
@@ -142,7 +141,7 @@ class EventStore:
                     continue
                 item = {
                     "event_id": event_id,
-                    "ts": float(row.get("ts") or 0.0),
+                    "ts": to_local_iso(row.get("ts"), default=""),
                     "type": str(row.get("type") or "system"),
                     "payload": dict(row.get("payload") or {}),
                     "tags": [str(x) for x in list(row.get("tags") or []) if str(x).strip()],

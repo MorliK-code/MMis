@@ -13,6 +13,7 @@ from llm import build_provider
 from llm.provider_base import LLMProviderBase
 from memory.memory_manager import MemoryManager
 from metadata.metadata_extractor import MetadataExtractor
+from utils.datetime_local import parse_time_to_epoch
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,7 @@ class Brain:
                 return result
 
         state_snapshot = self.state_manager.snapshot()
+        self._sync_active_character_manifest(state_snapshot.raw)
         track_state = bool(meta_map.get("track_state", True))
         if track_state and route in {"chat", "command"} and text:
             self.state_manager.update_on_user_message(
@@ -220,9 +222,8 @@ class Brain:
                     locked = op.get("locked")
                     blend = op.get("blend") if isinstance(op.get("blend"), dict) else None
                     ts = op.get("ts")
-                    try:
-                        ts_val = float(ts) if ts is not None else None
-                    except Exception:
+                    ts_val = parse_time_to_epoch(ts, 0.0) if ts is not None else None
+                    if ts_val <= 0:
                         ts_val = None
                     self.state_manager.set_active_personality(
                         value,
@@ -235,15 +236,20 @@ class Brain:
                 if value:
                     locked = op.get("locked")
                     ts = op.get("ts")
-                    try:
-                        ts_val = float(ts) if ts is not None else None
-                    except Exception:
+                    ts_val = parse_time_to_epoch(ts, 0.0) if ts is not None else None
+                    if ts_val <= 0:
                         ts_val = None
                     self.state_manager.set_active_character(
                         value,
                         locked=(bool(locked) if isinstance(locked, bool) else None),
                         switch_ts=ts_val,
                     )
+                    try:
+                        character_engine = getattr(self.pipeline, "character_engine", None)
+                        if character_engine is not None and hasattr(character_engine, "set_active_character"):
+                            character_engine.set_active_character(value)
+                    except Exception:
+                        pass
             elif key == "tool_results":
                 items = list(op.get("items") or [])
                 if items:
@@ -263,6 +269,10 @@ class Brain:
                         )
                     except Exception:
                         pass
+            elif key == "state_address_terms":
+                value = op.get("value")
+                if isinstance(value, dict):
+                    self.state_manager.set_address_terms(value)
             elif key in {"turn_user", "turn_assistant"}:
                 tags = dict(op.get("tags") or {})
                 if tags:
@@ -278,6 +288,23 @@ class Brain:
                     if tags.get("topic"):
                         ctx["topic"] = str(tags.get("topic"))
                     self.state_manager.patch({"context_tags": ctx})
+
+    def _sync_active_character_manifest(self, state_map: dict[str, Any]) -> None:
+        active = str((state_map or {}).get("active_character_id") or "").strip().lower()
+        if not active:
+            return
+        try:
+            character_engine = getattr(self.pipeline, "character_engine", None)
+            if character_engine is None:
+                return
+            manifest = {}
+            if hasattr(character_engine, "get_manifest"):
+                manifest = dict(character_engine.get_manifest() or {})
+            manifest_active = str(manifest.get("active_character_id") or "").strip().lower()
+            if manifest_active != active and hasattr(character_engine, "set_active_character"):
+                character_engine.set_active_character(active)
+        except Exception:
+            pass
 
     def _update_state_after_success(
         self,

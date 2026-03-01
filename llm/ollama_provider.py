@@ -183,6 +183,23 @@ def _extract_thinking(message: dict[str, Any], payload: dict[str, Any] | None = 
     return ""
 
 
+def _message_log_fields(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = list(messages or [])
+    roles = [str(m.get("role") or "") for m in rows]
+    order = [f"{idx}:{role}" for idx, role in enumerate(roles)]
+    system_content = ""
+    for row in rows:
+        if str(row.get("role") or "").strip().lower() == "system":
+            system_content = str(row.get("content") or "")
+            break
+    return {
+        "messages": rows,
+        "message_roles": roles,
+        "message_order": order,
+        "system_message": system_content,
+    }
+
+
 def _wrap_thinking(text: str, thinking: str, *, trim: bool = True) -> str:
     visible = str(text or "")
     think = str(thinking or "")
@@ -195,7 +212,7 @@ def _wrap_thinking(text: str, thinking: str, *, trim: bool = True) -> str:
         return visible
     if not visible.strip():
         return f"<think>{think}</think>"
-    return f"{visible}\n<think>{think}</think>"
+    return f"<think>{think}</think>\n{visible}"
 
 
 def _as_text(value: Any) -> str:
@@ -477,16 +494,24 @@ class OllamaProvider(LLMProviderBase):
         if isinstance(req.response_format, dict) and req.response_format:
             fmt = dict(req.response_format)
 
-        payload = self._client.chat(
-            model=model,
-            messages=messages,
-            stream=bool(stream),
-            think=think,
-            tools=(tools or None),
-            format=fmt,
-            options=options or None,
-            keep_alive=keep_alive,
+        request_payload = {
+            "model": model,
+            "messages": messages,
+            "stream": bool(stream),
+            "think": think,
+            "tools": (tools or None),
+            "format": fmt,
+            "options": options or None,
+            "keep_alive": keep_alive,
+        }
+        log_json(
+            LOGGER,
+            "llm_request_payload",
+            provider="ollama",
+            payload=request_payload,
+            **_message_log_fields(messages),
         )
+        payload = self._client.chat(**request_payload)
         if stream:
             return payload
         return _as_dict(payload)

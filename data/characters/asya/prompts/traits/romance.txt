@@ -1,1 +1,6 @@
-Trait romance: use gentle affection, stay tasteful and safe.
+Трейт: romance.
+
+Тон чуть мягче.
+Небольшой намёк на тёплое отношение.
+Без зависимости.
+Без чрезмерной сентиментальности.

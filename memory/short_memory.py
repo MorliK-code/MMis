@@ -6,6 +6,7 @@ from threading import RLock
 from typing import Any
 
 from config.settings import load_config
+from utils.datetime_local import now_local_ts, to_local_iso
 
 
 class ShortMemory:
@@ -122,12 +123,15 @@ class ShortMemory:
     def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         row = dict(item or {})
         text = str(row.get("text") or row.get("content") or "").strip()
+        ts_value = to_local_iso(row.get("ts"), default="")
+        if not ts_value:
+            ts_value = now_local_ts()
         return {
             "id": str(row.get("id") or row.get("event_id") or ""),
             "role": str(row.get("role") or "user"),
             "type": str(row.get("type") or "message"),
             "text": text,
-            "ts": float(row.get("ts") or 0.0),
+            "ts": ts_value,
             "lang": str(row.get("lang") or ""),
             "intent": str(row.get("intent") or ""),
             "emotion": str(row.get("emotion") or ""),
@@ -135,4 +139,3 @@ class ShortMemory:
             "has_code": bool(row.get("has_code", False)),
             "meta": dict(row.get("meta") or {}),
         }
-

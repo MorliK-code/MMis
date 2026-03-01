@@ -1,5 +1,8 @@
 ﻿from __future__ import annotations
 
+from _output_utils import enable_unittest_json_output
+enable_unittest_json_output()
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,3 +42,4 @@ class MemoryConflictTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,6 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+try:
+    from _output_utils import enable_unittest_json_output
+except ModuleNotFoundError:
+    from tests._output_utils import enable_unittest_json_output
+enable_unittest_json_output()
+
+import sys
 import unittest
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from core.response_pipeline import ResponsePipeline, _enforce_response_hygiene
 from llm.provider_base import (
@@ -12,6 +24,7 @@ from llm.provider_base import (
     Timings,
     Usage,
 )
+from modules.character.evaluator import ResponseConstraintEvaluator
 
 
 class _StubProvider(LLMProviderBase):
@@ -69,8 +82,69 @@ class ResponseHygieneTests(unittest.TestCase):
             policies={},
         )
 
-        self.assertEqual(result.text, "Простите, если что-то обидело.")
+        self.assertEqual(result.text, "Поняла. Перейду сразу к сути.")
+
+    def test_pipeline_replaces_smalltalk_echo(self) -> None:
+        provider = _StubProvider("Как у тебя дела?")
+        pipeline = ResponsePipeline(provider=provider)
+
+        result = pipeline.run(
+            route="chat",
+            user_msg="как у тебя дела?",
+            state={"mode": "chat", "history": [], "quality_profile": "BALANCED"},
+            meta={"source": "test", "store_turn": False},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+        )
+
+        self.assertEqual(result.text, "У меня все нормально, спасибо. Как ты?")
+
+    def test_pipeline_replaces_generic_short_echo(self) -> None:
+        provider = _StubProvider("что дальше")
+        pipeline = ResponsePipeline(provider=provider)
+
+        result = pipeline.run(
+            route="chat",
+            user_msg="что дальше",
+            state={"mode": "chat", "history": [], "quality_profile": "BALANCED"},
+            meta={"source": "test", "store_turn": False},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+        )
+
+        self.assertEqual(result.text, "Поняла. Я на связи и готова помочь. Уточни, что именно нужно.")
+
+    def test_post_filter_removes_banned_term_in_prefix_and_body(self) -> None:
+        evaluator = ResponseConstraintEvaluator()
+        out, applied = evaluator.enforce(
+            "Милашка, вот план. В конце снова милашка.",
+            address_terms_policy={
+                "terms_list": ["милашка"],
+                "banned_terms_effective": ["милашка"],
+                "banned_terms_active": True,
+                "use_term_now": False,
+            },
+        )
+        self.assertNotIn("милашка", out.lower())
+        self.assertIn("terms_removed_banned", applied)
+
+    def test_post_filter_leaves_max_one_term_when_use_term_now_true(self) -> None:
+        evaluator = ResponseConstraintEvaluator()
+        out, applied = evaluator.enforce(
+            "Милашка, старт. Потом милашка снова.",
+            address_terms_policy={
+                "terms_list": ["милашка"],
+                "allowed_term": "милашка",
+                "use_term_now": True,
+            },
+        )
+        self.assertEqual(out.lower().count("милашка"), 1)
+        self.assertIn("terms_limited_to_one", applied)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+

@@ -104,6 +104,23 @@ def _tool_calls_from_openai_message(message) -> list[ToolCall]:
     return calls
 
 
+def _message_log_fields(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = list(messages or [])
+    roles = [str(m.get("role") or "") for m in rows]
+    order = [f"{idx}:{role}" for idx, role in enumerate(roles)]
+    system_content = ""
+    for row in rows:
+        if str(row.get("role") or "").strip().lower() == "system":
+            system_content = str(row.get("content") or "")
+            break
+    return {
+        "messages": rows,
+        "message_roles": roles,
+        "message_order": order,
+        "system_message": system_content,
+    }
+
+
 class OpenAIProvider(LLMProviderBase):
     def __init__(
         self,
@@ -139,6 +156,13 @@ class OpenAIProvider(LLMProviderBase):
             json_mode=bool(req.json_mode),
         )
         kwargs = self._build_completion_kwargs(req=req, model=model, stream=False)
+        log_json(
+            LOGGER,
+            "llm_request_payload",
+            provider="openai",
+            payload=kwargs,
+            **_message_log_fields(list(kwargs.get("messages") or [])),
+        )
         t0 = time.perf_counter()
         resp = self._client.chat.completions.create(**kwargs)
         latency_ms = (time.perf_counter() - t0) * 1000.0
@@ -192,6 +216,13 @@ class OpenAIProvider(LLMProviderBase):
             json_mode=bool(req.json_mode),
         )
         kwargs = self._build_completion_kwargs(req=req, model=model, stream=True)
+        log_json(
+            LOGGER,
+            "llm_request_payload",
+            provider="openai",
+            payload=kwargs,
+            **_message_log_fields(list(kwargs.get("messages") or [])),
+        )
         stream = self._client.chat.completions.create(**kwargs)
         chunk_count = 0
         chars = 0

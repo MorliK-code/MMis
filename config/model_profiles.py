@@ -61,7 +61,7 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     "QUALITY": ModelProfile(
         name="QUALITY",
-        generation=GenerationProfile(temperature=0.82, top_p=0.95, repeat_penalty=1.05, max_tokens=2048),
+        generation=GenerationProfile(temperature=0.82, top_p=0.95, repeat_penalty=1.2, max_tokens=2048),
         ollama=OllamaProfile(num_thread=6, num_ctx=12288, num_gpu=1, num_batch=160, keep_alive="10m"),
         openai=OpenAIProfile(reasoning_effort="high"),
     ),
@@ -70,6 +70,12 @@ PROFILES: dict[str, ModelProfile] = {
         generation=GenerationProfile(temperature=0.45, top_p=0.88, repeat_penalty=1.12, max_tokens=384),
         ollama=OllamaProfile(num_thread=4, num_ctx=3072, num_gpu=0, num_batch=48, keep_alive="1m"),
         openai=OpenAIProfile(reasoning_effort="low"),
+    ),
+    "ASYA": ModelProfile(
+        name="ASYA",
+        generation=GenerationProfile(temperature=0.7, top_p=0.9, repeat_penalty=1.2, max_tokens=1024),
+        ollama=OllamaProfile(num_thread=6, num_ctx=8192, num_gpu=1, num_batch=128, keep_alive="5m"),
+        openai=OpenAIProfile(reasoning_effort="medium"),
     ),
 }
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
-from core.personality_engine import PersonalityEngine, ensure_default_personality_files, ensure_default_prompt_files
 from llm.provider_base import Message
 from modules.character.engine import CharacterEngine
 from prompt_engine.prompt_registry import PromptRegistry
@@ -23,14 +23,10 @@ class PromptEngine:
         self,
         registry: PromptRegistry | None = None,
         budget_manager: TokenBudgetManager | None = None,
-        personality_engine: PersonalityEngine | None = None,
         character_engine: CharacterEngine | None = None,
     ):
-        ensure_default_prompt_files()
-        ensure_default_personality_files()
         self.registry = registry or PromptRegistry()
         self.budget_manager = budget_manager or TokenBudgetManager()
-        self.personality_engine = personality_engine or PersonalityEngine()
         self.character_engine = character_engine or CharacterEngine()
 
     def compose(
@@ -46,26 +42,15 @@ class PromptEngine:
         policies_map = dict(policies or {})
         blocks = dict(getattr(prompt_pack, "blocks", {}) or {})
 
-        active_personality = _pick(
-            state_map.get("active_personality_id"),
-            traits_map.get("personality"),
-            traits_map.get("persona"),
-            policies_map.get("personality"),
-            _resolve_persona_name(traits_map=traits_map, state_map=state_map, policies_map=policies_map),
-            "default",
-        ).lower()
         active_character = _pick(
             state_map.get("active_character_id"),
             traits_map.get("character"),
             policies_map.get("character"),
-            active_personality,
+            state_map.get("active_personality_id"),
+            "default",
         ).lower()
-        personality = self.personality_engine.get_profile(active_personality)
 
         base_doc = self._safe_doc(key="system.base", fallback_text=blocks.get("system_role") or "")
-        persona_doc = self._safe_doc(path=personality.system_prompt, fallback_text=blocks.get("persona") or "")
-        style_doc = self._safe_doc(path=personality.style_prompt, fallback_text="")
-        rules_doc = self._safe_doc(path=personality.rules_prompt, fallback_text="")
         safety_doc = self._safe_doc(key="response.safety_filter", fallback_text="")
         formatting_doc = self._safe_doc(key="response.formatting", fallback_text="")
         character_prompt_block = str(state_map.get("character_prompt_block") or "").strip()
@@ -74,14 +59,14 @@ class PromptEngine:
                 character_prompt_block = str(self.character_engine.build_prompt(active_character) or "").strip()
             except Exception:
                 character_prompt_block = ""
-        personality_core_text = character_prompt_block or _join_non_empty([persona_doc["text"], style_doc["text"]])
-
-        blend = _as_dict(state_map.get("personality_blend"))
-        blend_old_block = self._build_blend_block(blend)
+        personality_core_text = character_prompt_block or f"[CHAR_META]\ncharacter={active_character}\nstyle_source=characters"
+        active_personality = active_character or "default"
 
         user_profile_block = self._build_user_profile_block(state_map)
         metadata_block = self._build_metadata_block(state_map=state_map, blocks=blocks)
         tools_state_block = self._build_tools_state_block(state_map)
+        verbosity_level = _resolve_verbosity_level(state_map=state_map, blocks=blocks)
+        verbosity_limits = self.budget_manager.apply_verbosity(verbosity_level)
 
         context_blocks = [
             ContextBlock(
@@ -101,17 +86,8 @@ class PromptEngine:
                 max_tokens=self.budget_manager.budget.personality,
             ),
             ContextBlock(
-                id="personality_blend",
-                content=blend_old_block,
-                bucket="personality",
-                priority=58,
-                required=False,
-                shrink_strategy="summarize",
-                max_tokens=max(64, self.budget_manager.budget.personality // 2),
-            ),
-            ContextBlock(
                 id="rules",
-                content=_join_non_empty([rules_doc["text"], safety_doc["text"], formatting_doc["text"]]),
+                content=_join_non_empty([safety_doc["text"], formatting_doc["text"]]),
                 bucket="rules",
                 priority=96,
                 required=True,
@@ -123,7 +99,7 @@ class PromptEngine:
                 bucket="user_profile",
                 priority=74,
                 shrink_strategy="summarize",
-                max_tokens=self.budget_manager.budget.user_profile,
+                max_tokens=int(verbosity_limits.get("user_profile", self.budget_manager.budget.user_profile)),
             ),
             ContextBlock(
                 id="metadata",
@@ -154,7 +130,7 @@ class PromptEngine:
                 bucket="history",
                 priority=72,
                 shrink_strategy="summarize",
-                max_tokens=self.budget_manager.budget.recent_chat,
+                max_tokens=int(verbosity_limits.get("history", self.budget_manager.budget.recent_chat)),
             ),
             ContextBlock(
                 id="long_summary",
@@ -162,14 +138,14 @@ class PromptEngine:
                 bucket="long_summary",
                 priority=70,
                 shrink_strategy="summarize",
-                max_tokens=self.budget_manager.budget.long_summary,
+                max_tokens=int(verbosity_limits.get("long_summary", self.budget_manager.budget.long_summary)),
             ),
             ContextBlock(
                 id="output_schema",
                 content=str(blocks.get("output_schema") or ""),
                 bucket="output",
                 priority=88,
-                max_tokens=self.budget_manager.budget.output,
+                max_tokens=int(verbosity_limits.get("output", self.budget_manager.budget.output)),
             ),
             ContextBlock(
                 id="user",
@@ -187,7 +163,6 @@ class PromptEngine:
             [
                 ("SYSTEM_CORE", fitted.get("system_core", "")),
                 ("PERSONALITY", fitted.get("personality_core", "")),
-                ("PERSONALITY_BLEND", fitted.get("personality_blend", "")),
                 ("RULES", fitted.get("rules", "")),
                 ("USER_PROFILE", fitted.get("user_profile", "")),
                 ("METADATA", fitted.get("metadata", "")),
@@ -206,24 +181,25 @@ class PromptEngine:
         ]
 
         sections = {
-            "active_personality_id": personality.id,
-            "active_personality_name": personality.name,
-            "active_personality_version": personality.version,
+            "active_personality_id": active_personality,
+            "active_personality_name": active_personality,
+            "active_personality_version": "character-driven",
             "active_character_id": active_character,
             "base_prompt_id": base_doc["id"],
             "base_prompt_version": base_doc["version"],
-            "persona_prompt_id": persona_doc["id"],
-            "persona_prompt_version": persona_doc["version"],
-            "style_prompt_id": style_doc["id"],
-            "style_prompt_version": style_doc["version"],
-            "rules_prompt_id": rules_doc["id"],
-            "rules_prompt_version": rules_doc["version"],
+            "persona_prompt_id": "character_prompt_block",
+            "persona_prompt_version": "character-driven",
+            "style_prompt_id": "character_prompt_block",
+            "style_prompt_version": "character-driven",
+            "rules_prompt_id": "response.safety_filter+response.formatting",
+            "rules_prompt_version": "registry",
             "system": system_content,
             "user": user_content,
         }
         sections["budget_total_tokens"] = str(budget_stats.get("total_tokens") or 0)
         sections["budget_dropped"] = ",".join([str(x) for x in list(budget_stats.get("dropped") or [])])
         sections["budget_trimmed"] = ",".join([str(x) for x in list(budget_stats.get("trimmed") or [])])
+        sections["dialog_verbosity_level"] = f"{verbosity_level:.3f}"
 
         return PromptEngineResult(messages=messages, sections=sections)
 
@@ -256,28 +232,6 @@ class PromptEngine:
             "text": str(fallback_text or "").strip(),
         }
 
-    def _build_blend_block(self, blend: dict[str, Any]) -> str:
-        row = dict(blend or {})
-        if not bool(row.get("active")):
-            return ""
-        old_id = str(row.get("from") or "").strip().lower()
-        new_id = str(row.get("to") or "").strip().lower()
-        old_weight = float(row.get("old_weight") or 0.0)
-        new_weight = float(row.get("new_weight") or 1.0)
-        if not old_id or not new_id or old_id == new_id:
-            return ""
-
-        old_profile = self.personality_engine.get_profile(old_id)
-        old_style = self._safe_doc(path=old_profile.style_prompt, fallback_text="")
-        old_persona = self._safe_doc(path=old_profile.system_prompt, fallback_text="")
-        old_text = _join_non_empty([old_persona["text"], old_style["text"]])
-        old_short = _first_sentences(old_text, max_lines=4)
-        return (
-            "Temporary blend mode is active. "
-            f"Use old persona '{old_id}' weight={old_weight:.2f} and new persona '{new_id}' weight={new_weight:.2f}.\n"
-            f"Old persona short summary:\n{old_short}"
-        ).strip()
-
     @staticmethod
     def _build_user_profile_block(state_map: dict[str, Any]) -> str:
         profile_summary = _as_dict(state_map.get("profile_summary"))
@@ -301,10 +255,49 @@ class PromptEngine:
         lines = []
         if tags_block:
             lines.append(tags_block)
-        for key in ("lang", "intent", "mood", "topic"):
+        for key in (
+            "lang",
+            "intent",
+            "mood",
+            "topic",
+            "user_greeting",
+            "allow_greeting",
+            "new_session",
+            "greeted_today",
+            "conversation_state",
+            "smalltalk_allowed",
+            "should_ask_back",
+            "local_date",
+            "local_region",
+            "greeting_allowed",
+            "dialog_sarcasm_level",
+            "dialog_warmth_level",
+            "dialog_strictness_level",
+            "dialog_verbosity_level",
+            "is_technical",
+            "allowed_term",
+            "use_term_now",
+            "address_terms_policy",
+        ):
             value = str(context.get(key) or "").strip()
             if value:
                 lines.append(f"- {key}: {value}")
+        dialog_mode = {
+            "greeting_allowed": str(context.get("greeting_allowed") or context.get("allow_greeting") or "").strip().lower(),
+            "smalltalk_allowed": str(context.get("smalltalk_allowed") or "").strip().lower(),
+            "sarcasm_level": str(context.get("dialog_sarcasm_level") or "").strip(),
+            "warmth_level": str(context.get("dialog_warmth_level") or "").strip(),
+            "strictness_level": str(context.get("dialog_strictness_level") or "").strip(),
+            "verbosity_level": str(context.get("dialog_verbosity_level") or "").strip(),
+        }
+        if any(dialog_mode.values()):
+            pretty = ", ".join([f"{k}: {v}" for k, v in dialog_mode.items() if v])
+            lines.append(f"- dialog_mode: {{{pretty}}}")
+            lines.append("- runtime_constraints: hard constraints are enforced in response post-filter.")
+        if str(context.get("use_term_now") or "").strip().lower() in {"false", "0", "no"}:
+            lines.append("- terms_rule: do not use endearment terms in this reply.")
+        elif str(context.get("use_term_now") or "").strip().lower() in {"true", "1", "yes"}:
+            lines.append("- terms_rule: allowed at most one short endearment term.")
         return "\n".join(lines).strip()
 
     @staticmethod
@@ -356,6 +349,29 @@ def _resolve_persona_name(
     return "default"
 
 
+def _resolve_verbosity_level(*, state_map: dict[str, Any], blocks: dict[str, str]) -> float:
+    context = _as_dict(state_map.get("context_tags"))
+    dialog_mode = _as_dict(state_map.get("dialog_mode"))
+    candidates = [
+        dialog_mode.get("verbosity_level"),
+        context.get("dialog_verbosity_level"),
+        context.get("verbosity_level"),
+    ]
+    for value in candidates:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except Exception:
+            continue
+    tags_block = str(blocks.get("context_tags") or "")
+    match = re.search(r"dialog_verbosity_level:\s*([0-9]*\.?[0-9]+)", tags_block)
+    if match:
+        try:
+            return max(0.0, min(1.0, float(match.group(1))))
+        except Exception:
+            pass
+    return 0.46
+
+
 def _join_sections(parts: list[tuple[str, str]]) -> str:
     out: list[str] = []
     for name, text in parts:
@@ -395,3 +411,5 @@ def _first_sentences(text: str, *, max_lines: int = 4) -> str:
     if not lines:
         return ""
     return "\n".join(lines[:max_lines]).strip()
+
+

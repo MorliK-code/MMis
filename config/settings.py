@@ -40,6 +40,11 @@ class AppSettings:
     cache_dir: Path
     log_dir: Path
     db_path: Path
+    dialog_new_session_after_min: int
+    dialog_greeting_max_words: int
+    dialog_greeting_max_chars: int
+    dialog_greetings: list[str] = field(default_factory=list)
+    dialog_greeting_exclusions: list[str] = field(default_factory=list)
     config_file: Path | None = None
     feature_flags: dict[str, bool] = field(default_factory=dict)
 
@@ -103,6 +108,34 @@ def load_config(force_reload: bool = False) -> AppSettings:
         .resolve(),
         log_dir=Path(_norm_str(_pick("MMIS_LOG_DIR", json_cfg, dotenv_cfg, str(dirs["logs"])))).expanduser().resolve(),
         db_path=Path(_norm_str(_pick("MMIS_DB_PATH", json_cfg, dotenv_cfg, db_default))).expanduser().resolve(),
+        dialog_new_session_after_min=max(
+            1,
+            _to_int(_pick("MMIS_DIALOG_NEW_SESSION_AFTER_MIN", json_cfg, dotenv_cfg, 360), default=360),
+        ),
+        dialog_greeting_max_words=max(
+            1,
+            _to_int(_pick("MMIS_DIALOG_GREETING_MAX_WORDS", json_cfg, dotenv_cfg, 6), default=6),
+        ),
+        dialog_greeting_max_chars=max(
+            8,
+            _to_int(_pick("MMIS_DIALOG_GREETING_MAX_CHARS", json_cfg, dotenv_cfg, 35), default=35),
+        ),
+        dialog_greetings=_to_csv_list(
+            _pick(
+                "MMIS_DIALOG_GREETINGS",
+                json_cfg,
+                dotenv_cfg,
+                "привет,приветик,здарова,здравствуйте,доброе утро,добрый день,добрый вечер,hi,hello,hey,yo",
+            )
+        ),
+        dialog_greeting_exclusions=_to_csv_list(
+            _pick(
+                "MMIS_DIALOG_GREETING_EXCLUSIONS",
+                json_cfg,
+                dotenv_cfg,
+                "слово привет,передай привет,передайте привет,приветствие,в коде привет,обсуждение слова привет,перевод привет",
+            )
+        ),
         config_file=config_file,
         feature_flags=_collect_feature_flags(json_cfg=json_cfg, dotenv_cfg=dotenv_cfg),
     )
@@ -204,6 +237,25 @@ def _strip_quotes(value: str) -> str:
     if len(src) >= 2 and ((src[0] == '"' and src[-1] == '"') or (src[0] == "'" and src[-1] == "'")):
         return src[1:-1]
     return src
+
+
+def _to_csv_list(value) -> list[str]:
+    if isinstance(value, list):
+        raw_items = [str(x or "").strip() for x in value]
+    else:
+        raw = str(value or "").strip()
+        raw_items = [x.strip() for x in raw.split(",")] if raw else []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if not item:
+            continue
+        low = item.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(item)
+    return out
 
 
 def _pick(env_key: str, json_cfg: dict[str, Any], dotenv_cfg: dict[str, str], default):

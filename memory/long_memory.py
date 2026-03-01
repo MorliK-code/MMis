@@ -9,6 +9,7 @@ from threading import RLock
 from typing import Any
 
 from config.settings import load_config
+from utils.datetime_local import now_local_iso, parse_time_to_epoch
 
 
 @dataclass(frozen=True)
@@ -16,7 +17,7 @@ class MemoryDoc:
     id: str
     text: str
     created_at: float
-    updated_at: float
+    updated_at: str
     source: str = "chat"
     tags: list[str] = field(default_factory=list)
     importance: float = 0.5
@@ -28,7 +29,7 @@ class MemoryDoc:
             "id": self.id,
             "text": self.text,
             "created_at": float(self.created_at),
-            "updated_at": float(self.updated_at),
+            "updated_at": str(self.updated_at),
             "source": self.source,
             "tags": list(self.tags or []),
             "importance": float(self.importance),
@@ -70,7 +71,7 @@ class LongMemory:
             id=str(doc_id or f"doc-{uuid.uuid4().hex[:16]}"),
             text=doc_text,
             created_at=now,
-            updated_at=now,
+            updated_at=now_local_iso(),
             source=str(source or "chat"),
             tags=[str(x) for x in list(tags or []) if str(x).strip()],
             importance=_clamp01(importance),
@@ -105,7 +106,7 @@ class LongMemory:
                 merged = dict(row.get("meta") or {})
                 merged.update(dict(changes.get("meta") or {}))
                 row["meta"] = merged
-            row["updated_at"] = time.time()
+            row["updated_at"] = now_local_iso()
             self._docs[key] = row
             self.save()
             return _doc_from_dict(row)
@@ -138,7 +139,7 @@ class LongMemory:
     ) -> list[MemoryDoc]:
         with self._lock:
             rows = list(self._docs.values())
-        rows.sort(key=lambda x: float(x.get("updated_at") or 0.0), reverse=True)
+        rows.sort(key=lambda x: parse_time_to_epoch(x.get("updated_at"), 0.0), reverse=True)
         tag_filter = {str(x).strip().lower() for x in list(tags or []) if str(x).strip()}
         source_filter = str(source or "").strip().lower()
         out: list[MemoryDoc] = []
@@ -178,7 +179,7 @@ class LongMemory:
                     "id": key,
                     "text": str(row.get("text") or ""),
                     "created_at": float(row.get("created_at") or time.time()),
-                    "updated_at": float(row.get("updated_at") or time.time()),
+                    "updated_at": str(row.get("updated_at") or now_local_iso()),
                     "source": str(row.get("source") or "chat"),
                     "tags": [str(x) for x in list(row.get("tags") or []) if str(x).strip()],
                     "importance": _clamp01(float(row.get("importance") or 0.5)),
@@ -203,7 +204,7 @@ def _doc_from_dict(row: dict[str, Any] | None) -> MemoryDoc | None:
         id=str(row.get("id") or ""),
         text=text,
         created_at=float(row.get("created_at") or time.time()),
-        updated_at=float(row.get("updated_at") or time.time()),
+        updated_at=str(row.get("updated_at") or now_local_iso()),
         source=str(row.get("source") or "chat"),
         tags=[str(x) for x in list(row.get("tags") or []) if str(x).strip()],
         importance=_clamp01(float(row.get("importance") or 0.5)),
@@ -214,4 +215,3 @@ def _doc_from_dict(row: dict[str, Any] | None) -> MemoryDoc | None:
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
-
