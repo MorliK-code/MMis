@@ -1,6 +1,5 @@
 ﻿from __future__ import annotations
 
-<<<<<<< HEAD
 try:
     from _output_utils import enable_unittest_json_output
 except ModuleNotFoundError:
@@ -14,9 +13,6 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-=======
-import unittest
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 from core.response_pipeline import ResponsePipeline
 from llm.provider_base import (
@@ -118,7 +114,6 @@ class ResponsePipelineUnwrapTests(unittest.TestCase):
             policies={},
         )
 
-<<<<<<< HEAD
         self.assertTrue(result.text.startswith("Привет"))
 
     def test_unwrap_and_terms_policy_are_compatible(self) -> None:
@@ -146,15 +141,9 @@ class ResponsePipelineUnwrapTests(unittest.TestCase):
         )
 
         self.assertNotIn("милашка", result.text.lower())
-=======
-        self.assertEqual(result.text, "Привет!")
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 if __name__ == "__main__":
     unittest.main()
-<<<<<<< HEAD
 
 
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04

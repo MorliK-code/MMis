@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ﻿from __future__ import annotations
 
 try:
@@ -14,11 +13,6 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-=======
-from __future__ import annotations
-
-import unittest
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 from core.response_pipeline import ResponsePipeline, _enforce_response_hygiene
 from llm.provider_base import (
@@ -30,10 +24,7 @@ from llm.provider_base import (
     Timings,
     Usage,
 )
-<<<<<<< HEAD
 from modules.character.evaluator import ResponseConstraintEvaluator
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 class _StubProvider(LLMProviderBase):
@@ -91,7 +82,6 @@ class ResponseHygieneTests(unittest.TestCase):
             policies={},
         )
 
-<<<<<<< HEAD
         self.assertEqual(result.text, "Поняла. Перейду сразу к сути.")
 
     def test_pipeline_replaces_smalltalk_echo(self) -> None:
@@ -152,15 +142,9 @@ class ResponseHygieneTests(unittest.TestCase):
         )
         self.assertEqual(out.lower().count("милашка"), 1)
         self.assertIn("terms_limited_to_one", applied)
-=======
-        self.assertEqual(result.text, "Простите, если что-то обидело.")
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 if __name__ == "__main__":
     unittest.main()
-<<<<<<< HEAD
 
 
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
