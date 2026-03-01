@@ -8,15 +8,8 @@ from threading import RLock
 from typing import Any
 
 from config.settings import load_config
-<<<<<<< HEAD
 from utils.datetime_local import now_local_ts, parse_time_to_epoch, to_local_iso
 from utils.logger import get_logger
-=======
-from utils.logger import get_logger
-
-
-LOGGER = get_logger(__name__)
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 LOGGER = get_logger(__name__)
