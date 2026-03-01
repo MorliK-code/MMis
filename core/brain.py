@@ -236,20 +236,29 @@ class Brain:
                 if value:
                     locked = op.get("locked")
                     ts = op.get("ts")
+<<<<<<< HEAD
                     ts_val = parse_time_to_epoch(ts, 0.0) if ts is not None else None
                     if ts_val <= 0:
+=======
+                    try:
+                        ts_val = float(ts) if ts is not None else None
+                    except Exception:
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                         ts_val = None
                     self.state_manager.set_active_character(
                         value,
                         locked=(bool(locked) if isinstance(locked, bool) else None),
                         switch_ts=ts_val,
                     )
+<<<<<<< HEAD
                     try:
                         character_engine = getattr(self.pipeline, "character_engine", None)
                         if character_engine is not None and hasattr(character_engine, "set_active_character"):
                             character_engine.set_active_character(value)
                     except Exception:
                         pass
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             elif key == "tool_results":
                 items = list(op.get("items") or [])
                 if items:

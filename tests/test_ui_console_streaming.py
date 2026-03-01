@@ -1,7 +1,11 @@
+<<<<<<< HEAD
 ﻿from __future__ import annotations
 
 from _output_utils import enable_unittest_json_output
 enable_unittest_json_output()
+=======
+from __future__ import annotations
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 import io
 import unittest
@@ -54,4 +58,7 @@ class ConsoleStreamingTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+<<<<<<< HEAD
 
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04

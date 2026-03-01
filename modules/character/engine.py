@@ -7,7 +7,10 @@ from typing import Any
 from modules.character.composer import CharacterComposeResult, CharacterComposer
 from modules.character.evaluator import RuleEvaluator
 from modules.character.storage import CharacterStorage
+<<<<<<< HEAD
 from utils.datetime_local import now_local_iso, now_local_ts, parse_time_to_epoch, to_local_iso
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 @dataclass(frozen=True)
@@ -21,8 +24,11 @@ class CharacterUpdateResult:
     prompt_block: str
     used_prompt_files: list[str] = field(default_factory=list)
     changes: list[dict[str, Any]] = field(default_factory=list)
+<<<<<<< HEAD
     effective_traits: dict[str, float] = field(default_factory=dict)
     style_coefficients: dict[str, float] = field(default_factory=dict)
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 class CharacterEngine:
@@ -42,7 +48,11 @@ class CharacterEngine:
         return self.storage.list_character_ids(include_disabled=False)
 
     def get_manifest(self) -> dict[str, Any]:
+<<<<<<< HEAD
         return self.storage.sync_manifest()
+=======
+        return self.storage.load_manifest()
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
     def get_active_character_id(self, state: dict[str, Any] | None = None) -> str:
         state_map = dict(state or {})
@@ -62,6 +72,7 @@ class CharacterEngine:
         if target not in known:
             raise ValueError(f"unknown character: {target}")
         manifest = self.storage.load_manifest()
+<<<<<<< HEAD
         previous = str(manifest.get("active_character_id") or "").strip().lower()
         manifest["active_character_id"] = target
         self.storage.save_manifest(manifest)
@@ -75,6 +86,10 @@ class CharacterEngine:
         )
         if previous and previous != target:
             self.storage.append_event(previous, {"type": "switch_out", "source": "manual", "to": target})
+=======
+        manifest["active_character_id"] = target
+        self.storage.save_manifest(manifest)
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         self.storage.append_event(target, {"type": "switch", "source": "manual", "target": target})
         return target
 
@@ -104,8 +119,13 @@ class CharacterEngine:
         row.setdefault("min", 0.0)
         row.setdefault("max", 1.0)
         row["confidence"] = _clamp01(confidence)
+<<<<<<< HEAD
         row["updated_at"] = now_local_iso()
         row["last_used_ts"] = now_local_ts()
+=======
+        row["updated_at"] = now
+        row["last_used_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         row["disabled"] = False
         if row["type"] == "flag":
             row["value"] = bool(value)
@@ -116,7 +136,11 @@ class CharacterEngine:
         learned_delta = self._extract_learned_delta(builtin, merged)
         self.storage.save_learned_traits(cid, learned_delta)
         state = self.storage.load_state(cid)
+<<<<<<< HEAD
         state["last_update_ts"] = now_local_ts()
+=======
+        state["last_update_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         self._refresh_active_lists(state=state, traits=merged)
         self.storage.save_state(cid, state)
         self.storage.append_event(
@@ -146,7 +170,11 @@ class CharacterEngine:
                 row["value"] = False
             else:
                 row["value"] = _to_float(row.get("min"), 0.0)
+<<<<<<< HEAD
             row["updated_at"] = now_local_iso()
+=======
+            row["updated_at"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             merged[name] = row
         else:
             merged.pop(name, None)
@@ -154,7 +182,11 @@ class CharacterEngine:
         learned_delta = self._extract_learned_delta(builtin, merged)
         self.storage.save_learned_traits(cid, learned_delta)
         state = self.storage.load_state(cid)
+<<<<<<< HEAD
         state["last_update_ts"] = now_local_ts()
+=======
+        state["last_update_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         self._refresh_active_lists(state=state, traits=merged)
         self.storage.save_state(cid, state)
         self.storage.append_event(cid, {"type": "trait_remove", "trait": name, "source": "manual"})
@@ -165,19 +197,25 @@ class CharacterEngine:
         character = self.storage.load_character(cid)
         state = self.storage.load_state(cid)
         _, _, merged = self._load_traits(cid)
+<<<<<<< HEAD
         context_tags = dict(state.get("context_tags") or {})
         is_technical = str(context_tags.get("is_technical") or "").strip().lower() in {"1", "true", "yes", "on"}
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         composed = self.composer.compose(
             storage=self.storage,
             character_id=cid,
             character=character,
             state=state,
             traits=merged,
+<<<<<<< HEAD
             dialog_mode=dict(state.get("dialog_mode") or {}),
             context_meta={
                 "intent": str(context_tags.get("intent") or ""),
                 "is_technical": is_technical,
             },
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         )
         return composed.prompt
 
@@ -225,7 +263,11 @@ class CharacterEngine:
             changes=changes,
         )
         self._refresh_active_lists(state=state, traits=merged)
+<<<<<<< HEAD
         state["last_update_ts"] = now_local_ts()
+=======
+        state["last_update_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         if not str(state.get("mood") or "").strip():
             state["mood"] = str(character.get("default_mood") or "thoughtful")
 
@@ -264,8 +306,11 @@ class CharacterEngine:
             prompt_block=composed.prompt,
             used_prompt_files=list(composed.used_files),
             changes=changes,
+<<<<<<< HEAD
             effective_traits=dict(composed.effective_traits or {}),
             style_coefficients=dict(composed.style_coefficients or {}),
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         )
 
     def _validate_character(self, character_id: str) -> str:
@@ -388,8 +433,13 @@ class CharacterEngine:
                 trait["disabled"] = False
 
             trait["confidence"] = _clamp01(_to_float(trait.get("confidence"), 0.5) + 0.03)
+<<<<<<< HEAD
             trait["updated_at"] = now_local_iso()
             trait["last_used_ts"] = now_local_ts()
+=======
+            trait["updated_at"] = now
+            trait["last_used_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             merged[trait_name] = trait
             if before != trait.get("value"):
                 changes.append(
@@ -422,11 +472,19 @@ class CharacterEngine:
             max_v = _to_float(trait.get("max"), 1.0)
             nxt = _clamp(cur - (decay * days), min_v, max_v)
             if abs(nxt - cur) < 1e-6:
+<<<<<<< HEAD
                 trait["decay_ts"] = now_local_ts()
                 merged[name] = trait
                 continue
             trait["value"] = nxt
             trait["decay_ts"] = now_local_ts()
+=======
+                trait["decay_ts"] = now
+                merged[name] = trait
+                continue
+            trait["value"] = nxt
+            trait["decay_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             merged[name] = trait
             changes.append({"kind": "decay", "trait": name, "from": cur, "to": nxt})
 
@@ -437,8 +495,13 @@ class CharacterEngine:
             row = dict(merged.get("sarcasm") or {})
             before = _to_float(row.get("value"), sarcasm)
             row["value"] = _clamp(before - 0.12, _to_float(row.get("min"), 0.0), _to_float(row.get("max"), 1.0))
+<<<<<<< HEAD
             row["updated_at"] = now_local_iso()
             row["last_used_ts"] = now_local_ts()
+=======
+            row["updated_at"] = now
+            row["last_used_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             row["_source"] = "learned"
             merged["sarcasm"] = row
             changes.append({"kind": "conflict", "trait": "sarcasm", "from": before, "to": row.get("value"), "reason": "romance_vs_sarcasm"})
@@ -450,8 +513,13 @@ class CharacterEngine:
                 row = dict(merged.get("playfulness") or {})
                 before = _to_float(row.get("value"), play)
                 row["value"] = _clamp(before - 0.1, _to_float(row.get("min"), 0.0), _to_float(row.get("max"), 1.0))
+<<<<<<< HEAD
                 row["updated_at"] = now_local_iso()
                 row["last_used_ts"] = now_local_ts()
+=======
+                row["updated_at"] = now
+                row["last_used_ts"] = now
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                 row["_source"] = "learned"
                 merged["playfulness"] = row
                 changes.append({"kind": "conflict", "trait": "playfulness", "from": before, "to": row.get("value"), "reason": "focused_mode"})
@@ -556,9 +624,15 @@ def _normalize_trait(value: dict[str, Any] | None) -> dict[str, Any]:
         "prompt_file": str(row.get("prompt_file") or "").strip(),
         "ttl_days": max(0.0, _to_float(row.get("ttl_days"), 0.0)),
         "disabled": bool(row.get("disabled", False)),
+<<<<<<< HEAD
         "updated_at": str(row.get("updated_at") or ""),
         "last_used_ts": to_local_iso(row.get("last_used_ts"), default=""),
         "decay_ts": to_local_iso(row.get("decay_ts"), default=""),
+=======
+        "updated_at": _to_float(row.get("updated_at"), 0.0),
+        "last_used_ts": _to_float(row.get("last_used_ts"), 0.0),
+        "decay_ts": _to_float(row.get("decay_ts"), 0.0),
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
     }
     if out["type"] == "flag":
         out["value"] = bool(out["value"])
@@ -596,7 +670,11 @@ def _to_float(value, default: float) -> float:
     try:
         return float(value)
     except Exception:
+<<<<<<< HEAD
         return parse_time_to_epoch(value, float(default))
+=======
+        return float(default)
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:

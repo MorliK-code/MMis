@@ -82,7 +82,11 @@ class StateManager:
             "mode": "chat",
             "active_character_id": "asya",
             "character_locked": False,
+<<<<<<< HEAD
             "character_last_switch_ts": "",
+=======
+            "character_last_switch_ts": 0.0,
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             "active_personality_id": "default",
             "personality_blend": {
                 "active": False,
@@ -158,7 +162,14 @@ class StateManager:
             merged["active_personality_id"] = str(merged.get("active_personality_id") or "default").strip().lower() or "default"
             merged["active_character_id"] = str(merged.get("active_character_id") or "asya").strip().lower() or "asya"
             merged["character_locked"] = bool(merged.get("character_locked", False))
+<<<<<<< HEAD
             merged["character_last_switch_ts"] = to_local_iso(merged.get("character_last_switch_ts"), default="")
+=======
+            try:
+                merged["character_last_switch_ts"] = float(merged.get("character_last_switch_ts") or 0.0)
+            except Exception:
+                merged["character_last_switch_ts"] = 0.0
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             merged["personality_blend"] = self._coerce_personality_blend(merged.get("personality_blend"))
             merged["personality_locked"] = bool(merged.get("personality_locked", False))
             merged["personality_last_switch_ts"] = to_local_iso(merged.get("personality_last_switch_ts"), default="")
@@ -241,7 +252,11 @@ class StateManager:
 
         index = {
             "version": 1,
+<<<<<<< HEAD
             "updated_at": now_local_iso(),
+=======
+            "updated_at": time.time(),
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             "keys": keys,
         }
         (root / "_index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -289,9 +304,16 @@ class StateManager:
             if locked is not None:
                 self._state["character_locked"] = bool(locked)
             if switch_ts is not None:
+<<<<<<< HEAD
                 self._state["character_last_switch_ts"] = to_local_iso(switch_ts, default=now_local_ts())
             elif not str(self._state.get("character_last_switch_ts") or "").strip():
                 self._state["character_last_switch_ts"] = now_local_ts()
+=======
+                try:
+                    self._state["character_last_switch_ts"] = float(switch_ts)
+                except Exception:
+                    self._state["character_last_switch_ts"] = time.time()
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             self._touch_action(f"character:{cid}")
         self._autosave()
 
@@ -563,7 +585,11 @@ class StateManager:
                 mode=self._normalize_mode(self._state.get("mode")),
                 active_character_id=str(self._state.get("active_character_id") or "asya"),
                 character_locked=bool(self._state.get("character_locked", False)),
+<<<<<<< HEAD
                 character_last_switch_ts=parse_time_to_epoch(self._state.get("character_last_switch_ts"), 0.0),
+=======
+                character_last_switch_ts=float(self._state.get("character_last_switch_ts") or 0.0),
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                 active_personality_id=str(self._state.get("active_personality_id") or "default"),
                 personality_blend=self._coerce_personality_blend(self._state.get("personality_blend")),
                 personality_locked=bool(self._state.get("personality_locked", False)),

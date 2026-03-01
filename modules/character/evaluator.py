@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+<<<<<<< HEAD
 import re
 from typing import Any
 
 from modules.character.dialog_policies import trim_leading_greeting
 
+=======
+from typing import Any
+
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 class RuleEvaluator:
     def matches(self, when: dict[str, Any] | None, *, ctx: dict[str, Any], traits: dict[str, Any]) -> bool:
@@ -62,6 +67,7 @@ def _to_float(value, default: float) -> float:
     except Exception:
         return float(default)
 
+<<<<<<< HEAD
 
 class ResponseConstraintEvaluator:
     """Deterministic post-filter for hard response constraints."""
@@ -355,3 +361,5 @@ class ResponseConstraintEvaluator:
         src = self._SPACE_RE.sub(" ", src)
         return src.strip()
 
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04

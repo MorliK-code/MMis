@@ -3,6 +3,7 @@
   "active_character_id": "asya",
   "characters": [
     {
+<<<<<<< HEAD
       "id": "assistant",
       "name": "Assistant",
       "enabled": true
@@ -19,4 +20,12 @@
     }
   ],
   "updated_at": "2026-03-01T16:54:31.980+02:00"
+=======
+      "id": "asya",
+      "name": "Asya",
+      "enabled": true
+    }
+  ],
+  "updated_at": 1772265684.1994836
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 }

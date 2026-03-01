@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from modules.character.composer import CharacterComposeResult, CharacterComposer
+<<<<<<< HEAD
 from modules.character.dialog_policies import (
     compute_address_terms_policy,
     compute_dialog_flags,
@@ -13,6 +14,10 @@ from modules.character.dialog_policies import (
 )
 from modules.character.engine import CharacterEngine, CharacterUpdateResult
 from modules.character.evaluator import ResponseConstraintEvaluator, RuleEvaluator
+=======
+from modules.character.engine import CharacterEngine, CharacterUpdateResult
+from modules.character.evaluator import RuleEvaluator
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 from modules.character.storage import CharacterStorage
 
 __all__ = [
@@ -20,6 +25,7 @@ __all__ = [
     "CharacterUpdateResult",
     "CharacterStorage",
     "RuleEvaluator",
+<<<<<<< HEAD
     "ResponseConstraintEvaluator",
     "CharacterComposer",
     "CharacterComposeResult",
@@ -31,4 +37,8 @@ __all__ = [
     "compute_dialog_mode",
     "extract_term_directive",
     "deterministic_term_gate_score",
+=======
+    "CharacterComposer",
+    "CharacterComposeResult",
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 ]

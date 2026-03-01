@@ -23,10 +23,18 @@ class PromptEngine:
         self,
         registry: PromptRegistry | None = None,
         budget_manager: TokenBudgetManager | None = None,
+<<<<<<< HEAD
+=======
+        personality_engine: PersonalityEngine | None = None,
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         character_engine: CharacterEngine | None = None,
     ):
         self.registry = registry or PromptRegistry()
         self.budget_manager = budget_manager or TokenBudgetManager()
+<<<<<<< HEAD
+=======
+        self.personality_engine = personality_engine or PersonalityEngine()
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         self.character_engine = character_engine or CharacterEngine()
 
     def compose(
@@ -49,6 +57,16 @@ class PromptEngine:
             state_map.get("active_personality_id"),
             "default",
         ).lower()
+<<<<<<< HEAD
+=======
+        active_character = _pick(
+            state_map.get("active_character_id"),
+            traits_map.get("character"),
+            policies_map.get("character"),
+            active_personality,
+        ).lower()
+        personality = self.personality_engine.get_profile(active_personality)
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
         base_doc = self._safe_doc(key="system.base", fallback_text=blocks.get("system_role") or "")
         safety_doc = self._safe_doc(key="response.safety_filter", fallback_text="")
@@ -59,8 +77,15 @@ class PromptEngine:
                 character_prompt_block = str(self.character_engine.build_prompt(active_character) or "").strip()
             except Exception:
                 character_prompt_block = ""
+<<<<<<< HEAD
         personality_core_text = character_prompt_block or f"[CHAR_META]\ncharacter={active_character}\nstyle_source=characters"
         active_personality = active_character or "default"
+=======
+        personality_core_text = character_prompt_block or _join_non_empty([persona_doc["text"], style_doc["text"]])
+
+        blend = _as_dict(state_map.get("personality_blend"))
+        blend_old_block = self._build_blend_block(blend)
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
         user_profile_block = self._build_user_profile_block(state_map)
         metadata_block = self._build_metadata_block(state_map=state_map, blocks=blocks)
@@ -181,9 +206,15 @@ class PromptEngine:
         ]
 
         sections = {
+<<<<<<< HEAD
             "active_personality_id": active_personality,
             "active_personality_name": active_personality,
             "active_personality_version": "character-driven",
+=======
+            "active_personality_id": personality.id,
+            "active_personality_name": personality.name,
+            "active_personality_version": personality.version,
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             "active_character_id": active_character,
             "base_prompt_id": base_doc["id"],
             "base_prompt_version": base_doc["version"],

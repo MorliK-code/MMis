@@ -1,9 +1,15 @@
 {
   "id": "asya",
   "name": "Asya",
+<<<<<<< HEAD
   "version": "1.1.0",
   "default_mood": "ironic",
   "llm_profile": "ASYA",
+=======
+  "version": "1.0.0",
+  "default_mood": "thoughtful",
+  "llm_profile": "BALANCED",
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
   "prompt_files": {
     "base": "prompts/base.txt",
     "moods_dir": "prompts/moods",

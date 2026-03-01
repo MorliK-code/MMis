@@ -5,6 +5,7 @@ from typing import Any
 
 from modules.character.storage import CharacterStorage
 
+<<<<<<< HEAD
 _MOOD_MODIFIERS: dict[str, dict[str, float]] = {
     "focused": {"strictness": 0.20, "warmth": -0.08, "sarcasm": -0.10, "verbosity": -0.12},
     "thoughtful": {"warmth": 0.08, "verbosity": 0.06},
@@ -13,6 +14,8 @@ _MOOD_MODIFIERS: dict[str, dict[str, float]] = {
     "romantic_soft": {"warmth": 0.18, "sarcasm": -0.12},
 }
 
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 @dataclass(frozen=True)
 class CharacterComposeResult:
@@ -20,8 +23,11 @@ class CharacterComposeResult:
     mood: str
     used_files: list[str] = field(default_factory=list)
     active_traits: list[str] = field(default_factory=list)
+<<<<<<< HEAD
     effective_traits: dict[str, float] = field(default_factory=dict)
     style_coefficients: dict[str, float] = field(default_factory=dict)
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 class CharacterComposer:
@@ -37,8 +43,11 @@ class CharacterComposer:
         character: dict[str, Any],
         state: dict[str, Any],
         traits: dict[str, Any],
+<<<<<<< HEAD
         dialog_mode: dict[str, Any] | None = None,
         context_meta: dict[str, Any] | None = None,
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
     ) -> CharacterComposeResult:
         prompt_files = dict(character.get("prompt_files") or {})
         base_rel = str(prompt_files.get("base") or "prompts/base.txt")
@@ -54,6 +63,7 @@ class CharacterComposer:
         active = set(str(x).strip().lower() for x in list(state.get("active_traits") or []) if str(x).strip())
         disabled = set(str(x).strip().lower() for x in list(state.get("disabled_traits") or []) if str(x).strip())
 
+<<<<<<< HEAD
         dm = dict(dialog_mode or {})
         meta = dict(context_meta or {})
         context_mods = compute_context_trait_modifiers(
@@ -66,6 +76,9 @@ class CharacterComposer:
 
         trait_blocks: list[tuple[float, str, str]] = []
         effective_traits: dict[str, float] = {}
+=======
+        trait_blocks: list[tuple[float, str, str]] = []
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         for name, payload in dict(traits or {}).items():
             trait_name = str(name or "").strip().lower()
             if not trait_name or trait_name.startswith("_") or trait_name in disabled:
@@ -83,6 +96,7 @@ class CharacterComposer:
                 include = bool(value)
                 score = 1.0 if include else 0.0
             else:
+<<<<<<< HEAD
                 base_score = _to_float(value, 0.0)
                 score = compute_effective_trait_value(
                     trait_name,
@@ -93,6 +107,10 @@ class CharacterComposer:
                 )
                 include = score >= self.trait_threshold
                 effective_traits[trait_name] = float(score)
+=======
+                score = _to_float(value, 0.0)
+                include = score >= self.trait_threshold
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             if not include:
                 continue
             rel = str(row.get("prompt_file") or "").strip().strip("/")
@@ -107,10 +125,31 @@ class CharacterComposer:
         trait_blocks.sort(key=lambda x: x[0], reverse=True)
         trait_blocks = trait_blocks[: self.max_trait_overlays]
 
+<<<<<<< HEAD
+=======
+        overlays: list[str] = []
+        overlays_dir = str(prompt_files.get("overlays_dir") or "prompts/overlays").strip().strip("/")
+        sarcasm = _trait_scalar(traits, "sarcasm")
+        warmth = _trait_scalar(traits, "warmth")
+        if sarcasm >= 0.72:
+            rel = f"{overlays_dir}/high_sarcasm.txt"
+            text = storage.read_prompt(character_id, rel)
+            if text:
+                overlays.append(text)
+                used.append(rel)
+        if warmth >= 0.72:
+            rel = f"{overlays_dir}/high_warmth.txt"
+            text = storage.read_prompt(character_id, rel)
+            if text:
+                overlays.append(text)
+                used.append(rel)
+
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         blocks: list[str] = []
         if base_text:
             blocks.append(f"[CHAR_BASE]\n{base_text}")
         blocks.append(f"[CHAR_META]\ncharacter={character_id}\nmood={mood}")
+<<<<<<< HEAD
         blocks.append(
             "[CHAR_DIALOG_MODE]\n"
             f"greeting_allowed={str(bool(dm.get('greeting_allowed', dm.get('allow_greeting', False)))).lower()}\n"
@@ -123,16 +162,26 @@ class CharacterComposer:
             f"strictness={style_coefficients['strictness']:.3f}\n"
             f"verbosity={style_coefficients['verbosity']:.3f}"
         )
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         if mood_text:
             blocks.append(f"[CHAR_MOOD]\n{mood_text}")
         if trait_blocks:
             text = "\n\n".join([row[2] for row in trait_blocks if row[2]])
             blocks.append(f"[CHAR_TRAITS]\n{text}")
+<<<<<<< HEAD
         if not base_text and not mood_text and not trait_blocks:
+=======
+        if overlays:
+            overlays_text = "\n\n".join(overlays)
+            blocks.append(f"[CHAR_OVERLAYS]\n{overlays_text}")
+        if not base_text and not mood_text and not trait_blocks and not overlays:
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             blocks.append("[CHAR_FALLBACK]\nKeep responses adaptive, warm, and concise.")
 
         active_traits = [row[1] for row in trait_blocks]
         prompt = "\n\n".join([x.strip() for x in blocks if str(x).strip()]).strip()
+<<<<<<< HEAD
         return CharacterComposeResult(
             prompt=prompt,
             mood=mood,
@@ -141,6 +190,9 @@ class CharacterComposer:
             effective_traits=effective_traits,
             style_coefficients=style_coefficients,
         )
+=======
+        return CharacterComposeResult(prompt=prompt, mood=mood, used_files=used, active_traits=active_traits)
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 def _to_float(value, default: float) -> float:
@@ -150,6 +202,7 @@ def _to_float(value, default: float) -> float:
         return float(default)
 
 
+<<<<<<< HEAD
 def compute_effective_trait_value(
     trait_name: str,
     *,
@@ -207,12 +260,15 @@ def compute_context_trait_modifiers(
     return out
 
 
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 def _trait_scalar(traits: dict[str, Any], key: str) -> float:
     row = dict(traits.get(str(key).strip().lower()) or {})
     value = row.get("value")
     if isinstance(value, bool):
         return 1.0 if value else 0.0
     return _to_float(value, 0.0)
+<<<<<<< HEAD
 
 
 def _overlay_modifiers(traits: dict[str, Any]) -> dict[str, float]:
@@ -269,3 +325,5 @@ def _resolve_style_coefficients(
         )
         out[key] = max(0.0, min(1.0, float(effective)))
     return out
+=======
+>>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
