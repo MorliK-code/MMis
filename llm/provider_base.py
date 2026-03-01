@@ -71,6 +71,7 @@ class LLMRequest:
 class LLMChunk:
     text_delta: str = ""
     tool_calls_delta: list[ToolCall] = field(default_factory=list)
+    thinking_delta: str = ""
     done: bool = False
     raw: Any = None
 
@@ -79,6 +80,7 @@ class LLMChunk:
 class LLMResponse:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
+    thinking: str = ""
     usage: Usage = field(default_factory=Usage)
     timings: Timings = field(default_factory=Timings)
     model: str = ""

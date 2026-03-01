@@ -20,6 +20,7 @@ from utils.datetime_local import parse_time_to_epoch
 class BrainResult:
     text: str
     route: str
+    thinking: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     memory_ops: list[dict[str, Any]] = field(default_factory=list)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
@@ -197,6 +198,7 @@ class Brain:
         return BrainResult(
             text=str(pipeline_result.text or ""),
             route=route,
+            thinking=str(pipeline_result.thinking or ""),
             tool_calls=list(pipeline_result.tool_calls or []),
             memory_ops=list(pipeline_result.memory_ops or []),
             ui_actions=list(pipeline_result.ui_actions or []),
@@ -420,6 +422,7 @@ class Brain:
             self.memory_manager.ingest_message(
                 role="assistant",
                 text=assistant_payload,
+                thinking=result.thinking,
                 metadata=assistant_meta,
                 trace_id=trace_id,
                 source=source,

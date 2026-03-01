@@ -92,10 +92,6 @@ def _print_help() -> None:
     print("/model               show current runtime model")
     print("/model <name>        set runtime model")
     print("/think               enable thinking")
-<<<<<<< HEAD
-=======
-    print("/nothink             disable thinking")
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
     print("/json                enable JSON mode")
     print("/nojson              disable JSON mode")
     print("/character ...       backend character command")
@@ -468,11 +464,7 @@ class _StreamRealtimePrinter:
         if self._printed_any:
             sys.stdout.write("\n")
         if target == "thinking":
-<<<<<<< HEAD
             sys.stdout.write("[Thinking] ")
-=======
-            sys.stdout.write("thinking> ")
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         else:
             sys.stdout.write("assistant> ")
         self._printed_any = True
@@ -483,10 +475,6 @@ def _sanitize_stream_text(piece: str) -> str:
     src = str(piece or "")
     if not src:
         return ""
-<<<<<<< HEAD
-=======
-    # Avoid terminal line rewrites from carriage returns in streamed chunks.
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
     src = src.replace("\r\n", "\n").replace("\r", "\n")
     return "".join(ch for ch in src if (ch == "\n" or ch == "\t" or ord(ch) >= 32))
 

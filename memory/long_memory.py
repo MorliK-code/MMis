@@ -18,6 +18,7 @@ class MemoryDoc:
     text: str
     created_at: float
     updated_at: str
+    thinking: str = ""
     source: str = "chat"
     tags: list[str] = field(default_factory=list)
     importance: float = 0.5
@@ -28,6 +29,7 @@ class MemoryDoc:
         return {
             "id": self.id,
             "text": self.text,
+            "thinking": self.thinking,
             "created_at": float(self.created_at),
             "updated_at": str(self.updated_at),
             "source": self.source,
@@ -56,6 +58,7 @@ class LongMemory:
         text: str,
         meta: dict[str, Any] | None = None,
         *,
+        thinking: str = "",
         source: str = "chat",
         tags: list[str] | None = None,
         importance: float = 0.5,
@@ -70,6 +73,7 @@ class LongMemory:
         item = MemoryDoc(
             id=str(doc_id or f"doc-{uuid.uuid4().hex[:16]}"),
             text=doc_text,
+            thinking=str(thinking or ""),
             created_at=now,
             updated_at=now_local_iso(),
             source=str(source or "chat"),
@@ -94,6 +98,8 @@ class LongMemory:
             row = dict(current)
             if "text" in changes and str(changes.get("text") or "").strip():
                 row["text"] = str(changes.get("text")).strip()
+            if "thinking" in changes:
+                row["thinking"] = str(changes.get("thinking") or "").strip()
             if "source" in changes and str(changes.get("source") or "").strip():
                 row["source"] = str(changes.get("source")).strip()
             if "tags" in changes:
@@ -178,6 +184,7 @@ class LongMemory:
                 self._docs[key] = {
                     "id": key,
                     "text": str(row.get("text") or ""),
+                    "thinking": str(row.get("thinking") or ""),
                     "created_at": float(row.get("created_at") or time.time()),
                     "updated_at": str(row.get("updated_at") or now_local_iso()),
                     "source": str(row.get("source") or "chat"),
@@ -203,6 +210,7 @@ def _doc_from_dict(row: dict[str, Any] | None) -> MemoryDoc | None:
     return MemoryDoc(
         id=str(row.get("id") or ""),
         text=text,
+        thinking=str(row.get("thinking") or ""),
         created_at=float(row.get("created_at") or time.time()),
         updated_at=str(row.get("updated_at") or now_local_iso()),
         source=str(row.get("source") or "chat"),

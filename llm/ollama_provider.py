@@ -298,7 +298,6 @@ class OllamaProvider(LLMProviderBase):
         msg = dict(payload.get("message") or {})
         text = str(msg.get("content") or "")
         thinking = _extract_thinking(msg, payload)
-        text = _wrap_thinking(text, thinking, trim=True)
         tool_calls = _parse_tool_calls_from_message(msg, text_fallback=text)
         usage = self._extract_usage(payload)
         timings = self._extract_timings(payload)
@@ -319,6 +318,7 @@ class OllamaProvider(LLMProviderBase):
         return LLMResponse(
             text=text,
             tool_calls=tool_calls,
+            thinking=thinking,
             usage=usage,
             timings=timings,
             model=str(payload.get("model") or model),
@@ -350,7 +350,6 @@ class OllamaProvider(LLMProviderBase):
             text_delta = str(msg.get("content") or "")
             thinking_delta = _extract_thinking(msg, chunk)
             thinking_delta, prev_thinking_char = _stitch_thinking_delta(prev_thinking_char, thinking_delta)
-            text_delta = _wrap_thinking(text_delta, thinking_delta, trim=False)
             tool_calls_delta = _parse_tool_calls_from_message(msg, text_fallback=text_delta)
             done = bool(chunk.get("done", False))
             chunk_count += 1
@@ -366,6 +365,7 @@ class OllamaProvider(LLMProviderBase):
                 )
             yield LLMChunk(
                 text_delta=text_delta,
+                thinking_delta=thinking_delta,
                 tool_calls_delta=tool_calls_delta,
                 done=done,
                 raw=(chunk if self.debug_raw else None),

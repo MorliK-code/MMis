@@ -131,6 +131,7 @@ class ShortMemory:
             "role": str(row.get("role") or "user"),
             "type": str(row.get("type") or "message"),
             "text": text,
+            "thinking": str(row.get("thinking") or ""),
             "ts": ts_value,
             "lang": str(row.get("lang") or ""),
             "intent": str(row.get("intent") or ""),

@@ -71,6 +71,7 @@ class MemoryManager:
         self,
         role: str,
         text: str,
+        thinking: str = "",
         metadata: dict | None = None,
         ts: float | str | None = None,
         **ids,
@@ -99,6 +100,7 @@ class MemoryManager:
                 "payload": {
                     "role": role_norm,
                     "text": content,
+                    "thinking": thinking,
                     "metadata": meta,
                     "ids": {k: v for k, v in ids.items()},
                 },
@@ -129,6 +131,7 @@ class MemoryManager:
                 "role": role_norm,
                 "type": "message",
                 "text": content,
+                "thinking": thinking,
                 "ts": now_iso,
                 "lang": lang,
                 "intent": intent,
@@ -168,6 +171,7 @@ class MemoryManager:
             confidence = _clamp01(float(meta.get("confidence") or 0.62))
             doc = self.long_memory.add_doc(
                 text=content,
+                thinking=thinking,
                 meta={"event_id": event_id, "role": role_norm, "source": source, "trace_id": trace_id},
                 source="chat",
                 tags=tags,

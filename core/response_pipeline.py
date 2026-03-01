@@ -22,12 +22,10 @@ from core.prompt_builder import PromptBuilder, PromptPack
 from llm.provider_base import LLMProviderBase, LLMRequest, Message, ToolCall, ToolSpec
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.engine import CharacterEngine
-<<<<<<< HEAD
 from modules.character.evaluator import ResponseConstraintEvaluator
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 from prompt_engine import PromptEngine
 from utils.datetime_local import now_local_ts, parse_time_to_epoch
+from core.web_rag_stage import WebRetrieveStage
 
 
 PROFILE_FAST = "FAST"
@@ -55,6 +53,7 @@ class PipelineContext:
     prompt_sections: dict[str, str] = field(default_factory=dict)
     raw_output: str = ""
     text: str = ""
+    thinking: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     memory_ops: list[dict[str, Any]] = field(default_factory=list)
@@ -68,6 +67,7 @@ class PipelineContext:
 @dataclass(frozen=True)
 class PipelineResult:
     text: str
+    thinking: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     memory_ops: list[dict[str, Any]] = field(default_factory=list)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
@@ -227,12 +227,7 @@ class PlanStage(PipelineStage):
 class PersonalityStage(PipelineStage):
     name = "personality"
 
-<<<<<<< HEAD
     def __init__(self, character_engine: CharacterEngine | None = None):
-=======
-    def __init__(self, personality_engine: PersonalityEngine | None = None, character_engine: CharacterEngine | None = None):
-        self._engine = personality_engine or PersonalityEngine()
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         self._characters = character_engine or CharacterEngine()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
@@ -259,11 +254,8 @@ class PersonalityStage(PipelineStage):
                 "mode": str(ctx.state.get("mode") or "chat"),
                 "topic": str(ctx.tags.get("topic") or ""),
                 "metadata_tags": list(ctx.tags.get("metadata_tags") or []),
-<<<<<<< HEAD
                 "dialog_mode": dict(ctx.meta.get("dialog_mode") or ctx.state.get("dialog_mode") or {}),
                 "is_technical": _to_bool(_pick_value(ctx.tags.get("is_technical"), ctx.meta.get("is_technical"), False), default=False),
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             },
             active_character_id=active_character,
         )
@@ -289,13 +281,10 @@ class PersonalityStage(PipelineStage):
             if key not in merged_traits:
                 merged_traits[key] = value
         merged_traits["character_traits_meta"] = dict(update.traits or {})
-<<<<<<< HEAD
         if update.style_coefficients:
             merged_traits["style_coefficients"] = dict(update.style_coefficients)
         if update.effective_traits:
             merged_traits["effective_traits"] = dict(update.effective_traits)
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         ctx.traits = merged_traits
         ctx.personality = {
             "target_personality_id": update.character_id,
@@ -310,11 +299,7 @@ class PersonalityStage(PipelineStage):
                     "op": "state_character",
                     "value": update.character_id,
                     "locked": bool(ctx.state.get("character_locked", False)),
-<<<<<<< HEAD
                     "ts": now_local_ts(),
-=======
-                    "ts": time.time(),
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                     "reason": "character_stage",
                 }
             )
@@ -323,11 +308,7 @@ class PersonalityStage(PipelineStage):
                     "op": "state_personality",
                     "value": update.character_id,
                     "locked": bool(ctx.state.get("personality_locked", False)),
-<<<<<<< HEAD
                     "ts": now_local_ts(),
-=======
-                    "ts": time.time(),
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                     "reason": "character_stage_mirror",
                 }
             )
@@ -469,18 +450,10 @@ class GenerateStage(PipelineStage):
         self,
         provider: LLMProviderBase,
         prompt_builder: PromptBuilder,
-<<<<<<< HEAD
-=======
-        personality_engine: PersonalityEngine | None = None,
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         character_engine: CharacterEngine | None = None,
     ):
         self.provider = provider
         self.prompt_builder = prompt_builder
-<<<<<<< HEAD
-=======
-        self.personality_engine = personality_engine or PersonalityEngine()
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         self.character_engine = character_engine or CharacterEngine()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
@@ -503,9 +476,8 @@ class GenerateStage(PipelineStage):
             if stream_result is not None:
                 text_out, thinking_out, model_name = stream_result
                 ctx.raw_output = text_out
-                if thinking_out:
-                    ctx.raw_output = f"{text_out}\n<think>{thinking_out}</think>"
-                ctx.text = ctx.raw_output
+                ctx.text = text_out
+                ctx.thinking = thinking_out
                 ctx.stats = {
                     "served_model": str(model_name or req.model or ""),
                     "answer_ms": 0.0,
@@ -520,6 +492,7 @@ class GenerateStage(PipelineStage):
         resp = self.provider.generate(req)
         ctx.raw_output = str(resp.text or "")
         ctx.text = ctx.raw_output
+        ctx.thinking = str(getattr(resp, "thinking", "") or "")
         if resp.tool_calls:
             ctx.tool_calls = [_tool_call_to_dict(x) for x in list(resp.tool_calls or [])]
         ctx.stats = {
@@ -640,11 +613,7 @@ class GenerateStage(PipelineStage):
                         "op": "state_character",
                         "value": current,
                         "locked": False,
-<<<<<<< HEAD
                         "ts": now_local_ts(),
-=======
-                        "ts": time.time(),
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                         "reason": "manual_auto",
                     }
                 )
@@ -655,25 +624,18 @@ class GenerateStage(PipelineStage):
                 ctx.text = f"Unknown character '{target}'. Available: {', '.join(sorted(known))}"
                 ctx.logs.append(f"stage=generate command=character:unknown:{target}")
                 return True
-<<<<<<< HEAD
             try:
                 self.character_engine.set_active_character(target)
             except Exception:
                 # Runtime state update below is still the source of truth for current turn.
                 pass
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             ctx.text = f"Character switched to: {target}"
             ctx.memory_ops.append(
                 {
                     "op": "state_character",
                     "value": target,
                     "locked": True,
-<<<<<<< HEAD
                     "ts": now_local_ts(),
-=======
-                    "ts": time.time(),
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                     "reason": "manual",
                     "confidence": 1.0,
                 }
@@ -692,11 +654,7 @@ class GenerateStage(PipelineStage):
                         "old_weight": 0.75 if current and current != target else 0.0,
                         "new_weight": 0.25 if current and current != target else 1.0,
                     },
-<<<<<<< HEAD
                     "ts": now_local_ts(),
-=======
-                    "ts": time.time(),
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                     "reason": "manual_character_mirror",
                     "confidence": 1.0,
                 }
@@ -770,15 +728,9 @@ class GenerateStage(PipelineStage):
                 or ctx.state.get("active_personality_id")
                 or "default"
             ).strip().lower() or "default"
-<<<<<<< HEAD
             locked = bool(ctx.state.get("character_locked", False))
             ctx.text = f"Character style source: {current} ({'locked' if locked else 'auto'})"
             ctx.logs.append("stage=generate command=persona:show_alias")
-=======
-            locked = bool(ctx.state.get("character_locked", False) or ctx.state.get("personality_locked", False))
-            ctx.text = f"Personality/Character: {current} ({'locked' if locked else 'auto'})"
-            ctx.logs.append("stage=generate command=persona:show")
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             return True
         if cmd in {"/persona auto", "/personality auto"}:
             current = str(
@@ -786,23 +738,14 @@ class GenerateStage(PipelineStage):
                 or ctx.state.get("active_personality_id")
                 or "default"
             ).strip().lower() or "default"
-<<<<<<< HEAD
             ctx.text = "Character auto mode enabled."
-=======
-            ctx.text = "Personality/character auto mode enabled."
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             ctx.memory_ops.append(
                 {
                     "op": "state_character",
                     "value": current,
                     "locked": False,
-<<<<<<< HEAD
                     "ts": now_local_ts(),
                     "reason": "manual_auto_alias_persona",
-=======
-                    "ts": time.time(),
-                    "reason": "manual_auto",
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                 }
             )
             ctx.memory_ops.append(
@@ -829,17 +772,9 @@ class GenerateStage(PipelineStage):
             target = cmd.split(" ", 1)[1].strip().lower()
             if not target:
                 return False
-<<<<<<< HEAD
             known_char = set(self.character_engine.list_ids())
             if target not in known_char:
                 ctx.text = f"Unknown character '{target}'. Available: {', '.join(sorted(known_char))}"
-=======
-            known_persona = set(self.personality_engine.list_ids())
-            known_char = set(self.character_engine.list_ids())
-            known = set(known_persona) | set(known_char)
-            if target not in known:
-                ctx.text = f"Unknown personality/character '{target}'. Available: {', '.join(sorted(known))}"
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                 ctx.logs.append(f"stage=generate command=persona:unknown:{target}")
                 return True
             current = str(ctx.state.get("active_personality_id") or "default").strip().lower() or "default"
@@ -868,7 +803,6 @@ class GenerateStage(PipelineStage):
                     "confidence": 1.0,
                 }
             )
-<<<<<<< HEAD
             ctx.memory_ops.append(
                 {
                     "op": "state_character",
@@ -880,20 +814,6 @@ class GenerateStage(PipelineStage):
                 }
             )
             ctx.logs.append(f"stage=generate command=persona_alias:{target}")
-=======
-            if target in known_char:
-                ctx.memory_ops.append(
-                    {
-                        "op": "state_character",
-                        "value": target,
-                        "locked": True,
-                        "ts": time.time(),
-                        "reason": "manual_persona_as_character",
-                        "confidence": 1.0,
-                    }
-                )
-            ctx.logs.append(f"stage=generate command=persona:{target}")
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             return True
         return False
 
@@ -905,12 +825,7 @@ class GenerateStage(PipelineStage):
         action = str(parts[1]).strip().lower()
         current = str(
             ctx.state.get("active_character_id")
-<<<<<<< HEAD
             or "default"
-=======
-            or ctx.state.get("active_personality_id")
-            or "asya"
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         ).strip().lower()
 
         if action == "list":
@@ -1042,7 +957,6 @@ class PostprocessStage(PipelineStage):
             text = _enforce_response_hygiene(text)
             if text != before_hygiene:
                 ctx.logs.append("stage=postprocess hygiene=applied")
-<<<<<<< HEAD
             text = _normalize_text(text)
             text = _enforce_response_hygiene(text)
             dialog_mode = _resolve_dialog_mode(ctx)
@@ -1067,12 +981,6 @@ class PostprocessStage(PipelineStage):
             if _should_apply_echo_guard(ctx.clean_user_msg) and _looks_like_echo_response(answer=text, user_msg=ctx.clean_user_msg):
                 text = _echo_fallback_text(ctx.clean_user_msg)
                 ctx.logs.append("stage=postprocess echo_guard=applied")
-=======
-            profile = str(ctx.traits.get("profile") or ctx.state.get("profile") or "default")
-            text = apply_personality(text, profile=profile)
-            text = _normalize_text(text)
-            text = _enforce_response_hygiene(text)
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
             add_emoji = bool(_as_dict(ctx.policies.get("postprocess")).get("add_emoji", False))
             if add_emoji:
@@ -1226,45 +1134,27 @@ class ResponsePipeline:
         metadata_extractor: MetadataExtractor | None = None,
         prompt_engine: PromptEngine | None = None,
         memory_manager=None,
-<<<<<<< HEAD
-=======
-        personality_engine: PersonalityEngine | None = None,
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         character_engine: CharacterEngine | None = None,
     ):
         self.provider = provider
         self.prompt_builder = prompt_builder or PromptBuilder()
-<<<<<<< HEAD
         self.character_engine = character_engine or CharacterEngine()
         self.prompt_engine = prompt_engine or PromptEngine(
-=======
-        self.personality_engine = personality_engine or PersonalityEngine()
-        self.character_engine = character_engine or CharacterEngine()
-        self.prompt_engine = prompt_engine or PromptEngine(
-            personality_engine=self.personality_engine,
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
             character_engine=self.character_engine,
         )
         self._stages: dict[str, PipelineStage] = {
             "preprocess": PreprocessStage(metadata_extractor=metadata_extractor),
             "plan": PlanStage(),
             "personality": PersonalityStage(
-<<<<<<< HEAD
-=======
-                personality_engine=self.personality_engine,
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                 character_engine=self.character_engine,
             ),
             "memory_retrieve": MemoryRetrieveStage(memory_manager=memory_manager),
+            "web_retrieve": WebRetrieveStage(),
             "prompt_build": PromptBuildStage(prompt_builder=self.prompt_builder),
             "prompt_engine": PromptEngineStage(prompt_engine=self.prompt_engine),
             "generate": GenerateStage(
                 provider=self.provider,
                 prompt_builder=self.prompt_builder,
-<<<<<<< HEAD
-=======
-                personality_engine=self.personality_engine,
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
                 character_engine=self.character_engine,
             ),
             "postprocess": PostprocessStage(),
@@ -1289,6 +1179,7 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "memory_retrieve",
+                "web_retrive",
                 "prompt_build",
                 "prompt_engine",
                 "generate",
@@ -1302,6 +1193,7 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "memory_retrieve",
+                "web_retrive",
                 "prompt_build",
                 "prompt_engine",
                 "generate",
@@ -1507,7 +1399,6 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
     if personality_id:
         out["personality_id"] = personality_id
         out["character_id"] = personality_id
-<<<<<<< HEAD
     for key in (
         "num_ctx",
         "num_thread",
@@ -1534,9 +1425,6 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "sarcasm_level",
         "is_technical",
     ):
-=======
-    for key in ("num_ctx", "num_thread", "num_gpu", "num_batch", "keep_alive", "think"):
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
         if key in meta:
             out[key] = meta.get(key)
     return out
@@ -1661,11 +1549,7 @@ def _unwrap_safety_output_json(text: str, *, preserve_json: bool) -> tuple[str, 
 _DROP_ROLE_LINE_RE = re.compile(r"^\s*(?:thinking|you|user|system)\s*>\s*", flags=re.IGNORECASE)
 _ASSISTANT_LINE_PREFIX_RE = re.compile(r"^\s*assistant\s*>\s*", flags=re.IGNORECASE)
 _MODEL_LINE_RE = re.compile(r"^\s*\[model:[^\]]+\]\s*$", flags=re.IGNORECASE)
-<<<<<<< HEAD
 _THINKING_HEADER_RE = re.compile(r"^\s*\[thinking\](?:\s*[РІР‚вЂќ-]\s*)?$", flags=re.IGNORECASE)
-=======
-_THINKING_HEADER_RE = re.compile(r"^\s*\[thinking\](?:\s*[—-]\s*)?$", flags=re.IGNORECASE)
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 
 
 def _enforce_response_hygiene(text: str) -> str:
@@ -1744,16 +1628,11 @@ def _dedupe_key(text: str) -> str:
     src = _normalize_text(text).lower()
     if not src:
         return ""
-<<<<<<< HEAD
     src = re.sub(r"[\"'`Р’В«Р’В»РІР‚С›РІР‚СљРІР‚Сњ]", "", src)
-=======
-    src = re.sub(r"[\"'`«»„“”]", "", src)
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
     src = re.sub(r"[\s\.,;:!?()\[\]{}\-_/\\]+", " ", src)
     return src.strip()
 
 
-<<<<<<< HEAD
 def _compute_greeting_flags(
     *,
     text: str,
@@ -2258,8 +2137,6 @@ def _echo_fallback_text(user_msg: str) -> str:
     return "РџРѕРЅСЏР»Р°. РЇ РЅР° СЃРІСЏР·Рё Рё РіРѕС‚РѕРІР° РїРѕРјРѕС‡СЊ. РЈС‚РѕС‡РЅРё, С‡С‚Рѕ РёРјРµРЅРЅРѕ РЅСѓР¶РЅРѕ."
 
 
-=======
->>>>>>> 51b8456b510b4061cb471a6e7b7574d205e99e04
 def _as_dict(value) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
