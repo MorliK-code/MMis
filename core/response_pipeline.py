@@ -572,6 +572,7 @@ class GenerateStage(PipelineStage):
 
     def _handle_internal_command(self, ctx: PipelineContext) -> bool:
         cmd = str(ctx.clean_user_msg or "").strip().lower()
+
         if cmd in {"/characters", "/character list"}:
             ids = self.character_engine.list_ids()
             current = str(
@@ -586,6 +587,7 @@ class GenerateStage(PipelineStage):
                 ctx.text = "Characters:\n" + "\n".join(rows)
             ctx.logs.append("stage=generate command=characters:list")
             return True
+        
         if cmd in {"/character", "/character current"}:
             ids = self.character_engine.list_ids()
             current = str(
@@ -597,6 +599,7 @@ class GenerateStage(PipelineStage):
             ctx.text = f"Character: {current} ({'locked' if locked else 'auto'})"
             ctx.logs.append("stage=generate command=character:show")
             return True
+        
         if cmd.startswith("/character "):
             target = cmd.split(" ", 1)[1].strip().lower()
             if not target:
@@ -663,18 +666,42 @@ class GenerateStage(PipelineStage):
             return True
         if cmd.startswith("/trait "):
             return self._handle_trait_command(ctx, cmd)
+        
         if cmd == "/think":
             ctx.text = "Thinking mode enabled."
             ctx.memory_ops.append({"op": "state_think", "value": True})
             ctx.ui_actions.append({"type": "toggle_think", "enabled": True})
             ctx.logs.append("stage=generate command=think")
             return True
+    
         if cmd == "/nothink":
             ctx.text = "Thinking mode disabled."
             ctx.memory_ops.append({"op": "state_think", "value": False})
             ctx.ui_actions.append({"type": "toggle_think", "enabled": False})
             ctx.logs.append("stage=generate command=nothink")
             return True
+        
+        if cmd == "/web":
+            ctx.text = "Web mode enabled."
+            ctx.memory_ops.append({"op": "state_web_mode", "value": "on"})
+            ctx.ui_actions.append({"type": "set_web_mode", "mode": "on"})
+            ctx.logs.append("stage=generate command=web mode=on")
+        return True
+        
+        if cmd == "/no-web":
+            ctx.text = "Web mode disabled."
+            ctx.memory_ops.append({"op": "state_web_mode", "value": "off"})
+            ctx.ui_actions.append({"type": "set_web_mode", "mode": "off"})
+            ctx.logs.append("stage=generate command=no-web mode=off")
+        return True
+
+        if cmd in {"/web-auto", "/web_auto", "/auto-web"}:
+            ctx.text = "Web mode set to auto."
+            ctx.memory_ops.append({"op": "state_web_mode", "value": "auto"})
+            ctx.ui_actions.append({"type": "set_web_mode", "mode": "auto"})
+            ctx.logs.append("stage=generate command=web-auto mode=auto")
+        return True
+        
         if cmd in {"/cache", "/cache stats"}:
             stats = _cache_stats()
             namespaces = list(stats.get("namespaces") or [])
@@ -704,6 +731,7 @@ class GenerateStage(PipelineStage):
                 )
             ctx.logs.append("stage=generate command=cache:stats")
             return True
+        
         if cmd in {"/cache clear", "/cache clean"}:
             summary = _cache_clear()
             ctx.text = (
@@ -715,6 +743,7 @@ class GenerateStage(PipelineStage):
             )
             ctx.logs.append("stage=generate command=cache:clear")
             return True
+        
         if cmd.startswith("/mode "):
             target = cmd.replace("/mode", "", 1).strip()
             if target:
@@ -722,6 +751,7 @@ class GenerateStage(PipelineStage):
                 ctx.memory_ops.append({"op": "state_mode", "value": target})
                 ctx.logs.append(f"stage=generate command=mode:{target}")
                 return True
+            
         if cmd in {"/persona", "/persona current", "/personality"}:
             current = str(
                 ctx.state.get("active_character_id")
@@ -732,6 +762,7 @@ class GenerateStage(PipelineStage):
             ctx.text = f"Character style source: {current} ({'locked' if locked else 'auto'})"
             ctx.logs.append("stage=generate command=persona:show_alias")
             return True
+        
         if cmd in {"/persona auto", "/personality auto"}:
             current = str(
                 ctx.state.get("active_character_id")
@@ -768,6 +799,7 @@ class GenerateStage(PipelineStage):
             )
             ctx.logs.append("stage=generate command=persona:auto_alias")
             return True
+        
         if cmd.startswith("/persona ") or cmd.startswith("/personality "):
             target = cmd.split(" ", 1)[1].strip().lower()
             if not target:

@@ -14,9 +14,9 @@
       "prompt_file": "prompts/traits/teasing.txt",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-01T19:21:34.643+02:00",
-      "last_used_ts": "2026-03-01T19:21:34.643+02:00",
-      "decay_ts": "2026-03-01T19:08:02.247+02:00"
+      "updated_at": "2026-03-02T01:32:36.926+02:00",
+      "last_used_ts": "2026-03-02T01:32:36.926+02:00",
+      "decay_ts": "2026-03-02T01:31:59.297+02:00"
     }
   }
 }

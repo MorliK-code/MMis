@@ -6,9 +6,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from config.settings import load_config
-from modules.internet.search import SearchClient, SearchEngine, SearchResult
+from modules.internet.search import SearchClient, SearchResult
 from modules.internet.scraper import WebScraper
-
 
 _TIME_SENSITIVE_RE = re.compile(
     r"\b(сегодня|сейчас|в\s+202\d|последн(ие|яя|ий)|новост|цена|курс|актуал|релиз|верси)\b",
@@ -17,15 +16,12 @@ _TIME_SENSITIVE_RE = re.compile(
 
 
 def _needs_web(text: str, tags: dict[str, Any], meta: dict[str, Any]) -> bool:
-    # команда
-    if str(text).strip().lower().startswith(("/web ", "/search ", "/google ")):
-        return True
+    if meta.get("no_web") is True:
+        return False
     
-    # ручной флаг
-    if bool(meta.get("use_web", False)):
-        return True
+    if meta.get("use_web") is True:
+        return False
     
-    # эвристика: вопрос + "актуальность"
     intent = str(tags.get("intent", "")).lower()
     if intent in {"question", "implementation", "action_request"} and _TIME_SENSITIVE_RE.search(text or ""):
         return True
@@ -35,13 +31,12 @@ def _needs_web(text: str, tags: dict[str, Any], meta: dict[str, Any]) -> bool:
 def _strip_web_prefix(text: str) -> str:
     s = str(text or "").strip()
     low = s.lower()
-    for p in ("/web ", "/search ", "/google "):
-        if low.startswith(p):
-            return s[len(p):].strip(
-            )
+    for p in ("/web", "/no-web"):
+        if low == p or low.startswith(p+ " "):
+            return s[len(p):].strip()
         return s
     
-def domain(url: str) -> str:
+def _domain(url: str) -> str:
     try:
         return urlparse(url).netloc.lower().strip()
     except Exception:
@@ -65,19 +60,29 @@ class WebRetrieveStage:
     name = "web_retrieve"
 
     def __init__(
-            self,
-            *,
-            search_client: SearchClient | None = None,
-            scraper: WebScraper | None = None,
-            cfg: WebRagConfig | None = None,
+        self,
+        *,
+        search_client: SearchClient | None = None,
+        scraper: WebScraper | None = None,
+        cfg: WebRagConfig | None = None,
     ):
         app = load_config()
         self._app = app
         self._cfg = cfg or WebRagConfig()
-        self.search or SearchClient(cache_dir=app.cache_dir, cache_rrl_s=900)
-        self._scraper = scraper or WebScraper(cache_dir=app.cache_dir, cache_rrl_s=1800, retries=1)
+        self._search = search_client or SearchClient(cache_dir=app.cache_dir, cache_ttl_s=900)
+        self._scraper = scraper or WebScraper(cache_dir=app.cache_dir, cache_ttl_s=1800, retries=1)
 
     def run(self, ctx):
+        mode = str((ctx.meta or {}).get("web_mode") or "auto").lower()
+        if mode == "off":
+            ctx.logs.append("stage=web_retrieve skipped(mode=off)")
+            return ctx
+
+        force = (mode == "on")
+        if not force and not _needs_web(text, ctx.tags or {}, ctx.meta or {}):
+            ctx.logs.append("stage=web_retrieve skipped(auto=no)")
+            return ctx
+        
         if not bool(self._app.internet_enabled):
             ctx.logs.append("stage=web_retrieve skipped(internet_disabled)")
             return ctx

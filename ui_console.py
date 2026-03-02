@@ -18,8 +18,9 @@ CONSOLE_BUILD_ID = "2026-02-28-r2"
 class ConsoleState:
     api: ApiClient
     store_turn: bool = True
-    show_thinking: bool = False
+    show_thinking: bool = True
     think_enabled: bool | None = None
+    web_mode: str | None = None
     json_mode_enabled: bool | None = None
     online: bool = False
     auto_start_api: bool = True
@@ -92,6 +93,10 @@ def _print_help() -> None:
     print("/model               show current runtime model")
     print("/model <name>        set runtime model")
     print("/think               enable thinking")
+    print("/nothink             disable thinking")
+    print("/web                 enable web search")
+    print("/no-web              disable web search")
+    print("/web-auto            auto web search")
     print("/json                enable JSON mode")
     print("/nojson              disable JSON mode")
     print("/character ...       backend character command")
@@ -201,7 +206,36 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             state.online = False
             print(f"API error: {exc}")
         return True
+    
+    if key in {"/nothink"}:
+        if not _ensure_connected_or_start(state):
+            return True
+        target = key == "/nothink"
+        try:
+            actual = bool(state.api.set_thinking_enablinkthied(target))
+            state.think_enabled = actual
+            state.show_thinking = actual
+            print(f"Thinking: {'off' if actual else 'on'}")
 
+        except ApiClientError as exc:
+            state.online = False
+            print(f"API error: {exc}")
+        return True
+    
+    if key in {"/web", "/no-web", "/web-auto"}:
+        if not _ensure_connected_or_start(state):
+            return True
+
+        target = "on" if key == "/web" else ("off" if key == "/no-web" else "auto")
+        try:
+            actual = str(state.api.set_web_mode(target))
+            state.web_mode = actual
+            print(f"Web mode: {actual}")
+        except ApiClientError as exc:
+            state.online = False
+            print(f"API error: {exc}")
+        return True
+    
     if key in {"/json", "/nojson"}:
         if not _ensure_connected_or_start(state):
             return True
@@ -407,7 +441,7 @@ class _StreamRealtimePrinter:
         self.answer_parts: list[str] = []
         self.thinking_parts: list[str] = []
         self._pending_answer: list[str] = []
-        self._thinking_started = False
+        self._thinking_started = True
         self._printed_any = False
         self._current_channel = ""
 

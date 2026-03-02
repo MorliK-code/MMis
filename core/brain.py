@@ -218,6 +218,10 @@ class Brain:
                     self.state_manager.set_mode(value)
             elif key == "state_think":
                 self.state_manager.patch({"thinking_enabled": bool(op.get("value", False))})
+            elif key == "state_web_mode":
+                value = str(op.get("value") or "").strip().lower()
+                if value in {"auto", "on", "off"}:
+                    self.state_manager.patch({"web_mode": value})
             elif key == "state_personality":
                 value = str(op.get("value") or "").strip().lower()
                 if value:

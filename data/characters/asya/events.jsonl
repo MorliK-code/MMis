@@ -455,3 +455,13 @@
 {"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-01T19:09:09.653+02:00"}
 {"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-01T19:10:53.962+02:00"}
 {"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-01T19:21:34.657+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.9975427194703784}], "ts": "2026-03-02T01:01:53.168+02:00"}
+{"type": "character_update", "intent": "search", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:05:10.201+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:06:20.635+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:13:56.502+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:23:48.858+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.9975427194703784, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T01:26:45.462+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:29:25.443+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:29:34.705+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.9997909551746591}, {"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.9997909551746591, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T01:31:59.317+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:32:36.940+02:00"}

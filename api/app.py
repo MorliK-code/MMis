@@ -22,6 +22,7 @@ from api.schemas import (
     ModelSetRequest,
     ModelsResponse,
     ThinkingRequest,
+    WebModeRequest,
 )
 from config.settings import load_config
 from core.brain import Brain
@@ -41,6 +42,7 @@ class _Runtime:
         self.brain = Brain(provider=self.provider)
         self.model = str(cfg.model_name or "").strip()
         self.thinking_enabled = bool(cfg.thinking_enabled)
+        self.web_mode = cfg.web_mode if bool(cfg.internet_enabled) else "off"
         self.json_mode_enabled = bool(cfg.json_mode_enabled)
 
         self.meta_root = Path(cfg.memory_dir) / "metadata"
@@ -88,6 +90,7 @@ def health() -> HealthResponse:
             model=_runtime.model,
             thinking_enabled=bool(_runtime.thinking_enabled),
             json_mode_enabled=bool(_runtime.json_mode_enabled),
+            web_mode=str(_runtime.web_mode),
         )
 
 
@@ -118,10 +121,26 @@ def set_thinking(req: ThinkingRequest) -> HealthResponse:
         return HealthResponse(
             status="ok",
             model=_runtime.model,
-            thinking_enabled=_runtime.thinking_enabled,
+            thinking_enabled=bool(_runtime.thinking_enabled),
             json_mode_enabled=bool(_runtime.json_mode_enabled),
+            web_mode=str(_runtime.web_mode),
         )
 
+@app.post("/web-mode", response_model=HealthResponse)
+def set_web_mode(req: WebModeRequest) -> HealthResponse:
+    mode = str(req.mode or "").strip().lower()
+    if mode not in {"auto", "on", "off"}:
+        raise HTTPException(status_code=400, detail="mode must be one of: auto, on, off")
+    
+    with _runtime.lock:
+        _runtime.web_mode = mode
+        return HealthResponse(
+            status="ok",
+            model=_runtime.model,
+            thinking_enabled=bool(_runtime.thinking_enabled),
+            web_mode=str(_runtime.web_mode),
+            json_mode_enabled=bool(_runtime.json_mode_enabled),
+            )
 
 @app.post("/json-mode", response_model=HealthResponse)
 def set_json_mode(req: JsonModeRequest) -> HealthResponse:
@@ -131,9 +150,9 @@ def set_json_mode(req: JsonModeRequest) -> HealthResponse:
             status="ok",
             model=_runtime.model,
             thinking_enabled=bool(_runtime.thinking_enabled),
-            json_mode_enabled=_runtime.json_mode_enabled,
+            json_mode_enabled=bool(_runtime.json_mode_enabled),
+            web_mode=str(_runtime.web_mode),
         )
-
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
@@ -165,6 +184,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             meta={
                 "model": _runtime.model,
                 "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
+                "web_mode":str(_runtime.web_mode),
                 "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                 "store_turn": bool(req.store_turn),
                 "source": "api",
@@ -248,6 +268,7 @@ def chat_stream(req: ChatRequest):
                         meta={
                             "model": _runtime.model,
                             "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
+                            "web_mode":str(_runtime.web_mode),
                             "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                             "store_turn": bool(req.store_turn),
                             "source": "api",
@@ -390,6 +411,7 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
                 f"status: ok\n"
                 f"model: {_runtime.model}\n"
                 f"thinking: {'on' if _runtime.thinking_enabled else 'off'}\n"
+                f"web_mode: {_runtime.web_mode}\n",
                 f"json_mode: {'on' if _runtime.json_mode_enabled else 'off'}"
             )
         }
@@ -418,6 +440,17 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
     if cmd == "/nothink":
         _runtime.thinking_enabled = False
         return {"answer": "Thinking: off"}
+    if cmd == "/web":
+        _runtime.web_mode = "on"
+        return {"answer": "Web: on"}
+
+    if cmd in {"/no-web", "/noweb", "/no_web"}:
+        _runtime.web_mode = "off"
+        return {"answer": "Web: off"}
+
+    if cmd in {"/web-auto", "/web_auto", "/autoweb"}:
+        _runtime.web_mode = "auto"
+        return {"answer": "Web: auto"}
     if cmd == "/json":
         _runtime.json_mode_enabled = True
         return {"answer": "JSON mode: on"}

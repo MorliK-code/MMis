@@ -112,6 +112,11 @@ class ApiClient:
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
         return bool(payload.get("thinking_enabled", enabled))
 
+    def set_web_mode(self, mode: str) -> str:
+        payload = self._request_json("POST", "/web-mode", {"mode": str(mode or "")})
+        self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
+        return str(payload.get("web_mode") or mode)
+
     def set_json_mode_enabled(self, enabled: bool) -> bool:
         payload = self._request_json("POST", "/json-mode", {"enabled": bool(enabled)})
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)

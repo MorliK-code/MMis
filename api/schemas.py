@@ -21,6 +21,7 @@ class HealthResponse(BaseModel):
     status: str
     model: str
     thinking_enabled: bool
+    web_mode: str
     json_mode_enabled: bool
 
 
@@ -36,6 +37,8 @@ class ModelSetRequest(BaseModel):
 class ThinkingRequest(BaseModel):
     enabled: bool
 
+class WebModeRequest(BaseModel):
+    mode: str
 
 class JsonModeRequest(BaseModel):
     enabled: bool
