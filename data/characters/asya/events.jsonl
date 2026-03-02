@@ -482,3 +482,15 @@
 {"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:46:48.207+02:00"}
 {"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.999757516426593}], "ts": "2026-03-02T14:56:21.355+02:00"}
 {"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:57:02.378+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:02:38.242+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:08:31.789+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.999757516426593, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T15:10:17.053+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:11:41.766+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:24:41.152+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.9997974631365527}], "ts": "2026-03-02T15:25:31.275+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:32:50.986+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.9997974631365527, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T15:40:43.240+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:42:17.655+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:43:16.390+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:47:11.425+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T15:48:52.739+02:00"}

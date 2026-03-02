@@ -73,8 +73,8 @@ PROFILES: dict[str, ModelProfile] = {
     ),
     "ASYA": ModelProfile(
         name="ASYA",
-        generation=GenerationProfile(temperature=0.7, top_p=0.9, repeat_penalty=1.2, max_tokens=1024),
-        ollama=OllamaProfile(num_thread=6, num_ctx=8192, num_gpu=1, num_batch=128, keep_alive="5m"),
+        generation=GenerationProfile(temperature=0.7, top_p=0.9, repeat_penalty=1.2, max_tokens=4096),
+        ollama=OllamaProfile(num_thread=6, num_ctx=8192, num_gpu=20, num_batch=128, keep_alive="5m"),
         openai=OpenAIProfile(reasoning_effort="medium"),
     ),
 }

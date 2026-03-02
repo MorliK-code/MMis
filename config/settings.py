@@ -90,7 +90,7 @@ def load_config(force_reload: bool = False) -> AppSettings:
         startup_mode=_norm_lower(_pick("MMIS_START_MODE", json_cfg, dotenv_cfg, "api")),
         active_profile=active_profile,
         llm_default_provider=llm_provider,
-        model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qwen3:8b")),
+        model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qcwind/qwen3-8b-instruct-Q4-K-M")),
         host=_norm_str(_pick("MMIS_API_HOST", json_cfg, dotenv_cfg, "127.0.0.1")),
         port=_to_int(_pick("MMIS_API_PORT", json_cfg, dotenv_cfg, 8040), default=8040),
         thinking_enabled=_to_bool(_pick("MMIS_THINKING_ENABLED", json_cfg, dotenv_cfg, False)),

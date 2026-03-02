@@ -433,7 +433,7 @@ class _StreamRealtimePrinter:
         self.answer_parts: list[str] = []
         self.thinking_parts: list[str] = []
         self._pending_answer: list[str] = []
-        self._thinking_started = True
+        self._thinking_started = False
         self._printed_any = False
         self._current_channel = ""
 
@@ -441,7 +441,7 @@ class _StreamRealtimePrinter:
         text = _sanitize_stream_text(piece)
         if not text:
             return
-        self._thinking_started = True
+        self._thinking_started = False
         self.thinking_parts.append(text)
         if not self.show_thinking:
             return
@@ -476,12 +476,7 @@ class _StreamRealtimePrinter:
         return "".join(self.thinking_parts)
 
     def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None) -> None:
-        """
-        Красиво добивает хвост, если бекенд не до-стримил последние символы, но прислал их в final.
-        """
-        # 1) сначала допечатываем pending из prefer_thinking_first
-        self.finalize()
-
+        
         # 2) добиваем assistant tail
         if isinstance(answer_final, str) and answer_final:
             rendered = self.rendered_answer()
@@ -512,7 +507,7 @@ class _StreamRealtimePrinter:
     def _emit_thinking(self, text: str) -> None:
         if not text:
             return
-        self._thinking_started = True
+        self._thinking_started = False
         self.thinking_parts.append(text)
         self._start_channel("thinking")
         sys.stdout.write(text)
