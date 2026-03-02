@@ -406,6 +406,15 @@ class PromptBuildStage(PipelineStage):
         if ctx.memory_context:
             prompt_state.setdefault("memory_context", dict(ctx.memory_context))
             prompt_state.setdefault("long_summary", str(ctx.memory_context.get("short_summary") or ""))
+        if bool(ctx.meta.get("think", False)):
+            rules = ctx.policies.get("rules")
+            if not isinstance(rules, list):
+                rules = [] if rules is None else [rules]
+            rules.append(
+                "Если включён thinking mode — пиши внутренние рассуждения ТОЛЬКО внутри тегов <think>...</think> "
+                "и финальный ответ снаружи. Не упоминай эти теги пользователю."
+            )
+            ctx.policies["rules"] = rules
         ctx.prompt_pack = self.prompt_builder.build(
             state=prompt_state,
             user_msg=ctx.clean_user_msg,
@@ -516,39 +525,35 @@ class GenerateStage(PipelineStage):
 
         try:
             for chunk in stream(req):
-                text_delta = str(getattr(chunk, "text_delta", "") or "")
-                if not text_delta:
-                    continue
-                visible, thinking = parser.feed(text_delta)
-                if thinking:
-                    thinking_parts.append(thinking)
+                # 1) thinking из провайдера (Ollama отдаёт thinking_delta отдельно)
+                thinking_delta = str(getattr(chunk, "thinking_delta", "") or "")
+                if thinking_delta:
+                    thinking_parts.append(thinking_delta)
                     if callable(on_thinking):
                         try:
-                            on_thinking(thinking)
+                            on_thinking(thinking_delta)
                         except Exception:
                             pass
-                if visible:
-                    answer_parts.append(visible)
-                    if callable(on_answer):
-                        try:
-                            on_answer(visible)
-                        except Exception:
-                            pass
-            tail_visible, tail_thinking = parser.flush()
-            if tail_visible:
-                answer_parts.append(tail_visible)
-                if callable(on_answer):
-                    try:
-                        on_answer(tail_visible)
-                    except Exception:
-                        pass
-            if tail_thinking:
-                thinking_parts.append(tail_thinking)
-                if callable(on_thinking):
-                    try:
-                        on_thinking(tail_thinking)
-                    except Exception:
-                        pass
+
+                # 2) обычный текст
+                text_delta = str(getattr(chunk, "text_delta", "") or "")
+                if text_delta:
+                    # на всякий случай также поддерживаем <think>...</think> в самом тексте
+                    visible, thinking_from_text = parser.feed(text_delta)
+                    if thinking_from_text:
+                        thinking_parts.append(thinking_from_text)
+                        if callable(on_thinking):
+                            try:
+                                on_thinking(thinking_from_text)
+                            except Exception:
+                                pass
+                    if visible:
+                        answer_parts.append(visible)
+                        if callable(on_answer):
+                            try:
+                                on_answer(visible)
+                            except Exception:
+                                pass
         except Exception:
             return None
 
@@ -1211,7 +1216,7 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "memory_retrieve",
-                "web_retrive",
+                "web_retrieve",
                 "prompt_build",
                 "prompt_engine",
                 "generate",
@@ -1225,7 +1230,7 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "memory_retrieve",
-                "web_retrive",
+                "web_retrieve",
                 "prompt_build",
                 "prompt_engine",
                 "generate",

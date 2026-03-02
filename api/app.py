@@ -193,6 +193,8 @@ def chat(req: ChatRequest) -> ChatResponse:
 
         answer_raw = str(result.text or "")
         answer, thinking = _split_visible_and_thinking(answer_raw)
+        if not thinking.strip():
+            thinking = str(getattr(result, "thinking", "") or "").strip()
         stats = dict(result.stats or {})
         stats.setdefault("served_model", _runtime.model)
         _runtime.last_stats = stats
@@ -442,6 +444,8 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
         return {"answer": "Thinking: off"}
     if cmd == "/web":
         _runtime.web_mode = "on"
+        if arg:
+            return {"pass_text": arg}
         return {"answer": "Web: on"}
 
     if cmd in {"/no-web", "/noweb", "/no_web"}:

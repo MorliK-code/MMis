@@ -44,7 +44,7 @@ def _configure_stdout() -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MMis console chat (API client)")
-    parser.add_argument("--api-url", default="", help="MMis API url (default: MMIS_API_URL or http://127.0.0.1:8000)")
+    parser.add_argument("--api-url", default="http://127.0.0.1:8040", help="MMis API url (default: MMIS_API_URL or http://127.0.0.1:8000)")
     parser.add_argument("--model", default="", help="Set model on startup")
     parser.add_argument("--once", default="", help="Single message and exit")
     parser.add_argument("--timeout", type=float, default=2.5, help="HTTP timeout seconds")
@@ -192,34 +192,24 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             print(f"API error: {exc}")
         return True
 
-    if key in {"/think"}:
+    if key in {"/think", "/nothink"}:
         if not _ensure_connected_or_start(state):
             return True
-        target = key == "/think"
+
+        target = (key == "/think")
         try:
             actual = bool(state.api.set_thinking_enabled(target))
             state.think_enabled = actual
-            state.show_thinking = actual
             print(f"Thinking: {'on' if actual else 'off'}")
-
         except ApiClientError as exc:
             state.online = False
             print(f"API error: {exc}")
         return True
     
-    if key in {"/nothink"}:
-        if not _ensure_connected_or_start(state):
-            return True
-        target = key == "/nothink"
-        try:
-            actual = bool(state.api.set_thinking_enablinkthied(target))
-            state.think_enabled = actual
-            state.show_thinking = actual
-            print(f"Thinking: {'off' if actual else 'on'}")
-
-        except ApiClientError as exc:
-            state.online = False
-            print(f"API error: {exc}")
+    if key in {"/show-thinking", "/hide-thinking"}:
+        target = (key == "/show-thinking")
+        state.show_thinking = target
+        print(f"Thinking display: {'on' if target else 'off'}")
         return True
     
     if key in {"/web", "/no-web", "/web-auto"}:
@@ -231,6 +221,8 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             actual = str(state.api.set_web_mode(target))
             state.web_mode = actual
             print(f"Web mode: {actual}")
+            if arg :
+                _send_chat(state, arg)
         except ApiClientError as exc:
             state.online = False
             print(f"API error: {exc}")
@@ -483,6 +475,49 @@ class _StreamRealtimePrinter:
     def rendered_thinking(self) -> str:
         return "".join(self.thinking_parts)
 
+    def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None) -> None:
+        """
+        Красиво добивает хвост, если бекенд не до-стримил последние символы, но прислал их в final.
+        """
+        # 1) сначала допечатываем pending из prefer_thinking_first
+        self.finalize()
+
+        # 2) добиваем assistant tail
+        if isinstance(answer_final, str) and answer_final:
+            rendered = self.rendered_answer()
+            tail = ""
+            if answer_final.startswith(rendered):
+                tail = answer_final[len(rendered) :]
+            elif len(answer_final) > len(rendered):
+                # fallback: если вдруг рассинхрон, печатаем только "добавку" по длине
+                tail = answer_final[len(rendered) :]
+
+            tail = _sanitize_stream_text(tail)
+            if tail:
+                self._emit_answer(tail)
+
+        # 3) добиваем thinking tail (только если включено отображение)
+        if self.show_thinking and isinstance(thinking_final, str) and thinking_final:
+            rendered_t = self.rendered_thinking()
+            tail_t = ""
+            if thinking_final.startswith(rendered_t):
+                tail_t = thinking_final[len(rendered_t) :]
+            elif len(thinking_final) > len(rendered_t):
+                tail_t = thinking_final[len(rendered_t) :]
+
+            tail_t = _sanitize_stream_text(tail_t)
+            if tail_t:
+                self._emit_thinking(tail_t)
+
+    def _emit_thinking(self, text: str) -> None:
+        if not text:
+            return
+        self._thinking_started = True
+        self.thinking_parts.append(text)
+        self._start_channel("thinking")
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
     def _emit_answer(self, text: str) -> None:
         if not text:
             return
@@ -559,12 +594,12 @@ def _stream_once(state: ConsoleState, text: str):
     reply = state.api.stream_chat(
         text=text,
         store_turn=state.store_turn,
-        think=state.think_enabled,
+        think=bool(state.think_enabled),
         json_mode=state.json_mode_enabled,
         on_chunk=printer.on_answer,
         on_thinking_chunk=printer.on_thinking,
     )
-    printer.finalize()
+    printer.finalize_with_final(answer_final=reply.answer, thinking_final=reply.thinking)
     return reply, printer.rendered_answer(), printer.rendered_thinking()
 
 

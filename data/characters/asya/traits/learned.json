@@ -2,7 +2,7 @@
   "traits": {
     "playfulness": {
       "type": "scalar",
-      "value": 1.0,
+      "value": 0.999757516426593,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.01,
@@ -14,9 +14,9 @@
       "prompt_file": "prompts/traits/teasing.txt",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-02T01:32:36.926+02:00",
-      "last_used_ts": "2026-03-02T01:32:36.926+02:00",
-      "decay_ts": "2026-03-02T01:31:59.297+02:00"
+      "updated_at": "2026-03-02T14:45:12.327+02:00",
+      "last_used_ts": "2026-03-02T14:45:12.327+02:00",
+      "decay_ts": "2026-03-02T14:56:21.342+02:00"
     }
   }
 }

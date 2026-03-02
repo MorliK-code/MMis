@@ -465,3 +465,20 @@
 {"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:29:34.705+02:00"}
 {"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.9997909551746591}, {"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.9997909551746591, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T01:31:59.317+02:00"}
 {"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T01:32:36.940+02:00"}
+{"type": "character_update", "intent": "search", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.9950966148299751}], "ts": "2026-03-02T13:18:04.610+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.9950966148299751, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T13:19:04.680+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T13:20:47.370+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T13:22:03.557+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T13:22:50.826+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T13:28:00.036+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.9997656470542705}], "ts": "2026-03-02T13:51:49.367+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:08:46.731+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.9997656470542705, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T14:19:46.569+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.9997943367505239}, {"kind": "trait", "trait": "playfulness", "op": "add", "from": 0.9997943367505239, "to": 1.0, "source": "rule"}], "ts": "2026-03-02T14:21:26.297+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:31:39.541+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:33:22.870+02:00"}
+{"type": "character_update", "intent": "chat", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:45:12.342+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:45:50.521+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:46:48.207+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [{"kind": "decay", "trait": "playfulness", "from": 1.0, "to": 0.999757516426593}], "ts": "2026-03-02T14:56:21.355+02:00"}
+{"type": "character_update", "intent": "question", "emotion": "neutral", "mode": "chat", "mood": "teasing", "changes": [], "ts": "2026-03-02T14:57:02.378+02:00"}
