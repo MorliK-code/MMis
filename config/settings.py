@@ -25,7 +25,7 @@ class AppSettings:
     llm_default_provider: str = "ollama"
     model_name: str = "qcwind/qwen3-8b-instruct-Q4-K-M"
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8045
     thinking_enabled: bool = True
     web_mode: str = "auto"
     json_mode_enabled: bool = False
@@ -90,7 +90,6 @@ class AppSettings:
     chat_proofread_strict: bool = False
     model_fallbacks: list[str] = field(default_factory=list)
     
-    llm_max_tokens: int = 2048
     llm_max_tokens_lower_bound: int = 2048
     llm_max_tokens_upper_bound: int = 8192
 
@@ -209,8 +208,8 @@ def load_config(force_reload: bool = False) -> AppSettings:
         log_backup_count=max(1, _to_int(_pick("MMIS_LOG_BACKUP_COUNT", json_cfg, dotenv_cfg, 5), default=5)),
         metadata_model=str(_pick("MMIS_METADATA_MODEL", json_cfg, dotenv_cfg, "qwen3:1.7b")).strip(),
         metadata_model_fallbacks=_to_csv_list(_pick("MMIS_METADATA_MODEL_FALLBACKS", json_cfg, dotenv_cfg, "phi3:mini,llama3.2:1b")),
-        llm_max_tokens_lower_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_LOWER_BOUND", json_cfg, dotenv_cfg, llm_max_tokens_lower_bound), default=2048)),
-        llm_max_tokens_upper_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_UPPER_BOUND", json_cfg, dotenv_cfg, llm_max_tokens_upper_bound), default=8192)),
+        llm_max_tokens_lower_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_LOWER_BOUND", json_cfg, dotenv_cfg, 2048), default=2048)),
+        llm_max_tokens_upper_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_UPPER_BOUND", json_cfg, dotenv_cfg, 8192), default=8192)),
         ollama_base_url=str(_pick("OLLAMA_HOST", json_cfg, dotenv_cfg, "http://127.0.0.1:11434")).strip(),
         ollama_timeout_sec=float(_pick("OLLAMA_TIMEOUT_SEC", json_cfg, dotenv_cfg, 120.0)),
         ollama_retries=max(0, _to_int(_pick("OLLAMA_RETRIES", json_cfg, dotenv_cfg, 1), default=1)),
