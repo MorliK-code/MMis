@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import Any
 
+from config.settings import load_config
 from llm.provider_base import (
     LLMChunk,
     LLMProviderBase,
@@ -27,32 +27,7 @@ except Exception:  # pragma: no cover
 
 
 LOGGER = get_logger(__name__)
-
-
-def _env_str(name: str, default: str) -> str:
-    return str(os.getenv(name, default)).strip()
-
-
-def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return float(default)
-    try:
-        value = float(str(raw).strip())
-    except Exception:
-        return float(default)
-    return float(value if value >= minimum else default)
-
-
-def _env_int(name: str, default: int, minimum: int = 0) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return int(default)
-    try:
-        value = int(str(raw).strip())
-    except Exception:
-        return int(default)
-    return max(minimum, value)
+_cfg = load_config()
 
 
 def _message_to_dict(msg: Message) -> dict[str, Any]:
@@ -131,11 +106,11 @@ class OpenAIProvider(LLMProviderBase):
         max_retries: int | None = None,
         default_model: str | None = None,
     ):
-        self.api_key = str(api_key or _env_str("OPENAI_API_KEY", "")).strip()
-        self.base_url = str(base_url or _env_str("OPENAI_BASE_URL", "https://api.openai.com/v1")).strip()
-        self.timeout_sec = float(timeout_sec if timeout_sec is not None else _env_float("OPENAI_TIMEOUT_SEC", 120.0, 0.1))
-        self.max_retries = int(max_retries if max_retries is not None else _env_int("OPENAI_MAX_RETRIES", 2, 0))
-        self.default_model = str(default_model or _env_str("OPENAI_MODEL", "")).strip()
+        self.api_key = str(api_key or _cfg.openai_api_key).strip()
+        self.base_url = str(base_url or _cfg.openai_api_url).strip()
+        self.timeout_sec = float(timeout_sec if timeout_sec is not None else _cfg.openai_timeout_sec)
+        self.max_retries = int(max_retries if max_retries is not None else _cfg.openai_max_retries)
+        self.default_model = str(default_model or _cfg.model_name).strip()
         self._client = self._build_client()
 
     def generate(self, req: LLMRequest) -> LLMResponse:
@@ -215,7 +190,7 @@ class OpenAIProvider(LLMProviderBase):
             tools=len(list(req.tools or [])),
             json_mode=bool(req.json_mode),
         )
-        kwargs = self._build_completion_kwargs(req=req, model=model, stream=True)
+        kwargs = self._build_completion_kwargs(req=req, model=str(req.model or self.default_model).strip(), stream=True)
         log_json(
             LOGGER,
             "llm_request_payload",

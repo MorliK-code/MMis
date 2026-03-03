@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from config.logging_config import setup_logging
-from config.model_profiles import ModelProfile, get_profile
+from config.model_config import ModelProfile, get_profile
 from config.paths import BASE_DIR, ensure_dirs
 from config.settings import AppSettings, load_config
 from core.brain import Brain
@@ -112,7 +112,7 @@ def build_container(settings: AppSettings) -> AppContainer:
     voice = VoiceManager() if settings.voice_enabled else None
     screen = ScreenAnalyzer() if settings.screen_enabled else None
     automation = _build_automation(settings=settings, event_store=event_store) if settings.automation_enabled else None
-    internet_search = SearchClient() if settings.internet_enabled else None
+    internet_search = SearchClient(endpoint=settings.search_api_url) if settings.internet_enabled else None
     internet_scraper = WebScraper() if settings.internet_enabled else None
 
     return AppContainer(

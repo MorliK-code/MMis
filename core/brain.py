@@ -134,6 +134,9 @@ class Brain:
         meta_for_pipeline.setdefault("turn_id", state_snapshot.turn_id)
         meta_for_pipeline.setdefault("quality_profile", state_snapshot.quality_profile)
         meta_for_pipeline.setdefault("track_state", track_state)
+        
+        cfg = load_config()
+        meta_for_pipeline.setdefault("safety_mode", cfg.safety_mode)
 
         try:
             pipeline_result = self.pipeline.run(

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ui.api_client import ApiClient, ApiClientError
+from config.settings import load_config
 
 
 CONSOLE_BUILD_ID = "2026-02-28-r2"
@@ -44,11 +45,11 @@ def _configure_stdout() -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MMis console chat (API client)")
-    parser.add_argument("--api-url", default="http://127.0.0.1:8040", help="MMis API url (default: MMIS_API_URL or http://127.0.0.1:8000)")
+    parser.add_argument("--api-url", default="", help="MMis API url (default: MMIS_API_URL or http://127.0.0.1:8000)")
     parser.add_argument("--model", default="", help="Set model on startup")
     parser.add_argument("--once", default="", help="Single message and exit")
-    parser.add_argument("--timeout", type=float, default=2.5, help="HTTP timeout seconds")
-    parser.add_argument("--stream-timeout", type=float, default=600.0, help="Stream timeout seconds")
+    parser.add_argument("--timeout", type=float, default=None, help="HTTP timeout seconds")
+    parser.add_argument("--stream-timeout", type=float, default=None, help="Stream timeout seconds")
     parser.add_argument("--no-store", action="store_true", help="Do not store turn in backend memory")
     think_view_group = parser.add_mutually_exclusive_group()
     think_view_group.add_argument("--show-thinking", action="store_true", help="Print thinking block")
@@ -436,12 +437,15 @@ class _StreamRealtimePrinter:
         self._thinking_started = False
         self._printed_any = False
         self._current_channel = ""
+        # Track how many sanitized characters have been physically printed
+        self._answer_printed_chars: int = 0
+        self._thinking_printed_chars: int = 0
 
     def on_thinking(self, piece: str) -> None:
         text = _sanitize_stream_text(piece)
         if not text:
             return
-        self._thinking_started = False
+        self._thinking_started = True
         self.thinking_parts.append(text)
         if not self.show_thinking:
             return
@@ -453,12 +457,29 @@ class _StreamRealtimePrinter:
         raw = str(piece or "")
         if not raw:
             return
-        text = _sanitize_stream_text(self.renderer.feed(raw))
+        text = _sanitize_stream_text(raw)
         if not text:
             return
+        
+        # If this is the very first piece of the actual answer, strip leading whitespace/newlines
+        # so it doesn't drop to a new line below "assistant> "
+        if not self.answer_parts and not self._pending_answer:
+            text = text.lstrip()
+            if not text:
+                return
+
         if self.prefer_thinking_first and not self._thinking_started:
-            self._pending_answer.append(text)
+            # If we prefer thinking first, we only buffer if thinking hasn't started
+            # But we can't buffer forever. If we get a lot of answer and no thinking,
+            # we should just release it.
+            if len("".join(self._pending_answer)) + len(text) > 100:
+                self._emit_answer("".join(self._pending_answer) + text)
+                self._pending_answer = []
+                self.prefer_thinking_first = False
+            else:
+                self._pending_answer.append(text)
             return
+
         if self._pending_answer:
             text = "".join(self._pending_answer) + text
             self._pending_answer = []
@@ -476,39 +497,58 @@ class _StreamRealtimePrinter:
         return "".join(self.thinking_parts)
 
     def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None) -> None:
-        
-        # 2) добиваем assistant tail
+        # Flush any pending buffer first
+        if self._pending_answer:
+            self._emit_answer("".join(self._pending_answer))
+            self._pending_answer = []
+
+        # Append any tail characters not yet streamed
         if isinstance(answer_final, str) and answer_final:
-            rendered = self.rendered_answer()
-            tail = ""
-            if answer_final.startswith(rendered):
-                tail = answer_final[len(rendered) :]
-            elif len(answer_final) > len(rendered):
-                # fallback: если вдруг рассинхрон, печатаем только "добавку" по длине
-                tail = answer_final[len(rendered) :]
+            final_san = _sanitize_stream_text(answer_final).strip()
+            rendered = self.rendered_answer().strip()
+            if not rendered:
+                # Nothing was streamed at all — print the full final answer
+                if final_san:
+                    self._emit_answer(final_san)
+            elif final_san.endswith(rendered):
+                pass  # streamed text is a suffix of final — nothing to add (edge case)
+            elif final_san.startswith(rendered):
+                # Normal case: final extends what was streamed
+                tail = final_san[len(rendered):]
+                if tail:
+                    self._emit_answer(tail)
+            else:
+                # Out-of-sync: find how much of the END of rendered matches final
+                # Try progressively shorter suffixes until we find an overlap
+                tail = ""
+                for cut in range(min(len(rendered), len(final_san)), 0, -1):
+                    if final_san.startswith(rendered[-cut:]):
+                        tail = final_san[cut:]
+                        break
+                if not tail and len(final_san) > len(rendered):
+                    # Last resort: just emit the extra length at the end
+                    tail = final_san[len(rendered):]
+                if tail:
+                    self._emit_answer(tail)
 
-            tail = _sanitize_stream_text(tail)
-            if tail:
-                self._emit_answer(tail)
-
-        # 3) добиваем thinking tail (только если включено отображение)
+        # Append any thinking tail not yet streamed
         if self.show_thinking and isinstance(thinking_final, str) and thinking_final:
-            rendered_t = self.rendered_thinking()
-            tail_t = ""
-            if thinking_final.startswith(rendered_t):
-                tail_t = thinking_final[len(rendered_t) :]
-            elif len(thinking_final) > len(rendered_t):
-                tail_t = thinking_final[len(rendered_t) :]
-
-            tail_t = _sanitize_stream_text(tail_t)
-            if tail_t:
-                self._emit_thinking(tail_t)
+            final_t_san = _sanitize_stream_text(thinking_final).strip()
+            rendered_t = self.rendered_thinking().strip()
+            if not rendered_t:
+                if final_t_san:
+                    self._emit_thinking(final_t_san)
+            elif final_t_san.startswith(rendered_t):
+                tail_t = final_t_san[len(rendered_t):]
+                if tail_t:
+                    self._emit_thinking(tail_t)
 
     def _emit_thinking(self, text: str) -> None:
         if not text:
             return
         self._thinking_started = False
         self.thinking_parts.append(text)
+        self._thinking_printed_chars += len(text)
         self._start_channel("thinking")
         sys.stdout.write(text)
         sys.stdout.flush()
@@ -516,8 +556,14 @@ class _StreamRealtimePrinter:
     def _emit_answer(self, text: str) -> None:
         if not text:
             return
+        # Force strip leading whitespace on the very first text chunk
+        if not self.answer_parts:
+            text = text.lstrip()
+            if not text:
+                return
         self._start_channel("assistant")
         self.answer_parts.append(text)
+        self._answer_printed_chars += len(text)
         sys.stdout.write(text)
         sys.stdout.flush()
 
@@ -539,7 +585,7 @@ def _sanitize_stream_text(piece: str) -> str:
     src = str(piece or "")
     if not src:
         return ""
-    src = src.replace("\r\n", "\n").replace("\r", "\n")
+    src = src.replace("\r\n", "\n").replace("\r", "")
     return "".join(ch for ch in src if (ch == "\n" or ch == "\t" or ord(ch) >= 32))
 
 
@@ -786,9 +832,6 @@ def _stop_api_process(state: ConsoleState) -> None:
 def _cleanup(state: ConsoleState) -> None:
     _stop_api_process(state)
 
-    # Ollama may already be user-managed service, so do not terminate it aggressively.
-
-
 def _looks_like_shell_command(text: str) -> bool:
     src = str(text or "").strip()
     if not src:
@@ -802,60 +845,86 @@ def _looks_like_shell_command(text: str) -> bool:
 def main() -> int:
     _configure_stdout()
     args = _build_parser().parse_args()
+    config = load_config()
+
+    api_url = str(args.api_url).strip() or config.api_url
+    model_name = str(args.model).strip() or config.console_model
+    timeout = float(args.timeout) if args.timeout is not None else float(config.console_timeout_sec)
+    stream_timeout = float(args.stream_timeout) if args.stream_timeout is not None else float(config.console_stream_timeout_sec)
+
+    store_turn = False if args.no_store else config.console_store_turn
+    
+    if args.show_thinking:
+        show_thinking = True
+    elif args.hide_thinking:
+        show_thinking = False
+    else:
+        show_thinking = config.console_show_thinking
+
+    auto_start_api = False if args.no_auto_api else config.console_auto_start_api
+    auto_start_ollama = False if args.no_auto_ollama else config.console_auto_start_ollama
 
     state = ConsoleState(
         api=ApiClient(
-            base_url=(str(args.api_url).strip() or None),
-            timeout_sec=float(args.timeout),
-            stream_timeout_sec=float(args.stream_timeout),
+            base_url=api_url,
+            timeout_sec=timeout,
+            stream_timeout_sec=stream_timeout,
         ),
-        store_turn=not bool(args.no_store),
-        show_thinking=bool(args.show_thinking and not args.hide_thinking),
-        auto_start_api=not bool(args.no_auto_api),
-        auto_start_ollama=not bool(args.no_auto_ollama),
+        store_turn=store_turn,
+        show_thinking=show_thinking,
+        auto_start_api=auto_start_api,
+        auto_start_ollama=auto_start_ollama,
     )
 
     _print_header(state)
 
-    if str(args.model).strip():
+    if model_name:
         if _ensure_connected_or_start(state):
             try:
-                state.api.set_model(str(args.model).strip())
-                print(f"Startup model set: {state.api.get_runtime_model() or args.model}")
+                state.api.set_model(model_name)
+                print(f"Startup model set: {state.api.get_runtime_model() or model_name}")
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")
 
+    think_action = None
+    think_source_is_cli = False
     if bool(args.think):
-        if _ensure_connected_or_start(state):
-            try:
-                state.think_enabled = bool(state.api.set_thinking_enabled(True))
-                print(f"Thinking: {'on' if state.think_enabled else 'off'}")
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
+        think_action = True
+        think_source_is_cli = True
     elif bool(args.nothink):
+        think_action = False
+        think_source_is_cli = True
+    elif config.thinking_enabled is not None:
+        think_action = config.thinking_enabled
+
+    if think_action is not None:
         if _ensure_connected_or_start(state):
             try:
-                state.think_enabled = bool(state.api.set_thinking_enabled(False))
-                print(f"Thinking: {'on' if state.think_enabled else 'off'}")
+                state.think_enabled = bool(state.api.set_thinking_enabled(think_action))
+                if think_source_is_cli:
+                    print(f"Thinking: {'on' if state.think_enabled else 'off'}")
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")
 
+    json_action = None
+    json_source_is_cli = False
     if bool(args.json):
-        if _ensure_connected_or_start(state):
-            try:
-                state.json_mode_enabled = bool(state.api.set_json_mode_enabled(True))
-                print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
+        json_action = True
+        json_source_is_cli = True
     elif bool(args.nojson):
+        json_action = False
+        json_source_is_cli = True
+    elif config.console_json_mode_enabled:
+        json_action = True
+
+    if json_action is not None:
         if _ensure_connected_or_start(state):
             try:
-                state.json_mode_enabled = bool(state.api.set_json_mode_enabled(False))
-                print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
+                state.json_mode_enabled = bool(state.api.set_json_mode_enabled(json_action))
+                if json_source_is_cli:
+                    print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")

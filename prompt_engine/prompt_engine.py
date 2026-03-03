@@ -50,9 +50,26 @@ class PromptEngine:
             "default",
         ).lower()
 
+        safety_mode = str(state_map.get("safety_mode") or "").strip().lower()
+        needs_safety_json = safety_mode in {"content_filter", "locked", "strict"}
+
         base_doc = self._safe_doc(key="system.base", fallback_text=blocks.get("system_role") or "")
-        safety_doc = self._safe_doc(key="response.safety_filter", fallback_text="")
+        
+        # When safety_mode is active, we just include the safety_doc rules, BUT we shouldn't force JSON format
+        # unless JSON mode is explicitly enabled in the API parameters.
+        safety_doc_text = ""
+        if needs_safety_json:
+            s_doc = self._safe_doc(key="response.safety_filter", fallback_text="")
+            # Strip out the explicit JSON requirement from the safety doc if it exists,
+            # so the model can answer naturally, unless JSON mode is active.
+            safety_doc_text = str(s_doc.get("text", "")).replace(
+                'Возврат JSON:\n{"safe":true|false, "reason":"", "output":"..."}', 
+                'Верни ответ в обычном текстовом формате.'
+            )
+            
+        safety_doc = {"text": safety_doc_text}
         formatting_doc = self._safe_doc(key="response.formatting", fallback_text="")
+        
         character_prompt_block = str(state_map.get("character_prompt_block") or "").strip()
         if not character_prompt_block and active_character:
             try:

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from config.logging_config import setup_logging
 from config.paths import LOGS_DIR
+from config.settings import load_config
 
 
 @dataclass(frozen=True)
@@ -75,11 +76,10 @@ def log_json(logger: logging.Logger, event: str, **payload) -> None:
 
 
 def _config_from_env() -> LoggingConfig:
-    level = str(os.getenv("MMIS_LOG_LEVEL", "INFO")).strip().upper() or "INFO"
-    file_raw = str(os.getenv("MMIS_LOG_FILE", "")).strip()
-    use_colors_raw = str(os.getenv("MMIS_LOG_COLORS", "1")).strip().lower()
-    use_colors = use_colors_raw in {"1", "true", "yes", "on"}
-    log_file: str | Path | None = Path(file_raw).expanduser() if file_raw else None
+    cfg = load_config()
+    level = str(cfg.log_level).strip().upper() or "INFO"
+    use_colors = bool(cfg.log_colors)
+    log_file: str | Path | None = Path(cfg.log_file).expanduser() if cfg.log_file else None
     return LoggingConfig(level=level, log_file=log_file, use_colors=use_colors)
 
 

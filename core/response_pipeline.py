@@ -554,6 +554,21 @@ class GenerateStage(PipelineStage):
                                 on_answer(visible)
                             except Exception:
                                 pass
+            visible, thinking_from_text = parser.flush()
+            if thinking_from_text:
+                thinking_parts.append(thinking_from_text)
+                if callable(on_thinking):
+                    try:
+                        on_thinking(thinking_from_text)
+                    except Exception:
+                        pass
+            if visible:
+                answer_parts.append(visible)
+                if callable(on_answer):
+                    try:
+                        on_answer(visible)
+                    except Exception:
+                        pass
         except Exception:
             return None
 
@@ -691,21 +706,21 @@ class GenerateStage(PipelineStage):
             ctx.memory_ops.append({"op": "state_web_mode", "value": "on"})
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "on"})
             ctx.logs.append("stage=generate command=web mode=on")
-        return True
+            return True
         
         if cmd == "/no-web":
             ctx.text = "Web mode disabled."
             ctx.memory_ops.append({"op": "state_web_mode", "value": "off"})
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "off"})
             ctx.logs.append("stage=generate command=no-web mode=off")
-        return True
+            return True
 
         if cmd in {"/web-auto", "/web_auto", "/auto-web"}:
             ctx.text = "Web mode set to auto."
             ctx.memory_ops.append({"op": "state_web_mode", "value": "auto"})
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "auto"})
             ctx.logs.append("stage=generate command=web-auto mode=auto")
-        return True
+            return True
         
         if cmd in {"/cache", "/cache stats"}:
             stats = _cache_stats()
@@ -2119,11 +2134,11 @@ def _bool_to_text(value: bool) -> str:
 
 
 _CHECKIN_RE = re.compile(
-    r"(РєР°Рє\s+(?:Сѓ\s+С‚РµР±СЏ\s+)?РґРµР»Р°|РєР°Рє\s+С‚С‹|РєР°Рє\s+СЃР°Рј|С‡С‚Рѕ\s+РЅРѕРІРѕРіРѕ|РєР°Рє\s+РЅР°СЃС‚СЂРѕРµРЅРёРµ|how\s+are\s+you)",
+    r"(как\s+(?:у\s+тебя\s+)?дела|как\s+ты|как\s+сам|что\s+нового|как\s+настроение|how\s+are\s+you)",
     flags=re.IGNORECASE,
 )
 _QUESTION_START_RE = re.compile(
-    r"^\s*(РєР°Рє|С‡С‚Рѕ|РїРѕС‡РµРјСѓ|Р·Р°С‡РµРј|РєРѕРіРґР°|РіРґРµ|РєС‚Рѕ|С‡РµРј|РєР°РєРѕР№|РєР°РєР°СЏ|РєР°РєРёРµ|СЃРєРѕР»СЊРєРѕ|how|what|why|where|when)\b",
+    r"^\s*(как|что|почему|зачем|когда|где|кто|чем|какой|какая|какие|сколько|how|what|why|where|when)\b",
     flags=re.IGNORECASE,
 )
 
@@ -2170,8 +2185,8 @@ def _looks_like_echo_response(*, answer: str, user_msg: str) -> bool:
 def _echo_fallback_text(user_msg: str) -> str:
     src = _normalize_text(user_msg)
     if _CHECKIN_RE.search(src):
-        return "РЈ РјРµРЅСЏ РІСЃРµ РЅРѕСЂРјР°Р»СЊРЅРѕ, СЃРїР°СЃРёР±Рѕ. РљР°Рє С‚С‹?"
-    return "РџРѕРЅСЏР»Р°. РЇ РЅР° СЃРІСЏР·Рё Рё РіРѕС‚РѕРІР° РїРѕРјРѕС‡СЊ. РЈС‚РѕС‡РЅРё, С‡С‚Рѕ РёРјРµРЅРЅРѕ РЅСѓР¶РЅРѕ."
+        return "У меня все нормально, спасибо. Как ты?"
+    return "Поняла. Я на связи и готова помочь. Уточни, что именно нужно."
 
 
 def _as_dict(value) -> dict[str, Any]:
@@ -2248,8 +2263,12 @@ def _to_int(value, default: int | None) -> int | None:
 
 def _verbosity_to_max_tokens(level: float) -> int:
     value = max(0.0, min(1.0, float(level)))
-    # Keep practical bounds for chat responses.
-    return int(round(180 + (value * 900)))
+    from config.settings import load_config
+    cfg = load_config()
+    lower = cfg.llm_max_tokens_lower_bound
+    upper = cfg.llm_max_tokens_upper_bound
+    range_val = max(0, upper - lower)
+    return int(round(lower + (value * range_val)))
 
 
 def _normalize_text(value) -> str:
@@ -2284,6 +2303,3 @@ def _contains_cyrillic(text: str) -> bool:
 
 def run_response_pipeline(text: str) -> str:
     return str(text or "").strip()
-
-
-

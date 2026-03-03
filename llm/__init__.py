@@ -22,8 +22,14 @@ from llm.provider_base import (
 )
 
 
+from config.settings import load_config
+
 def build_provider(name: str | None = None, *, default_model: str | None = None) -> LLMProviderBase:
-    provider_name = str(name or os.getenv("MMIS_LLM_PROVIDER", "ollama")).strip().lower()
+    if name:
+        provider_name = str(name).strip().lower()
+    else:
+        provider_name = str(load_config().llm_provider).strip().lower()
+        
     if provider_name == "openai":
         return OpenAIProvider(default_model=default_model)
     return OllamaProvider(default_model=default_model)

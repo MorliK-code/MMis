@@ -74,7 +74,7 @@ class WebRetrieveStage:
         app = load_config()
         self._app = app
         self._cfg = cfg or WebRagConfig()
-        self._search = search_client or SearchClient(cache_dir=app.cache_dir, cache_ttl_s=900)
+        self._search = search_client or SearchClient(endpoint=app.search_api_url, cache_dir=app.cache_dir, cache_ttl_s=900)
         self._scraper = scraper or WebScraper(cache_dir=app.cache_dir, cache_ttl_s=1800, retries=1)
 
     def run(self, ctx):

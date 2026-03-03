@@ -16,38 +16,100 @@ VALID_SAFETY_MODES = {"read_only_tools", "allow_os_actions"}
 
 @dataclass(frozen=True)
 class AppSettings:
-    app_name: str
-    debug: bool
-    locale: str
-    default_language: str
-    startup_mode: str
-    active_profile: str
-    llm_default_provider: str
-    model_name: str
-    host: str
-    port: int
-    thinking_enabled: bool
-    web_mode: str
-    json_mode_enabled: bool
-    internet_enabled: bool
-    automation_enabled: bool
-    screen_enabled: bool
-    voice_enabled: bool
-    safety_mode: str
-    read_only_tools: bool
-    data_dir: Path
-    models_dir: Path
-    memory_dir: Path
-    cache_dir: Path
-    log_dir: Path
-    db_path: Path
-    dialog_new_session_after_min: int
-    dialog_greeting_max_words: int
-    dialog_greeting_max_chars: int
+    app_name: str = "MMis"
+    debug: bool = False
+    locale: str = "ru_RU"
+    default_language: str = "ru"
+    startup_mode: str = "api"
+    active_profile: str = "BALANCED"
+    llm_default_provider: str = "ollama"
+    model_name: str = "qcwind/qwen3-8b-instruct-Q4-K-M"
+    host: str = "127.0.0.1"
+    port: int = 8000
+    thinking_enabled: bool = True
+    web_mode: str = "auto"
+    json_mode_enabled: bool = False
+    internet_enabled: bool = True
+    automation_enabled: bool = True
+    screen_enabled: bool = True
+    voice_enabled: bool = True
+    safety_mode: str = "read_only_tools"
+    read_only_tools: bool = True
+    data_dir: Path = DATA_DIR
+    models_dir: Path = MODELS_DIR
+    memory_dir: Path = field(default_factory=lambda: DATA_DIR / "memory")
+    cache_dir: Path = field(default_factory=lambda: Path(".cache").resolve())
+    log_dir: Path = field(default_factory=lambda: Path("logs").resolve())
+    db_path: Path = field(default_factory=lambda: DATA_DIR / "memory" / "memory.db")
+    dialog_new_session_after_min: int = 360
+    dialog_greeting_max_words: int = 6
+    dialog_greeting_max_chars: int = 35
     dialog_greetings: list[str] = field(default_factory=list)
     dialog_greeting_exclusions: list[str] = field(default_factory=list)
     config_file: Path | None = None
     feature_flags: dict[str, bool] = field(default_factory=dict)
+    
+    # --- Consolidated Settings ---
+    # Logging
+    log_level: str = "INFO"
+    log_file: Path | str | None = None
+    log_colors: bool = True
+    log_max_bytes: int = 10485760
+    log_backup_count: int = 5
+    
+    # Metadata
+    metadata_model: str = "qwen3:1.7b"
+    metadata_model_fallbacks: list[str] = field(default_factory=list)
+    
+    # LLM Providers
+    llm_max_tokens_lower_bound: int = 2048
+    llm_max_tokens_upper_bound: int = 8192
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_timeout_sec: float = 120.0
+    ollama_retries: int = 1
+    openai_api_key: str = ""
+    openai_api_url: str = "https://api.openai.com/v1"
+    openai_timeout_sec: float = 120.0
+    openai_max_retries: int = 2
+    
+    # Tools & Search
+    search_api_url: str = "https://www.googleapis.com/customsearch/v1?key=API_KEY&cx=SEARCH_ENGINE_ID"
+    
+    # Voice
+    voice_tts_voice: str = "ru-RU-DmitryNeural"
+    voice_tts_rate: str = "+0%"
+    voice_tts_volume: str = "+0%"
+    voice_input_dir: Path | None = None
+    voice_output_dir: Path | None = None
+    
+    # Chat & Memory
+    short_memory_limit: int = 10
+    chat_recall_results: int = 3
+    chat_events_limit: int = 10
+    chat_proofread: bool = False
+    chat_proofread_strict: bool = False
+    model_fallbacks: list[str] = field(default_factory=list)
+    
+    llm_max_tokens: int = 2048
+    llm_max_tokens_lower_bound: int = 2048
+    llm_max_tokens_upper_bound: int = 8192
+
+    # Hardware
+    gpu_vram_gb: int | None = None
+    
+    # UI Console
+    console_model: str = ""
+    console_timeout_sec: float = 2.5
+    console_stream_timeout_sec: float = 600.0
+    console_store_turn: bool = True
+    console_show_thinking: bool = True  
+    console_json_mode_enabled: bool = False
+    console_auto_start_api: bool = True
+    console_auto_start_ollama: bool = True
+
+    @property
+    def api_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
 
     def to_dict(self) -> dict[str, Any]:
         row = asdict(self)
@@ -92,7 +154,7 @@ def load_config(force_reload: bool = False) -> AppSettings:
         llm_default_provider=llm_provider,
         model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qcwind/qwen3-8b-instruct-Q4-K-M")),
         host=_norm_str(_pick("MMIS_API_HOST", json_cfg, dotenv_cfg, "127.0.0.1")),
-        port=_to_int(_pick("MMIS_API_PORT", json_cfg, dotenv_cfg, 8040), default=8040),
+        port=_to_int(_pick("MMIS_API_PORT", json_cfg, dotenv_cfg, 8000), default=8000),
         thinking_enabled=_to_bool(_pick("MMIS_THINKING_ENABLED", json_cfg, dotenv_cfg, False)),
         web_mode=_norm_lower(_pick("MMIS_WEB_MODE", json_cfg, dotenv_cfg, "auto")),
         json_mode_enabled=_to_bool(_pick("MMIS_JSON_MODE", json_cfg, dotenv_cfg, False)),
@@ -140,6 +202,43 @@ def load_config(force_reload: bool = False) -> AppSettings:
         ),
         config_file=config_file,
         feature_flags=_collect_feature_flags(json_cfg=json_cfg, dotenv_cfg=dotenv_cfg),
+        log_level=str(_pick("MMIS_LOG_LEVEL", json_cfg, dotenv_cfg, "DEBUG" if _to_bool(_pick("MMIS_DEBUG", json_cfg, dotenv_cfg, False)) else "INFO")).strip().upper(),
+        log_file=Path(str(_pick("MMIS_LOG_FILE", json_cfg, dotenv_cfg, ""))).expanduser() if str(_pick("MMIS_LOG_FILE", json_cfg, dotenv_cfg, "")).strip() else None,
+        log_colors=_to_bool(_pick("MMIS_LOG_COLORS", json_cfg, dotenv_cfg, True)),
+        log_max_bytes=max(262144, _to_int(_pick("MMIS_LOG_MAX_BYTES", json_cfg, dotenv_cfg, 10485760), default=10485760)),
+        log_backup_count=max(1, _to_int(_pick("MMIS_LOG_BACKUP_COUNT", json_cfg, dotenv_cfg, 5), default=5)),
+        metadata_model=str(_pick("MMIS_METADATA_MODEL", json_cfg, dotenv_cfg, "qwen3:1.7b")).strip(),
+        metadata_model_fallbacks=_to_csv_list(_pick("MMIS_METADATA_MODEL_FALLBACKS", json_cfg, dotenv_cfg, "phi3:mini,llama3.2:1b")),
+        llm_max_tokens_lower_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_LOWER_BOUND", json_cfg, dotenv_cfg, llm_max_tokens_lower_bound), default=2048)),
+        llm_max_tokens_upper_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_UPPER_BOUND", json_cfg, dotenv_cfg, llm_max_tokens_upper_bound), default=8192)),
+        ollama_base_url=str(_pick("OLLAMA_HOST", json_cfg, dotenv_cfg, "http://127.0.0.1:11434")).strip(),
+        ollama_timeout_sec=float(_pick("OLLAMA_TIMEOUT_SEC", json_cfg, dotenv_cfg, 120.0)),
+        ollama_retries=max(0, _to_int(_pick("OLLAMA_RETRIES", json_cfg, dotenv_cfg, 1), default=1)),
+        openai_api_key=str(_pick("OPENAI_API_KEY", json_cfg, dotenv_cfg, "")).strip(),
+        openai_api_url=str(_pick("OPENAI_BASE_URL", json_cfg, dotenv_cfg, "https://api.openai.com/v1")).strip(),
+        openai_timeout_sec=float(_pick("OPENAI_TIMEOUT_SEC", json_cfg, dotenv_cfg, 120.0)),
+        openai_max_retries=max(0, _to_int(_pick("OPENAI_MAX_RETRIES", json_cfg, dotenv_cfg, 2), default=2)),
+        search_api_url=str(_pick("MMIS_SEARCH_API_URL", json_cfg, dotenv_cfg, "")).strip(),
+        voice_tts_voice=str(_pick("MMIS_VOICE_TTS_VOICE", json_cfg, dotenv_cfg, "ru-RU-DmitryNeural")).strip(),
+        voice_tts_rate=str(_pick("MMIS_VOICE_TTS_RATE", json_cfg, dotenv_cfg, "+0%")).strip(),
+        voice_tts_volume=str(_pick("MMIS_VOICE_TTS_VOLUME", json_cfg, dotenv_cfg, "+0%")).strip(),
+        voice_input_dir=Path(str(_pick("MMIS_VOICE_INPUT_DIR", json_cfg, dotenv_cfg, str(memory_dir / "voice" / "input")))).expanduser(),
+        voice_output_dir=Path(str(_pick("MMIS_VOICE_OUTPUT_DIR", json_cfg, dotenv_cfg, str(memory_dir / "voice" / "output")))).expanduser(),
+        short_memory_limit=_to_int(_pick("MMIS_SHORT_MEMORY_LIMIT", json_cfg, dotenv_cfg, 10), default=10),
+        chat_recall_results=_to_int(_pick("MMIS_CHAT_RECALL_RESULTS", json_cfg, dotenv_cfg, 3), default=3),
+        chat_events_limit=_to_int(_pick("MMIS_CHAT_EVENTS_LIMIT", json_cfg, dotenv_cfg, 10), default=10),
+        chat_proofread=_to_bool(_pick("MMIS_CHAT_PROOFREAD", json_cfg, dotenv_cfg, False)),
+        chat_proofread_strict=_to_bool(_pick("MMIS_CHAT_PROOFREAD_STRICT", json_cfg, dotenv_cfg, False)),
+        model_fallbacks=_to_csv_list(_pick("MMIS_MODEL_FALLBACKS", json_cfg, dotenv_cfg, "")),
+        gpu_vram_gb=_to_int_or_none(_pick("MMIS_GPU_VRAM_GB", json_cfg, dotenv_cfg, None)),
+        console_model=str(_pick("MMIS_CONSOLE_MODEL", json_cfg, dotenv_cfg, "")).strip(),
+        console_timeout_sec=float(_pick("MMIS_CONSOLE_TIMEOUT_SEC", json_cfg, dotenv_cfg, 2.5)),
+        console_stream_timeout_sec=float(_pick("MMIS_CONSOLE_STREAM_TIMEOUT_SEC", json_cfg, dotenv_cfg, 600.0)),
+        console_store_turn=_to_bool(_pick("MMIS_CONSOLE_STORE_TURN", json_cfg, dotenv_cfg, True)),
+        console_show_thinking=_to_bool(_pick("MMIS_CONSOLE_SHOW_THINKING", json_cfg, dotenv_cfg, True)),
+        console_json_mode_enabled=_to_bool(_pick("MMIS_CONSOLE_JSON_MODE", json_cfg, dotenv_cfg, False)),
+        console_auto_start_api=_to_bool(_pick("MMIS_CONSOLE_AUTO_API", json_cfg, dotenv_cfg, True)),
+        console_auto_start_ollama=_to_bool(_pick("MMIS_CONSOLE_AUTO_OLLAMA", json_cfg, dotenv_cfg, True)),
     )
     _validate_settings(settings)
 
@@ -147,6 +246,11 @@ def load_config(force_reload: bool = False) -> AppSettings:
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     settings.memory_dir.mkdir(parents=True, exist_ok=True)
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if settings.voice_input_dir:
+        settings.voice_input_dir.mkdir(parents=True, exist_ok=True)
+    if settings.voice_output_dir:
+        settings.voice_output_dir.mkdir(parents=True, exist_ok=True)
 
     _SETTINGS_CACHE = settings
     return settings
@@ -338,11 +442,29 @@ def _to_bool(value) -> bool:
     return raw in {"1", "true", "yes", "on", "y", "t"}
 
 
+def _to_bool_or_none(value) -> bool | None:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw or raw == "none":
+        return None
+    return raw in {"1", "true", "yes", "on", "y", "t"}
+
+
 def _to_int(value, *, default: int) -> int:
     try:
         return int(str(value).strip())
     except Exception:
         return int(default)
+
+
+def _to_int_or_none(value) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except Exception:
+        return None
 
 
 def _norm_str(value) -> str:

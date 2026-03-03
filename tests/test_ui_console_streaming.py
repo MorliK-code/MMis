@@ -24,7 +24,7 @@ class ConsoleStreamingTests(unittest.TestCase):
             printer.finalize()
 
         out = sink.getvalue()
-        self.assertTrue(out.startswith("thinking> "))
+        self.assertTrue(out.startswith("[Thinking] "))
         self.assertIn("\nassistant> ", out)
         self.assertEqual(printer.rendered_thinking(), "T1")
         self.assertEqual(printer.rendered_answer(), "A1A2A3")

@@ -91,7 +91,8 @@ class SearchClient:
 
         ranked = _rank_results(results, query=text, recency_days=recency_days)
         final = ranked[:limit]
-        self._cache_set(cache_key, final)
+        if final:
+            self._cache_set(cache_key, final)
         return final
 
     def _search_endpoint(self, query: str) -> list[SearchResult]:
@@ -104,7 +105,11 @@ class SearchClient:
         except Exception:
             return []
 
-        rows = raw.get("results") if isinstance(raw, dict) else raw
+        # Support both SearXNG ("results") and Google Custom Search ("items")
+        rows = raw.get("results") or raw.get("items")
+        if rows is None and isinstance(raw, list):
+            rows = raw
+        
         if not isinstance(rows, list):
             return []
 

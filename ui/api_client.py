@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from config.settings import load_config
 from utils.logger import get_logger, log_json
 
-
 LOGGER = get_logger(__name__)
+_cfg = load_config()
 
 
 class ApiClientError(RuntimeError):
@@ -28,11 +29,11 @@ class ApiReply:
 
 class ApiClient:
     def __init__(self, base_url: str | None = None, timeout_sec: float = 2.5, stream_timeout_sec: float = 600.0):
-        env_url = os.getenv("MMIS_API_URL", "http://127.0.0.1:8000")
+        env_url = _cfg.api_url
         self.base_url = (base_url or env_url).rstrip("/")
         self.timeout_sec = float(timeout_sec)
         self.stream_timeout_sec = float(stream_timeout_sec)
-        self._runtime_model_cache = str(os.getenv("MMIS_MODEL_NAME", "")).strip()
+        self._runtime_model_cache = str(_cfg.model_name).strip()
 
     def _url(self, path: str) -> str:
         if not path.startswith("/"):

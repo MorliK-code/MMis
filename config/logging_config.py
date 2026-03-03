@@ -42,12 +42,12 @@ def setup_logging(settings: AppSettings | None = None, *, force: bool = False) -
         return
 
     cfg = settings or load_config()
-    log_level_name = str(os.getenv("MMIS_LOG_LEVEL", "DEBUG" if cfg.debug else "INFO")).strip().upper()
+    log_level_name = str(cfg.log_level).strip().upper()
     level = getattr(logging, log_level_name, logging.INFO)
-    max_bytes = _env_int("MMIS_LOG_MAX_BYTES", 10 * 1024 * 1024, minimum=256 * 1024)
-    backup_count = _env_int("MMIS_LOG_BACKUP_COUNT", 5, minimum=1)
+    max_bytes = cfg.log_max_bytes
+    backup_count = cfg.log_backup_count
 
-    log_dir = Path(str(os.getenv("MMIS_LOG_DIR", str(cfg.log_dir or LOG_DIR)))).expanduser().resolve()
+    log_dir = Path(str(cfg.log_dir or LOG_DIR)).expanduser().resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
@@ -118,17 +118,6 @@ def _has_stream_handler(logger: logging.Logger) -> bool:
         if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
             return True
     return False
-
-
-def _env_int(name: str, default: int, minimum: int = 0) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return int(default)
-    try:
-        value = int(str(raw).strip())
-    except Exception:
-        return int(default)
-    return max(int(minimum), value)
 
 
 # Backward compatibility alias.

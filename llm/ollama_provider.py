@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import Any
 
 import ollama
 
+from config.settings import load_config
 from llm.provider_base import (
     LLMChunk,
     LLMProviderBase,
@@ -24,32 +24,7 @@ from utils.logger import get_logger, log_json
 
 
 LOGGER = get_logger(__name__)
-
-
-def _env_str(name: str, default: str) -> str:
-    return str(os.getenv(name, default)).strip()
-
-
-def _env_int(name: str, default: int, minimum: int = 0) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return int(default)
-    try:
-        value = int(str(raw).strip())
-    except Exception:
-        return int(default)
-    return max(minimum, value)
-
-
-def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return float(default)
-    try:
-        value = float(str(raw).strip())
-    except Exception:
-        return float(default)
-    return float(value if value >= minimum else default)
+_cfg = load_config()
 
 
 def _as_dict(obj) -> dict:
@@ -263,13 +238,11 @@ class OllamaProvider(LLMProviderBase):
         default_model: str | None = None,
         debug_raw: bool | None = None,
     ):
-        self.host = str(host or _env_str("OLLAMA_HOST", "http://127.0.0.1:11434")).strip()
-        self.timeout_sec = float(timeout_sec if timeout_sec is not None else _env_float("OLLAMA_TIMEOUT_SEC", 120.0, 0.1))
-        self.retries = int(retries if retries is not None else _env_int("OLLAMA_RETRIES", 1, 0))
-        self.default_model = str(default_model or _env_str("MMIS_MODEL_NAME", "")).strip()
-        self.debug_raw = bool(
-            _env_int("MMIS_DEBUG_RAW_LLM", 0, 0) if debug_raw is None else debug_raw
-        )
+        self.host = str(host or _cfg.ollama_base_url).strip()
+        self.timeout_sec = float(timeout_sec if timeout_sec is not None else _cfg.ollama_timeout_sec)
+        self.retries = int(retries if retries is not None else _cfg.ollama_retries)
+        self.default_model = str(default_model or _cfg.model_name).strip()
+        self.debug_raw = bool(debug_raw if debug_raw is not None else False)
         self._client = ollama.Client(host=self.host, timeout=self.timeout_sec)
 
     def generate(self, req: LLMRequest) -> LLMResponse:
@@ -527,8 +500,7 @@ class OllamaProvider(LLMProviderBase):
             options["repeat_penalty"] = float(req.repeat_penalty)
         if req.seed is not None:
             options["seed"] = int(req.seed)
-        if req.max_tokens is not None:
-            options["num_predict"] = int(req.max_tokens)
+        options["num_predict"] = int(req.max_tokens) if req.max_tokens is not None else 4096
         if req.stop:
             options["stop"] = [str(x) for x in req.stop if str(x)]
 
