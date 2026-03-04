@@ -6,6 +6,7 @@ enable_unittest_json_output()
 import tempfile
 import unittest
 
+from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
 from llm.provider_base import (
     LLMProviderBase,
@@ -16,8 +17,6 @@ from llm.provider_base import (
     Timings,
     Usage,
 )
-from modules.character import CharacterEngine, CharacterStorage
-
 
 class _StubProvider(LLMProviderBase):
     def generate(self, req: LLMRequest) -> LLMResponse:
@@ -42,9 +41,8 @@ class _StubProvider(LLMProviderBase):
 class PersonalitySwitchingTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(prefix="mmis_style_single_source_")
-        storage = CharacterStorage(root=self._tmp.name)
-        self.characters = CharacterEngine(storage=storage)
-        self.pipeline = ResponsePipeline(provider=_StubProvider(), character_engine=self.characters)
+        self.characters = CharacterRuntime(character_path=self._tmp.name, autosave=False)
+        self.pipeline = ResponsePipeline(provider=_StubProvider(), character_runtime=self.characters)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -79,4 +77,3 @@ class PersonalitySwitchingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -18,6 +18,7 @@ _CHANNEL_PREFIXES: dict[str, tuple[str, ...]] = {
     "memory": ("memory", "metadata"),
     "tools": ("modules", "tools"),
     "ui": ("ui", "api", "ui_console", "ui_pyside6"),
+    "web": ("web", "core.web_rag_stage", "tools.modules.internet"),
 }
 
 

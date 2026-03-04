@@ -5,7 +5,13 @@ from importlib import import_module
 __all__ = [
     "Brain",
     "BrainResult",
-    "PromptBuilder",
+    "CharacterRuntime",
+    "CharacterMeta",
+    "CharacterRuntimeResult",
+    "PersonalityProfile",
+    "PersonalityDecision",
+    "StateSnapshot",
+    "PromptBudgets",
     "PromptPack",
     "ResponsePipeline",
     "PipelineContext",
@@ -14,15 +20,19 @@ __all__ = [
     "PROFILE_FAST",
     "PROFILE_BALANCED",
     "PROFILE_QUALITY",
-    "StateManager",
-    "StateSnapshot",
 ]
 
 _LAZY = {
     "Brain": "core.brain",
     "BrainResult": "core.brain",
-    "PromptBuilder": "core.prompt_builder",
-    "PromptPack": "core.prompt_builder",
+    "CharacterRuntime": "core.character_runtime",
+    "CharacterMeta": "core.character_runtime",
+    "CharacterRuntimeResult": "core.character_runtime",
+    "PersonalityProfile": "core.character_runtime",
+    "PersonalityDecision": "core.character_runtime",
+    "StateSnapshot": "core.character_runtime",
+    "PromptBudgets": "core.character_runtime",
+    "PromptPack": "core.character_runtime",
     "ResponsePipeline": "core.response_pipeline",
     "PipelineContext": "core.response_pipeline",
     "PipelineStage": "core.response_pipeline",
@@ -30,8 +40,6 @@ _LAZY = {
     "PROFILE_FAST": "core.response_pipeline",
     "PROFILE_BALANCED": "core.response_pipeline",
     "PROFILE_QUALITY": "core.response_pipeline",
-    "StateManager": "core.state_manager",
-    "StateSnapshot": "core.state_manager",
 }
 
 

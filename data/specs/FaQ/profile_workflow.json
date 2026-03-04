@@ -1,0 +1,264 @@
+{
+  "schema_version": 2,
+  "id": "profile_workflow",
+  "title": "Workflow: character profile",
+  "description": "Подробный процесс создания персонажа с нуля: выбор id, настройка характера, задание правил речи, эволюции и финальная проверка в runtime.",
+  "target_paths": {
+    "character": "data/specs/characters/{character_id}/character.json",
+    "persona_state": "data/specs/characters/{character_id}/persona_state.json",
+    "persona_spec": "data/specs/characters/{character_id}/persona_spec.json",
+    "evolution_spec": "data/specs/characters/{character_id}/evolution_spec.json",
+    "blueprint": "data/specs/characters/{character_id}/profile_blueprint.json"
+  },
+  "required_files": [
+    "character.json",
+    "persona_state.json",
+    "persona_spec.json",
+    "evolution_spec.json"
+  ],
+  "create_from_zero": {
+    "step_order": [
+      "choose_character_id",
+      "create_blueprint",
+      "fill_core_profile",
+      "fill_prompt_behavior",
+      "fill_evolution",
+      "build_specs",
+      "validate_and_activate"
+    ],
+    "steps": {
+      "choose_character_id": {
+        "goal": "Задать стабильный идентификатор и отображаемое имя.",
+        "actions": [
+          "Выбери character_id в lower_snake_case или kebab-case (например: asya, dev_assistant, qa-helper).",
+          "Проверь, что имя папки и character_id совпадают.",
+          "Выбери display name (например: Ася)."
+        ],
+        "output": "Создана папка data/specs/characters/{character_id}, id и name согласованы во всех JSON."
+      },
+      "create_blueprint": {
+        "goal": "Собрать рабочую основу без ручного создания 4 файлов.",
+        "actions": [
+          "Запусти: python scripts/character_profile_builder.py --id <character_id> --preset starter_plus --dry-run",
+          "Если dry-run успешен, запусти ту же команду без --dry-run.",
+          "Для старта в стиле Asya можно использовать --preset asya_like."
+        ],
+        "output": "Созданы profile_blueprint.json и 4 базовых spec-файла."
+      },
+      "fill_core_profile": {
+        "goal": "Настроить базовый стиль и дефолтное поведение.",
+        "actions": [
+          "Укажи profile.vibe: balanced | playful | strict | soft.",
+          "Задай profile.technicality в диапазоне 0..1.",
+          "Задай profile.energy в диапазоне 0..1.",
+          "Проверь default_mode, default_mood и llm_profile."
+        ],
+        "output": "Согласованный базовый профиль без конфликтов по стилю."
+      },
+      "fill_prompt_behavior": {
+        "goal": "Заполнить текстовые правила поведения персонажа.",
+        "actions": [
+          "В persona_spec.identity опиши роль, тон, границы и языковую политику.",
+          "В persona_spec.moods задай формулировки для ключевых настроений.",
+          "В persona_spec.modes обязательно покрой режимы friend_chat/helper/engineer/debugger/planner.",
+          "В persona_spec.traits_rules опиши пороги min и соответствующие фразы."
+        ],
+        "output": "Персонаж предсказуемо формирует тон ответа в разных режимах."
+      },
+      "fill_evolution": {
+        "goal": "Настроить адаптацию персонажа по сигналам диалога.",
+        "actions": [
+          "Добавь правила в evolution_spec.rules (when + apply).",
+          "В when используй intent/emotion/mode/tags_any/tags_all/min_trait/max_trait.",
+          "В apply используй операции add|set|mul|remove|toggle|update и/или set_mood.",
+          "Держи изменения traits небольшими (обычно +/-0.02..0.10 за шаг)."
+        ],
+        "output": "Эволюция работает плавно, без резких скачков личности."
+      },
+      "build_specs": {
+        "goal": "Сгенерировать финальные JSON на основе blueprint.",
+        "actions": [
+          "Запусти: python scripts/character_profile_builder.py --id <character_id>",
+          "При необходимости укажи имя: --name \"<display_name>\".",
+          "Если нужно сразу активировать персонажа: добавь --set-active."
+        ],
+        "output": "Обновлены character.json/persona_state.json/persona_spec.json/evolution_spec.json, синхронизирован manifest."
+      },
+      "validate_and_activate": {
+        "goal": "Подтвердить целостность и отсутствие регрессий.",
+        "actions": [
+          "Прогони тесты: test_persona_compiler.py, test_learner.py, test_character_runtime_learner.py.",
+          "Сделай ручную проверку минимум в 2-3 режимах (friend_chat + engineer + debugger).",
+          "Проверь, что плейсхолдеры не попадают в финальный ответ."
+        ],
+        "output": "Персонаж готов к использованию в runtime."
+      }
+    }
+  },
+  "parameter_reference": {
+    "profile_blueprint_root": {
+      "schema_version": "int, обычно 1",
+      "preset": "starter_plus | asya_like | default",
+      "profile.vibe": "balanced | playful | strict | soft",
+      "profile.technicality": "float 0..1 (влияет на professionalism/strictness/directness)",
+      "profile.energy": "float 0..1 (влияет на trait energy)",
+      "character": "объект character.json",
+      "persona_state": "объект persona_state.json",
+      "persona_spec": "объект persona_spec.json",
+      "evolution_spec": "объект evolution_spec.json"
+    },
+    "character_json": {
+      "required": [
+        "schema_version",
+        "character_id",
+        "id",
+        "name",
+        "default_mood",
+        "default_mode",
+        "llm_profile",
+        "locks"
+      ],
+      "fields": {
+        "schema_version": "int",
+        "character_id": "string, lower_snake_or_kebab",
+        "id": "string, дубликат character_id",
+        "name": "string, отображаемое имя",
+        "version": "string, например 1.0.0",
+        "default_mood": "string, должен существовать в persona_spec.moods",
+        "default_mode": "friend_chat | helper | engineer | debugger | planner",
+        "llm_profile": "FAST | BALANCED | QUALITY | ECONOM (если поддерживается конфигом)",
+        "locks.feminine": "bool",
+        "locks.informal_you": "bool"
+      }
+    },
+    "persona_state_json": {
+      "required": [
+        "schema_version",
+        "character_id",
+        "name",
+        "mood",
+        "traits",
+        "locks",
+        "bans",
+        "learned"
+      ],
+      "traits_range": "Все числовые traits должны быть в диапазоне 0..1.",
+      "recommended_traits": [
+        "warmth",
+        "sarcasm",
+        "teasing",
+        "verbosity",
+        "strictness",
+        "empathy",
+        "professionalism",
+        "directness",
+        "patience",
+        "humor",
+        "emoji_rate",
+        "energy",
+        "curiosity",
+        "playfulness",
+        "assertiveness"
+      ],
+      "learned_fields": {
+        "preferences_confirmed": "array[string]",
+        "preferences_pending": "array[string]",
+        "style_bias": "object",
+        "baseline_traits": "object[trait->0..1], опционально"
+      }
+    },
+    "persona_spec_json": {
+      "required": [
+        "schema_version",
+        "identity",
+        "locks_map",
+        "bans_template",
+        "moods",
+        "modes",
+        "traits_rules"
+      ],
+      "notes": [
+        "identity поддерживает placeholder {character_name} (также допустим {name}).",
+        "bans_template использует placeholder {ban-word}.",
+        "traits_rules поддерживает правила с ключом line или lines.",
+        "Для стабильного поведения обязательно покрой режимы friend_chat/helper/engineer/debugger/planner."
+      ]
+    },
+    "evolution_spec_json": {
+      "required": [
+        "schema_version",
+        "rules",
+        "cleanup"
+      ],
+      "rule_when_fields": [
+        "intent",
+        "emotion",
+        "mode",
+        "tags_any",
+        "tags_all",
+        "min_trait",
+        "max_trait"
+      ],
+      "rule_apply_fields": [
+        "trait + op + value",
+        "set_mood"
+      ],
+      "supported_ops": [
+        "add",
+        "set",
+        "mul",
+        "remove",
+        "toggle",
+        "update"
+      ],
+      "cleanup_fields": {
+        "remove_if_confidence_below": "float 0..1",
+        "remove_if_unused_days": "positive int"
+      }
+    }
+  },
+  "edit_order": [
+    "profile_blueprint.json",
+    "character.json",
+    "persona_spec.json",
+    "persona_state.json",
+    "evolution_spec.json"
+  ],
+  "minimal_blueprint_recipe": {
+    "character_id": "my_new_character",
+    "preset": "starter_plus",
+    "profile": {
+      "vibe": "balanced",
+      "technicality": 0.6,
+      "energy": 0.55
+    },
+    "character": {
+      "name": "My New Character",
+      "default_mood": "neutral",
+      "default_mode": "friend_chat",
+      "llm_profile": "BALANCED"
+    }
+  },
+  "acceptance_checks": [
+    "persona_compiler собирает финальный текст без утечек placeholder-ов: {name}/{character_name}/{ban-word}/{term}/{word}.",
+    "В persona_state нет traits вне диапазона 0..1.",
+    "persona_state.mood присутствует в persona_spec.moods.",
+    "default_mode присутствует в persona_spec.modes.",
+    "Профиль компилируется без fallback-ошибок."
+  ],
+  "common_mistakes": [
+    "character_id не совпадает между именем папки и JSON.",
+    "Добавлен mood в state, но отсутствует описание в persona_spec.moods.",
+    "Слишком большие дельты в evolution rules (например +0.3 за шаг).",
+    "Нет engineer/debugger mode, из-за чего технические ответы нестабильны.",
+    "Используются неподдерживаемые placeholders."
+  ],
+  "commands": [
+    "python scripts/character_profile_builder.py --id <character_id> --preset starter_plus --dry-run",
+    "python scripts/character_profile_builder.py --id <character_id> --preset starter_plus",
+    "python scripts/character_profile_builder.py --id <character_id> --name \"<display_name>\" --set-active",
+    "python -m unittest discover -s tests -p \"test_persona_compiler.py\"",
+    "python -m unittest discover -s tests -p \"test_learner.py\"",
+    "python -m unittest discover -s tests -p \"test_character_runtime_learner.py\""
+  ]
+}

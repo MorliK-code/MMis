@@ -17,6 +17,53 @@ from memory.vector_store import VectorStore
 
 
 class MemoryConflictTests(unittest.TestCase):
+    def test_fact_pending_then_confirmed_by_repeat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            manager = MemoryManager(
+                short_memory=ShortMemory(path=root / "short.json", autosave=False),
+                long_memory=LongMemory(path=root / "long.json"),
+                vector_store=VectorStore(path=root / "vectors.json"),
+                fact_extractor=FactExtractor(),
+                user_profile_store=UserProfileStore(path=root / "user_profile.json"),
+                assistant_profile_store=AssistantProfileStore(path=root / "assistant_profile.json"),
+                event_store=EventStore(path=root / "events.jsonl"),
+            )
+
+            manager.ingest_message("user", "I was born in 2003", metadata={"lang": "en"})
+            pending = manager.user_profile_store.get_pending_facts(profile_id="default")
+            self.assertIn("birth_year", pending)
+
+            manager.ingest_message("user", "I was born in 2003", metadata={"lang": "en"})
+            current = manager.user_profile_store.get("birth_year", profile_id="default") or {}
+            confirmed = manager.user_profile_store.get_confirmed_facts(profile_id="default")
+
+            self.assertEqual(str(current.get("value")), "2003")
+            self.assertFalse(bool(current.get("needs_confirmation", False)))
+            self.assertEqual(str(dict(confirmed.get("birth_year") or {}).get("value")), "2003")
+
+    def test_pending_fact_can_be_confirmed_by_yes_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            manager = MemoryManager(
+                short_memory=ShortMemory(path=root / "short.json", autosave=False),
+                long_memory=LongMemory(path=root / "long.json"),
+                vector_store=VectorStore(path=root / "vectors.json"),
+                fact_extractor=FactExtractor(),
+                user_profile_store=UserProfileStore(path=root / "user_profile.json"),
+                assistant_profile_store=AssistantProfileStore(path=root / "assistant_profile.json"),
+                event_store=EventStore(path=root / "events.jsonl"),
+            )
+
+            manager.ingest_message("user", "I was born in 2003", metadata={"lang": "en"})
+            manager.ingest_message("user", "yes", metadata={"lang": "en"})
+
+            current = manager.user_profile_store.get("birth_year", profile_id="default") or {}
+            history = manager.user_profile_store.history("birth_year", profile_id="default")
+
+            self.assertEqual(str(current.get("value")), "2003")
+            self.assertTrue(any(str(row.get("status") or "") == "confirmed_by_user" for row in history))
+
     def test_birth_year_update_overwrites_current_and_keeps_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -30,8 +77,10 @@ class MemoryConflictTests(unittest.TestCase):
                 event_store=EventStore(path=root / "events.jsonl"),
             )
 
-            manager.ingest_message("user", "I was born in 2003", {"lang": "en"})
-            manager.ingest_message("user", "I was born in 2004", {"lang": "en"})
+            manager.ingest_message("user", "I was born in 2003", metadata={"lang": "en"})
+            manager.ingest_message("user", "I was born in 2003", metadata={"lang": "en"})
+            manager.ingest_message("user", "I was born in 2004", metadata={"lang": "en"})
+            manager.ingest_message("user", "I was born in 2004", metadata={"lang": "en"})
 
             current = manager.user_profile_store.get("birth_year", profile_id="default") or {}
             history = manager.user_profile_store.history("birth_year", profile_id="default")

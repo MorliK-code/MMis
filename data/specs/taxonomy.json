@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "langs": [
+    "ru",
+    "uk",
+    "en",
+    "mixed",
+    "unknown"
+  ],
+  "intents": [
+    "chat",
+    "question",
+    "task",
+    "bug_report",
+    "code_review",
+    "planning",
+    "clarification"
+  ],
+  "emotions": [
+    "neutral",
+    "frustrated",
+    "happy",
+    "anxious",
+    "angry",
+    "sad",
+    "excited",
+    "tired"
+  ],
+  "modes": [
+    "friend_chat",
+    "helper",
+    "engineer",
+    "debugger",
+    "planner"
+  ],
+  "topics": [
+    "python",
+    "git",
+    "docker",
+    "windows",
+    "linux",
+    "vscode",
+    "llm",
+    "rag",
+    "ui",
+    "qt",
+    "db",
+    "network",
+    "ollama",
+    "chromadb"
+  ],
+  "structural_tags": [
+    "has_code",
+    "has_traceback",
+    "has_logs",
+    "has_command",
+    "has_config",
+    "has_json",
+    "has_link",
+    "has_stacktrace"
+  ],
+  "tone_tags": [
+    "tone_soft",
+    "tone_strict",
+    "tone_teasing",
+    "tone_neutral"
+  ],
+  "aliases": {
+    "langs": {
+      "russian": "ru",
+      "ru-ru": "ru",
+      "ukrainian": "uk",
+      "uk-ua": "uk",
+      "english": "en",
+      "en-us": "en",
+      "en-gb": "en"
+    },
+    "intents": {
+      "smalltalk": "chat",
+      "chitchat": "chat",
+      "qna": "question",
+      "ask": "question",
+      "task_request": "task",
+      "action_request": "task",
+      "implementation": "task",
+      "coding_help": "task",
+      "debug": "bug_report",
+      "complaint": "bug_report",
+      "review": "code_review",
+      "plan": "planning",
+      "clarify": "clarification",
+      "memory_update": "clarification",
+      "search": "question",
+      "ui_request": "task",
+      "nsfw_flirt": "chat"
+    },
+    "emotions": {
+      "frustrated_angry": "frustrated",
+      "annoyed": "frustrated",
+      "positive": "happy",
+      "playful": "happy",
+      "playful_ironic": "happy",
+      "confused": "anxious",
+      "stressed": "anxious",
+      "overwhelmed": "anxious",
+      "mad": "angry",
+      "anger": "angry",
+      "disappointed": "sad",
+      "positive_excited": "excited",
+      "curious": "excited",
+      "sad_tired": "tired",
+      "bored": "tired"
+    },
+    "topics": {
+      "py": "python",
+      "python3": "python",
+      "github": "git",
+      "compose": "docker",
+      "win": "windows",
+      "win32": "windows",
+      "ubuntu": "linux",
+      "debian": "linux",
+      "vs_code": "vscode",
+      "visual_studio_code": "vscode",
+      "ai": "llm",
+      "genai": "llm",
+      "retrieval_augmented_generation": "rag",
+      "frontend": "ui",
+      "pyside6": "qt",
+      "sqlite": "db",
+      "postgres": "db",
+      "postgresql": "db",
+      "mysql": "db",
+      "api": "network",
+      "tcp": "network",
+      "ollama_server": "ollama",
+      "chroma": "chromadb"
+    },
+    "modes": {
+      "chat": "friend_chat",
+      "task": "helper",
+      "coding": "engineer",
+      "debug": "debugger"
+    }
+  }
+}

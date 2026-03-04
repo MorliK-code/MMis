@@ -25,7 +25,7 @@ class _CacheEntry:
 
 
 class PromptLoader:
-    """Loads prompt files from prompts/ tree, parses metadata header, and caches by mtime."""
+    """Legacy prompt loader. TXT prompt files are blocked in runtime (JSON specs only)."""
 
     def __init__(self, root: str | Path | None = None):
         base = Path(root).expanduser() if root is not None else (Path(__file__).resolve().parent.parent / "prompts")
@@ -37,6 +37,8 @@ class PromptLoader:
 
     def load_document(self, rel_path: str, *, use_cache: bool = True, hot_reload: bool = True) -> PromptDocument:
         key = _normalize_rel_path(rel_path)
+        if key.lower().endswith(".txt"):
+            raise ValueError(f"TXT prompt files are disabled in runtime: {key}")
         path = self._resolve_path(key)
         mtime_ns = int(path.stat().st_mtime_ns)
 

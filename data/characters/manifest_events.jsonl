@@ -1,6 +1,0 @@
-{"type": "manifest_sync", "active_before": "default", "active_after": "default", "added": ["assistant"], "removed": [], "total": 3, "ts": "2026-03-01T12:40:41.034+02:00", "at": "2026-03-01T12:40:41.034+02:00"}
-{"type": "active_character_changed", "from": "default", "to": "asya", "source": "manual", "ts": "2026-03-01T12:40:41.058+02:00", "at": "2026-03-01T12:40:41.058+02:00"}
-{"type": "active_character_changed", "from": "asya", "to": "default", "source": "manual", "ts": "2026-03-01T12:40:41.068+02:00", "at": "2026-03-01T12:40:41.068+02:00"}
-{"type": "manifest_sync", "active_before": "default", "active_after": "default", "added": ["personality_profiles"], "removed": [], "total": 4, "ts": "2026-03-01T12:46:56.969+02:00", "at": "2026-03-01T12:46:56.969+02:00"}
-{"type": "manifest_sync", "active_before": "default", "active_after": "default", "added": [], "removed": [], "total": 3, "ts": "2026-03-01T12:47:27.037+02:00", "at": "2026-03-01T12:47:27.037+02:00"}
-{"type": "active_character_changed", "from": "default", "to": "asya", "source": "manual", "ts": "2026-03-01T16:54:31.982+02:00", "at": "2026-03-01T16:54:31.982+02:00"}

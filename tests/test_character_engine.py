@@ -31,14 +31,14 @@ class CharacterEngineTests(unittest.TestCase):
 
         result = self.engine.update(
             text="hello there",
-            meta={"intent": "chat", "mood": "positive_excited", "mode": "chat"},
+            meta={"intent": "chat", "mood": "excited", "mode": "chat"},
             active_character_id=self.character_id,
         )
 
         after_play = float(result.traits.get("playfulness", {}).get("value", 0.0))
         self.assertGreaterEqual(after_play, before_play)
         self.assertTrue(result.prompt_block.strip())
-        self.assertIn("[CHAR_BASE]", result.prompt_block)
+        self.assertIn("[PERSONA_IDENTITY]", result.prompt_block)
 
     def test_set_and_remove_trait(self) -> None:
         updated = self.engine.set_trait(self.character_id, "debug_humor", value=0.8, confidence=0.9)

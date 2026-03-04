@@ -79,7 +79,7 @@ class DialogPoliciesTests(unittest.TestCase):
             text="Traceback: ValueError in C:\\repo\\main.py",
             now="2026-03-01T10:00:00+02:00",
             state={"last_turn_ts": "2026-03-01T09:58:00+02:00", "conversation_state": "continuing_smalltalk"},
-            metadata={"intent": "coding_help", "emotion": "neutral"},
+            metadata={"intent": "bug_report", "emotion": "neutral"},
         )["dialog_mode"]
         self.assertFalse(mode["smalltalk_allowed"])
         self.assertLessEqual(float(mode["sarcasm_level"]), 0.12)
@@ -211,4 +211,3 @@ class DialogPoliciesTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

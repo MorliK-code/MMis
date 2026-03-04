@@ -1,4 +1,4 @@
-# data.md
+﻿# data.md
 
 - project_root: `C:\Users\Morli.K\Desktop\MMis`
 - generated_at: `2026-03-01T12:50:09+02:00`
@@ -213,27 +213,6 @@
 | `data/characters/default/traits/learned.json` | 477 | 22 | `2026-03-01T12:34:27+02:00` |
 | `data/characters/manifest.json` | 393 | 22 | `2026-03-01T12:47:27+02:00` |
 | `data/characters/manifest_events.jsonl` | 905 | 5 | `2026-03-01T12:47:27+02:00` |
-| `data/characters/personality_profiles/character.json` | 292 | 12 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/default.json` | 549 | 24 | `2026-03-01T12:46:45+02:00` |
-| `data/characters/personality_profiles/flirty.json` | 641 | 30 | `2026-03-01T12:46:45+02:00` |
-| `data/characters/personality_profiles/prompts/base.txt` | 116 | 2 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/moods/focused.txt` | 63 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/moods/ironic.txt` | 49 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/moods/romantic_soft.txt` | 57 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/moods/teasing.txt` | 54 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/moods/thoughtful.txt` | 65 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/overlays/high_sarcasm.txt` | 78 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/overlays/high_warmth.txt` | 71 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/traits/romance.txt` | 62 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/traits/sarcasm.txt` | 61 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/traits/teasing.txt` | 65 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/prompts/traits/warmth.txt` | 57 | 1 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/rules/evolution.json` | 1185 | 68 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/state.json` | 214 | 13 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/strict.json` | 617 | 28 | `2026-03-01T12:46:45+02:00` |
-| `data/characters/personality_profiles/supportive.json` | 563 | 25 | `2026-03-01T12:46:45+02:00` |
-| `data/characters/personality_profiles/traits/builtin.json` | 1428 | 69 | `2026-03-01T12:46:56+02:00` |
-| `data/characters/personality_profiles/traits/learned.json` | 20 | 3 | `2026-03-01T12:46:56+02:00` |
 | `data/dialog_police.py` | 621 | 8 | `2026-03-01T12:11:19+02:00` |
 | `data/logs/.gitkeep` | 5 | 1 | `2026-02-28T04:49:07+02:00` |
 | `data/logs/app.log` | 173716 | 1083 | `2026-03-01T12:44:46+02:00` |

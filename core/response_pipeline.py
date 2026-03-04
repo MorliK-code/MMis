@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.spec_registry import load_character_spec, load_spec
 from config.settings import load_config
 from modules.character.dialog_policies import (
     compute_dialog_flags as dialog_compute_dialog_flags,
@@ -18,19 +19,24 @@ from modules.character.dialog_policies import (
     local_region_name as dialog_local_region_name,
     trim_leading_greeting as dialog_trim_leading_greeting,
 )
-from core.prompt_builder import PromptBuilder, PromptPack
+from core.character_runtime import CharacterRuntime
+from core.character_runtime import PromptPack
+from core.mode_selector import ModeSelector, normalize_mode_name
 from llm.provider_base import LLMProviderBase, LLMRequest, Message, ToolCall, ToolSpec
+from llm.tokenizer import estimate_tokens
+from metadata.taxonomy import MODES
 from metadata.metadata_extractor import MetadataExtractor
-from modules.character.engine import CharacterEngine
 from modules.character.evaluator import ResponseConstraintEvaluator
 from prompt_engine import PromptEngine
 from utils.datetime_local import now_local_ts, parse_time_to_epoch
+from utils.logger import get_logger, log_json
 from core.web_rag_stage import WebRetrieveStage
 
 
 PROFILE_FAST = "FAST"
 PROFILE_BALANCED = "BALANCED"
 PROFILE_QUALITY = "QUALITY"
+WEB_TRACE_LOGGER = get_logger("web.trace")
 
 
 @dataclass
@@ -56,6 +62,7 @@ class PipelineContext:
     thinking: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
+    structured_output: dict[str, Any] = field(default_factory=dict)
     memory_ops: list[dict[str, Any]] = field(default_factory=list)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
@@ -68,6 +75,7 @@ class PipelineContext:
 class PipelineResult:
     text: str
     thinking: str = ""
+    structured_output: dict[str, Any] = field(default_factory=dict)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     memory_ops: list[dict[str, Any]] = field(default_factory=list)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
@@ -203,20 +211,87 @@ class PreprocessStage(PipelineStage):
         return ctx
 
 
+class ModeSelectStage(PipelineStage):
+    name = "mode_select"
+
+    def __init__(self, selector: ModeSelector | None = None):
+        self._selector = selector or ModeSelector()
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        if ctx.route != "chat":
+            ctx.logs.append("stage=mode_select skipped(route)")
+            return ctx
+
+        active_mode = normalize_mode_name(
+            _pick(
+                ctx.state.get("active_mode"),
+                ctx.meta.get("active_mode"),
+                ctx.state.get("mode"),
+                "friend_chat",
+            )
+        )
+        mode_lock = _to_bool(
+            _pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False),
+            default=False,
+        )
+        tags = [str(x).strip().lower() for x in _as_list(ctx.tags.get("metadata_tags")) if str(x).strip()]
+        decision = self._selector.decide(
+            active_mode=active_mode,
+            mode_lock=mode_lock,
+            intent=str(ctx.tags.get("intent") or ""),
+            emotion=str(ctx.tags.get("mood") or ""),
+            tags=tags,
+        )
+
+        target = normalize_mode_name(decision.mode)
+        should_switch = self._selector.should_switch(current_mode=active_mode, decision=decision)
+        if should_switch:
+            ctx.memory_ops.append(
+                {
+                    "op": "state_mode",
+                    "value": target,
+                    "reason": f"auto_mode:{decision.reason}",
+                    "confidence": float(decision.confidence),
+                }
+            )
+            ctx.state["active_mode"] = target
+            if target == "debugger":
+                ctx.state["mode"] = "debug"
+            elif target == "engineer":
+                ctx.state["mode"] = "coding"
+            elif target in {"helper", "planner"}:
+                ctx.state["mode"] = "task"
+            else:
+                ctx.state["mode"] = "chat"
+        else:
+            ctx.state["active_mode"] = active_mode
+            target = active_mode
+
+        ctx.tags["active_mode"] = target
+        ctx.meta["active_mode"] = target
+        ctx.meta["mode_lock"] = bool(mode_lock)
+        ctx.logs.append(
+            "stage=mode_select "
+            f"mode={target} lock={int(bool(mode_lock))} "
+            f"decision={decision.reason} conf={decision.confidence:.2f}"
+        )
+        return ctx
+
+
 class PlanStage(PipelineStage):
     name = "plan"
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        mode = str(ctx.state.get("mode") or "chat")
+        mode = normalize_mode_name(_pick(ctx.state.get("active_mode"), ctx.state.get("mode"), "friend_chat"))
         goal = _pick(
             ctx.state.get("active_goal"),
             ctx.state.get("current_task"),
             ctx.state.get("task"),
         )
         intent = str(ctx.tags.get("intent") or "chat")
-        if mode == "task" and goal:
+        if mode in {"planner", "helper"} and goal:
             ctx.plan = f"goal={goal}; intent={intent}; style=step-by-step"
-        elif intent in {"question", "implementation", "action_request"}:
+        elif intent in {"question", "task", "bug_report", "code_review", "planning"}:
             ctx.plan = f"intent={intent}; provide concise actionable answer"
         else:
             ctx.plan = f"intent={intent}; maintain conversational flow"
@@ -227,8 +302,8 @@ class PlanStage(PipelineStage):
 class PersonalityStage(PipelineStage):
     name = "personality"
 
-    def __init__(self, character_engine: CharacterEngine | None = None):
-        self._characters = character_engine or CharacterEngine()
+    def __init__(self, character_runtime: CharacterRuntime | None = None):
+        self._characters = character_runtime or CharacterRuntime()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.route != "chat":
@@ -246,12 +321,16 @@ class PersonalityStage(PipelineStage):
         if known and active_character not in known:
             active_character = sorted(known)[0]
 
-        update = self._characters.update(
+        update = self._characters.evolve(
             text=str(ctx.clean_user_msg or ctx.user_msg or ""),
             meta={
+                "lang": str(ctx.tags.get("lang") or ""),
                 "intent": str(ctx.tags.get("intent") or ""),
                 "mood": str(ctx.tags.get("mood") or ""),
                 "mode": str(ctx.state.get("mode") or "chat"),
+                "active_mode": str(ctx.state.get("active_mode") or "friend_chat"),
+                "turn_id": ctx.meta.get("turn_id"),
+                "conversation_id": ctx.meta.get("conversation_id") or ctx.state.get("conversation_id"),
                 "topic": str(ctx.tags.get("topic") or ""),
                 "metadata_tags": list(ctx.tags.get("metadata_tags") or []),
                 "dialog_mode": dict(ctx.meta.get("dialog_mode") or ctx.state.get("dialog_mode") or {}),
@@ -264,7 +343,11 @@ class PersonalityStage(PipelineStage):
         ctx.state["active_character_id"] = update.character_id
         ctx.state["active_personality_id"] = update.character_id
         ctx.state["character_state"] = dict(update.state)
-        ctx.state["character_prompt_block"] = str(update.prompt_block or "")
+        try:
+            compiled_persona = str(self._characters.build_personality_block(update.character_id) or "").strip()
+        except Exception:
+            compiled_persona = ""
+        ctx.state["character_prompt_block"] = compiled_persona or str(update.prompt_block or "")
         ctx.state["mood"] = str(update.mood or "")
         if update.llm_profile:
             if not str(ctx.state.get("quality_profile") or "").strip():
@@ -379,6 +462,10 @@ class MemoryRetrieveStage(PipelineStage):
         if short_summary and not str(ctx.state.get("dialog_summary") or "").strip():
             ctx.state["dialog_summary"] = short_summary
 
+        short_summary_meta = pack.get("short_summary_meta")
+        if isinstance(short_summary_meta, dict):
+            ctx.state["short_summary_meta"] = dict(short_summary_meta)
+
         profile_summary = pack.get("profile_summary")
         if isinstance(profile_summary, dict):
             ctx.state["profile_summary"] = dict(profile_summary)
@@ -392,8 +479,8 @@ class MemoryRetrieveStage(PipelineStage):
 class PromptBuildStage(PipelineStage):
     name = "prompt_build"
 
-    def __init__(self, prompt_builder: PromptBuilder):
-        self.prompt_builder = prompt_builder
+    def __init__(self, character_runtime: CharacterRuntime):
+        self.character_runtime = character_runtime
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.route != "chat":
@@ -406,6 +493,9 @@ class PromptBuildStage(PipelineStage):
         if ctx.memory_context:
             prompt_state.setdefault("memory_context", dict(ctx.memory_context))
             prompt_state.setdefault("long_summary", str(ctx.memory_context.get("short_summary") or ""))
+            short_summary_meta = ctx.memory_context.get("short_summary_meta")
+            if isinstance(short_summary_meta, dict):
+                prompt_state.setdefault("short_summary_meta", dict(short_summary_meta))
         if bool(ctx.meta.get("think", False)):
             rules = ctx.policies.get("rules")
             if not isinstance(rules, list):
@@ -415,7 +505,7 @@ class PromptBuildStage(PipelineStage):
                 "и финальный ответ снаружи. Не упоминай эти теги пользователю."
             )
             ctx.policies["rules"] = rules
-        ctx.prompt_pack = self.prompt_builder.build(
+        ctx.prompt_pack = self.character_runtime.build(
             state=prompt_state,
             user_msg=ctx.clean_user_msg,
             retrieved_memories=ctx.retrieved_memories,
@@ -458,12 +548,11 @@ class GenerateStage(PipelineStage):
     def __init__(
         self,
         provider: LLMProviderBase,
-        prompt_builder: PromptBuilder,
-        character_engine: CharacterEngine | None = None,
+        character_runtime: CharacterRuntime,
     ):
         self.provider = provider
-        self.prompt_builder = prompt_builder
-        self.character_engine = character_engine or CharacterEngine()
+        self.character_runtime = character_runtime
+        self.character_engine = character_runtime
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.route == "system_event":
@@ -471,9 +560,18 @@ class GenerateStage(PipelineStage):
             return ctx
 
         if ctx.route == "command":
-            handled = self._handle_internal_command(ctx)
+            try:
+                handled = self._handle_internal_command(ctx)
+            except Exception as exc:
+                ctx.text = f"Command failed: {type(exc).__name__}"
+                ctx.logs.append(f"stage=generate command_error={type(exc).__name__}")
+                ctx.errors.append(f"command:{type(exc).__name__}:{exc}")
+                return ctx
             if handled:
                 return ctx
+            ctx.text = "Unknown command. Use /help"
+            ctx.logs.append("stage=generate command=unknown")
+            return ctx
 
         req = self._build_request(ctx)
         stream_answer_cb = ctx.meta.get("stream_on_answer_chunk")
@@ -721,6 +819,76 @@ class GenerateStage(PipelineStage):
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "auto"})
             ctx.logs.append("stage=generate command=web-auto mode=auto")
             return True
+
+        if cmd in {"/output", "/output status"}:
+            output_spec = load_spec("output", required=False)
+            mode = normalize_mode_name(
+                _pick(
+                    ctx.state.get("active_mode"),
+                    ctx.meta.get("active_mode"),
+                    ctx.state.get("mode"),
+                    "friend_chat",
+                )
+            )
+            strict_modes = {
+                str(x).strip().lower()
+                for x in list(output_spec.get("default_enabled_modes") or ["engineer", "debugger", "planner"])
+                if str(x).strip()
+            }
+            strict_default = mode in strict_modes
+            of = _coerce_output_format_state(_pick_value(ctx.state.get("output_format"), ctx.meta.get("output_format"), {}))
+            manual_params = of.get("show_parameters")
+            manual_summary = of.get("show_summary")
+            eff_params = bool(manual_params) if isinstance(manual_params, bool) else bool(strict_default)
+            summary_cfg = _as_dict(output_spec.get("summary"))
+            required_modes = {
+                str(x).strip().lower()
+                for x in list(summary_cfg.get("required_modes") or [])
+                if str(x).strip()
+            }
+            if isinstance(manual_summary, bool):
+                eff_summary = bool(manual_summary)
+            elif required_modes:
+                eff_summary = mode in required_modes
+            else:
+                eff_summary = bool(strict_default)
+            manual_params_text = ("on" if manual_params else "off") if isinstance(manual_params, bool) else "auto"
+            manual_summary_text = ("on" if manual_summary else "off") if isinstance(manual_summary, bool) else "auto"
+            ctx.text = (
+                "Output format:\n"
+                f"- mode: {mode}\n"
+                f"- parameters: {'on' if eff_params else 'off'} (manual={manual_params_text})\n"
+                f"- summary: {'on' if eff_summary else 'off'} (manual={manual_summary_text})"
+            )
+            ctx.logs.append("stage=generate command=output:status")
+            return True
+
+        if cmd.startswith("/output "):
+            tail = cmd.replace("/output", "", 1).strip().lower()
+            parts = [x for x in tail.split(" ") if x]
+            if len(parts) != 2:
+                ctx.text = "Usage: /output parameters on|off OR /output summary on|off"
+                ctx.logs.append("stage=generate command=output:usage")
+                return True
+            field, raw_value = parts
+            enabled = raw_value in {"on", "true", "1", "yes"}
+            if raw_value not in {"on", "off", "true", "false", "1", "0", "yes", "no"}:
+                ctx.text = "Usage: /output parameters on|off OR /output summary on|off"
+                ctx.logs.append("stage=generate command=output:usage")
+                return True
+            if field not in {"parameters", "summary"}:
+                ctx.text = "Usage: /output parameters on|off OR /output summary on|off"
+                ctx.logs.append(f"stage=generate command=output:unknown:{field}")
+                return True
+            value: dict[str, Any]
+            if field == "parameters":
+                value = {"show_parameters": bool(enabled)}
+            else:
+                value = {"show_summary": bool(enabled)}
+            ctx.memory_ops.append({"op": "state_output_format", "value": value})
+            ctx.text = f"Output {field} {'enabled' if enabled else 'disabled'}."
+            ctx.logs.append(f"stage=generate command=output:{field}:{'on' if enabled else 'off'}")
+            return True
         
         if cmd in {"/cache", "/cache stats"}:
             stats = _cache_stats()
@@ -764,13 +932,149 @@ class GenerateStage(PipelineStage):
             ctx.logs.append("stage=generate command=cache:clear")
             return True
         
+        if cmd in {"/mode", "/mode current"}:
+            current_mode = normalize_mode_name(
+                _pick(
+                    ctx.state.get("active_mode"),
+                    ctx.meta.get("active_mode"),
+                    ctx.state.get("mode"),
+                    "friend_chat",
+                )
+            )
+            locked = bool(_pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False))
+            ctx.text = f"Mode: {current_mode} ({'locked' if locked else 'auto'})"
+            ctx.logs.append("stage=generate command=mode:show")
+            return True
+
+        if cmd == "/modes" or cmd.startswith("/modes "):
+            target_character = str(
+                ctx.state.get("active_character_id")
+                or ctx.state.get("active_personality_id")
+                or "asya"
+            ).strip().lower() or "asya"
+            if cmd.startswith("/modes "):
+                raw_target = cmd.split(" ", 1)[1].strip().lower()
+                if raw_target:
+                    known = set(self.character_engine.list_ids()) if hasattr(self.character_engine, "list_ids") else set()
+                    if known and raw_target not in known:
+                        ctx.text = f"Unknown character '{raw_target}'. Available: {', '.join(sorted(known))}"
+                        ctx.logs.append(f"stage=generate command=modes:unknown_character:{raw_target}")
+                        return True
+                    target_character = raw_target
+
+            persona_spec = {}
+            try:
+                persona_spec = load_character_spec(target_character, "persona_spec", required=False)
+            except Exception:
+                persona_spec = {}
+            persona_modes = dict(persona_spec.get("modes") or {})
+
+            if persona_modes:
+                modes = sorted(str(x).strip().lower() for x in persona_modes.keys() if str(x).strip())
+                source = f"characters/{target_character}/persona_spec.json"
+            else:
+                modes_spec = load_spec("modes", required=False)
+                modes_map = dict(modes_spec.get("modes") or {})
+                modes = sorted(str(x).strip().lower() for x in modes_map.keys() if str(x).strip())
+                source = "modes_spec.json"
+
+            current_mode = normalize_mode_name(
+                _pick(
+                    ctx.state.get("active_mode"),
+                    ctx.meta.get("active_mode"),
+                    ctx.state.get("mode"),
+                    "friend_chat",
+                )
+            )
+            if not modes:
+                ctx.text = f"No modes configured for '{target_character}'."
+                ctx.logs.append("stage=generate command=modes:empty")
+                return True
+            rows = [f"{'*' if m == current_mode else ' '} {m}" for m in modes]
+            ctx.text = (
+                f"Modes for {target_character}:\n"
+                + "\n".join(rows)
+                + f"\n(source: {source})"
+            )
+            ctx.logs.append(f"stage=generate command=modes:list character={target_character}")
+            return True
+
         if cmd.startswith("/mode "):
-            target = cmd.replace("/mode", "", 1).strip()
-            if target:
+            target_raw = cmd.replace("/mode", "", 1).strip().lower()
+            if target_raw:
+                if target_raw in {"off", "auto"}:
+                    ctx.text = "Mode auto enabled (lock off)."
+                    ctx.memory_ops.append({"op": "state_mode_lock", "value": False})
+                    ctx.logs.append("stage=generate command=mode:auto")
+                    return True
+                target = normalize_mode_name(target_raw)
+                if target_raw not in set(str(x).strip().lower() for x in MODES) and target != target_raw:
+                    allowed = ", ".join(sorted(str(x) for x in MODES))
+                    ctx.text = f"Unknown mode '{target_raw}'. Available: {allowed}"
+                    ctx.logs.append(f"stage=generate command=mode:unknown:{target_raw}")
+                    return True
                 ctx.text = f"Mode switched to: {target}"
-                ctx.memory_ops.append({"op": "state_mode", "value": target})
+                ctx.memory_ops.append(
+                    {
+                        "op": "state_mode",
+                        "value": target,
+                        "reason": "manual_mode_command",
+                        "confidence": 1.0,
+                    }
+                )
                 ctx.logs.append(f"stage=generate command=mode:{target}")
                 return True
+
+        if cmd.startswith("/mode_lock "):
+            raw_value = cmd.replace("/mode_lock", "", 1).strip().lower()
+            enabled = raw_value in {"on", "true", "1", "yes"}
+            if raw_value not in {"on", "off", "true", "false", "1", "0", "yes", "no"}:
+                ctx.text = "Usage: /mode_lock on|off"
+                ctx.logs.append("stage=generate command=mode_lock:usage")
+                return True
+            ctx.text = f"Mode lock {'enabled' if enabled else 'disabled'}."
+            ctx.memory_ops.append({"op": "state_mode_lock", "value": bool(enabled)})
+            ctx.logs.append(f"stage=generate command=mode_lock:{'on' if enabled else 'off'}")
+            return True
+
+        if cmd in {"/mode_lock", "/mode_lock status"}:
+            locked = bool(_pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False))
+            ctx.text = f"Mode lock: {'on' if locked else 'off'}"
+            ctx.logs.append("stage=generate command=mode_lock:show")
+            return True
+
+        if cmd in {"/persona_debug", "/persona debug"} or cmd.startswith("/persona_debug "):
+            payload: dict[str, Any]
+            if hasattr(self.character_engine, "get_persona_debug"):
+                try:
+                    payload = dict(self.character_engine.get_persona_debug(state=ctx.state, max_deltas=3) or {})
+                except Exception:
+                    payload = {}
+            else:
+                payload = {}
+            if not payload:
+                payload = {"active_character_id": str(ctx.state.get("active_character_id") or "default")}
+            ctx.text = _format_persona_debug(payload)
+            ctx.logs.append("stage=generate command=persona_debug")
+            return True
+
+        if cmd in {"/brain_debug", "/brain debug"} or cmd.startswith("/brain_debug "):
+            payload: dict[str, Any]
+            if hasattr(self.character_engine, "get_brain_debug"):
+                try:
+                    payload = dict(self.character_engine.get_brain_debug(state=ctx.state, max_actions=3) or {})
+                except Exception:
+                    payload = {}
+            else:
+                payload = {}
+            if not payload:
+                payload = {
+                    "active_mode": str(ctx.state.get("active_mode") or ctx.state.get("mode") or "friend_chat"),
+                    "mode_lock": bool(ctx.state.get("mode_lock", False)),
+                }
+            ctx.text = _format_brain_debug(payload)
+            ctx.logs.append("stage=generate command=brain_debug")
+            return True
             
         if cmd in {"/persona", "/persona current", "/personality"}:
             current = str(
@@ -928,7 +1232,7 @@ class GenerateStage(PipelineStage):
                 prompt_state.setdefault("context_tags", dict(ctx.tags))
                 if ctx.plan:
                     prompt_state["plan"] = ctx.plan
-                ctx.prompt_pack = self.prompt_builder.build(
+                ctx.prompt_pack = self.character_runtime.build(
                     state=prompt_state,
                     user_msg=ctx.clean_user_msg,
                     retrieved_memories=ctx.retrieved_memories,
@@ -1114,6 +1418,209 @@ class VerifyStage(PipelineStage):
         return ctx
 
 
+class OutputFormatStage(PipelineStage):
+    name = "output_format"
+
+    def __init__(self, provider: LLMProviderBase):
+        self._provider = provider
+        self._output_spec = load_spec("output", required=False)
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        text = _normalize_text(ctx.text)
+        if ctx.route != "chat":
+            ctx.structured_output = {
+                "parameters": None,
+                "summary": None,
+                "text": text,
+                "formatted": False,
+            }
+            ctx.logs.append("stage=output_format skipped(route)")
+            return ctx
+
+        verify_cfg = _as_dict(ctx.policies.get("verify"))
+        require_json = bool(verify_cfg.get("require_json", False))
+        json_mode = bool(ctx.meta.get("json_mode", False))
+        response_format = _pick_value(ctx.meta.get("response_format"), ctx.policies.get("response_format"), None)
+        if require_json or json_mode or isinstance(response_format, dict):
+            ctx.structured_output = {
+                "parameters": None,
+                "summary": None,
+                "text": text,
+                "formatted": False,
+            }
+            ctx.logs.append("stage=output_format skipped(json_mode)")
+            return ctx
+
+        self._output_spec = load_spec("output", required=False)
+        mode = normalize_mode_name(
+            _pick(
+                ctx.state.get("active_mode"),
+                ctx.meta.get("active_mode"),
+                ctx.state.get("mode"),
+                "friend_chat",
+            )
+        )
+        strict_modes = {
+            str(x).strip().lower()
+            for x in list(self._output_spec.get("default_enabled_modes") or ["engineer", "debugger", "planner"])
+            if str(x).strip()
+        }
+        strict_default = mode in strict_modes
+        output_format = _coerce_output_format_state(
+            _pick_value(ctx.state.get("output_format"), ctx.meta.get("output_format"), {})
+        )
+        manual_params = output_format.get("show_parameters")
+        manual_summary = output_format.get("show_summary")
+        show_parameters = bool(manual_params) if isinstance(manual_params, bool) else bool(strict_default and self._spec_default_parameters())
+        show_summary = bool(manual_summary) if isinstance(manual_summary, bool) else bool(self._summary_enabled_for_mode(mode, strict_default))
+
+        parameters, parameters_lines = self._build_parameters(ctx, mode=mode)
+        summary = ""
+        if show_summary:
+            summary = self._generate_summary(ctx, text)
+            if not summary:
+                summary = "-"
+
+        formatted = bool(show_parameters or show_summary)
+        if formatted:
+            ctx.text = _render_output_blocks(
+                parameters_lines=parameters_lines,
+                summary=summary,
+                text=text,
+                include_parameters=bool(show_parameters),
+                include_summary=bool(show_summary),
+                order=self._output_order(),
+            )
+        else:
+            ctx.text = text
+
+        ctx.structured_output = {
+            "parameters": (dict(parameters) if show_parameters else None),
+            "summary": (str(summary) if show_summary else None),
+            "text": str(text),
+            "formatted": bool(formatted),
+        }
+        ctx.logs.append(
+            "stage=output_format "
+            f"mode={mode} formatted={int(formatted)} "
+            f"parameters={int(bool(show_parameters))} summary={int(bool(show_summary))}"
+        )
+        return ctx
+
+    def _build_parameters(self, ctx: PipelineContext, *, mode: str) -> tuple[dict[str, Any], list[str]]:
+        mood = str(
+            _pick(
+                ctx.state.get("mood"),
+                ctx.tags.get("mood"),
+                _as_dict(ctx.state.get("context_tags")).get("mood"),
+                "neutral",
+            )
+        ).strip().lower() or "neutral"
+        intent = str(ctx.tags.get("intent") or "").strip().lower()
+        emotion = str(ctx.tags.get("mood") or "").strip().lower()
+        topics = _extract_topics_from_tags(ctx.tags)
+        traits = _extract_output_traits(ctx.state, ctx.traits)
+        tags = [str(x).strip().lower() for x in _as_list(ctx.tags.get("metadata_tags")) if str(x).strip()]
+        thinking_tokens = max(0, int(estimate_tokens(str(ctx.thinking or "")) or 0))
+        character_id = str(
+            _pick(
+                ctx.state.get("active_character_id"),
+                ctx.state.get("active_personality_id"),
+                ctx.meta.get("character_id"),
+                "default",
+            )
+        ).strip().lower() or "default"
+        base = {
+            "character_id": character_id,
+            "mode": mode,
+            "mood": mood,
+            "traits": traits,
+            "intent": intent,
+            "emotion": emotion,
+            "topics": topics,
+            "tags": tags,
+            "thinking_tokens": thinking_tokens,
+        }
+        fields = [str(x).strip() for x in list(self._output_spec.get("parameters_fields") or []) if str(x).strip()]
+        selected = _select_parameter_fields(base, fields=fields)
+        rendered_lines = _render_parameters_lines(selected, field_order=(fields or None))
+        return selected, rendered_lines
+
+    def _summary_enabled_for_mode(self, mode: str, strict_default: bool) -> bool:
+        summary_cfg = _as_dict(self._output_spec.get("summary"))
+        if not bool(summary_cfg.get("enabled", self._output_spec.get("show_summary", True))):
+            return False
+        required_modes = {
+            str(x).strip().lower()
+            for x in list(summary_cfg.get("required_modes") or [])
+            if str(x).strip()
+        }
+        if required_modes:
+            return mode in required_modes
+        return bool(strict_default)
+
+    def _spec_default_parameters(self) -> bool:
+        return bool(self._output_spec.get("show_parameters", True))
+
+    def _output_order(self) -> list[str]:
+        raw = [str(x).strip().lower() for x in list(self._output_spec.get("order") or []) if str(x).strip()]
+        allowed = {"parameters", "summary", "response"}
+        out = [x for x in raw if x in allowed]
+        if "response" not in out:
+            out.append("response")
+        return out
+
+    def _generate_summary(self, ctx: PipelineContext, text: str) -> str:
+        source = _normalize_text(text)
+        if not source:
+            return ""
+        summary_cfg = _as_dict(self._output_spec.get("summary"))
+        strategy = str(summary_cfg.get("strategy") or "mini_pass").strip().lower()
+        max_sentences = max(1, int(summary_cfg.get("max_sentences") or 2))
+        if strategy in {"mini_pass", "mini_pass_fallback", "llm"}:
+            mini = self._summary_mini_pass(ctx, source)
+            if mini:
+                return _limit_summary_sentences(mini, max_sentences=max_sentences)
+            return _fallback_summary_from_text(source, max_sentences=max_sentences)
+        return _fallback_summary_from_text(source, max_sentences=max_sentences)
+
+    def _summary_mini_pass(self, ctx: PipelineContext, text: str) -> str:
+        model = str(ctx.stats.get("served_model") or ctx.meta.get("model") or "").strip()
+        request = LLMRequest(
+            model=model,
+            messages=[
+                Message(
+                    role="system",
+                    content=(
+                        "Summarize assistant response in 1-2 concise sentences. "
+                        "Keep key action points. No bullet list."
+                    ),
+                ),
+                Message(
+                    role="user",
+                    content=f"Response:\n{text}\n\nShort summary:",
+                ),
+            ],
+            temperature=0.2,
+            max_tokens=96,
+            metadata={
+                "trace_id": str(ctx.meta.get("trace_id") or f"summary_{int(time.time() * 1000)}"),
+                "summary_mini_pass": True,
+            },
+        )
+        try:
+            response = self._provider.generate(request)
+        except Exception as exc:
+            ctx.logs.append(f"stage=output_format summary_mini_pass_error={type(exc).__name__}")
+            return ""
+        summary = _normalize_text(str(response.text or ""))
+        if not summary:
+            return ""
+        if _looks_like_json(summary):
+            return ""
+        return _squeeze_summary(summary)
+
+
 class MemoryWriteStage(PipelineStage):
     name = "memory_write"
 
@@ -1122,9 +1629,15 @@ class MemoryWriteStage(PipelineStage):
         if not store_turn:
             ctx.logs.append("stage=memory_write skipped")
             return ctx
+        if ctx.route == "command" and not bool(ctx.meta.get("store_command_turns", False)):
+            ctx.logs.append("stage=memory_write skipped(command)")
+            return ctx
 
         if ctx.route in {"chat", "command"} and ctx.clean_user_msg:
             turn_tags = dict(ctx.tags)
+            turn_tags["active_mode"] = normalize_mode_name(
+                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat")
+            )
             personality_id = str(
                 ctx.state.get("active_character_id")
                 or ctx.state.get("active_personality_id")
@@ -1142,6 +1655,9 @@ class MemoryWriteStage(PipelineStage):
             )
         if ctx.route in {"chat", "command"} and ctx.text:
             turn_tags = dict(ctx.tags)
+            turn_tags["active_mode"] = normalize_mode_name(
+                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat")
+            )
             personality_id = str(
                 ctx.state.get("active_character_id")
                 or ctx.state.get("active_personality_id")
@@ -1153,6 +1669,7 @@ class MemoryWriteStage(PipelineStage):
                 {
                     "op": "turn_assistant",
                     "text": str(ctx.text),
+                    "thinking": str(ctx.thinking or ""),
                     "tags": turn_tags,
                     "ts": now_local_ts(),
                 }
@@ -1182,41 +1699,42 @@ class ResponsePipeline:
     def __init__(
         self,
         provider: LLMProviderBase,
-        prompt_builder: PromptBuilder | None = None,
+        character_runtime: CharacterRuntime | None = None,
         metadata_extractor: MetadataExtractor | None = None,
         prompt_engine: PromptEngine | None = None,
         memory_manager=None,
-        character_engine: CharacterEngine | None = None,
     ):
         self.provider = provider
-        self.prompt_builder = prompt_builder or PromptBuilder()
-        self.character_engine = character_engine or CharacterEngine()
+        self.character_engine = character_runtime or CharacterRuntime()
+        self.character_runtime = self.character_engine
         self.prompt_engine = prompt_engine or PromptEngine(
-            character_engine=self.character_engine,
+            character_runtime=self.character_engine,
         )
         self._stages: dict[str, PipelineStage] = {
             "preprocess": PreprocessStage(metadata_extractor=metadata_extractor),
+            "mode_select": ModeSelectStage(),
             "plan": PlanStage(),
             "personality": PersonalityStage(
-                character_engine=self.character_engine,
+                character_runtime=self.character_engine,
             ),
             "memory_retrieve": MemoryRetrieveStage(memory_manager=memory_manager),
             "web_retrieve": WebRetrieveStage(),
-            "prompt_build": PromptBuildStage(prompt_builder=self.prompt_builder),
+            "prompt_build": PromptBuildStage(character_runtime=self.character_runtime),
             "prompt_engine": PromptEngineStage(prompt_engine=self.prompt_engine),
             "generate": GenerateStage(
                 provider=self.provider,
-                prompt_builder=self.prompt_builder,
-                character_engine=self.character_engine,
+                character_runtime=self.character_runtime,
             ),
             "postprocess": PostprocessStage(),
             "tool_router": ToolRouterStage(),
             "verify": VerifyStage(),
+            "output_format": OutputFormatStage(provider=self.provider),
             "memory_write": MemoryWriteStage(),
         }
         self._profiles: dict[str, tuple[str, ...]] = {
             PROFILE_FAST: (
                 "preprocess",
+                "mode_select",
                 "personality",
                 "memory_retrieve",
                 "prompt_build",
@@ -1224,10 +1742,12 @@ class ResponsePipeline:
                 "generate",
                 "postprocess",
                 "verify",
+                "output_format",
                 "memory_write",
             ),
             PROFILE_BALANCED: (
                 "preprocess",
+                "mode_select",
                 "plan",
                 "personality",
                 "memory_retrieve",
@@ -1238,10 +1758,12 @@ class ResponsePipeline:
                 "postprocess",
                 "tool_router",
                 "verify",
+                "output_format",
                 "memory_write",
             ),
             PROFILE_QUALITY: (
                 "preprocess",
+                "mode_select",
                 "plan",
                 "personality",
                 "memory_retrieve",
@@ -1252,6 +1774,7 @@ class ResponsePipeline:
                 "tool_router",
                 "verify",
                 "postprocess",
+                "output_format",
                 "memory_write",
             ),
         }
@@ -1277,9 +1800,33 @@ class ResponsePipeline:
             policies=_as_dict(policies),
             profile=self._resolve_profile(meta=meta, state=state, policies=policies),
         )
+        web_trace_id = _resolve_web_trace_id(ctx.meta, ctx.user_msg)
+        ctx.meta["web_trace_id"] = web_trace_id
+        web_mode = _resolve_web_mode(ctx.meta, ctx.state)
+        ctx.meta.setdefault("web_mode", web_mode)
+        force_web = _is_forced_web_request(ctx.user_msg)
+        input_preview = _text_preview(ctx.user_msg, 120)
+
         stage_names = self._resolve_stage_names(ctx.profile, ctx.meta, ctx.policies)
         ctx.logs.append(f"profile={ctx.profile}")
         ctx.logs.append(f"stages={','.join(stage_names)}")
+        ctx.logs.append(
+            "stage=web_trace start "
+            f"trace={web_trace_id} route={ctx.route} web_mode={web_mode} "
+            f"force={int(bool(force_web))} input_len={len(str(ctx.user_msg or '').strip())} "
+            f"input_preview={input_preview}"
+        )
+        log_json(
+            WEB_TRACE_LOGGER,
+            "web_trace_start",
+            trace=web_trace_id,
+            route=ctx.route,
+            web_mode=web_mode,
+            force=bool(force_web),
+            input_len=len(str(ctx.user_msg or "").strip()),
+            input_preview=input_preview,
+            profile=ctx.profile,
+        )
 
         for name in stage_names:
             stage = self._stages.get(name)
@@ -1292,13 +1839,45 @@ class ResponsePipeline:
                 ctx.errors.append(f"{name}:{exc}")
                 ctx.logs.append(f"stage={name} error={type(exc).__name__}")
                 if name == "generate":
-                    ctx.text = "I got stuck during generation. Please try again."
+                    if ctx.route == "command":
+                        ctx.text = "Command processing failed. Check logs and command syntax."
+                    else:
+                        ctx.text = "I got stuck during generation. Please try again."
                     ctx.stop = True
             if ctx.stop:
                 break
 
+        output_preview = _text_preview(ctx.text, 160)
+        output_len = len(str(ctx.text or ""))
+        web_used = str(ctx.tags.get("web_used") or "false").strip().lower() or "false"
+        web_query = str(ctx.meta.get("web_query") or "").strip()
+        web_fetched = int(_to_int(ctx.meta.get("web_fetched"), 0) or 0)
+        web_result_count = int(_to_int(ctx.meta.get("web_result_count"), 0) or 0)
+        ctx.logs.append(
+            "stage=web_trace end "
+            f"trace={web_trace_id} route={ctx.route} web_mode={web_mode} web_used={web_used} "
+            f"query_len={len(web_query)} results={web_result_count} fetched={web_fetched} "
+            f"output_len={output_len} output_preview={output_preview}"
+        )
+        log_json(
+            WEB_TRACE_LOGGER,
+            "web_trace_end",
+            trace=web_trace_id,
+            route=ctx.route,
+            web_mode=web_mode,
+            web_used=(web_used == "true"),
+            query_len=len(web_query),
+            results=web_result_count,
+            fetched=web_fetched,
+            output_len=output_len,
+            output_preview=output_preview,
+            errors=len(list(ctx.errors or [])),
+        )
+
         return PipelineResult(
             text=str(ctx.text or ""),
+            thinking=str(ctx.thinking or ""),
+            structured_output=dict(ctx.structured_output or {}),
             tool_calls=list(ctx.tool_calls or []),
             memory_ops=list(ctx.memory_ops or []),
             ui_actions=list(ctx.ui_actions or []),
@@ -1476,6 +2055,8 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "warmth_level",
         "sarcasm_level",
         "is_technical",
+        "active_mode",
+        "mode_lock",
     ):
         if key in meta:
             out[key] = meta.get(key)
@@ -2133,6 +2714,376 @@ def _bool_to_text(value: bool) -> str:
     return "true" if bool(value) else "false"
 
 
+def _format_persona_debug(payload: dict[str, Any]) -> str:
+    row = dict(payload or {})
+    character = str(row.get("active_character_id") or row.get("character_id") or "default").strip().lower() or "default"
+    mode = str(row.get("active_mode") or "friend_chat").strip().lower() or "friend_chat"
+    locked = bool(row.get("mode_lock", False))
+    mood = str(row.get("mood") or "neutral").strip().lower() or "neutral"
+    traits = dict(row.get("traits") or {})
+    locks = dict(row.get("locks") or {})
+    bans = [str(x).strip() for x in list(row.get("bans") or []) if str(x).strip()]
+    deltas = [dict(x) for x in list(row.get("last_deltas") or []) if isinstance(x, dict)]
+    feedback = [str(x).strip() for x in list(row.get("feedback") or []) if str(x).strip()]
+    event_changes = [dict(x) for x in list(row.get("last_event_changes") or []) if isinstance(x, dict)]
+
+    lines = ["persona_debug:"]
+    lines.append(f"- character={character}")
+    lines.append(f"- mode={mode} ({'locked' if locked else 'auto'})")
+    lines.append(f"- mood={mood}")
+    if traits:
+        ordered = []
+        for key in ("warmth", "sarcasm", "teasing", "strictness", "verbosity", "empathy"):
+            if key not in traits:
+                continue
+            try:
+                ordered.append(f"{key}={float(traits.get(key)):.2f}")
+            except Exception:
+                continue
+        if ordered:
+            lines.append("- traits: " + " ".join(ordered))
+    if locks:
+        lock_rows = [f"{k}={_bool_to_text(bool(v))}" for k, v in sorted(locks.items(), key=lambda x: str(x[0]))]
+        if lock_rows:
+            lines.append("- locks: " + ", ".join(lock_rows))
+    lines.append("- bans: " + (", ".join(bans) if bans else "(none)"))
+    if feedback:
+        lines.append("- feedback: " + ", ".join(feedback[:8]))
+
+    if deltas:
+        rendered: list[str] = []
+        for diff in deltas[:3]:
+            pairs: list[str] = []
+            for key, values in sorted(diff.items(), key=lambda x: str(x[0])):
+                if not isinstance(values, dict):
+                    continue
+                old = values.get("old")
+                new = values.get("new")
+                if old == new:
+                    continue
+                pairs.append(f"{key}:{old}->{new}")
+            if pairs:
+                rendered.append("; ".join(pairs[:4]))
+        if rendered:
+            lines.append("- last_deltas: " + " | ".join(rendered[:3]))
+
+    if event_changes:
+        compact: list[str] = []
+        for item in event_changes[:3]:
+            kind = str(item.get("kind") or "").strip().lower()
+            if not kind:
+                continue
+            if kind == "persona_drift":
+                td = dict(item.get("trait_deltas") or {})
+                if td:
+                    bits = [f"{k}:{v}" for k, v in sorted(td.items(), key=lambda x: str(x[0]))]
+                    compact.append(f"{kind}({', '.join(bits[:4])})")
+                else:
+                    compact.append(kind)
+            elif kind == "user_feedback":
+                fb = [str(x).strip() for x in list(item.get("feedback") or []) if str(x).strip()]
+                compact.append(f"{kind}({', '.join(fb[:3])})" if fb else kind)
+            else:
+                compact.append(kind)
+        if compact:
+            lines.append("- last_update: " + " | ".join(compact))
+
+    return "\n".join(lines)
+
+
+def _format_brain_debug(payload: dict[str, Any]) -> str:
+    row = dict(payload or {})
+    lines = ["brain_debug:"]
+    mode = str(row.get("active_mode") or "friend_chat").strip().lower() or "friend_chat"
+    mode_lock = bool(row.get("mode_lock", False))
+    lines.append(f"- active_mode={mode} ({'locked' if mode_lock else 'auto'})")
+    lines.append(f"- web_mode={str(row.get('web_mode') or 'auto').strip().lower() or 'auto'}")
+    lines.append(f"- thinking_enabled={_bool_to_text(bool(row.get('thinking_enabled', False)))}")
+    lines.append(f"- quality_profile={str(row.get('quality_profile') or 'BALANCED').strip().upper() or 'BALANCED'}")
+    output_format = _coerce_output_format_state(row.get("output_format"))
+    p_manual = output_format.get("show_parameters")
+    s_manual = output_format.get("show_summary")
+    p_text = ("on" if p_manual else "off") if isinstance(p_manual, bool) else "auto"
+    s_text = ("on" if s_manual else "off") if isinstance(s_manual, bool) else "auto"
+    lines.append(f"- output_parameters={p_text}")
+    lines.append(f"- output_summary={s_text}")
+    goal = str(row.get("active_goal") or "").strip()
+    lines.append(f"- active_goal={goal or '(none)'}")
+
+    signals = dict(row.get("last_signals") or {})
+    if signals:
+        parts = []
+        for k, v in sorted(signals.items(), key=lambda x: str(x[0])):
+            if v is None or v == "" or v == []:
+                continue
+            parts.append(f"{k}={v}")
+        lines.append("- last_signals: " + (", ".join(parts[:10]) if parts else "(none)"))
+    else:
+        lines.append("- last_signals: (none)")
+    feedback = [str(x).strip() for x in list(row.get("feedback") or []) if str(x).strip()]
+    if feedback:
+        lines.append("- feedback: " + ", ".join(feedback[:8]))
+
+    tasks = [dict(x) for x in list(row.get("active_tasks") or []) if isinstance(x, dict)]
+    if tasks:
+        out = []
+        for item in tasks[:4]:
+            label = str(item.get("title") or item.get("name") or item.get("text") or item.get("id") or "").strip()
+            if label:
+                out.append(label)
+        lines.append("- active_tasks: " + (", ".join(out) if out else "(none)"))
+    else:
+        lines.append("- active_tasks: (none)")
+
+    actions = [dict(x) for x in list(row.get("last_actions") or []) if isinstance(x, dict)]
+    if actions:
+        chunks = []
+        for item in actions[-3:]:
+            atype = str(item.get("type") or "EVENT").strip().upper() or "EVENT"
+            ts = str(item.get("ts") or "").strip()
+            diff = dict(item.get("state_diff") or {})
+            diff_bits = []
+            for key, values in sorted(diff.items(), key=lambda x: str(x[0])):
+                if not isinstance(values, dict):
+                    continue
+                old = values.get("old")
+                new = values.get("new")
+                if old == new:
+                    continue
+                diff_bits.append(f"{key}:{old}->{new}")
+            label = f"{atype}@{ts}" if ts else atype
+            if atype == "FEEDBACK_RECEIVED":
+                fb = [str(x).strip() for x in list(item.get("feedback") or []) if str(x).strip()]
+                if fb:
+                    label += "(" + ", ".join(fb[:3]) + ")"
+            if diff_bits:
+                label += " [" + ", ".join(diff_bits[:4]) + "]"
+            chunks.append(label)
+        lines.append("- last_actions: " + " | ".join(chunks))
+    else:
+        lines.append("- last_actions: (none)")
+
+    return "\n".join(lines)
+
+
+def _coerce_nullable_bool(value) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"none", "null", ""}:
+        return None
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _coerce_output_format_state(value) -> dict[str, Any]:
+    row = _as_dict(value)
+    return {
+        "show_parameters": _coerce_nullable_bool(row.get("show_parameters")),
+        "show_summary": _coerce_nullable_bool(row.get("show_summary")),
+    }
+
+
+def _extract_topics_from_tags(tags: dict[str, Any]) -> list[str]:
+    row = _as_dict(tags)
+    found: list[str] = []
+    seen: set[str] = set()
+    explicit_topic = str(row.get("topic") or "").strip().lower()
+    if explicit_topic:
+        seen.add(explicit_topic)
+        found.append(explicit_topic)
+    for tag in list(_as_list(row.get("metadata_tags"))):
+        token = str(tag or "").strip().lower()
+        if not token.startswith("topic_"):
+            continue
+        item = token.replace("topic_", "", 1).strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        found.append(item)
+    return found
+
+
+def _extract_output_traits(state: dict[str, Any], traits: dict[str, Any]) -> dict[str, float]:
+    order = ("warmth", "sarcasm", "teasing", "strictness", "verbosity", "empathy")
+    state_map = _as_dict(state)
+    traits_map = _as_dict(traits)
+    persona_traits = {}
+    active_character = str(state_map.get("active_character_id") or "").strip().lower()
+    characters = _as_dict(state_map.get("characters"))
+    if active_character:
+        entry = _as_dict(characters.get(active_character))
+        persona = _as_dict(entry.get("persona"))
+        persona_traits = _as_dict(persona.get("traits"))
+    out: dict[str, float] = {}
+    for key in order:
+        raw = None
+        if key in persona_traits:
+            raw = persona_traits.get(key)
+        elif key in traits_map:
+            raw = traits_map.get(key)
+        if raw is None:
+            continue
+        try:
+            out[key] = max(0.0, min(1.0, float(raw)))
+        except Exception:
+            continue
+    return out
+
+
+def _fallback_summary_from_text(text: str, *, max_sentences: int = 2) -> str:
+    src = _normalize_text(text)
+    if not src:
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+", src)
+    if not parts:
+        return ""
+    head = [x.strip() for x in parts[: max(1, int(max_sentences))] if str(x).strip()]
+    return _squeeze_summary(" ".join(head))
+
+
+def _limit_summary_sentences(text: str, *, max_sentences: int = 2) -> str:
+    src = _normalize_text(text)
+    if not src:
+        return ""
+    parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+", src) if str(x).strip()]
+    if not parts:
+        return src
+    limited = " ".join(parts[: max(1, int(max_sentences))]).strip()
+    return _squeeze_summary(limited)
+
+
+def _squeeze_summary(text: str, *, max_chars: int = 300) -> str:
+    src = _normalize_text(text)
+    if not src:
+        return ""
+    if len(src) <= max(24, int(max_chars)):
+        return src
+    clipped = src[: max(24, int(max_chars))]
+    cut = clipped.rsplit(" ", 1)[0].strip()
+    return (cut if cut else clipped.strip()).rstrip(".") + "."
+
+
+def _render_output_blocks(
+    *,
+    parameters_lines: list[str],
+    summary: str,
+    text: str,
+    include_parameters: bool,
+    include_summary: bool,
+    order: list[str] | None = None,
+) -> str:
+    chunks: list[str] = []
+    queue = [str(x).strip().lower() for x in list(order or ["parameters", "summary", "response"]) if str(x).strip()]
+    if "response" not in queue:
+        queue.append("response")
+    for section in queue:
+        if section == "parameters":
+            if include_parameters:
+                chunks.append(_render_parameters_block(parameters_lines))
+            continue
+        if section == "summary":
+            if include_summary:
+                summary_text = _normalize_text(summary) or "-"
+                chunks.append("[SUMMARY]\n" + summary_text)
+            continue
+        if section == "response":
+            chunks.append("[RESPONSE]\n" + (_normalize_text(text) or "-"))
+    return "\n\n".join(chunks).strip()
+
+
+def _render_parameters_block(lines: list[str]) -> str:
+    row = [str(x).strip() for x in list(lines or []) if str(x).strip()]
+    if not row:
+        row = ["-"]
+    return "[PARAMETERS]\n" + "\n".join(row)
+
+
+def _render_parameters_lines(parameters: dict[str, Any], *, field_order: list[str] | None = None) -> list[str]:
+    flat = _flatten_parameter_map(parameters)
+    if not flat:
+        return []
+    order = [str(x).strip() for x in list(field_order or []) if str(x).strip()]
+    lines: list[str] = []
+    if order:
+        for field in order:
+            if field not in flat:
+                continue
+            lines.append(_render_kv_line(field, flat.get(field)))
+    else:
+        for key in sorted(flat.keys()):
+            lines.append(_render_kv_line(key, flat.get(key)))
+    return lines
+
+
+def _render_kv_line(key: str, value: Any) -> str:
+    if isinstance(value, float):
+        return f"{key}={max(0.0, min(1.0, value)):.2f}"
+    if isinstance(value, list):
+        compact = [str(x).strip().lower() for x in value if str(x).strip()]
+        return f"{key}={', '.join(compact)}"
+    return f"{key}={str(value).strip()}"
+
+
+def _select_parameter_fields(payload: dict[str, Any], *, fields: list[str]) -> dict[str, Any]:
+    base = _as_dict(payload)
+    if not fields:
+        return base
+    out: dict[str, Any] = {}
+    for raw in list(fields or []):
+        field = str(raw or "").strip()
+        if not field:
+            continue
+        value, exists = _get_nested(base, field)
+        if not exists:
+            continue
+        _set_nested(out, field, value)
+    return out
+
+
+def _flatten_parameter_map(payload: dict[str, Any], *, prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    row = _as_dict(payload)
+    for key, value in row.items():
+        item_key = str(key or "").strip()
+        if not item_key:
+            continue
+        full_key = f"{prefix}.{item_key}" if prefix else item_key
+        if isinstance(value, dict):
+            out.update(_flatten_parameter_map(value, prefix=full_key))
+            continue
+        out[full_key] = value
+    return out
+
+
+def _get_nested(payload: dict[str, Any], field: str) -> tuple[Any, bool]:
+    cur: Any = payload
+    for part in str(field).split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None, False
+        cur = cur.get(part)
+    return cur, True
+
+
+def _set_nested(payload: dict[str, Any], field: str, value: Any) -> None:
+    parts = [str(x).strip() for x in str(field).split(".") if str(x).strip()]
+    if not parts:
+        return
+    cur = payload
+    for part in parts[:-1]:
+        child = cur.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            cur[part] = child
+        cur = child
+    cur[parts[-1]] = value
+
+
 _CHECKIN_RE = re.compile(
     r"(как\s+(?:у\s+тебя\s+)?дела|как\s+ты|как\s+сам|что\s+нового|как\s+настроение|how\s+are\s+you)",
     flags=re.IGNORECASE,
@@ -2299,6 +3250,41 @@ def _repair_mojibake(text: str) -> str:
 
 def _contains_cyrillic(text: str) -> bool:
     return bool(re.search(r"[\u0400-\u04FF]", str(text or "")))
+
+
+def _resolve_web_mode(meta: dict[str, Any], state: dict[str, Any]) -> str:
+    raw = _pick(
+        _as_dict(meta).get("web_mode"),
+        _as_dict(state).get("web_mode"),
+        "auto",
+    ).lower()
+    if raw in {"on", "off", "auto"}:
+        return raw
+    return "auto"
+
+
+def _resolve_web_trace_id(meta: dict[str, Any], user_msg: str) -> str:
+    source = _pick(_as_dict(meta).get("web_trace_id"), _as_dict(meta).get("trace_id"))
+    if source:
+        return source
+    ts = int(time.time() * 1000)
+    msg_len = len(str(user_msg or "").strip())
+    return f"web-{ts}-{msg_len}"
+
+
+def _is_forced_web_request(text: str) -> bool:
+    src = str(text or "").strip().lower()
+    return src == "/web" or src.startswith("/web ")
+
+
+def _text_preview(value: str, max_chars: int = 120) -> str:
+    src = _normalize_text(value).replace("\n", " ")
+    if not src:
+        return "-"
+    n = max(12, int(max_chars or 120))
+    if len(src) <= n:
+        return src
+    return src[: n - 3].rstrip() + "..."
 
 
 def run_response_pipeline(text: str) -> str:

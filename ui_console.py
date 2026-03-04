@@ -4,6 +4,7 @@ import argparse
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,13 +14,14 @@ from config.settings import load_config
 
 
 CONSOLE_BUILD_ID = "2026-02-28-r2"
-
+config = load_config()
 
 @dataclass
 class ConsoleState:
     api: ApiClient
     store_turn: bool = True
     show_thinking: bool = True
+    thinking_first: bool = True
     think_enabled: bool | None = None
     web_mode: str | None = None
     json_mode_enabled: bool | None = None
@@ -31,7 +33,7 @@ class ConsoleState:
 
 
 def _configure_stdout() -> None:
-    for stream_name in ("stdout", "stderr"):
+    for stream_name in ("stdin", "stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if stream is None:
             continue
@@ -44,8 +46,11 @@ def _configure_stdout() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    host = config.host
+    port = config.port
+
     parser = argparse.ArgumentParser(description="MMis console chat (API client)")
-    parser.add_argument("--api-url", default="", help="MMis API url (default: MMIS_API_URL or http://127.0.0.1:8000)")
+    parser.add_argument("--api-url", default="", help=f"MMis API url (default: MMIS_API_URL or http://{host}:{port})")
     parser.add_argument("--model", default="", help="Set model on startup")
     parser.add_argument("--once", default="", help="Single message and exit")
     parser.add_argument("--timeout", type=float, default=None, help="HTTP timeout seconds")
@@ -60,6 +65,9 @@ def _build_parser() -> argparse.ArgumentParser:
     think_group = parser.add_mutually_exclusive_group()
     think_group.add_argument("--think", action="store_true", help="Enable think mode on startup")
     think_group.add_argument("--nothink", action="store_true", help="Disable think mode on startup")
+    think_order_group = parser.add_mutually_exclusive_group()
+    think_order_group.add_argument("--thinking-first", action="store_true", help="Prefer streaming thinking before answer")
+    think_order_group.add_argument("--thinking-last", action="store_true", help="Do not delay answer waiting for thinking")
     json_group = parser.add_mutually_exclusive_group()
     json_group.add_argument("--json", action="store_true", help="Enable JSON mode on startup")
     json_group.add_argument("--nojson", action="store_true", help="Disable JSON mode on startup")
@@ -72,7 +80,7 @@ def _print_header(state: ConsoleState) -> None:
     print(f"API: {state.api.base_url}")
     if _ensure_connected(state):
         print("Connected.")
-        _print_health_short(state)
+        _print_health_short(state, startup=True)
         return
 
     print("API недоступен.")
@@ -80,42 +88,55 @@ def _print_header(state: ConsoleState) -> None:
         print("Пробую авто-запуск API...")
         if _start_api_process(state) and _wait_for_api(state, timeout_s=18.0):
             print("API поднят автоматически.")
-            _print_health_short(state)
+            _print_health_short(state, startup=True)
             _ensure_model_backend(state)
             return
     print("Запусти вручную: python main.py --mode api")
 
 
 def _print_help() -> None:
-    print("/help                show commands")
-    print("/connect [url]       reconnect API (optional custom url)")
-    print("/restartapi          restart local API process")
-    print("/models              list available models")
-    print("/model               show current runtime model")
-    print("/model <name>        set runtime model")
-    print("/think               enable thinking")
-    print("/nothink             disable thinking")
-    print("/web                 enable web search")
-    print("/no-web              disable web search")
-    print("/web-auto            auto web search")
-    print("/json                enable JSON mode")
-    print("/nojson              disable JSON mode")
-    print("/character ...       backend character command")
-    print("/trait ...           backend trait command")
-    print("/health              show API health")
-    print("/store on|off        toggle store_turn")
-    print("/exit or /quit       exit")
+    print("/help                        show commands")
+    print("/connect [url]               reconnect API (optional custom url)")
+    print("/restartapi                  restart local API process")
+    print("/models                      list available models")
+    print("/model                       show current runtime model")
+    print("/model <name>                set runtime model")
+    print("/think                       enable thinking")
+    print("/nothink                     disable thinking")
+    print("/show-thinking               show thinking stream")
+    print("/hide-thinking               hide thinking stream")
+    print("/thinking-first              prefer thinking stream before answer")
+    print("/thinking-last               prefer answer stream without waiting for thinking")
+    print("/web                         enable web search")
+    print("/no-web                      disable web search")
+    print("/web-auto                    auto web search")
+    print("/output status               show output format controls")
+    print("/output parameters on|off")  
+    print("/output summary on|off")     
+    print("/mode <name>                 backend mode switch")
+    print("/mode_lock on|off            backend mode lock")
+    print("/brain_debug                 backend brain debug")
+    print("/persona_debug               backend persona debug")
+    print("/json                        enable JSON mode")
+    print("/nojson                      disable JSON mode")
+    print("/character ...               backend character command")
+    print("/trait ...                   backend trait command")
+    print("/health                      show API health")
+    print("/store on|off                toggle store_turn")
+    print("/exit or /quit               exit")
 
 
-def _print_health_short(state: ConsoleState) -> None:
+def _print_health_short(state: ConsoleState, *, startup: bool = False) -> None:
     try:
         payload = state.api.health()
         state.online = True
         state.think_enabled = bool(payload.get("thinking_enabled", True))
         state.json_mode_enabled = bool(payload.get("json_mode_enabled", False))
         print(f"Model: {payload.get('model')}")
-        print(f"Thinking: {'on' if state.think_enabled else 'off'}")
-        print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
+        if not startup:
+            print(f"Thinking: {'on' if state.think_enabled else 'off'}")
+            print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
+            print(f"Thinking-first: {'on' if state.thinking_first else 'off'}")
     except ApiClientError as exc:
         state.online = False
         print(f"API error: {exc}")
@@ -212,6 +233,11 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         state.show_thinking = target
         print(f"Thinking display: {'on' if target else 'off'}")
         return True
+
+    if key in {"/thinking-first", "/thinking-last"}:
+        state.thinking_first = (key == "/thinking-first")
+        print(f"Thinking-first: {'on' if state.thinking_first else 'off'}")
+        return True
     
     if key in {"/web", "/no-web", "/web-auto"}:
         if not _ensure_connected_or_start(state):
@@ -229,19 +255,6 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             print(f"API error: {exc}")
         return True
     
-    if key in {"/json", "/nojson"}:
-        if not _ensure_connected_or_start(state):
-            return True
-        target = key == "/json"
-        try:
-            actual = bool(state.api.set_json_mode_enabled(target))
-            state.json_mode_enabled = actual
-            print(f"JSON mode: {'on' if actual else 'off'}")
-        except ApiClientError as exc:
-            state.online = False
-            print(f"API error: {exc}")
-        return True
-
     if key in {"/json", "/nojson"}:
         if not _ensure_connected_or_start(state):
             return True
@@ -273,14 +286,9 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         print(f"store_turn: {'on' if state.store_turn else 'off'}")
         return True
 
-    passthrough_prefixes = {"/character", "/characters", "/trait", "/persona", "/personality", "/mode"}
-    if key in passthrough_prefixes:
-        if not _ensure_connected_or_start(state):
-            return True
-        _send_chat(state, raw)
+    if not _ensure_connected_or_start(state):
         return True
-
-    print(f"Unknown command: {cmd}. Use /help")
+    _send_chat(state, raw)
     return True
 
 
@@ -440,6 +448,76 @@ class _StreamRealtimePrinter:
         # Track how many sanitized characters have been physically printed
         self._answer_printed_chars: int = 0
         self._thinking_printed_chars: int = 0
+        self._io_lock = threading.RLock()
+        self._hidden_hint_frames = (
+            "\u0434\u0443\u043c\u0430\u0435\u0442.",
+            "\u0434\u0443\u043c\u0430\u0435\u0442..",
+            "\u0434\u0443\u043c\u0430\u0435\u0442...",
+        )
+        self._hidden_hint_index = 0
+        self._hidden_hint_active = False
+        self._hidden_hint_stop = threading.Event()
+        self._hidden_hint_thread: threading.Thread | None = None
+        self._hidden_hint_last_width = 0
+
+    def start_hidden_thinking_hint(self) -> None:
+        if self.show_thinking:
+            return
+        with self._io_lock:
+            if self._hidden_hint_active:
+                return
+            self._hidden_hint_active = True
+            self._hidden_hint_stop = threading.Event()
+            self._hidden_hint_index = 1
+            self._render_hidden_hint_locked(self._hidden_hint_frames[0])
+            self._hidden_hint_thread = threading.Thread(
+                target=self._run_hidden_thinking_hint,
+                name="mmis-thinking-indicator",
+                daemon=True,
+            )
+            self._hidden_hint_thread.start()
+
+    def stop_hidden_thinking_hint(self, *, clear_line: bool = True) -> None:
+        thread: threading.Thread | None = None
+        with self._io_lock:
+            if not self._hidden_hint_active and self._current_channel != "thinking_hint":
+                return
+            self._hidden_hint_active = False
+            self._hidden_hint_stop.set()
+            thread = self._hidden_hint_thread
+            self._hidden_hint_thread = None
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=0.25)
+        with self._io_lock:
+            if clear_line and self._current_channel == "thinking_hint":
+                self._clear_hidden_hint_line_locked()
+
+    def _run_hidden_thinking_hint(self) -> None:
+        while not self._hidden_hint_stop.wait(0.35):
+            with self._io_lock:
+                if not self._hidden_hint_active:
+                    break
+                frame = self._hidden_hint_frames[self._hidden_hint_index]
+                self._hidden_hint_index = (self._hidden_hint_index + 1) % len(self._hidden_hint_frames)
+                self._render_hidden_hint_locked(frame)
+
+    def _render_hidden_hint_locked(self, frame: str) -> None:
+        line = f"assistant> {str(frame or '')}"
+        width = max(self._hidden_hint_last_width, len(line))
+        sys.stdout.write("\r" + line.ljust(width))
+        sys.stdout.flush()
+        self._hidden_hint_last_width = width
+        self._printed_any = True
+        self._current_channel = "thinking_hint"
+
+    def _clear_hidden_hint_line_locked(self) -> None:
+        width = max(0, int(self._hidden_hint_last_width))
+        if width > 0:
+            sys.stdout.write("\r" + (" " * width) + "\r")
+            sys.stdout.flush()
+        self._hidden_hint_last_width = 0
+        self._current_channel = ""
+        self._printed_any = False
 
     def on_thinking(self, piece: str) -> None:
         text = _sanitize_stream_text(piece)
@@ -448,10 +526,12 @@ class _StreamRealtimePrinter:
         self._thinking_started = True
         self.thinking_parts.append(text)
         if not self.show_thinking:
+            self.start_hidden_thinking_hint()
             return
-        self._start_channel("thinking")
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        with self._io_lock:
+            self._start_channel("thinking")
+            sys.stdout.write(text)
+            sys.stdout.flush()
 
     def on_answer(self, piece: str) -> None:
         raw = str(piece or "")
@@ -486,6 +566,7 @@ class _StreamRealtimePrinter:
         self._emit_answer(text)
 
     def finalize(self) -> None:
+        self.stop_hidden_thinking_hint(clear_line=True)
         if self._pending_answer:
             self._emit_answer("".join(self._pending_answer))
             self._pending_answer = []
@@ -497,6 +578,7 @@ class _StreamRealtimePrinter:
         return "".join(self.thinking_parts)
 
     def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None) -> None:
+        self.stop_hidden_thinking_hint(clear_line=True)
         # Flush any pending buffer first
         if self._pending_answer:
             self._emit_answer("".join(self._pending_answer))
@@ -549,28 +631,33 @@ class _StreamRealtimePrinter:
         self._thinking_started = False
         self.thinking_parts.append(text)
         self._thinking_printed_chars += len(text)
-        self._start_channel("thinking")
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        with self._io_lock:
+            self._start_channel("thinking")
+            sys.stdout.write(text)
+            sys.stdout.flush()
 
     def _emit_answer(self, text: str) -> None:
         if not text:
             return
+        self.stop_hidden_thinking_hint(clear_line=True)
         # Force strip leading whitespace on the very first text chunk
         if not self.answer_parts:
             text = text.lstrip()
             if not text:
                 return
-        self._start_channel("assistant")
-        self.answer_parts.append(text)
-        self._answer_printed_chars += len(text)
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        with self._io_lock:
+            self._start_channel("assistant")
+            self.answer_parts.append(text)
+            self._answer_printed_chars += len(text)
+            sys.stdout.write(text)
+            sys.stdout.flush()
 
     def _start_channel(self, channel: str) -> None:
         target = "thinking" if str(channel or "").lower() == "thinking" else "assistant"
         if self._current_channel == target:
             return
+        if self._current_channel == "thinking_hint":
+            self._clear_hidden_hint_line_locked()
         if self._printed_any:
             sys.stdout.write("\n")
         if target == "thinking":
@@ -585,7 +672,7 @@ def _sanitize_stream_text(piece: str) -> str:
     src = str(piece or "")
     if not src:
         return ""
-    src = src.replace("\r\n", "\n").replace("\r", "")
+    src = src.replace("\r\n", "\n").replace("\r", "\n")
     return "".join(ch for ch in src if (ch == "\n" or ch == "\t" or ord(ch) >= 32))
 
 
@@ -626,20 +713,25 @@ def _send_chat(state: ConsoleState, text: str) -> int:
 
 def _stream_once(state: ConsoleState, text: str):
     renderer = _ConsoleChunkRenderer()
-    prefer_thinking_first = bool(state.show_thinking and state.think_enabled is True)
+    prefer_thinking_first = bool(state.show_thinking and state.thinking_first)
     printer = _StreamRealtimePrinter(
         renderer,
         prefer_thinking_first=prefer_thinking_first,
         show_thinking=bool(state.show_thinking),
     )
-    reply = state.api.stream_chat(
-        text=text,
-        store_turn=state.store_turn,
-        think=bool(state.think_enabled),
-        json_mode=state.json_mode_enabled,
-        on_chunk=printer.on_answer,
-        on_thinking_chunk=printer.on_thinking,
-    )
+    if not bool(state.show_thinking) and bool(state.think_enabled):
+        printer.start_hidden_thinking_hint()
+    try:
+        reply = state.api.stream_chat(
+            text=text,
+            store_turn=state.store_turn,
+            think=bool(state.think_enabled),
+            json_mode=state.json_mode_enabled,
+            on_chunk=printer.on_answer,
+            on_thinking_chunk=printer.on_thinking,
+        )
+    finally:
+        printer.stop_hidden_thinking_hint(clear_line=True)
     printer.finalize_with_final(answer_final=reply.answer, thinking_final=reply.thinking)
     return reply, printer.rendered_answer(), printer.rendered_thinking()
 
@@ -845,7 +937,6 @@ def _looks_like_shell_command(text: str) -> bool:
 def main() -> int:
     _configure_stdout()
     args = _build_parser().parse_args()
-    config = load_config()
 
     api_url = str(args.api_url).strip() or config.api_url
     model_name = str(args.model).strip() or config.console_model
@@ -860,6 +951,12 @@ def main() -> int:
         show_thinking = False
     else:
         show_thinking = config.console_show_thinking
+    if bool(args.thinking_first):
+        thinking_first = True
+    elif bool(args.thinking_last):
+        thinking_first = False
+    else:
+        thinking_first = bool(config.console_thinking_first)
 
     auto_start_api = False if args.no_auto_api else config.console_auto_start_api
     auto_start_ollama = False if args.no_auto_ollama else config.console_auto_start_ollama
@@ -872,6 +969,7 @@ def main() -> int:
         ),
         store_turn=store_turn,
         show_thinking=show_thinking,
+        thinking_first=thinking_first,
         auto_start_api=auto_start_api,
         auto_start_ollama=auto_start_ollama,
     )
@@ -888,13 +986,10 @@ def main() -> int:
                 print(f"API error: {exc}")
 
     think_action = None
-    think_source_is_cli = False
     if bool(args.think):
         think_action = True
-        think_source_is_cli = True
     elif bool(args.nothink):
         think_action = False
-        think_source_is_cli = True
     elif config.thinking_enabled is not None:
         think_action = config.thinking_enabled
 
@@ -902,20 +997,15 @@ def main() -> int:
         if _ensure_connected_or_start(state):
             try:
                 state.think_enabled = bool(state.api.set_thinking_enabled(think_action))
-                if think_source_is_cli:
-                    print(f"Thinking: {'on' if state.think_enabled else 'off'}")
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")
 
     json_action = None
-    json_source_is_cli = False
     if bool(args.json):
         json_action = True
-        json_source_is_cli = True
     elif bool(args.nojson):
         json_action = False
-        json_source_is_cli = True
     elif config.console_json_mode_enabled:
         json_action = True
 
@@ -923,11 +1013,12 @@ def main() -> int:
         if _ensure_connected_or_start(state):
             try:
                 state.json_mode_enabled = bool(state.api.set_json_mode_enabled(json_action))
-                if json_source_is_cli:
-                    print(f"JSON mode: {'on' if state.json_mode_enabled else 'off'}")
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")
+
+    if state.think_enabled is not None:
+        print(f"Thinking: {'on' if state.think_enabled else 'off'}")
 
     try:
         once = str(args.once).strip()

@@ -1,0 +1,228 @@
+{
+  "schema_version": 3,
+  "id": "specs_assembly_workflow",
+  "title": "Workflow: specs assembly",
+  "description": "Подробный регламент сборки и сопровождения всех JSON-спек проекта: порядок загрузки, контракты, проверки и правила изменений.",
+  "spec_root": "data/specs",
+  "core_specs": [
+    "data/specs/system_spec.json",
+    "data/specs/metadata_spec.json",
+    "data/specs/output_spec.json",
+    "data/specs/memory_spec.json",
+    "data/specs/modes_spec.json",
+    "data/specs/taxonomy.json"
+  ],
+  "character_specs_glob": "data/specs/characters/*/{character.json,persona_state.json,persona_spec.json,evolution_spec.json}",
+  "assembly_order": [
+    "taxonomy.json",
+    "modes_spec.json",
+    "metadata_spec.json",
+    "system_spec.json",
+    "output_spec.json",
+    "memory_spec.json",
+    "characters/*"
+  ],
+  "assembly_from_zero": {
+    "step_order": [
+      "prepare_sources",
+      "validate_core",
+      "assemble_characters",
+      "run_contract_checks",
+      "run_tests",
+      "publish_runtime"
+    ],
+    "steps": {
+      "prepare_sources": {
+        "goal": "Подготовить полный набор spec-файлов перед сборкой.",
+        "actions": [
+          "Проверь наличие всех core_specs.",
+          "Проверь структуру папок в data/specs/characters/*.",
+          "Убедись, что profile_workflow.json актуален для новых персонажей."
+        ],
+        "output": "Структура specs готова к проверке и компоновке."
+      },
+      "validate_core": {
+        "goal": "Проверить корректность базовых контрактов проекта.",
+        "actions": [
+          "Проверь, что taxonomy.json покрывает языки/интенты/эмоции/режимы/темы.",
+          "Проверь, что system_spec содержит обязательные prompt_toggles и prompts.* ключи.",
+          "Проверь, что в specs нет ссылок на legacy TXT prompts."
+        ],
+        "output": "Core-спеки валидны и согласованы между собой."
+      },
+      "assemble_characters": {
+        "goal": "Собрать и нормализовать спецификации персонажей.",
+        "actions": [
+          "Для нового персонажа используй profile workflow и builder script.",
+          "Проверь, что у каждого персонажа есть character/persona_state/persona_spec/evolution_spec.",
+          "Проверь, что default_mode и mood согласованы с persona_spec."
+        ],
+        "output": "Все character specs находятся в едином формате."
+      },
+      "run_contract_checks": {
+        "goal": "Проверить функциональные контракты runtime.",
+        "actions": [
+          "Проверь output_contract: порядок блоков output и приоритет ручного override.",
+          "Проверь metadata contract: теги и режимы согласованы с taxonomy.",
+          "Проверь, что loader/engine корректно читают все обязательные поля."
+        ],
+        "output": "Сборка соответствует runtime-контрактам."
+      },
+      "run_tests": {
+        "goal": "Поймать регрессии до запуска в runtime.",
+        "actions": [
+          "Запусти таргетные unit-тесты по spec registry, taxonomy, prompt toggles, persona compiler.",
+          "При изменении modes/output обязательно прогони смежные тесты response pipeline.",
+          "Зафиксируй ошибки и исправь их до публикации."
+        ],
+        "output": "Стабильный набор specs без известных тестовых падений."
+      },
+      "publish_runtime": {
+        "goal": "Подготовить runtime к использованию обновленных spec-файлов.",
+        "actions": [
+          "Синхронизируй manifest персонажей.",
+          "При необходимости выставь active_character_id.",
+          "Сделай smoke-check в UI/API на 2-3 типовых сценариях."
+        ],
+        "output": "Обновленные specs применены в runtime."
+      }
+    }
+  },
+  "contracts": {
+    "taxonomy_is_source_of_truth": [
+      "языки/интенты/эмоции/режимы/темы задаются в taxonomy.json",
+      "нормализация в коде опирается на taxonomy aliases"
+    ],
+    "system_spec_minimum": [
+      "prompt_toggles.response_safety_filter",
+      "prompt_toggles.response_formatting",
+      "prompts.system.base",
+      "prompts.response.safety_filter",
+      "prompts.response.formatting"
+    ],
+    "no_txt_runtime": [
+      "runtime не читает prompts/* (TXT forbidden)",
+      "spec registry валидирует отсутствие .txt ссылок в JSON"
+    ],
+    "output_contract": [
+      "output_spec управляет порядком блоков output",
+      "manual override в state выше mode default"
+    ]
+  },
+  "parameter_reference": {
+    "taxonomy_json": {
+      "must_define": [
+        "languages",
+        "intents",
+        "emotions",
+        "modes",
+        "topics"
+      ],
+      "notes": [
+        "aliases должны быть детерминированны и не пересекаться по смыслу",
+        "новые intent/emotion должны быть совместимы с metadata extractor"
+      ]
+    },
+    "modes_spec_json": {
+      "must_define": [
+        "mode defaults",
+        "fallback mode",
+        "режимные ограничения вывода"
+      ]
+    },
+    "system_spec_json": {
+      "must_define": [
+        "prompt_toggles",
+        "prompts.system.base",
+        "response safety/formatting hooks"
+      ]
+    },
+    "output_spec_json": {
+      "must_define": [
+        "порядок output blocks",
+        "правила форматирования",
+        "поведение ручного override"
+      ]
+    },
+    "memory_spec_json": {
+      "must_define": [
+        "правила извлечения фактов",
+        "слияние/очистка памяти",
+        "ограничения на шум"
+      ]
+    },
+    "metadata_spec_json": {
+      "must_define": [
+        "стандарты intent/emotion/tagging",
+        "контракт выдачи полей для prompt engine"
+      ]
+    },
+    "character_specs": {
+      "required_files": [
+        "character.json",
+        "persona_state.json",
+        "persona_spec.json",
+        "evolution_spec.json"
+      ],
+      "consistency_rules": [
+        "character_id совпадает в папке и JSON",
+        "default_mood присутствует в persona_spec.moods",
+        "default_mode присутствует в persona_spec.modes",
+        "traits в persona_state лежат в диапазоне 0..1"
+      ]
+    }
+  },
+  "change_policy": {
+    "add_new_field": [
+      "можно добавлять новые поля в specs (additive)",
+      "новое поле должно иметь безопасный default или fallback в коде",
+      "при добавлении поля обнови тесты, где это поле используется"
+    ],
+    "remove_field": [
+      "перед удалением поля проверить все consumers через rg",
+      "удаление только вместе с правкой loader/engine/tests",
+      "удалять только после подтверждения отсутствия runtime-зависимостей"
+    ],
+    "rename_field": [
+      "делай через переходный период: old+new ключи",
+      "добавь миграционную логику и тесты совместимости",
+      "после миграции убери старый ключ отдельным изменением"
+    ],
+    "character_onboarding": [
+      "создать папку data/specs/characters/{character_id}",
+      "положить 4 обязательных файла",
+      "добавить/проверить manifest через runtime sync"
+    ]
+  },
+  "verification_commands": [
+    "python scripts/character_profile_builder.py --id <character_id> --dry-run",
+    "python -m unittest discover -s tests -p \"test_spec_registry.py\"",
+    "python -m unittest discover -s tests -p \"test_taxonomy.py\"",
+    "python -m unittest discover -s tests -p \"test_prompt_engine_prompt_toggles.py\"",
+    "python -m unittest discover -s tests -p \"test_persona_compiler.py\""
+  ],
+  "failure_policy": [
+    "если system_spec невалиден JSON — сборка считается проваленной",
+    "если отсутствует любой core_spec — сборка считается проваленной",
+    "если есть .txt ссылки в specs — сборка считается проваленной",
+    "если character specs нарушают consistency_rules — сборка считается проваленной"
+  ],
+  "common_mistakes": [
+    "Редактируют taxonomy и забывают обновить тесты metadata/tagging.",
+    "Добавляют новое поле в spec, но не добавляют fallback в коде.",
+    "Меняют output_spec и не проверяют response pipeline контракты.",
+    "Создают персонажа без полного набора 4 обязательных файлов.",
+    "Оставляют legacy TXT-ссылки, которые runtime уже не читает."
+  ],
+  "profile_bootstrap": {
+    "source": "data/specs/FaQ/profile_workflow.json",
+    "purpose": "Основной справочник для создания нового персонажа с нуля и настройки ключевых параметров профиля.",
+    "minimal_sequence": [
+      "Создать персонажа через scripts/character_profile_builder.py",
+      "Заполнить profile_blueprint.json",
+      "Собрать 4 spec-файла персонажа",
+      "Прогнать unit-тесты",
+      "Синхронизировать manifest и установить active_character_id"
+    ]
+  }
+}

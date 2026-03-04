@@ -11,9 +11,9 @@ from config.model_config import ModelProfile, get_profile
 from config.paths import BASE_DIR, ensure_dirs
 from config.settings import AppSettings, load_config
 from core.brain import Brain
-from core.prompt_builder import PromptBuilder
+from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
-from core.state_manager import StateManager
+from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
 from llm.tokenizer import ApproxTokenizer, Tokenizer
@@ -40,10 +40,9 @@ class AppContainer:
     profile: ModelProfile
     provider: LLMProviderBase
     tokenizer: Tokenizer
-    state_manager: StateManager
+    character_runtime: CharacterRuntime
     metadata_extractor: MetadataExtractor
     memory_manager: MemoryManager
-    prompt_builder: PromptBuilder
     response_pipeline: ResponsePipeline
     brain: Brain
     voice: VoiceManager | None = None
@@ -54,7 +53,7 @@ class AppContainer:
 
     def shutdown(self) -> None:
         _safe_call(self.voice, "shutdown")
-        _safe_call(self.state_manager, "save")
+        _safe_call(self.character_runtime, "save")
         _safe_call(self.memory_manager.short_memory, "save")
         _safe_call(self.memory_manager.long_memory, "save")
         _safe_call(self.memory_manager.vector_store, "save")
@@ -66,14 +65,15 @@ class AppContainer:
 
 
 def build_container(settings: AppSettings) -> AppContainer:
+    validate_no_txt_paths(settings)
     ensure_dirs(memory_dir=settings.memory_dir)
     profile = get_profile(settings.active_profile)
     provider_name = _resolve_provider_name(settings.llm_default_provider)
     provider = build_provider(provider_name, default_model=settings.model_name)
     tokenizer: Tokenizer = ApproxTokenizer()
 
-    state_manager = StateManager()
-    state_manager.set_quality_profile(_state_profile_name(settings.active_profile))
+    character_runtime = CharacterRuntime()
+    character_runtime.set_quality_profile(_state_profile_name(settings.active_profile))
     metadata_extractor = MetadataExtractor(cache_size=280)
 
     short_memory = ShortMemory(limit=80, summary_trigger=60)
@@ -94,16 +94,15 @@ def build_container(settings: AppSettings) -> AppContainer:
         retrieve_score_threshold=0.28,
     )
 
-    prompt_builder = PromptBuilder()
     response_pipeline = ResponsePipeline(
         provider=provider,
-        prompt_builder=prompt_builder,
+        character_runtime=character_runtime,
         metadata_extractor=metadata_extractor,
         memory_manager=memory_manager,
     )
     brain = Brain(
         provider=provider,
-        state_manager=state_manager,
+        state_manager=character_runtime,
         memory_manager=memory_manager,
         metadata_extractor=metadata_extractor,
         response_pipeline=response_pipeline,
@@ -120,10 +119,9 @@ def build_container(settings: AppSettings) -> AppContainer:
         profile=profile,
         provider=provider,
         tokenizer=tokenizer,
-        state_manager=state_manager,
+        character_runtime=character_runtime,
         metadata_extractor=metadata_extractor,
         memory_manager=memory_manager,
-        prompt_builder=prompt_builder,
         response_pipeline=response_pipeline,
         brain=brain,
         voice=voice,
@@ -132,6 +130,14 @@ def build_container(settings: AppSettings) -> AppContainer:
         internet_search=internet_search,
         internet_scraper=internet_scraper,
     )
+
+
+def setup_app() -> AppContainer:
+    """Backward-compatible app bootstrap used by legacy debug scripts/tests."""
+    settings = load_config()
+    ensure_dirs(memory_dir=settings.memory_dir)
+    setup_logging(settings)
+    return build_container(settings)
 
 
 def run_cli(container: AppContainer, *, once_text: str | None = None, source: str = "cli") -> int:
@@ -366,4 +372,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

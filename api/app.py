@@ -26,11 +26,13 @@ from api.schemas import (
 )
 from config.settings import load_config
 from core.brain import Brain
+from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
 from utils.logger import get_logger, log_json
 
 
 cfg = load_config()
+validate_no_txt_paths(cfg)
 app = FastAPI(title="MMis API", version="2.1.0")
 LOGGER = get_logger(__name__)
 
@@ -168,7 +170,14 @@ def chat(req: ChatRequest) -> ChatResponse:
             if bool(req.store_turn):
                 _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
                 _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
-            return ChatResponse(answer=answer, thinking="", stats=stats, model=_runtime.model)
+            return ChatResponse(
+                answer=answer,
+                thinking="",
+                stats=stats,
+                model=_runtime.model,
+                parameters=None,
+                summary=None,
+            )
 
         log_json(
             LOGGER,
@@ -195,6 +204,12 @@ def chat(req: ChatRequest) -> ChatResponse:
         answer, thinking = _split_visible_and_thinking(answer_raw)
         if not thinking.strip():
             thinking = str(getattr(result, "thinking", "") or "").strip()
+        structured = dict(getattr(result, "structured_output", {}) or {})
+        parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
+        summary = structured.get("summary")
+        summary_text = str(summary).strip() if summary is not None else None
+        if summary_text == "":
+            summary_text = None
         stats = dict(result.stats or {})
         stats.setdefault("served_model", _runtime.model)
         _runtime.last_stats = stats
@@ -212,7 +227,14 @@ def chat(req: ChatRequest) -> ChatResponse:
             thinking_chars=len(thinking),
             stats_keys=len(list(stats.keys())),
         )
-        return ChatResponse(answer=answer, thinking=thinking, stats=stats, model=_runtime.model)
+        return ChatResponse(
+            answer=answer,
+            thinking=thinking,
+            stats=stats,
+            model=_runtime.model,
+            parameters=parameters,
+            summary=summary_text,
+        )
 
 
 @app.post("/chat/stream")
@@ -227,7 +249,14 @@ def chat_stream(req: ChatRequest):
             if native is not None:
                 answer = str(native.get("answer") or "")
                 stats = {"served_model": _runtime.model, "native_command": True}
-                payload = {"answer": answer, "thinking": "", "stats": stats, "model": _runtime.model}
+                payload = {
+                    "answer": answer,
+                    "thinking": "",
+                    "stats": stats,
+                    "model": _runtime.model,
+                    "parameters": None,
+                    "summary": None,
+                }
                 if bool(req.store_turn):
                     _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
                     _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
@@ -311,9 +340,22 @@ def chat_stream(req: ChatRequest):
 
         answer_raw = str(result.text or "")
         answer, thinking = _split_visible_and_thinking(answer_raw)
+        structured = dict(getattr(result, "structured_output", {}) or {})
+        parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
+        summary = structured.get("summary")
+        summary_text = str(summary).strip() if summary is not None else None
+        if summary_text == "":
+            summary_text = None
         stats = dict(result.stats or {})
         stats.setdefault("served_model", _runtime.model)
-        payload = {"answer": answer, "thinking": thinking, "stats": stats, "model": _runtime.model}
+        payload = {
+            "answer": answer,
+            "thinking": thinking,
+            "stats": stats,
+            "model": _runtime.model,
+            "parameters": parameters,
+            "summary": summary_text,
+        }
         _runtime.last_thinking = thinking
 
         if bool(req.store_turn):
@@ -345,8 +387,55 @@ def chat_stream(req: ChatRequest):
 
 @app.post("/feedback")
 def feedback(req: FeedbackRequest) -> dict:
-    _ = req
-    return {"status": "ok"}
+    with _runtime.lock:
+        score = int(req.feedback)
+        penalty = float(req.penalty)
+        state_mgr = _runtime.brain.state_manager
+        character_id = str(state_mgr.get("active_character_id") or "asya").strip().lower() or "asya"
+        if score > 0:
+            token = "api_feedback_positive"
+        elif score < 0:
+            token = "api_feedback_negative"
+        else:
+            token = "api_feedback_neutral"
+        feedback_items = [token]
+        try:
+            state_mgr.dispatch_action(
+                {
+                    "type": "FEEDBACK_RECEIVED",
+                    "character_id": character_id,
+                    "feedback": feedback_items,
+                    "score": score,
+                    "penalty": penalty,
+                    "source": "api_feedback",
+                }
+            )
+        except Exception:
+            pass
+        try:
+            if hasattr(state_mgr, "storage") and hasattr(state_mgr.storage, "append_event"):
+                state_mgr.storage.append_event(
+                    character_id,
+                    {
+                        "type": "api_feedback",
+                        "character_id": character_id,
+                        "feedback": feedback_items,
+                        "score": score,
+                        "penalty": penalty,
+                        "user_text": str(req.user_text or "")[:400],
+                        "assistant_text": str(req.assistant_text or "")[:400],
+                    },
+                )
+        except Exception:
+            pass
+        log_json(
+            LOGGER,
+            "api_feedback",
+            character_id=character_id,
+            score=score,
+            penalty=penalty,
+        )
+    return {"status": "ok", "character_id": character_id, "feedback": score}
 
 
 @app.get("/metadata", response_model=MetadataResponse)
@@ -413,7 +502,7 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
                 f"status: ok\n"
                 f"model: {_runtime.model}\n"
                 f"thinking: {'on' if _runtime.thinking_enabled else 'off'}\n"
-                f"web_mode: {_runtime.web_mode}\n",
+                f"web_mode: {_runtime.web_mode}\n"
                 f"json_mode: {'on' if _runtime.json_mode_enabled else 'off'}"
             )
         }

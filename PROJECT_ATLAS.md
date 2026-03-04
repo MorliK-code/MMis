@@ -60,9 +60,6 @@ MMis/
 |---|---|---|---|
 | `core/brain.py` | Orkestrator obrabotki soobshcheniy (`handle_message`) | Marshrutizatsiya + state + pipeline + persist | Dobavit novye tipy memory_ops/ui_actions |
 | `core/response_pipeline.py` | Stadii preprocess/plan/personality/memory/prompt/generate/postprocess/verify | Razdelenie logiki po etapam | Podklyuchat novye stage i profile-vykl/inkl |
-| `core/prompt_builder.py` | Sbor PromptPack iz state/history/memory/tags | Strukturnyy prompt i token-budget | Menyat pravila srezki istorii i kontekst-buckety |
-| `core/state_manager.py` | Menedzher sostoyaniya sesii + split storage po klyucham | Ustoychivoe hranenie rezhimov, cooldown, context | Dobavit komponentnye setter/getter, migratsii state |
-| `core/personality_engine.py` | Legacy-dvizhok personality switching (manual/auto/blend) | Sovmestimost starogo persona-potoka, teper profile-path v `data/characters/_legacy/personality_profiles` | Postepenno perenosit logiku v character engine |
 | `core/__init__.py` | Lazy-export core klassov | Ustranenie ciklicheskih importov | Derzhat lazy i ne delat eager-importov |
 
 ---
@@ -184,7 +181,6 @@ MMis/
 |---|---|---|---|
 | `base_system.txt` | Bazovye pravila assistenta | Fundament safety/behavior | Menyat global policy text |
 
-### `prompts/legacy/system/`
 
 | File | Chto eto | Zachem eto | Chto mozhno delat |
 |---|---|---|---|
@@ -305,7 +301,6 @@ MMis/
 | `asya/prompts/overlays/*.txt` | High-intensity overlays | Aktsent pri vysokih trait values | Kalibrovat porogi i tekst |
 | `asya/prompts/traits/*.txt` | Trait-specific style snippets | Lokalen vklad trait v rechi | Dobavit trait->prompt map |
 | `asya/events.jsonl` | Zhurnal sobytiy personazha | Audit evolutsii i debug | Analizirovat regressii haraktera |
-| `_legacy/personality_profiles/*.json` | Legacy personality-profili, perenesennye iz `data/personalities` | Sovmestimost staryh `/persona` scenariev | Migriruy i chisti po mere perehoda na `characters` |
 
 ### `data/memory_storage/`
 

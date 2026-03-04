@@ -5,7 +5,7 @@ enable_unittest_json_output()
 
 import unittest
 
-from core.prompt_builder import PromptBuilder
+from core.character_runtime import CharacterRuntime
 
 
 class PromptBudgetTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class PromptBudgetTests(unittest.TestCase):
             }
         }
 
-        pack = PromptBuilder.build(
+        pack = CharacterRuntime.build(
             state=state,
             user_msg="Please explain this error and give steps " * 10,
             retrieved_memories=retrieved,

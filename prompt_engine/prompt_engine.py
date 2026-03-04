@@ -4,8 +4,10 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from config.settings import load_config
+from core.character_runtime import CharacterRuntime
+from core.spec_registry import load_spec
 from llm.provider_base import Message
-from modules.character.engine import CharacterEngine
 from prompt_engine.prompt_registry import PromptRegistry
 from prompt_engine.token_budget_manager import ContextBlock, TokenBudgetManager
 
@@ -23,11 +25,13 @@ class PromptEngine:
         self,
         registry: PromptRegistry | None = None,
         budget_manager: TokenBudgetManager | None = None,
-        character_engine: CharacterEngine | None = None,
+        character_runtime: CharacterRuntime | None = None,
     ):
         self.registry = registry or PromptRegistry()
         self.budget_manager = budget_manager or TokenBudgetManager()
-        self.character_engine = character_engine or CharacterEngine()
+        self.character_engine = character_runtime or CharacterRuntime()
+        self._settings = load_config()
+        self._system_spec: dict[str, Any] = {}
 
     def compose(
         self,
@@ -41,6 +45,41 @@ class PromptEngine:
         traits_map = dict(traits or {})
         policies_map = dict(policies or {})
         blocks = dict(getattr(prompt_pack, "blocks", {}) or {})
+        self._system_spec = load_spec("system", required=False)
+        prompt_toggles = _as_dict(self._system_spec.get("prompt_toggles"))
+        state_toggles = _as_dict(state_map.get("prompt_toggles"))
+        safety_default = _coerce_bool(
+            prompt_toggles.get("response_safety_filter"),
+            default=bool(self._settings.prompt_response_safety_filter_enabled),
+        )
+        formatting_default = _coerce_bool(
+            prompt_toggles.get("response_formatting"),
+            default=bool(self._settings.prompt_response_formatting_enabled),
+        )
+        safety_legacy_present = "prompt_response_safety_filter_enabled" in state_map
+        safety_nested_present = "response_safety_filter" in state_toggles
+        safety_legacy_value = state_map.get("prompt_response_safety_filter_enabled")
+        safety_nested_value = state_toggles.get("response_safety_filter")
+        if (safety_legacy_present and safety_legacy_value is None) or (
+            safety_nested_present and safety_nested_value is None
+        ):
+            # Explicit null means "disable safety filter".
+            safety_prompt_enabled = False
+        else:
+            safety_prompt_enabled = _coerce_bool(
+                _pick_first(
+                    safety_legacy_value,
+                    safety_nested_value,
+                ),
+                default=safety_default,
+            )
+        formatting_prompt_enabled = _coerce_bool(
+            _pick_first(
+                state_map.get("prompt_response_formatting_enabled"),
+                state_toggles.get("response_formatting"),
+            ),
+            default=formatting_default,
+        )
 
         active_character = _pick(
             state_map.get("active_character_id"),
@@ -58,7 +97,7 @@ class PromptEngine:
         # When safety_mode is active, we just include the safety_doc rules, BUT we shouldn't force JSON format
         # unless JSON mode is explicitly enabled in the API parameters.
         safety_doc_text = ""
-        if needs_safety_json:
+        if needs_safety_json and safety_prompt_enabled:
             s_doc = self._safe_doc(key="response.safety_filter", fallback_text="")
             # Strip out the explicit JSON requirement from the safety doc if it exists,
             # so the model can answer naturally, unless JSON mode is active.
@@ -68,12 +107,15 @@ class PromptEngine:
             )
             
         safety_doc = {"text": safety_doc_text}
-        formatting_doc = self._safe_doc(key="response.formatting", fallback_text="")
+        formatting_doc_text = ""
+        if formatting_prompt_enabled:
+            formatting_doc_text = str(self._safe_doc(key="response.formatting", fallback_text="").get("text", "")).strip()
+        formatting_doc = {"text": formatting_doc_text}
         
         character_prompt_block = str(state_map.get("character_prompt_block") or "").strip()
         if not character_prompt_block and active_character:
             try:
-                character_prompt_block = str(self.character_engine.build_prompt(active_character) or "").strip()
+                character_prompt_block = str(self.character_engine.build_personality_block(active_character) or "").strip()
             except Exception:
                 character_prompt_block = ""
         personality_core_text = character_prompt_block or f"[CHAR_META]\ncharacter={active_character}\nstyle_source=characters"
@@ -197,6 +239,11 @@ class PromptEngine:
             Message(role="user", content=user_content),
         ]
 
+        active_rule_prompts: list[str] = []
+        if safety_doc_text:
+            active_rule_prompts.append("response.safety_filter")
+        if formatting_doc_text:
+            active_rule_prompts.append("response.formatting")
         sections = {
             "active_personality_id": active_personality,
             "active_personality_name": active_personality,
@@ -208,7 +255,7 @@ class PromptEngine:
             "persona_prompt_version": "character-driven",
             "style_prompt_id": "character_prompt_block",
             "style_prompt_version": "character-driven",
-            "rules_prompt_id": "response.safety_filter+response.formatting",
+            "rules_prompt_id": "+".join(active_rule_prompts) if active_rule_prompts else "none",
             "rules_prompt_version": "registry",
             "system": system_content,
             "user": user_content,
@@ -276,6 +323,7 @@ class PromptEngine:
             "lang",
             "intent",
             "mood",
+            "active_mode",
             "topic",
             "user_greeting",
             "allow_greeting",
@@ -410,6 +458,27 @@ def _as_dict(value) -> dict[str, Any]:
         return {}
 
 
+def _pick_first(*values):
+    for value in values:
+        if value is None:
+            continue
+        return value
+    return None
+
+
+def _coerce_bool(value, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 def _pick(*values) -> str:
     for value in values:
         text = str(value or "").strip()
@@ -428,5 +497,3 @@ def _first_sentences(text: str, *, max_lines: int = 4) -> str:
     if not lines:
         return ""
     return "\n".join(lines[:max_lines]).strip()
-
-

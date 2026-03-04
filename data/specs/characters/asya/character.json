@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "character_id": "asya",
+  "name": "Ася",
+  "default_mood": "neutral",
+  "default_mode": "friend_chat",
+  "locks": {
+    "feminine": true,
+    "informal_you": true
+  }
+}

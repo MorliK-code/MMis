@@ -177,6 +177,7 @@ class CharacterEngine:
             context_meta={
                 "intent": str(context_tags.get("intent") or ""),
                 "is_technical": is_technical,
+                "active_mode": str(context_tags.get("active_mode") or state.get("mode") or "friend_chat"),
             },
         )
         return composed.prompt
@@ -239,6 +240,7 @@ class CharacterEngine:
             character=character,
             state=state,
             traits=merged,
+            context_meta={"active_mode": str(meta_map.get("active_mode") or meta_map.get("mode") or "friend_chat")},
         )
         self.storage.append_event(
             cid,
@@ -392,9 +394,10 @@ class CharacterEngine:
             trait["last_used_ts"] = now_local_ts()
             merged[trait_name] = trait
             if before != trait.get("value"):
+                change_kind = _trait_change_kind(trait_name)
                 changes.append(
                     {
-                        "kind": "trait",
+                        "kind": change_kind,
                         "trait": trait_name,
                         "op": op,
                         "from": before,
@@ -607,4 +610,11 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 
 def _clamp01(value: float) -> float:
     return _clamp(float(value), 0.0, 1.0)
+
+
+def _trait_change_kind(trait_name: str) -> str:
+    key = str(trait_name or "").strip().lower()
+    if key in {"playfulness", "thoughtfulness"}:
+        return "derived_axis"
+    return "trait"
 

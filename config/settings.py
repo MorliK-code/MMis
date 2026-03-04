@@ -25,7 +25,7 @@ class AppSettings:
     llm_default_provider: str = "ollama"
     model_name: str = "qcwind/qwen3-8b-instruct-Q4-K-M"
     host: str = "127.0.0.1"
-    port: int = 8045
+    port: int = 8000
     thinking_enabled: bool = True
     web_mode: str = "auto"
     json_mode_enabled: bool = False
@@ -35,6 +35,8 @@ class AppSettings:
     voice_enabled: bool = True
     safety_mode: str = "read_only_tools"
     read_only_tools: bool = True
+    prompt_response_safety_filter_enabled: bool = False
+    prompt_response_formatting_enabled: bool = True
     data_dir: Path = DATA_DIR
     models_dir: Path = MODELS_DIR
     memory_dir: Path = field(default_factory=lambda: DATA_DIR / "memory")
@@ -102,6 +104,7 @@ class AppSettings:
     console_stream_timeout_sec: float = 600.0
     console_store_turn: bool = True
     console_show_thinking: bool = True  
+    console_thinking_first: bool = True
     console_json_mode_enabled: bool = False
     console_auto_start_api: bool = True
     console_auto_start_ollama: bool = True
@@ -154,7 +157,14 @@ def load_config(force_reload: bool = False) -> AppSettings:
         model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qcwind/qwen3-8b-instruct-Q4-K-M")),
         host=_norm_str(_pick("MMIS_API_HOST", json_cfg, dotenv_cfg, "127.0.0.1")),
         port=_to_int(_pick("MMIS_API_PORT", json_cfg, dotenv_cfg, 8000), default=8000),
-        thinking_enabled=_to_bool(_pick("MMIS_THINKING_ENABLED", json_cfg, dotenv_cfg, False)),
+        thinking_enabled=_to_bool(
+            _pick(
+                "MMIS_THINKING_ENABLED",
+                json_cfg,
+                dotenv_cfg,
+                _pick("MMIS_THINKING_ENABLE", json_cfg, dotenv_cfg, True),
+            )
+        ),
         web_mode=_norm_lower(_pick("MMIS_WEB_MODE", json_cfg, dotenv_cfg, "auto")),
         json_mode_enabled=_to_bool(_pick("MMIS_JSON_MODE", json_cfg, dotenv_cfg, False)),
         internet_enabled=_to_bool(_pick("MMIS_INTERNET_ENABLED", json_cfg, dotenv_cfg, True)),
@@ -163,6 +173,12 @@ def load_config(force_reload: bool = False) -> AppSettings:
         voice_enabled=_to_bool(_pick("MMIS_VOICE_ENABLED", json_cfg, dotenv_cfg, True)),
         safety_mode=safety_mode,
         read_only_tools=(safety_mode != "allow_os_actions"),
+        prompt_response_safety_filter_enabled=_to_bool(
+            _pick("MMIS_PROMPT_RESPONSE_SAFETY_FILTER_ENABLED", json_cfg, dotenv_cfg, True)
+        ),
+        prompt_response_formatting_enabled=_to_bool(
+            _pick("MMIS_PROMPT_RESPONSE_FORMATTING_ENABLED", json_cfg, dotenv_cfg, True)
+        ),
         data_dir=DATA_DIR,
         models_dir=MODELS_DIR,
         memory_dir=memory_dir,
@@ -235,6 +251,14 @@ def load_config(force_reload: bool = False) -> AppSettings:
         console_stream_timeout_sec=float(_pick("MMIS_CONSOLE_STREAM_TIMEOUT_SEC", json_cfg, dotenv_cfg, 600.0)),
         console_store_turn=_to_bool(_pick("MMIS_CONSOLE_STORE_TURN", json_cfg, dotenv_cfg, True)),
         console_show_thinking=_to_bool(_pick("MMIS_CONSOLE_SHOW_THINKING", json_cfg, dotenv_cfg, True)),
+        console_thinking_first=_to_bool(
+            _pick(
+                "MMIS_CONSOLE_THINKING_FIRST",
+                json_cfg,
+                dotenv_cfg,
+                _pick("MMIS_THINKING_FIRST", json_cfg, dotenv_cfg, True),
+            )
+        ),
         console_json_mode_enabled=_to_bool(_pick("MMIS_CONSOLE_JSON_MODE", json_cfg, dotenv_cfg, False)),
         console_auto_start_api=_to_bool(_pick("MMIS_CONSOLE_AUTO_API", json_cfg, dotenv_cfg, True)),
         console_auto_start_ollama=_to_bool(_pick("MMIS_CONSOLE_AUTO_OLLAMA", json_cfg, dotenv_cfg, True)),

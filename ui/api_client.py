@@ -25,6 +25,8 @@ class ApiReply:
     thinking: str
     stats: dict
     model: str
+    parameters: dict | None = None
+    summary: str | None = None
 
 
 class ApiClient:
@@ -162,6 +164,8 @@ class ApiClient:
         thinking_parts: list[str] = []
         stats: dict = {}
         model = self._runtime_model_cache
+        parameters: dict | None = None
+        summary: str | None = None
         chunk_count = 0
         thinking_chunk_count = 0
         log_json(
@@ -206,6 +210,11 @@ class ApiClient:
                         thinking = str(data.get("thinking") or "")
                         stats = data.get("stats") or {}
                         model = str(data.get("model") or model)
+                        parameters = data.get("parameters") if isinstance(data.get("parameters"), dict) else None
+                        raw_summary = data.get("summary")
+                        summary = str(raw_summary).strip() if raw_summary is not None else None
+                        if summary == "":
+                            summary = None
                         self._runtime_model_cache = model or self._runtime_model_cache
                         log_json(
                             LOGGER,
@@ -216,7 +225,14 @@ class ApiClient:
                             answer_chars=len(answer),
                             thinking_chars=len(thinking),
                         )
-                        return ApiReply(answer=answer, thinking=thinking, stats=stats, model=model)
+                        return ApiReply(
+                            answer=answer,
+                            thinking=thinking,
+                            stats=stats,
+                            model=model,
+                            parameters=parameters,
+                            summary=summary,
+                        )
         except urllib_error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
             detail = raw
@@ -250,4 +266,6 @@ class ApiClient:
             thinking="".join(thinking_parts),
             stats=stats,
             model=model,
+            parameters=parameters,
+            summary=summary,
         )

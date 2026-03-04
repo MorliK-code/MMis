@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from modules.character.persona_compiler import compile_system_persona
 from modules.character.storage import CharacterStorage
 
 _MOOD_MODIFIERS: dict[str, dict[str, float]] = {
@@ -40,17 +41,7 @@ class CharacterComposer:
         dialog_mode: dict[str, Any] | None = None,
         context_meta: dict[str, Any] | None = None,
     ) -> CharacterComposeResult:
-        prompt_files = dict(character.get("prompt_files") or {})
-        base_rel = str(prompt_files.get("base") or "prompts/base.txt")
-        base_text = storage.read_prompt(character_id, base_rel)
-        used = [base_rel] if base_text else []
-
         mood = str(state.get("mood") or character.get("default_mood") or "thoughtful").strip().lower()
-        mood_rel = f"{str(prompt_files.get('moods_dir') or 'prompts/moods').strip().strip('/')}/{mood}.txt"
-        mood_text = storage.read_prompt(character_id, mood_rel)
-        if mood_text:
-            used.append(mood_rel)
-
         active = set(str(x).strip().lower() for x in list(state.get("active_traits") or []) if str(x).strip())
         disabled = set(str(x).strip().lower() for x in list(state.get("disabled_traits") or []) if str(x).strip())
 
@@ -62,10 +53,16 @@ class CharacterComposer:
             is_technical=bool(meta.get("is_technical", False)),
         )
         overlay_mods = _overlay_modifiers(traits)
-        style_coefficients = _resolve_style_coefficients(traits=traits, dialog_mode=dm, context_mods=context_mods, mood=mood, overlay_mods=overlay_mods)
+        style_coefficients = _resolve_style_coefficients(
+            traits=traits,
+            dialog_mode=dm,
+            context_mods=context_mods,
+            mood=mood,
+            overlay_mods=overlay_mods,
+        )
 
-        trait_blocks: list[tuple[float, str, str]] = []
         effective_traits: dict[str, float] = {}
+        persona_traits: dict[str, float] = {}
         for name, payload in dict(traits or {}).items():
             trait_name = str(name or "").strip().lower()
             if not trait_name or trait_name.startswith("_") or trait_name in disabled:
@@ -95,44 +92,27 @@ class CharacterComposer:
                 effective_traits[trait_name] = float(score)
             if not include:
                 continue
-            rel = str(row.get("prompt_file") or "").strip().strip("/")
-            if not rel:
-                continue
-            text = storage.read_prompt(character_id, rel)
-            if not text:
-                continue
-            trait_blocks.append((score, trait_name, text))
-            used.append(rel)
+            if trait_name in {"warmth", "sarcasm", "verbosity", "strictness", "teasing", "empathy"}:
+                persona_traits[trait_name] = float(score)
+            elif trait_name == "playfulness":
+                persona_traits.setdefault("teasing", float(score))
+            elif trait_name == "thoughtfulness":
+                persona_traits.setdefault("empathy", float(score))
 
-        trait_blocks.sort(key=lambda x: x[0], reverse=True)
-        trait_blocks = trait_blocks[: self.max_trait_overlays]
-
-        blocks: list[str] = []
-        if base_text:
-            blocks.append(f"[CHAR_BASE]\n{base_text}")
-        blocks.append(f"[CHAR_META]\ncharacter={character_id}\nmood={mood}")
-        blocks.append(
-            "[CHAR_DIALOG_MODE]\n"
-            f"greeting_allowed={str(bool(dm.get('greeting_allowed', dm.get('allow_greeting', False)))).lower()}\n"
-            f"smalltalk_allowed={str(bool(dm.get('smalltalk_allowed', True))).lower()}"
+        persona_payload = storage.load_persona_state(character_id)
+        persona_payload = dict(persona_payload or {})
+        persona_payload["mood"] = mood
+        traits_payload = dict(persona_payload.get("traits") or {})
+        traits_payload.update(persona_traits)
+        persona_payload["traits"] = traits_payload
+        active_mode = str(meta.get("active_mode") or dm.get("active_mode") or "friend_chat").strip().lower() or "friend_chat"
+        prompt, _ = compile_system_persona(
+            character_id=character_id,
+            persona_state=persona_payload,
+            active_mode=active_mode,
         )
-        blocks.append(
-            "[CHAR_STYLE_COEFFICIENTS]\n"
-            f"warmth={style_coefficients['warmth']:.3f}\n"
-            f"sarcasm={style_coefficients['sarcasm']:.3f}\n"
-            f"strictness={style_coefficients['strictness']:.3f}\n"
-            f"verbosity={style_coefficients['verbosity']:.3f}"
-        )
-        if mood_text:
-            blocks.append(f"[CHAR_MOOD]\n{mood_text}")
-        if trait_blocks:
-            text = "\n\n".join([row[2] for row in trait_blocks if row[2]])
-            blocks.append(f"[CHAR_TRAITS]\n{text}")
-        if not base_text and not mood_text and not trait_blocks:
-            blocks.append("[CHAR_FALLBACK]\nKeep responses adaptive, warm, and concise.")
-
-        active_traits = [row[1] for row in trait_blocks]
-        prompt = "\n\n".join([x.strip() for x in blocks if str(x).strip()]).strip()
+        used = [f"spec:characters/{character_id}/persona_spec.json", f"spec:characters/{character_id}/persona_state.json"]
+        active_traits = sorted(persona_traits.keys())
         return CharacterComposeResult(
             prompt=prompt,
             mood=mood,
@@ -193,7 +173,7 @@ def compute_context_trait_modifiers(
         out[key] += (value - baseline) * 0.6
 
     intent_key = str(intent or "").strip().lower()
-    if intent_key in {"coding_help", "coding", "task_request", "implementation", "debug"}:
+    if intent_key in {"bug_report", "task", "code_review", "question"}:
         out["strictness"] += 0.18
         out["verbosity"] -= 0.06
         out["sarcasm"] -= 0.10

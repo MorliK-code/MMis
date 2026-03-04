@@ -34,29 +34,20 @@ _SOFT_RE = re.compile(
 _NEGATIVE_EMOTIONS = {
     "angry",
     "frustrated",
-    "frustrated_angry",
     "sad",
-    "sad_tired",
-    "upset",
-    "confused",
+    "anxious",
+    "tired",
 }
 _POSITIVE_EMOTIONS = {
-    "positive",
-    "positive_excited",
+    "happy",
     "excited",
-    "playful",
-    "playful_ironic",
 }
 _TECH_INTENTS = {
-    "coding",
-    "coding_help",
-    "task_request",
-    "implementation",
-    "ui_request",
-    "search",
-    "question",
+    "task",
     "bug_report",
-    "debug",
+    "code_review",
+    "planning",
+    "question",
 }
 
 _SESSION_BAN_MARKER_PREFIX = "session:"
@@ -406,7 +397,12 @@ def compute_dialog_mode(
     local_date = _local_date(now_ts)
     local_region = _local_region(now_ts)
 
-    intent = _pick_text(meta_map.get("intent"), state_map.get("intent"), state_map.get("mode")).lower()
+    intent = _pick_text(
+        meta_map.get("intent"),
+        state_map.get("intent"),
+        state_map.get("active_mode"),
+        state_map.get("mode"),
+    ).lower()
     emotion = _pick_text(meta_map.get("emotion"), meta_map.get("mood"), state_map.get("mood"), state_map.get("emotion")).lower()
     profile = _pick_text(
         meta_map.get("active_personality_profile"),
@@ -421,6 +417,8 @@ def compute_dialog_mode(
     message_len = len(src)
     user_words = len(_WORD_RE.findall(src))
     technical = is_technical(src)
+    if not technical:
+        technical = str(state_map.get("active_mode") or "").strip().lower() in {"engineer", "debugger", "planner"}
     tone = detect_user_tone(src)
 
     greeted_on_date = str(state_map.get("greeted_on_date") or "").strip()

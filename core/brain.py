@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any
 
 from config.settings import load_config
+from core.character_runtime import CharacterRuntime
 from core.response_pipeline import PipelineResult, ResponsePipeline
-from core.state_manager import StateManager
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
 from memory.memory_manager import MemoryManager
@@ -21,6 +22,7 @@ class BrainResult:
     text: str
     route: str
     thinking: str = ""
+    structured_output: dict[str, Any] = field(default_factory=dict)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     memory_ops: list[dict[str, Any]] = field(default_factory=list)
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
@@ -39,7 +41,7 @@ class Brain:
         self,
         *,
         provider: LLMProviderBase | None = None,
-        state_manager: StateManager | None = None,
+        state_manager: CharacterRuntime | None = None,
         memory_manager: MemoryManager | None = None,
         metadata_extractor: MetadataExtractor | None = None,
         response_pipeline: ResponsePipeline | None = None,
@@ -51,10 +53,14 @@ class Brain:
         else:
             cfg = load_config()
             self._provider = build_provider(cfg.llm_default_provider, default_model=cfg.model_name)
-        self.state_manager = state_manager or StateManager()
+        self.state_manager = state_manager or CharacterRuntime()
         self.memory_manager = memory_manager or MemoryManager()
         self.metadata_extractor = metadata_extractor or MetadataExtractor(cache_size=280)
-        self.pipeline = response_pipeline or ResponsePipeline(self._provider, memory_manager=self.memory_manager)
+        self.pipeline = response_pipeline or ResponsePipeline(
+            self._provider,
+            character_runtime=self.state_manager,
+            memory_manager=self.memory_manager,
+        )
 
         self._lock = RLock()
         self._dedup_window_sec = max(0.05, float(dedup_window_sec))
@@ -80,19 +86,20 @@ class Brain:
         signature = self._signature(route=route, text=text, event_name=event_name, source=source)
 
         with self._lock:
-            duplicate_result = self._check_duplicate(signature, now)
-            if duplicate_result is not None:
-                return duplicate_result
-            if self._is_throttled(source, now):
-                result = BrainResult(
-                    text="",
-                    route=route,
-                    throttled=True,
-                    logs=[f"throttled source={source}"],
-                    ui_actions=[{"type": "noop", "reason": "throttled"}],
-                )
-                self._remember(signature, now, result)
-                return result
+            if route != "command":
+                duplicate_result = self._check_duplicate(signature, now)
+                if duplicate_result is not None:
+                    return duplicate_result
+                if self._is_throttled(source, now):
+                    result = BrainResult(
+                        text="",
+                        route=route,
+                        throttled=True,
+                        logs=[f"throttled source={source}"],
+                        ui_actions=[{"type": "noop", "reason": "throttled"}],
+                    )
+                    self._remember(signature, now, result)
+                    return result
 
         state_snapshot = self.state_manager.snapshot()
         self._sync_active_character_manifest(state_snapshot.raw)
@@ -123,6 +130,14 @@ class Brain:
         state_map.setdefault("active_tasks", state_snapshot.active_tasks)
         state_map.setdefault("history", state_snapshot.history)
         state_map.setdefault("context_tags", state_snapshot.context_tags)
+        state_map.setdefault("active_mode", state_snapshot.active_mode)
+        state_map.setdefault("mode_lock", state_snapshot.mode_lock)
+        state_map.setdefault("mode_until", state_snapshot.mode_until)
+        state_map.setdefault("last_signals", state_snapshot.last_signals)
+        state_map.setdefault("last_actions", state_snapshot.last_actions)
+        state_map.setdefault("web_mode", state_snapshot.web_mode)
+        state_map.setdefault("thinking_enabled", state_snapshot.thinking_enabled)
+        state_map.setdefault("output_format", state_snapshot.output_format)
 
         retrieved_memories = meta_map.get("retrieved_memories", state_snapshot.retrieved_memories)
         traits = meta_map.get("traits", state_snapshot.traits)
@@ -133,6 +148,9 @@ class Brain:
         meta_for_pipeline.setdefault("conversation_id", state_snapshot.conversation_id)
         meta_for_pipeline.setdefault("turn_id", state_snapshot.turn_id)
         meta_for_pipeline.setdefault("quality_profile", state_snapshot.quality_profile)
+        meta_for_pipeline.setdefault("active_mode", state_snapshot.active_mode)
+        meta_for_pipeline.setdefault("mode_lock", state_snapshot.mode_lock)
+        meta_for_pipeline.setdefault("output_format", state_snapshot.output_format)
         meta_for_pipeline.setdefault("track_state", track_state)
         
         cfg = load_config()
@@ -193,8 +211,9 @@ class Brain:
             ev = str(meta.get("name") or meta.get("event") or text or "event").strip()
             return "system_event", text, ev
 
-        if text.startswith("/"):
-            return "command", text, ""
+        command_candidate = _normalize_command_candidate(text)
+        if command_candidate.startswith("/"):
+            return "command", command_candidate, ""
         return "chat", text, ""
 
     def _to_brain_result(self, *, route: str, pipeline_result: PipelineResult) -> BrainResult:
@@ -202,6 +221,7 @@ class Brain:
             text=str(pipeline_result.text or ""),
             route=route,
             thinking=str(pipeline_result.thinking or ""),
+            structured_output=dict(pipeline_result.structured_output or {}),
             tool_calls=list(pipeline_result.tool_calls or []),
             memory_ops=list(pipeline_result.memory_ops or []),
             ui_actions=list(pipeline_result.ui_actions or []),
@@ -219,6 +239,17 @@ class Brain:
                 value = str(op.get("value") or "").strip()
                 if value:
                     self.state_manager.set_mode(value)
+            elif key == "state_mode_lock":
+                self.state_manager.set_mode_lock(bool(op.get("value", False)))
+            elif key == "state_output_format":
+                value = op.get("value")
+                if isinstance(value, dict):
+                    show_parameters = value.get("show_parameters")
+                    show_summary = value.get("show_summary")
+                    self.state_manager.set_output_format(
+                        show_parameters=(bool(show_parameters) if isinstance(show_parameters, bool) else None),
+                        show_summary=(bool(show_summary) if isinstance(show_summary, bool) else None),
+                    )
             elif key == "state_think":
                 self.state_manager.patch({"thinking_enabled": bool(op.get("value", False))})
             elif key == "state_web_mode":
@@ -352,6 +383,9 @@ class Brain:
             return
         if not bool(meta.get("store_turn", True)):
             return
+        # By default, do not persist slash-commands to memory stores.
+        if route == "command" and not bool(meta.get("store_command_turns", False)):
+            return
 
         source = str(meta.get("source") or route or "text")
         conversation_id = str(meta.get("conversation_id") or self.state_manager.get("conversation_id") or "")
@@ -375,6 +409,11 @@ class Brain:
             or state_map.get("active_character_id")
             or state_map.get("active_personality_id")
             or "default"
+        )
+        persona_snapshot = self._extract_persona_snapshot(
+            state_snapshot=state_snapshot,
+            state_map=state_map,
+            personality_id=personality_id,
         )
 
         user_payload = str(user_text or "").strip()
@@ -417,6 +456,8 @@ class Brain:
                 latency_ms=answer_ms,
                 personality_id=personality_id,
             )
+            if persona_snapshot:
+                assistant_meta["persona_snapshot"] = dict(persona_snapshot)
             self.memory_manager.ingest_message(
                 role="assistant",
                 text=assistant_payload,
@@ -449,11 +490,23 @@ class Brain:
         meta = _as_dict(data.get("meta"))
         raw_tags = list(data.get("tags") or [])
         tags = [str(x).strip() for x in raw_tags if str(x).strip()]
+        topics: list[str] = []
         topic = ""
         for tag in tags:
             if str(tag).startswith("topic_"):
-                topic = str(tag).replace("topic_", "", 1)
-                break
+                row = str(tag).replace("topic_", "", 1)
+                if row and row not in topics:
+                    topics.append(row)
+                if not topic:
+                    topic = row
+        for row in list(meta.get("topics") or []):
+            item = str(row or "").strip().replace("topic_", "", 1)
+            if not item:
+                continue
+            if item not in topics:
+                topics.append(item)
+            if not topic:
+                topic = item
         intent_label = str(intent.get("label") or data.get("intent") or "")
         emotion_label = str(emotion.get("label") or data.get("emotion") or "")
         out = {
@@ -462,9 +515,12 @@ class Brain:
             "mood": emotion_label,
             "emotion": emotion_label,
             "topic": topic,
+            "topics": topics,
+            "active_mode": str(data.get("active_mode") or meta.get("active_mode") or ""),
             "tags": tags,
             "has_code": bool(meta.get("has_code", False)),
             "has_link": bool(meta.get("has_link", False)),
+            "entities": dict(data.get("entities") or {}),
             "meta": data,
         }
         try:
@@ -488,12 +544,12 @@ class Brain:
         tags = [str(x).strip().lower() for x in list(merged.get("tags") or []) if str(x).strip()]
         extra = dict(op_tags or {})
 
-        for key in ("lang", "intent", "mood", "topic"):
+        for key in ("lang", "intent", "mood", "topic", "active_mode"):
             value = str(extra.get(key) or "").strip()
             if value and not str(merged.get(key) or "").strip():
                 merged[key] = value
 
-        for key in ("lang", "intent", "mood", "topic"):
+        for key in ("lang", "intent", "mood", "topic", "active_mode"):
             value = str(merged.get(key) or "").strip().lower()
             if not value:
                 continue
@@ -505,11 +561,13 @@ class Brain:
                 tags.append(f"emotion_{value}")
             elif key == "topic":
                 tags.append(f"topic_{value}")
+            elif key == "active_mode":
+                tags.append(f"mode_hint_{value}")
 
         if merged.get("has_code"):
             tags.append("has_code")
         if merged.get("has_link"):
-            tags.append("contains_link")
+            tags.append("has_link")
         pid = str(personality_id or "").strip().lower()
         if pid:
             merged["personality_id"] = pid
@@ -529,6 +587,55 @@ class Brain:
         merged["quality_profile"] = str(quality_profile or "")
         merged["latency_ms"] = max(0.0, float(latency_ms or 0.0))
         return merged
+
+    @staticmethod
+    def _extract_persona_snapshot(
+        *,
+        state_snapshot,
+        state_map: dict[str, Any],
+        personality_id: str,
+    ) -> dict[str, Any]:
+        raw = dict(getattr(state_snapshot, "raw", {}) or {})
+        chars = dict(raw.get("characters") or {})
+        cid = str(
+            raw.get("active_character_id")
+            or state_map.get("active_character_id")
+            or personality_id
+            or "default"
+        ).strip().lower() or "default"
+        entry = dict(chars.get(cid) or {})
+        persona = dict(entry.get("persona") or {})
+        traits_raw = dict(persona.get("traits") or {})
+        context_tags = _as_dict(state_map.get("context_tags"))
+        if not persona and not traits_raw:
+            return {}
+        traits: dict[str, float] = {}
+        for key in ("warmth", "sarcasm", "verbosity", "strictness", "teasing", "empathy"):
+            if key not in traits_raw:
+                continue
+            try:
+                traits[key] = max(0.0, min(1.0, float(traits_raw.get(key))))
+            except Exception:
+                continue
+        mood = str(
+            persona.get("mood")
+            or state_map.get("mood")
+            or context_tags.get("mood")
+            or "neutral"
+        ).strip().lower() or "neutral"
+        active_mode = str(
+            raw.get("active_mode")
+            or state_map.get("active_mode")
+            or "friend_chat"
+        ).strip().lower() or "friend_chat"
+        if not traits and not mood:
+            return {}
+        return {
+            "character_id": cid,
+            "mood": mood,
+            "traits": traits,
+            "active_mode": active_mode,
+        }
 
     @staticmethod
     def _turn_meta_from_ops(ops: list[dict[str, Any]], op_name: str) -> dict[str, Any]:
@@ -565,6 +672,7 @@ class Brain:
         return BrainResult(
             text=prev.text,
             route=prev.route,
+            structured_output=dict(prev.structured_output or {}),
             tool_calls=prev.tool_calls,
             memory_ops=prev.memory_ops,
             ui_actions=prev.ui_actions,
@@ -614,3 +722,12 @@ def _as_dict(value) -> dict[str, Any]:
     except Exception:
         return {}
 
+
+def _normalize_command_candidate(value: str) -> str:
+    text = str(value or "")
+    text = text.lstrip()
+    while text and text[0] in {"\ufeff", "\u200b", "\u200c", "\u200d", "\u2060"}:
+        text = text[1:].lstrip()
+    # Tolerate accidental console prompt prefixes copied into input.
+    text = re.sub(r"^\s*(?:you|user|assistant)\s*>\s*", "", text, flags=re.IGNORECASE)
+    return text

@@ -19,4 +19,13 @@ __all__ = [
     "SearchClient",
     "WebScraper",
     "CharacterEngine",
+    "CharacterRuntime",
 ]
+
+
+# Lazy import for CharacterRuntime to avoid circular dependency.
+def __getattr__(name: str):
+    if name == "CharacterRuntime":
+        from core.character_runtime import CharacterRuntime as _CharacterRuntime
+        return _CharacterRuntime
+    raise AttributeError(name)

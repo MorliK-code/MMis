@@ -15,6 +15,8 @@ class ChatResponse(BaseModel):
     thinking: str = ""
     stats: dict = {}
     model: str
+    parameters: dict | None = None
+    summary: str | None = None
 
 
 class HealthResponse(BaseModel):

@@ -80,7 +80,7 @@
 
 ## tests/test_prompt_budget.py
 - `test_prompt_builder_respects_total_budget`  
-  Проверяет, что `PromptBuilder` укладывает собранный prompt в общий токен-бюджет (`full_prompt <= total_tokens`) при длинном контексте.
+  Проверяет, что `CharacterRuntime.build(...)` укладывает собранный prompt в общий токен-бюджет (`full_prompt <= total_tokens`) при длинном контексте.
 
 ## tests/test_prompt_registry_metadata.py
 - `test_frontmatter_is_parsed`  

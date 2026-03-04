@@ -43,3 +43,11 @@ models/quantized/**
 dist/
 build/
 *.egg-info/
+
+# Local tooling noise
+.antigravity/
+**/.antigravity/
+node_modules/
+**/node_modules/
+*.tmp
+*.temp
