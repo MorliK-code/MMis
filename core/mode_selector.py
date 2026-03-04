@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from metadata.taxonomy import MODES
+from core.spec_registry import load_spec
 
-_MODE_SET = set(str(x).strip().lower() for x in MODES)
+_DEFAULT_MODES = ("friend_chat", "helper", "engineer", "debugger", "planner", "spicy_chat")
 _LEGACY_TO_MODE = {
     "chat": "friend_chat",
     "task": "helper",
@@ -22,14 +22,70 @@ class ModeDecision:
     locked: bool = False
 
 
-def normalize_mode_name(value: str) -> str:
-    text = str(value or "").strip().lower()
-    if text in _MODE_SET:
-        return text
-    mapped = _LEGACY_TO_MODE.get(text, "")
-    if mapped:
+def normalize_mode_name(value: str, *, allow_custom: bool = False) -> str:
+    text = _sanitize_mode_token(value)
+    if not text:
+        return "friend_chat"
+
+    mode_set, aliases = runtime_mode_catalog()
+    mapped = aliases.get(text, text)
+    if mapped in mode_set:
         return mapped
+
+    legacy = aliases.get(_sanitize_mode_token(_LEGACY_TO_MODE.get(mapped, "")), "")
+    if legacy in mode_set:
+        return legacy
+
+    if allow_custom:
+        custom = _sanitize_mode_token(mapped)
+        if custom:
+            return custom
     return "friend_chat"
+
+
+def list_runtime_modes() -> list[str]:
+    mode_set, _ = runtime_mode_catalog()
+    return sorted(mode_set)
+
+
+def runtime_mode_catalog() -> tuple[set[str], dict[str, str]]:
+    taxonomy = load_spec("taxonomy", required=False)
+    modes_spec = load_spec("modes", required=False)
+
+    mode_set: set[str] = set()
+    for value in list(taxonomy.get("modes") or []):
+        key = _sanitize_mode_token(value)
+        if key:
+            mode_set.add(key)
+    for value in list(dict(modes_spec.get("modes") or {}).keys()):
+        key = _sanitize_mode_token(value)
+        if key:
+            mode_set.add(key)
+    for value in _DEFAULT_MODES:
+        key = _sanitize_mode_token(value)
+        if key:
+            mode_set.add(key)
+
+    aliases: dict[str, str] = {}
+    alias_map = dict(dict(taxonomy.get("aliases") or {}).get("modes") or {})
+    for key, raw_target in alias_map.items():
+        alias = _sanitize_mode_token(key)
+        target = _sanitize_mode_token(raw_target)
+        if not alias or not target:
+            continue
+        aliases[alias] = target
+    for key, target in _LEGACY_TO_MODE.items():
+        aliases[_sanitize_mode_token(key)] = _sanitize_mode_token(target)
+    for mode in list(mode_set):
+        aliases.setdefault(mode, mode)
+    return mode_set, aliases
+
+
+def _sanitize_mode_token(value: str) -> str:
+    raw = str(value or "").strip().lower().replace(" ", "_")
+    if not raw:
+        return ""
+    return "".join(ch for ch in raw if ch.isalnum() or ch in {"_", "-"})
 
 
 class ModeSelector:
@@ -45,7 +101,7 @@ class ModeSelector:
         emotion: str,
         tags: Iterable[str] | None = None,
     ) -> ModeDecision:
-        current = normalize_mode_name(active_mode)
+        current = normalize_mode_name(active_mode, allow_custom=True)
         if bool(mode_lock):
             return ModeDecision(mode=current, confidence=1.0, reason="mode_lock", locked=True)
 
@@ -84,7 +140,8 @@ class ModeSelector:
     def should_switch(self, *, current_mode: str, decision: ModeDecision) -> bool:
         if decision.locked:
             return False
-        current = normalize_mode_name(current_mode)
-        if decision.mode == current:
+        current = normalize_mode_name(current_mode, allow_custom=True)
+        target = normalize_mode_name(decision.mode, allow_custom=True)
+        if target == current:
             return False
         return float(decision.confidence) >= self.confidence_threshold

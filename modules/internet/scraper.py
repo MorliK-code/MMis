@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
+from modules.internet.content_cleaner import clean_web_content
 from utils.cache import DiskTTLCache
 from utils.logger import get_logger
 
@@ -64,12 +65,18 @@ class WebScraper:
         cache_ttl_s: int = 1800,
         cache_dir: str | Path | None = None,
         use_disk_cache: bool = True,
+        clean_max_chars: int = 4000,
+        clean_min_chars: int = 200,
+        clean_language_hint: str = "",
     ):
         self.timeout_s = max(3, int(timeout_s))
         self.retries = max(0, int(retries))
         self.max_bytes = max(50_000, int(max_bytes))
         self.respect_robots = bool(respect_robots)
         self.cache_ttl_s = max(60, int(cache_ttl_s))
+        self.clean_max_chars = max(256, int(clean_max_chars))
+        self.clean_min_chars = max(40, int(clean_min_chars))
+        self.clean_language_hint = str(clean_language_hint or "").strip()
         self._disk_cache = DiskTTLCache(
             namespace="internet_scraper_fetch",
             root=cache_dir,
@@ -124,7 +131,16 @@ class WebScraper:
     def scrape(self, url: str) -> ScrapeResult:
         started = time.perf_counter()
         html_text, status_code, content_type, final_url = self._fetch_with_meta(url)
-        text, title, headings = self.extract_readable(html_text)
+        _, fallback_title, headings = self.extract_readable(html_text)
+        clean = clean_web_content(
+            html_text,
+            base_url=final_url,
+            max_chars=self.clean_max_chars,
+            min_chars=self.clean_min_chars,
+            language_hint=self.clean_language_hint,
+        )
+        text = str(clean.text or "")
+        title = str(clean.title or fallback_title or "").strip()
         links = self.extract_links(html_text, base_url=final_url)
 
         return ScrapeResult(
@@ -140,6 +156,10 @@ class WebScraper:
                 "elapsed_ms": (time.perf_counter() - started) * 1000.0,
                 "text_len": len(text),
                 "links_count": len(links),
+                "clean_method": str(clean.method or ""),
+                "removed_blocks": int(clean.removed_blocks),
+                "raw_len": int(clean.raw_len),
+                "clean_len": int(clean.clean_len),
             },
         )
 

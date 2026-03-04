@@ -106,6 +106,12 @@ PROFILES: dict[str, ModelProfile] = {
         ollama=OllamaProfile(num_thread=6, num_ctx=8192, num_gpu=-1, num_batch=128, keep_alive="5m"),
         openai=OpenAIProfile(reasoning_effort="medium"),
     ),
+    "AUTONOMOUS": ModelProfile(
+        name="AUTONOMOUS",
+        generation=GenerationProfile(temperature=0.6, top_p=0.9, repeat_penalty=1.08, max_tokens=-1),
+        ollama=OllamaProfile(num_thread=6, num_ctx=16384, num_gpu=1, num_batch=192, keep_alive="15m"),
+        openai=OpenAIProfile(reasoning_effort="high"),
+    ),
 }
 
 

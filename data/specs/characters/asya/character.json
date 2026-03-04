@@ -4,6 +4,7 @@
   "name": "Ася",
   "default_mood": "neutral",
   "default_mode": "friend_chat",
+  "model_profile": "ASYA",
   "locks": {
     "feminine": true,
     "informal_you": true

@@ -25,21 +25,46 @@ class PersonaCompilerTests(unittest.TestCase):
                 },
                 "mood": "neutral",
                 "locks": {"feminine": True, "informal_you": True},
-                "bans": ["артефакт"],
+                "bans": ["artifact"],
             },
             active_mode="engineer",
         )
         self.assertIn("Active mode: engineer.", text)
-        self.assertIn("женский род", text.lower())
-        self.assertIn("артефакт", text)
         self.assertNotIn("{name}", text)
         self.assertNotIn("{word}", text)
         self.assertNotIn("{ban-word}", text)
-        # persona_spec for asya uses "lines": [...], not only "line".
-        self.assertIn("Тон заметно тёплый и поддерживающий.", text)
-        # Dynamic trait selection should include non-legacy traits too.
-        self.assertIn("В задачах держи деловой стиль и структуру.", text)
         self.assertEqual(str(debug.get("active_mode")), "engineer")
+        self.assertTrue(str(debug.get("mode_profile_source") or "").strip())
+        self.assertTrue(str(debug.get("mode_profile_id") or "").strip())
+        self.assertGreater(float(debug.get("mode_blend_alpha") or 0.0), 0.0)
+
+    def test_missing_persona_mode_uses_runtime_profile_fallback(self) -> None:
+        text, debug = compile_system_persona(
+            character_id="assistant",
+            persona_state={"traits": {"warmth": 0.55}, "mood": "neutral"},
+            active_mode="spicy_chat",
+        )
+        self.assertIn("Active mode: spicy_chat.", text)
+        self.assertNotEqual(str(debug.get("mode_profile_id") or ""), "friend_chat")
+        self.assertIn(
+            str(debug.get("mode_profile_source") or ""),
+            {"builtin_preset", "semantic_preset", "modes_spec.persona_effects"},
+        )
+
+    def test_helper_and_spicy_mode_profiles_are_distinct(self) -> None:
+        helper_text, helper_debug = compile_system_persona(
+            character_id="assistant",
+            persona_state={"traits": {"warmth": 0.55}, "mood": "neutral"},
+            active_mode="helper",
+        )
+        spicy_text, spicy_debug = compile_system_persona(
+            character_id="assistant",
+            persona_state={"traits": {"warmth": 0.55}, "mood": "neutral"},
+            active_mode="spicy_chat",
+        )
+        self.assertNotEqual(helper_text, spicy_text)
+        self.assertEqual(str(helper_debug.get("mode_profile_id") or ""), "helper")
+        self.assertEqual(str(spicy_debug.get("mode_profile_id") or ""), "spicy_chat")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
-﻿"""
-Р•РґРёРЅС‹Р№ runtime РґР»СЏ РїРµСЂСЃРѕРЅР°Р¶Р°.
+"""
+Единый runtime для персонажа.
 
-РћР±СЉРµРґРёРЅСЏРµС‚:
+Объединяет:
 - PersonalityEngine (personality profiles, switching, blending)
 - StateManager (character state, mood, traits, context)
 - PromptBuilder (persona block construction)
@@ -21,7 +21,6 @@ from typing import Any
 
 from config.settings import load_config
 from core.mode_selector import normalize_mode_name
-from metadata.taxonomy import MODES
 from modules.character.composer import CharacterComposeResult, CharacterComposer, compute_context_trait_modifiers
 from modules.character.dialog_policies import (
     local_date_kyiv as dialog_local_date,
@@ -42,7 +41,7 @@ from utils.datetime_local import now_local_iso, now_local_ts, parse_time_to_epoc
 @dataclass(frozen=True)
 class CharacterMeta:
     """
-    РњРµС‚Р°РґР°РЅРЅС‹Рµ РїРµСЂСЃРѕРЅР°Р¶Р°.
+    Метаданные персонажа.
     """
     id: str
     name: str
@@ -61,7 +60,7 @@ class CharacterMeta:
 @dataclass(frozen=True)
 class PersonalityProfile:
     """
-    РџСЂРѕС„РёР»СЊ Р»РёС‡РЅРѕСЃС‚Рё (РёР· personality_engine).
+    Профиль личности (из personality_engine).
     """
     id: str
     name: str
@@ -95,7 +94,7 @@ class PersonalityProfile:
 @dataclass(frozen=True)
 class PersonalityDecision:
     """
-    Р РµС€РµРЅРёРµ Рѕ РїРµСЂРµРєР»СЋС‡РµРЅРёРё Р»РёС‡РЅРѕСЃС‚Рё (РёР· personality_engine).
+    Решение о переключении личности (из personality_engine).
     """
     target_personality_id: str
     confidence: float
@@ -120,7 +119,7 @@ class PersonalityDecision:
 @dataclass(frozen=True)
 class StateSnapshot:
     """
-    РЎРЅРёРјРѕРє СЃРѕСЃС‚РѕСЏРЅРёСЏ (РёР· state_manager).
+    Снимок состояния (из state_manager).
     """
     conversation_id: str
     turn_id: int
@@ -159,7 +158,7 @@ class StateSnapshot:
 @dataclass(frozen=True)
 class CharacterRuntimeResult:
     """
-    Р РµР·СѓР»СЊС‚Р°С‚ РѕР±РЅРѕРІР»РµРЅРёСЏ CharacterRuntime.
+    Результат обновления CharacterRuntime.
     """
     character_id: str
     mood: str
@@ -177,7 +176,7 @@ class CharacterRuntimeResult:
 @dataclass(frozen=True)
 class PromptBudgets:
     """
-    Р‘СЋРґР¶РµС‚С‹ С‚РѕРєРµРЅРѕРІ РґР»СЏ prompt (РёР· prompt_builder).
+    Бюджеты токенов для prompt (из prompt_builder).
     """
     total_tokens: int = 2200
     system_tokens: int = 240
@@ -234,7 +233,7 @@ class PromptBudgets:
 @dataclass(frozen=True)
 class PromptPack:
     """
-    Р РµР·СѓР»СЊС‚Р°С‚ РїРѕСЃС‚СЂРѕРµРЅРёСЏ prompt (РёР· prompt_builder).
+    Результат построения prompt (из prompt_builder).
     """
     system_prompt: str
     user_message: str
@@ -255,9 +254,9 @@ class PromptPack:
 
 class CharacterRuntime:
     """
-    Р•РґРёРЅС‹Р№ runtime РґР»СЏ СѓРїСЂР°РІР»РµРЅРёСЏ РїРµСЂСЃРѕРЅР°Р¶РµРј.
+    Единый runtime для управления персонажем.
 
-    РћР±СЉРµРґРёРЅСЏРµС‚:
+    Объединяет:
     - PersonalityEngine (personality profiles, switching, blending)
     - StateManager (character state, mood, traits, context)
     - PromptBuilder (persona block construction)
@@ -286,20 +285,21 @@ class CharacterRuntime:
         state_store_dir: str | Path | None = None,
         autosave: bool = True,
         history_limit: int = 120,
+        action_history_limit: int = 3,
     ):
         """
-        РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ CharacterRuntime.
+        �нициализация CharacterRuntime.
 
         Args:
-            character_path: РџСѓС‚СЊ Рє РґРёСЂРµРєС‚РѕСЂРёРё РїРµСЂСЃРѕРЅР°Р¶РµР№.
-            storage: РҐСЂР°РЅРёР»РёС‰Рµ РїРµСЂСЃРѕРЅР°Р¶РµР№.
-            evaluator: РћС†РµРЅС‰РёРє РїСЂР°РІРёР» СЌРІРѕР»СЋС†РёРё.
-            composer: РљРѕРјРїРѕР·РёС‚РѕСЂ prompt.
-            trait_threshold: РџРѕСЂРѕРі РІРєР»СЋС‡РµРЅРёСЏ traits.
-            max_trait_overlays: РњР°РєСЃРёРјСѓРј trait overlays.
-            cooldown_sec: РљСѓР»РґР°СѓРЅ РјРµР¶РґСѓ РїРµСЂРµРєР»СЋС‡РµРЅРёСЏРјРё personality.
-            min_confidence: РњРёРЅРёРјР°Р»СЊРЅР°СЏ СѓРІРµСЂРµРЅРЅРѕСЃС‚СЊ РґР»СЏ РїРµСЂРµРєР»СЋС‡РµРЅРёСЏ.
-            blend_steps: РЁР°РіРѕРІ РґР»СЏ blending personality.
+            character_path: Путь к директории персонажей.
+            storage: Хранилище персонажей.
+            evaluator: Оценщик правил эволюции.
+            composer: Композитор prompt.
+            trait_threshold: Порог включения traits.
+            max_trait_overlays: Максимум trait overlays.
+            cooldown_sec: Кулдаун между переключениями personality.
+            min_confidence: Минимальная уверенность для переключения.
+            blend_steps: Шагов для blending personality.
         """
         if storage is not None:
             self.storage = storage
@@ -335,6 +335,7 @@ class CharacterRuntime:
         self.state_store_dir.mkdir(parents=True, exist_ok=True)
         self.autosave = bool(autosave)
         self.history_limit = max(20, int(history_limit))
+        self.action_history_limit = max(1, int(action_history_limit))
         self._lock = RLock()
 
         self._state = self._default_state()
@@ -345,7 +346,7 @@ class CharacterRuntime:
     # -------------------------------------------------------------------------
 
     def _default_state(self) -> dict[str, Any]:
-        """РЎРѕР·РґР°С‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ."""
+        """Создать состояние по умолчанию."""
         conversation_id = self._new_conversation_id()
         output_format = {
             "show_parameters": None,
@@ -484,10 +485,35 @@ class CharacterRuntime:
                 item["type"] = atype
             item["ts"] = to_local_iso(item.get("ts"), default=now_local_ts())
             out.append(item)
-        limit = max(20, int(self.history_limit))
-        if len(out) > limit:
-            out = out[-limit:]
-        return out
+        return self._trim_last_actions(out)
+
+    @staticmethod
+    def _is_feedback_action(row: dict[str, Any]) -> bool:
+        return str(dict(row or {}).get("type") or "").strip().upper() == "FEEDBACK_RECEIVED"
+
+    def _trim_last_actions(self, actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = [dict(x) for x in list(actions or []) if isinstance(x, dict)]
+        limit = max(1, int(self.action_history_limit))
+        if len(rows) <= limit:
+            return rows
+        tail = list(rows[-limit:])
+        if any(self._is_feedback_action(x) for x in tail):
+            return tail
+        feedback_index = -1
+        for idx in range(len(rows) - 1, -1, -1):
+            if self._is_feedback_action(rows[idx]):
+                feedback_index = idx
+                break
+        if feedback_index < 0:
+            return tail
+        feedback_row = dict(rows[feedback_index])
+        replace_index = 0
+        for idx, item in enumerate(tail):
+            if not self._is_feedback_action(item):
+                replace_index = idx
+                break
+        tail[replace_index] = feedback_row
+        return tail
 
     def _debug_state_snapshot(self) -> dict[str, Any]:
         active_character = str(self._state.get("active_character_id") or "asya").strip().lower() or "asya"
@@ -545,10 +571,7 @@ class CharacterRuntime:
                 row["state_diff"] = diff
         actions = self._coerce_last_actions(self._state.get("last_actions"))
         actions.append(row)
-        limit = max(20, int(self.history_limit))
-        if len(actions) > limit:
-            actions = actions[-limit:]
-        self._state["last_actions"] = actions
+        self._state["last_actions"] = self._trim_last_actions(actions)
 
     def _build_global_section(self, state_map: dict[str, Any]) -> dict[str, Any]:
         src = dict(state_map or {})
@@ -762,12 +785,92 @@ class CharacterRuntime:
         with self._lock:
             self._sync_flat_with_global(prefer_global=False)
             self._ensure_characters_state()
-            payload = self._to_json_safe(self._state)
+            payload = self._to_json_safe(self._ordered_state_map(self._state))
             self._save_split_state(payload)
             self.state_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+
+    def _ordered_state_map(self, state_map: dict[str, Any]) -> dict[str, Any]:
+        src = dict(state_map or {})
+        if isinstance(src.get("global"), dict):
+            src["global"] = self._ordered_global_map(src.get("global") or {})
+        ordered_keys = [
+            "schema_version",
+            "global",
+            "characters",
+            "conversation_id",
+            "turn_id",
+            "active_character_id",
+            "mode",
+            "active_mode",
+            "mode_lock",
+            "mode_until",
+            "web_mode",
+            "thinking_enabled",
+            "output_format",
+            "quality_profile",
+            "active_goal",
+            "active_tasks",
+            "last_signals",
+            "last_actions",
+            "context_tags",
+            "traits",
+            "policies",
+            "retrieved_memories",
+            "context_stack",
+            "last_tool_result",
+            "cooldowns",
+            "address_terms",
+            "dialog_summary",
+            "history",
+            "character_locked",
+            "character_last_switch_ts",
+            "active_personality_id",
+            "personality_blend",
+            "personality_locked",
+            "personality_last_switch_ts",
+            "personality_cooldown_sec",
+        ]
+        out: dict[str, Any] = {}
+        for key in ordered_keys:
+            if key in src:
+                out[key] = src.get(key)
+        for key, value in src.items():
+            if key in out:
+                continue
+            out[key] = value
+        return out
+
+    def _ordered_global_map(self, section: dict[str, Any]) -> dict[str, Any]:
+        src = dict(section or {})
+        ordered_keys = [
+            "conversation_id",
+            "turn_id",
+            "active_character_id",
+            "active_mode",
+            "mode_lock",
+            "mode_until",
+            "web_mode",
+            "thinking_enabled",
+            "output_format",
+            "quality_profile",
+            "active_goal",
+            "active_tasks",
+            "last_signals",
+            "last_actions",
+            "context_stack",
+        ]
+        out: dict[str, Any] = {}
+        for key in ordered_keys:
+            if key in src:
+                out[key] = src.get(key)
+        for key, value in src.items():
+            if key in out:
+                continue
+            out[key] = value
+        return out
 
     def _load_payload(self) -> dict[str, Any]:
         split_payload = self._load_split_state()
@@ -858,7 +961,7 @@ class CharacterRuntime:
             self.save()
 
     def snapshot(self) -> StateSnapshot:
-        """РџРѕР»СѓС‡РёС‚СЊ СЃРЅРёРјРѕРє СЃРѕСЃС‚РѕСЏРЅРёСЏ."""
+        """Получить снимок состояния."""
         with self._lock:
             self._sync_flat_with_global(prefer_global=False)
             self._ensure_characters_state()
@@ -1449,15 +1552,15 @@ class CharacterRuntime:
     # -------------------------------------------------------------------------
 
     def list_ids(self) -> list[str]:
-        """РЎРїРёСЃРѕРє РґРѕСЃС‚СѓРїРЅС‹С… РїРµСЂСЃРѕРЅР°Р¶РµР№."""
+        """Список доступных персонажей."""
         return self.storage.list_character_ids(include_disabled=False)
 
     def get_manifest(self) -> dict[str, Any]:
-        """РџРѕР»СѓС‡РёС‚СЊ РјР°РЅРёС„РµСЃС‚ РІСЃРµС… РїРµСЂСЃРѕРЅР°Р¶РµР№."""
+        """Получить манифест всех персонажей."""
         return self.storage.sync_manifest()
 
     def get_active_character_id(self, state: dict[str, Any] | None = None) -> str:
-        """РџРѕР»СѓС‡РёС‚СЊ ID Р°РєС‚РёРІРЅРѕРіРѕ РїРµСЂСЃРѕРЅР°Р¶Р°."""
+        """Получить ID активного персонажа."""
         state_map = dict(state or {})
         from_state = str(state_map.get("active_character_id") or "").strip().lower()
         if from_state:
@@ -1479,7 +1582,7 @@ class CharacterRuntime:
         locked: bool | None = None,
         switch_ts: float | None = None,
     ) -> str:
-        """РЈСЃС‚Р°РЅРѕРІРёС‚СЊ Р°РєС‚РёРІРЅРѕРіРѕ РїРµСЂСЃРѕРЅР°Р¶Р°."""
+        """Установить активного персонажа."""
         target = str(character_id or "").strip().lower()
         known = set(self.list_ids())
         if target not in known:
@@ -1505,7 +1608,7 @@ class CharacterRuntime:
         return target
 
     def get_meta(self, character_id: str | None = None) -> CharacterMeta:
-        """РџРѕР»СѓС‡РёС‚СЊ РјРµС‚Р°РґР°РЅРЅС‹Рµ РїРµСЂСЃРѕРЅР°Р¶Р°."""
+        """Получить метаданные персонажа."""
         cid = self._validate_character(character_id)
         if cid in self._meta_cache:
             return self._meta_cache[cid]
@@ -1531,7 +1634,7 @@ class CharacterRuntime:
         return meta
 
     def _load_profile(self, character_id: str) -> PersonalityProfile | None:
-        """Р—Р°РіСЂСѓР·РёС‚СЊ РїСЂРѕС„РёР»СЊ Р»РёС‡РЅРѕСЃС‚Рё."""
+        """Загрузить профиль личности."""
         cid = self._validate_character(character_id)
         if cid in self._profiles_cache:
             return self._profiles_cache[cid]
@@ -1557,7 +1660,7 @@ class CharacterRuntime:
     # -------------------------------------------------------------------------
 
     def get_profile(self, profile_id: str) -> PersonalityProfile:
-        """РџРѕР»СѓС‡РёС‚СЊ РїСЂРѕС„РёР»СЊ Р»РёС‡РЅРѕСЃС‚Рё."""
+        """Получить профиль личности."""
         key = str(profile_id or "").strip().lower()
         if key in self._profiles_cache:
             return self._profiles_cache[key]
@@ -1577,7 +1680,7 @@ class CharacterRuntime:
         now_ts: float | None = None,
     ) -> PersonalityDecision:
         """
-        РџСЂРёРЅСЏС‚СЊ СЂРµС€РµРЅРёРµ Рѕ РїРµСЂРµРєР»СЋС‡РµРЅРёРё Р»РёС‡РЅРѕСЃС‚Рё.
+        Принять решение о переключении личности.
         """
         now = float(now_ts or time.time())
         active_id = self._normalize_personality_id(active_personality_id)
@@ -1674,7 +1777,7 @@ class CharacterRuntime:
         )
 
     def advance_blend(self, blend: dict[str, Any] | None) -> dict[str, Any]:
-        """РџСЂРѕРґРІРёРЅСѓС‚СЊ blend personality."""
+        """Продвинуть blend personality."""
         row = dict(blend or {})
         if not bool(row.get("active")):
             return {
@@ -1709,7 +1812,7 @@ class CharacterRuntime:
         recent_context: dict[str, Any],
         user_pref: str,
     ) -> dict[str, float]:
-        """РћС†РµРЅРёС‚СЊ Р»РёС‡РЅРѕСЃС‚Рё."""
+        """Оценить личности."""
         scores = {pid: 0.2 for pid in self.list_ids()}
         scores.setdefault("default", 0.25)
 
@@ -1750,7 +1853,7 @@ class CharacterRuntime:
         return out
 
     def _build_blend(self, old_id: str, new_id: str, active: bool) -> dict[str, Any]:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ blend personality."""
+        """Построить blend personality."""
         if not active or old_id == new_id:
             return {
                 "active": False,
@@ -1776,7 +1879,7 @@ class CharacterRuntime:
     # -------------------------------------------------------------------------
 
     def get_traits(self, character_id: str | None = None) -> dict[str, Any]:
-        """РџРѕР»СѓС‡РёС‚СЊ РІСЃРµ traits РїРµСЂСЃРѕРЅР°Р¶Р° (merged builtin + learned)."""
+        """Получить все traits персонажа (merged builtin + learned)."""
         cid = self._validate_character(character_id)
         builtin = dict(self.storage.load_builtin_traits(cid))
         learned = dict(self.storage.load_learned_traits(cid))
@@ -1815,7 +1918,7 @@ class CharacterRuntime:
         confidence: float = 0.8,
         trait_type: str | None = None,
     ) -> dict[str, Any]:
-        """РЈСЃС‚Р°РЅРѕРІРёС‚СЊ Р·РЅР°С‡РµРЅРёРµ trait."""
+        """Установить значение trait."""
         cid = self._validate_character(character_id)
         builtin, _, merged = self._load_traits(cid)
         name = self._normalize_trait_name(trait_name)
@@ -1876,7 +1979,7 @@ class CharacterRuntime:
         return self._clean_trait(row)
 
     def remove_trait(self, character_id: str, trait_name: str) -> bool:
-        """РЈРґР°Р»РёС‚СЊ trait."""
+        """Удалить trait."""
         cid = self._validate_character(character_id)
         builtin, _, merged = self._load_traits(cid)
         name = self._normalize_trait_name(trait_name)
@@ -1929,9 +2032,9 @@ class CharacterRuntime:
         active_character_id: str | None = None,
     ) -> CharacterRuntimeResult:
         """
-        РћР±РЅРѕРІРёС‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ РїРµСЂСЃРѕРЅР°Р¶Р° РЅР° РѕСЃРЅРѕРІРµ РІР·Р°РёРјРѕРґРµР№СЃС‚РІРёСЏ.
+        Обновить состояние персонажа на основе взаимодействия.
 
-        РџСЂРёРјРµРЅСЏРµС‚ РїСЂР°РІРёР»Р° СЌРІРѕР»СЋС†РёРё, decay, conflict resolution.
+        Применяет правила эволюции, decay, conflict resolution.
         """
         meta_map = dict(meta or {})
         cid = self._validate_character(active_character_id or self.get_active_character_id(meta_map))
@@ -2297,9 +2400,9 @@ class CharacterRuntime:
 
     def build_personality_block(self, character_id: str | None = None) -> str:
         """
-        РџРѕСЃС‚СЂРѕРёС‚СЊ prompt block РґР»СЏ РїРµСЂСЃРѕРЅР°Р¶Р°.
+        Построить prompt block для персонажа.
 
-        Р­С‚Рѕ РѕСЃРЅРѕРІРЅРѕР№ РјРµС‚РѕРґ РґР»СЏ РёРЅС‚РµРіСЂР°С†РёРё СЃ Brain/PromptBuilder.
+        Это основной метод для интеграции с Brain/PromptBuilder.
         """
         cid = self._validate_character(character_id)
         state = self.storage.load_state(cid)
@@ -2347,7 +2450,7 @@ class CharacterRuntime:
         budgets: PromptBudgets | None = None,
     ) -> PromptPack:
         """
-        РџРѕСЃС‚СЂРѕРёС‚СЊ РїРѕР»РЅС‹Р№ prompt.
+        Построить полный prompt.
         """
         state_map = dict(self._state)
         traits_map = _as_dict(traits)
@@ -2419,7 +2522,7 @@ class CharacterRuntime:
         traits: dict[str, Any],
         policies: dict[str, Any],
     ) -> dict[str, str]:
-        """РР·РІР»РµС‡СЊ РєРѕРЅС‚РµРєСЃС‚РЅС‹Рµ С‚РµРіРё."""
+        """�звлечь контекстные теги."""
         state_tags = _as_dict(state.get("context_tags"))
         policy_tags = _as_dict(policies.get("context_tags"))
         trait_tags = _as_dict(traits.get("context_tags"))
@@ -2517,7 +2620,7 @@ class CharacterRuntime:
         return {k: v for k, v in tags.items() if v}
 
     def _build_system_role_block(self, policies: dict[str, Any]) -> str:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє system role."""
+        """Построить блок system role."""
         lines = [
             "You are MMis assistant.",
             "Follow system rules and active policies strict.",
@@ -2551,7 +2654,7 @@ class CharacterRuntime:
         traits: dict[str, Any],
         policies: dict[str, Any],
     ) -> str:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє persona."""
+        """Построить блок persona."""
         character_prompt = _normalize_text(state.get("character_prompt_block"))
         if character_prompt:
             return character_prompt
@@ -2618,7 +2721,7 @@ class CharacterRuntime:
         return _normalize_text(text)
 
     def _build_state_summary_block(self, state: dict[str, Any]) -> str:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє state summary."""
+        """Построить блок state summary."""
         mode = _normalize_text(state.get("active_mode") or state.get("mode")) or "friend_chat"
         task = (
             _normalize_text(state.get("current_task"))
@@ -2653,7 +2756,7 @@ class CharacterRuntime:
         return "\n".join(lines)
 
     def _build_context_tags_block(self, tags: dict[str, str]) -> str:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє context tags."""
+        """Построить блок context tags."""
         if not tags:
             return "- none"
         return "\n".join(f"- {k}: {v}" for k, v in tags.items())
@@ -2663,7 +2766,7 @@ class CharacterRuntime:
         retrieved_memories,
         budgets: PromptBudgets,
     ) -> tuple[str, list[dict[str, Any]], int]:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє memories."""
+        """Построить блок memories."""
         from llm.tokenizer import estimate_tokens
 
         raw_items = []
@@ -2705,7 +2808,7 @@ class CharacterRuntime:
         state: dict[str, Any],
         budgets: PromptBudgets,
     ) -> tuple[str, list[dict[str, str]], int]:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє conversation tail."""
+        """Построить блок conversation tail."""
         from llm.tokenizer import estimate_tokens
 
         source = (
@@ -2744,7 +2847,7 @@ class CharacterRuntime:
         *,
         dropped_tail: int,
     ) -> str:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє long summary."""
+        """Построить блок long summary."""
         explicit = _normalize_text(
             state.get("long_summary")
             or state.get("rolling_summary")
@@ -2773,7 +2876,7 @@ class CharacterRuntime:
         return clipped if clipped else "- none"
 
     def _build_output_schema_block(self, policies: dict[str, Any]) -> str:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ Р±Р»РѕРє output schema."""
+        """Построить блок output schema."""
         for key in ("output_schema", "response_schema", "tool_schema"):
             value = policies.get(key)
             if isinstance(value, (dict, list)):
@@ -2788,7 +2891,7 @@ class CharacterRuntime:
         blocks: dict[str, str],
         budgets: PromptBudgets,
     ) -> tuple[dict[str, str], dict[str, Any]]:
-        """РџСЂРёРјРµРЅРёС‚СЊ Р±СЋРґР¶РµС‚С‹ Рє Р±Р»РѕРєР°Рј."""
+        """Применить бюджеты к блокам."""
         from llm.tokenizer import estimate_tokens
 
         limits = {
@@ -2817,7 +2920,7 @@ class CharacterRuntime:
         budgets: PromptBudgets,
         cut_info: dict[str, Any],
     ) -> dict[str, str]:
-        """РћР±РµСЃРїРµС‡РёС‚СЊ РѕР±С‰РёР№ Р±СЋРґР¶РµС‚."""
+        """Обеспечить общий бюджет."""
         out = dict(blocks)
         while self._full_token_count(out) > budgets.total_tokens:
             changed = False
@@ -2837,7 +2940,7 @@ class CharacterRuntime:
         return out
 
     def _render_blocks(self, blocks: dict[str, str], system: bool = False) -> str:
-        """Р РµРЅРґРµСЂ Р±Р»РѕРєРѕРІ."""
+        """Рендер блоков."""
         order = (
             "system_role",
             "persona",
@@ -2857,7 +2960,7 @@ class CharacterRuntime:
         return "\n\n".join(parts).strip()
 
     def _full_token_count(self, blocks: dict[str, str]) -> int:
-        """РџРѕР»СѓС‡РёС‚СЊ РѕР±С‰РµРµ РєРѕР»РёС‡РµСЃС‚РІРѕ С‚РѕРєРµРЅРѕРІ."""
+        """Получить общее количество токенов."""
         from llm.tokenizer import estimate_tokens
         return estimate_tokens(self._render_blocks(blocks))
 
@@ -2866,7 +2969,7 @@ class CharacterRuntime:
     # -------------------------------------------------------------------------
 
     def _validate_character(self, character_id: str | None = None) -> str:
-        """Р’Р°Р»РёРґРёСЂРѕРІР°С‚СЊ Рё РїРѕР»СѓС‡РёС‚СЊ ID РїРµСЂСЃРѕРЅР°Р¶Р°."""
+        """Валидировать и получить ID персонажа."""
         cid = str(character_id or "").strip().lower()
         ids = set(self.list_ids())
         if cid in ids:
@@ -2876,7 +2979,7 @@ class CharacterRuntime:
         return "asya"
 
     def _load_traits(self, character_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        """Р—Р°РіСЂСѓР·РёС‚СЊ builtin, learned Рё merged traits."""
+        """Загрузить builtin, learned и merged traits."""
         builtin = dict(self.storage.load_builtin_traits(character_id))
         learned = dict(self.storage.load_learned_traits(character_id))
         merged: dict[str, Any] = {}
@@ -2902,7 +3005,7 @@ class CharacterRuntime:
         return builtin, learned, merged
 
     def _build_context(self, *, text: str, meta: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
-        """РџРѕСЃС‚СЂРѕРёС‚СЊ РєРѕРЅС‚РµРєСЃС‚ РґР»СЏ rule evaluator."""
+        """Построить контекст для rule evaluator."""
         tags = list(meta.get("metadata_tags") or meta.get("tags") or [])
         return {
             "text": str(text or ""),
@@ -2928,7 +3031,7 @@ class CharacterRuntime:
         now: float,
         changes: list[dict[str, Any]],
     ) -> None:
-        """РџСЂРёРјРµРЅРёС‚СЊ actions РёР· rules."""
+        """Применить actions из rules."""
         for row in list(actions or []):
             if not isinstance(row, dict):
                 continue
@@ -3004,7 +3107,7 @@ class CharacterRuntime:
                 })
 
     def _apply_decay(self, merged: dict[str, Any], *, now: float, changes: list[dict[str, Any]]) -> None:
-        """РџСЂРёРјРµРЅРёС‚СЊ decay Рє scalar traits."""
+        """Применить decay к scalar traits."""
         for name, row in list(merged.items()):
             trait = dict(row or {})
             if str(trait.get("type") or "scalar").strip().lower() != "scalar":
@@ -3032,7 +3135,7 @@ class CharacterRuntime:
             changes.append({"kind": "decay", "trait": name, "from": cur, "to": nxt})
 
     def _resolve_conflicts(self, *, merged: dict[str, Any], state: dict[str, Any], now: float, changes: list[dict[str, Any]]) -> None:
-        """Р Р°Р·СЂРµС€РёС‚СЊ РєРѕРЅС„Р»РёРєС‚С‹ РјРµР¶РґСѓ traits."""
+        """Разрешить конфликты между traits."""
         sarcasm = self._trait_scalar(merged, "sarcasm")
         romance = self._trait_scalar(merged, "romance")
 
@@ -3081,7 +3184,7 @@ class CharacterRuntime:
         now: float,
         changes: list[dict[str, Any]],
     ) -> None:
-        """РћС‡РёСЃС‚РєР° СЃС‚Р°СЂС‹С…/РЅРµР°РєС‚РёРІРЅС‹С… traits."""
+        """Очистка старых/неактивных traits."""
         cleanup = dict(rules.get("cleanup") or {})
         conf_threshold = self._to_float(cleanup.get("remove_if_confidence_below"), 0.25)
         unused_days = max(1.0, self._to_float(cleanup.get("remove_if_unused_days"), 45.0))
@@ -3116,7 +3219,7 @@ class CharacterRuntime:
         state["counters"] = counters
 
     def _refresh_active_lists(self, *, state: dict[str, Any], traits: dict[str, Any]) -> None:
-        """РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРєРё active/disabled traits."""
+        """Обновить списки active/disabled traits."""
         active: list[str] = []
         disabled: list[str] = []
 
@@ -3138,7 +3241,7 @@ class CharacterRuntime:
         state["disabled_traits"] = sorted(set(disabled))
 
     def _extract_learned_delta(self, builtin: dict[str, Any], merged: dict[str, Any]) -> dict[str, Any]:
-        """РР·РІР»РµС‡СЊ delta learned traits."""
+        """�звлечь delta learned traits."""
         out: dict[str, Any] = {}
         for name, row in list(merged.items()):
             clean = self._clean_trait(row)
@@ -3151,7 +3254,7 @@ class CharacterRuntime:
         return out
 
     def _flat_trait_values(self, traits: dict[str, Any]) -> dict[str, Any]:
-        """РџР»РѕСЃРєРёРµ Р·РЅР°С‡РµРЅРёСЏ traits."""
+        """Плоские значения traits."""
         out: dict[str, Any] = {}
         for name, row in dict(traits or {}).items():
             if str(name).startswith("_"):
@@ -3167,7 +3270,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _normalize_trait_name(value: str) -> str:
-        """РќРѕСЂРјР°Р»РёР·РѕРІР°С‚СЊ РёРјСЏ trait."""
+        """Нормализовать имя trait."""
         raw = str(value or "").strip().lower()
         if not raw:
             return ""
@@ -3175,7 +3278,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _normalize_trait(value: dict[str, Any] | None) -> dict[str, Any]:
-        """РќРѕСЂРјР°Р»РёР·РѕРІР°С‚СЊ trait."""
+        """Нормализовать trait."""
         row = dict(value or {})
         ttype = str(row.get("type") or "scalar").strip().lower()
         out = {
@@ -3201,14 +3304,14 @@ class CharacterRuntime:
 
     @staticmethod
     def _clean_trait(value: dict[str, Any]) -> dict[str, Any]:
-        """РћС‡РёСЃС‚РёС‚СЊ trait РѕС‚ СЃР»СѓР¶РµР±РЅС‹С… РїРѕР»РµР№."""
+        """Очистить trait от служебных полей."""
         row = dict(value or {})
         row.pop("_source", None)
         return row
 
     @staticmethod
     def _has_override(base: dict[str, Any], current: dict[str, Any]) -> bool:
-        """РџСЂРѕРІРµСЂРёС‚СЊ РµСЃС‚СЊ Р»Рё override РЅР°Рґ base."""
+        """Проверить есть ли override над base."""
         base_n = CharacterRuntime._normalize_trait(base)
         cur_n = CharacterRuntime._normalize_trait(current)
         for key in ("type", "value", "disabled", "prompt_file"):
@@ -3220,7 +3323,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _trait_scalar(traits: dict[str, Any], name: str) -> float:
-        """РџРѕР»СѓС‡РёС‚СЊ scalar Р·РЅР°С‡РµРЅРёРµ trait."""
+        """Получить scalar значение trait."""
         row = dict(traits.get(str(name).strip().lower()) or {})
         value = row.get("value")
         if isinstance(value, bool):
@@ -3229,7 +3332,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _to_float(value, default: float) -> float:
-        """РљРѕРЅРІРµСЂС‚РёСЂРѕРІР°С‚СЊ РІ float."""
+        """Конвертировать в float."""
         try:
             return float(value)
         except Exception:
@@ -3237,7 +3340,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _clamp(value: float, minimum: float, maximum: float) -> float:
-        """Clamp Р·РЅР°С‡РµРЅРёСЏ."""
+        """Clamp значения."""
         lo = float(min(minimum, maximum))
         hi = float(max(minimum, maximum))
         return max(lo, min(hi, float(value)))
@@ -3249,7 +3352,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _normalize_mode(value: Any) -> str:
-        """РќРѕСЂРјР°Р»РёР·РѕРІР°С‚СЊ СЂРµР¶РёРј."""
+        """Нормализовать режим."""
         text = str(value or "chat").strip().lower()
         valid = {"chat", "task", "coding", "voice", "silent", "debug"}
         return text if text in valid else "chat"
@@ -3259,17 +3362,7 @@ class CharacterRuntime:
         text = str(value or "").strip().lower()
         if text in {"voice", "silent"}:
             return "friend_chat"
-        if text in set(str(x).strip().lower() for x in MODES):
-            return text
-        mapped = {
-            "chat": "friend_chat",
-            "task": "helper",
-            "coding": "engineer",
-            "debug": "debugger",
-        }.get(text, "")
-        if mapped:
-            return mapped
-        return normalize_mode_name(text)
+        return normalize_mode_name(text, allow_custom=True)
 
     @staticmethod
     def _active_to_legacy_mode(value: Any) -> str:
@@ -3285,14 +3378,14 @@ class CharacterRuntime:
 
     @staticmethod
     def _normalize_profile(value: Any) -> str:
-        """РќРѕСЂРјР°Р»РёР·РѕРІР°С‚СЊ РїСЂРѕС„РёР»СЊ."""
+        """Нормализовать профиль."""
         text = str(value or "BALANCED").strip().upper()
-        valid = {"FAST", "BALANCED", "QUALITY"}
+        valid = {"FAST", "BALANCED", "QUALITY", "ECONOM", "AUTONOMOUS"}
         return text if text in valid else "BALANCED"
 
     @staticmethod
     def _normalize_personality_id(value: Any) -> str:
-        """РќРѕСЂРјР°Р»РёР·РѕРІР°С‚СЊ ID Р»РёС‡РЅРѕСЃС‚Рё."""
+        """Нормализовать ID личности."""
         text = str(value or "").strip().lower()
         if not text:
             return ""
@@ -3300,13 +3393,13 @@ class CharacterRuntime:
 
     @staticmethod
     def _new_conversation_id() -> str:
-        """РЎРѕР·РґР°С‚СЊ РЅРѕРІС‹Р№ ID СЂР°Р·РіРѕРІРѕСЂР°."""
+        """Создать новый ID разговора."""
         import uuid
         return str(uuid.uuid4())
 
     @staticmethod
     def _coerce_history(value) -> list[dict[str, str]]:
-        """РџСЂРёРІРµСЃС‚Рё РёСЃС‚РѕСЂРёСЋ Рє РїСЂР°РІРёР»СЊРЅРѕРјСѓ С„РѕСЂРјР°С‚Сѓ."""
+        """Привести историю к правильному формату."""
         if not value:
             return []
         if isinstance(value, list):
@@ -3315,7 +3408,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _coerce_dict_list(value) -> list[dict[str, Any]]:
-        """РџСЂРёРІРµСЃС‚Рё СЃРїРёСЃРѕРє dict."""
+        """Привести список dict."""
         if not value:
             return []
         if isinstance(value, list):
@@ -3324,7 +3417,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _coerce_string_dict(value) -> dict[str, str]:
-        """РџСЂРёРІРµСЃС‚Рё dict[str, str]."""
+        """Привести dict[str, str]."""
         if not value:
             return {}
         if isinstance(value, dict):
@@ -3333,7 +3426,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _coerce_personality_blend(value) -> dict[str, Any]:
-        """РџСЂРёРІРµСЃС‚Рё personality blend."""
+        """Привести personality blend."""
         default = {
             "active": False,
             "from": "default",
@@ -3361,7 +3454,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _coerce_cooldowns(value) -> dict[str, Any]:
-        """РџСЂРёРІРµСЃС‚Рё cooldowns."""
+        """Привести cooldowns."""
         default = {
             "last_user_message": "",
             "last_user_hash": "",
@@ -3391,7 +3484,7 @@ class CharacterRuntime:
 
     @staticmethod
     def _coerce_address_terms(value, *, conversation_id: str) -> dict[str, Any]:
-        """РџСЂРёРІРµСЃС‚Рё address terms."""
+        """Привести address terms."""
         row = dict(value or {})
         out = {
             "last_term_used_at": "",
@@ -3480,7 +3573,7 @@ def _starts_with_greeting(text: str) -> bool:
 
 
 def _normalize_text(value) -> str:
-    """РќРѕСЂРјР°Р»РёР·РѕРІР°С‚СЊ С‚РµРєСЃС‚."""
+    """Нормализовать текст."""
     if value is None:
         return ""
     text = str(value).strip()
@@ -3493,7 +3586,7 @@ def _normalize_text(value) -> str:
 
 
 def _as_dict(value) -> dict[str, Any]:
-    """РџСЂРёРІРµСЃС‚Рё Рє dict."""
+    """Привести к dict."""
     if isinstance(value, dict):
         return dict(value)
     if value is None:
@@ -3507,7 +3600,7 @@ def _as_dict(value) -> dict[str, Any]:
 
 
 def _as_list(value) -> list[Any]:
-    """РџСЂРёРІРµСЃС‚Рё Рє list."""
+    """Привести к list."""
     if value is None:
         return []
     if isinstance(value, (list, tuple)):
@@ -3516,7 +3609,7 @@ def _as_list(value) -> list[Any]:
 
 
 def _coerce_policies(policies) -> dict[str, Any]:
-    """РџСЂРёРІРµСЃС‚Рё policies."""
+    """Привести policies."""
     if isinstance(policies, dict):
         return dict(policies)
     if isinstance(policies, (list, tuple)):
@@ -3526,7 +3619,7 @@ def _coerce_policies(policies) -> dict[str, Any]:
 
 
 def _coerce_memory(item) -> dict[str, Any]:
-    """РџСЂРёРІРµСЃС‚Рё memory item."""
+    """Привести memory item."""
     if isinstance(item, dict):
         return {
             "text": _normalize_text(item.get("text") or item.get("content") or ""),
@@ -3547,7 +3640,7 @@ def _coerce_memory(item) -> dict[str, Any]:
 
 
 def _coerce_turn(item) -> dict[str, str]:
-    """РџСЂРёРІРµСЃС‚Рё turn."""
+    """Привести turn."""
     if isinstance(item, dict):
         return {
             "role": str(item.get("role") or "user").strip().lower(),
@@ -3557,7 +3650,7 @@ def _coerce_turn(item) -> dict[str, str]:
 
 
 def _to_int(value, default: int, minimum: int = 0) -> int:
-    """РљРѕРЅРІРµСЂС‚РёСЂРѕРІР°С‚СЊ РІ int."""
+    """Конвертировать в int."""
     try:
         return max(minimum, int(value))
     except Exception:
@@ -3565,7 +3658,7 @@ def _to_int(value, default: int, minimum: int = 0) -> int:
 
 
 def _clip_to_tokens(text: str, max_tokens: int) -> tuple[str, bool]:
-    """РћР±СЂРµР·Р°С‚СЊ С‚РµРєСЃС‚ РґРѕ max_tokens."""
+    """Обрезать текст до max_tokens."""
     from llm.tokenizer import estimate_tokens
 
     if not text:
@@ -3577,7 +3670,6 @@ def _clip_to_tokens(text: str, max_tokens: int) -> tuple[str, bool]:
     if current_tokens <= max_tokens:
         return text, False
 
-    # Binary search
     lo, hi = 0, len(text)
     while lo < hi:
         mid = (lo + hi) // 2
@@ -3592,7 +3684,7 @@ def _clip_to_tokens(text: str, max_tokens: int) -> tuple[str, bool]:
 
 
 def _shrink_block(text: str, block_type: str) -> str:
-    """РЎР¶Р°С‚СЊ Р±Р»РѕРє."""
+    """Сжать блок."""
     if not text or text == "- none":
         return text
 

@@ -91,6 +91,29 @@ class LearnerTests(unittest.TestCase):
         self.assertLess(float(traits.get("teasing", 1.0)), 0.40)
         self.assertIn("implicit_deltas", debug)
 
+    def test_feedback_less_compliments_lowers_social_tone_traits(self) -> None:
+        persona = {
+            "traits": {
+                "warmth": 0.62,
+                "humor": 0.48,
+                "emoji_rate": 0.28,
+            },
+            "learned": {},
+        }
+        updated, _debug = update_persona(
+            persona,
+            {
+                "intent": "chat",
+                "emotion": "neutral",
+                "tags": [],
+                "user_feedback": ["less_compliments"],
+            },
+        )
+        traits = dict(updated.get("traits") or {})
+        self.assertLess(float(traits.get("warmth", 1.0)), 0.62)
+        self.assertLess(float(traits.get("humor", 1.0)), 0.48)
+        self.assertLess(float(traits.get("emoji_rate", 1.0)), 0.28)
+
 
 if __name__ == "__main__":
     unittest.main()

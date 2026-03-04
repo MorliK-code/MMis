@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ui.api_client import ApiClient, ApiClientError
@@ -30,6 +31,108 @@ class ConsoleState:
     auto_start_ollama: bool = True
     api_process: subprocess.Popen | None = None
     ollama_process: subprocess.Popen | None = None
+    prefs: dict = field(default_factory=dict)
+
+
+def _ui_state_file_path() -> Path:
+    base = Path(getattr(config, "memory_dir", Path("data/memory"))).expanduser()
+    return base / "ui_console_state.json"
+
+
+def _load_ui_state() -> dict:
+    path = _ui_state_file_path()
+    try:
+        if not path.exists():
+            return {}
+        payload = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    out: dict = {}
+    if isinstance(payload.get("show_thinking"), bool):
+        out["show_thinking"] = bool(payload.get("show_thinking"))
+    if isinstance(payload.get("thinking_first"), bool):
+        out["thinking_first"] = bool(payload.get("thinking_first"))
+    if isinstance(payload.get("store_turn"), bool):
+        out["store_turn"] = bool(payload.get("store_turn"))
+    runtime = payload.get("runtime")
+    if isinstance(runtime, dict):
+        out["runtime"] = dict(runtime)
+    return out
+
+
+def _save_ui_state(state: ConsoleState) -> None:
+    path = _ui_state_file_path()
+    runtime = dict(state.prefs.get("runtime") or {}) if isinstance(state.prefs, dict) else {}
+    payload = {
+        "show_thinking": bool(state.show_thinking),
+        "thinking_first": bool(state.thinking_first),
+        "store_turn": bool(state.store_turn),
+        "runtime": runtime,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _runtime_prefs(state: ConsoleState) -> dict:
+    prefs = state.prefs if isinstance(state.prefs, dict) else {}
+    runtime = prefs.get("runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+        prefs["runtime"] = runtime
+    state.prefs = prefs
+    return runtime
+
+
+def _set_runtime_pref(state: ConsoleState, key: str, value) -> None:
+    runtime = _runtime_prefs(state)
+    runtime[str(key)] = value
+    _save_ui_state(state)
+
+
+def _send_backend_command_silent(state: ConsoleState, command_text: str) -> bool:
+    try:
+        state.api.stream_chat(
+            text=str(command_text or "").strip(),
+            store_turn=False,
+            think=bool(state.think_enabled),
+            json_mode=False,
+            on_chunk=None,
+            on_thinking_chunk=None,
+        )
+        return True
+    except ApiClientError:
+        return False
+
+
+def _apply_persisted_runtime_settings(state: ConsoleState) -> None:
+    runtime = _runtime_prefs(state)
+    web_mode = str(runtime.get("web_mode") or "").strip().lower()
+    if web_mode in {"on", "off", "auto"}:
+        try:
+            state.web_mode = str(state.api.set_web_mode(web_mode))
+        except ApiClientError:
+            pass
+
+    mode_lock = runtime.get("mode_lock")
+    if isinstance(mode_lock, bool):
+        _send_backend_command_silent(state, f"/mode_lock {'on' if mode_lock else 'off'}")
+
+    active_mode = str(runtime.get("active_mode") or "").strip()
+    if active_mode:
+        _send_backend_command_silent(state, f"/mode {active_mode}")
+
+    output_parameters = runtime.get("output_parameters")
+    if isinstance(output_parameters, bool):
+        _send_backend_command_silent(state, f"/output parameters {'on' if output_parameters else 'off'}")
+
+    output_summary = runtime.get("output_summary")
+    if isinstance(output_summary, bool):
+        _send_backend_command_silent(state, f"/output summary {'on' if output_summary else 'off'}")
 
 
 def _configure_stdout() -> None:
@@ -95,35 +198,44 @@ def _print_header(state: ConsoleState) -> None:
 
 
 def _print_help() -> None:
-    print("/help                        show commands")
-    print("/connect [url]               reconnect API (optional custom url)")
-    print("/restartapi                  restart local API process")
-    print("/models                      list available models")
-    print("/model                       show current runtime model")
-    print("/model <name>                set runtime model")
-    print("/think                       enable thinking")
-    print("/nothink                     disable thinking")
-    print("/show-thinking               show thinking stream")
-    print("/hide-thinking               hide thinking stream")
-    print("/thinking-first              prefer thinking stream before answer")
-    print("/thinking-last               prefer answer stream without waiting for thinking")
-    print("/web                         enable web search")
-    print("/no-web                      disable web search")
-    print("/web-auto                    auto web search")
-    print("/output status               show output format controls")
-    print("/output parameters on|off")  
-    print("/output summary on|off")     
-    print("/mode <name>                 backend mode switch")
-    print("/mode_lock on|off            backend mode lock")
-    print("/brain_debug                 backend brain debug")
-    print("/persona_debug               backend persona debug")
-    print("/json                        enable JSON mode")
-    print("/nojson                      disable JSON mode")
-    print("/character ...               backend character command")
-    print("/trait ...                   backend trait command")
-    print("/health                      show API health")
-    print("/store on|off                toggle store_turn")
-    print("/exit or /quit               exit")
+    print("Доступные команды:")
+    print("")
+    print("Локальные (UI):")
+    print("/help                        показать эту справку")
+    print("/connect [url]               переподключиться к API (можно указать URL)")
+    print("/restartapi                  перезапустить локальный API-процесс")
+    print("/models                      показать доступные модели")
+    print("/model                       показать текущую модель")
+    print("/model <name>                переключить модель")
+    print("/show-thinking               показывать поток thinking")
+    print("/hide-thinking               скрывать поток thinking")
+    print("/thinking-first              показывать thinking до ответа")
+    print("/thinking-last               показывать ответ без ожидания thinking")
+    print("/store on|off                включить/выключить сохранение turns")
+    print("/health                      проверить состояние API")
+    print("/exit или /quit              выход")
+    print("")
+    print("Команды, отправляемые в backend:")
+    print("/think                       включить thinking у модели")
+    print("/nothink                     выключить thinking у модели")
+    print("/web                         включить web-поиск (SearxNG backend)")
+    print("/no-web                      выключить web-поиск")
+    print("/web-auto                    auto web: high-priority for rates/weather/today/latest")
+    print("/output status               показать формат вывода")
+    print("/output parameters on|off    включить/выключить блок [PARAMETERS]")
+    print("/output summary on|off       включить/выключить блок [SUMMARY]")
+    print("/mode <name>                 переключить backend mode (автоматически mode_lock=on)")
+    print("/mode_lock on|off            включить/выключить lock mode")
+    print("/brain_debug                 показать debug brain state")
+    print("/persona_debug               показать debug persona state")
+    print("/json                        включить JSON-режим ответа")
+    print("/nojson                      выключить JSON-режим ответа")
+    print("/character ...               команды управления персонажем")
+    print("/character delete <id>       удалить персонажа (кроме default)")
+    print("/trait ...                   команды управления traits")
+    print("/studio ...                  единый модуль работы с персонажем (create/update/modes/mixed/build_pack)")
+    print("/studio apply|cancel         локальные команды студии (не отправляются в основной чат-промпт)")
+    print("/apply | /cancel             короткие локальные команды студии при active session")
 
 
 def _print_health_short(state: ConsoleState, *, startup: bool = False) -> None:
@@ -209,6 +321,7 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         try:
             state.api.set_model(arg)
             print(f"Model switched to: {state.api.get_runtime_model() or arg}")
+            _set_runtime_pref(state, "model", str(arg).strip())
         except ApiClientError as exc:
             state.online = False
             print(f"API error: {exc}")
@@ -222,6 +335,7 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         try:
             actual = bool(state.api.set_thinking_enabled(target))
             state.think_enabled = actual
+            _set_runtime_pref(state, "think_enabled", bool(actual))
             print(f"Thinking: {'on' if actual else 'off'}")
         except ApiClientError as exc:
             state.online = False
@@ -231,11 +345,13 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
     if key in {"/show-thinking", "/hide-thinking"}:
         target = (key == "/show-thinking")
         state.show_thinking = target
+        _save_ui_state(state)
         print(f"Thinking display: {'on' if target else 'off'}")
         return True
 
     if key in {"/thinking-first", "/thinking-last"}:
         state.thinking_first = (key == "/thinking-first")
+        _save_ui_state(state)
         print(f"Thinking-first: {'on' if state.thinking_first else 'off'}")
         return True
     
@@ -247,6 +363,7 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         try:
             actual = str(state.api.set_web_mode(target))
             state.web_mode = actual
+            _set_runtime_pref(state, "web_mode", str(actual).strip().lower())
             print(f"Web mode: {actual}")
             if arg :
                 _send_chat(state, arg)
@@ -262,6 +379,7 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         try:
             actual = bool(state.api.set_json_mode_enabled(target))
             state.json_mode_enabled = actual
+            _set_runtime_pref(state, "json_mode_enabled", bool(actual))
             print(f"JSON mode: {'on' if actual else 'off'}")
         except ApiClientError as exc:
             state.online = False
@@ -283,12 +401,31 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         else:
             print("Usage: /store on|off")
             return True
+        _save_ui_state(state)
         print(f"store_turn: {'on' if state.store_turn else 'off'}")
         return True
 
     if not _ensure_connected_or_start(state):
         return True
-    _send_chat(state, raw)
+    rc = _send_chat(state, raw, command_output=True)
+    if rc == 0:
+        if key == "/output":
+            low = str(arg or "").strip().lower()
+            if low in {"parameters on", "parameters off"}:
+                _set_runtime_pref(state, "output_parameters", low.endswith("on"))
+            elif low in {"summary on", "summary off"}:
+                _set_runtime_pref(state, "output_summary", low.endswith("on"))
+        elif key == "/mode_lock":
+            low = str(arg or "").strip().lower()
+            if low in {"on", "off"}:
+                _set_runtime_pref(state, "mode_lock", low == "on")
+        elif key == "/mode":
+            low = str(arg or "").strip().lower()
+            if low in {"auto", "off"}:
+                _set_runtime_pref(state, "mode_lock", False)
+            elif low and low not in {"current", "status"}:
+                _set_runtime_pref(state, "active_mode", low)
+                _set_runtime_pref(state, "mode_lock", True)
     return True
 
 
@@ -548,6 +685,21 @@ class _StreamRealtimePrinter:
             if not text:
                 return
 
+        # Some backends can resend overlapping answer chunks.
+        # Drop any prefix already present at the tail of rendered/pending text.
+        already = self.rendered_answer() + "".join(self._pending_answer)
+        if already and text:
+            max_overlap = min(len(already), len(text))
+            cut = 0
+            for size in range(max_overlap, 0, -1):
+                if text.startswith(already[-size:]):
+                    cut = size
+                    break
+            if cut > 0:
+                text = text[cut:]
+                if not text:
+                    return
+
         if self.prefer_thinking_first and not self._thinking_started:
             # If we prefer thinking first, we only buffer if thinking hasn't started
             # But we can't buffer forever. If we get a lot of answer and no thinking,
@@ -584,39 +736,23 @@ class _StreamRealtimePrinter:
             self._emit_answer("".join(self._pending_answer))
             self._pending_answer = []
 
-        # Append any tail characters not yet streamed
+        # Append any tail characters not yet streamed.
         if isinstance(answer_final, str) and answer_final:
-            final_san = _sanitize_stream_text(answer_final).strip()
-            rendered = self.rendered_answer().strip()
+            final_san = _sanitize_stream_text(answer_final)
+            rendered = self.rendered_answer()
             if not rendered:
-                # Nothing was streamed at all — print the full final answer
                 if final_san:
                     self._emit_answer(final_san)
-            elif final_san.endswith(rendered):
-                pass  # streamed text is a suffix of final — nothing to add (edge case)
             elif final_san.startswith(rendered):
-                # Normal case: final extends what was streamed
                 tail = final_san[len(rendered):]
                 if tail:
                     self._emit_answer(tail)
-            else:
-                # Out-of-sync: find how much of the END of rendered matches final
-                # Try progressively shorter suffixes until we find an overlap
-                tail = ""
-                for cut in range(min(len(rendered), len(final_san)), 0, -1):
-                    if final_san.startswith(rendered[-cut:]):
-                        tail = final_san[cut:]
-                        break
-                if not tail and len(final_san) > len(rendered):
-                    # Last resort: just emit the extra length at the end
-                    tail = final_san[len(rendered):]
-                if tail:
-                    self._emit_answer(tail)
+            # Out-of-sync stream/final mismatch: do not append fallback tail to avoid duplicates.
 
-        # Append any thinking tail not yet streamed
+        # Append any thinking tail not yet streamed.
         if self.show_thinking and isinstance(thinking_final, str) and thinking_final:
-            final_t_san = _sanitize_stream_text(thinking_final).strip()
-            rendered_t = self.rendered_thinking().strip()
+            final_t_san = _sanitize_stream_text(thinking_final)
+            rendered_t = self.rendered_thinking()
             if not rendered_t:
                 if final_t_san:
                     self._emit_thinking(final_t_san)
@@ -676,32 +812,32 @@ def _sanitize_stream_text(piece: str) -> str:
     return "".join(ch for ch in src if (ch == "\n" or ch == "\t" or ord(ch) >= 32))
 
 
-def _send_chat(state: ConsoleState, text: str) -> int:
+def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) -> int:
     try:
-        reply, streamed_text, streamed_thinking = _stream_once(state, text)
+        reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
         if _is_generation_fallback(reply.answer):
             print()
-            print("LLM backend недоступен. Пробую поднять Ollama и повторить запрос...")
+            print("LLM backend недоступен. Пробую автоматически переключиться на локальный Ollama и повторить запрос...")
             if _ensure_model_backend(state):
-                reply, streamed_text, streamed_thinking = _stream_once(state, text)
+                reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
         if _is_generation_fallback(reply.answer):
             _print_backend_hint(state)
 
-        if not str(streamed_text or "").strip() and str(reply.answer or "").strip():
+        if (not str(streamed_text or "")) and str(reply.answer or ""):
+            # Print full answer only when stream produced no visible answer at all.
             print(f"assistant> {str(reply.answer or '')}", end="")
         print()
-        model = str(getattr(reply, "model", "") or "")
-        if model:
-            print(f"[model: {model}]")
-        if state.show_thinking:
-            thinking = str(getattr(reply, "thinking", "") or "")
-            if str(streamed_thinking or "").strip():
-                pass
-            elif thinking.strip():
-                print("[thinking]")
-                print(thinking.strip())
-            elif state.think_enabled is not False:
-                print("[thinking] —")
+        if not bool(command_output):
+            model = str(getattr(reply, "model", "") or "")
+            if model:
+                print(f"[model: {model}]")
+            if state.show_thinking:
+                thinking = str(getattr(reply, "thinking", "") or "")
+                if str(streamed_thinking or "").strip():
+                    pass
+                elif thinking.strip():
+                    print("[thinking]")
+                    print(thinking.strip())
         state.online = True
         return 0
     except ApiClientError as exc:
@@ -710,8 +846,7 @@ def _send_chat(state: ConsoleState, text: str) -> int:
         print(f"API error: {exc}")
         return 1
 
-
-def _stream_once(state: ConsoleState, text: str):
+def _stream_once(state: ConsoleState, text: str, *, command_output: bool = False):
     renderer = _ConsoleChunkRenderer()
     prefer_thinking_first = bool(state.show_thinking and state.thinking_first)
     printer = _StreamRealtimePrinter(
@@ -719,7 +854,7 @@ def _stream_once(state: ConsoleState, text: str):
         prefer_thinking_first=prefer_thinking_first,
         show_thinking=bool(state.show_thinking),
     )
-    if not bool(state.show_thinking) and bool(state.think_enabled):
+    if (not bool(command_output)) and (not bool(state.show_thinking)) and bool(state.think_enabled):
         printer.start_hidden_thinking_hint()
     try:
         reply = state.api.stream_chat(
@@ -937,24 +1072,37 @@ def _looks_like_shell_command(text: str) -> bool:
 def main() -> int:
     _configure_stdout()
     args = _build_parser().parse_args()
+    persisted_ui_state = _load_ui_state()
 
     api_url = str(args.api_url).strip() or config.api_url
-    model_name = str(args.model).strip() or config.console_model
+    persisted_runtime = dict(persisted_ui_state.get("runtime") or {}) if isinstance(persisted_ui_state.get("runtime"), dict) else {}
+    model_name = str(args.model).strip()
+    if not model_name:
+        model_name = str(persisted_runtime.get("model") or "").strip() or config.console_model
     timeout = float(args.timeout) if args.timeout is not None else float(config.console_timeout_sec)
     stream_timeout = float(args.stream_timeout) if args.stream_timeout is not None else float(config.console_stream_timeout_sec)
 
-    store_turn = False if args.no_store else config.console_store_turn
+    if args.no_store:
+        store_turn = False
+    elif isinstance(persisted_ui_state.get("store_turn"), bool):
+        store_turn = bool(persisted_ui_state.get("store_turn"))
+    else:
+        store_turn = config.console_store_turn
     
     if args.show_thinking:
         show_thinking = True
     elif args.hide_thinking:
         show_thinking = False
+    elif isinstance(persisted_ui_state.get("show_thinking"), bool):
+        show_thinking = bool(persisted_ui_state.get("show_thinking"))
     else:
         show_thinking = config.console_show_thinking
     if bool(args.thinking_first):
         thinking_first = True
     elif bool(args.thinking_last):
         thinking_first = False
+    elif isinstance(persisted_ui_state.get("thinking_first"), bool):
+        thinking_first = bool(persisted_ui_state.get("thinking_first"))
     else:
         thinking_first = bool(config.console_thinking_first)
 
@@ -972,6 +1120,7 @@ def main() -> int:
         thinking_first=thinking_first,
         auto_start_api=auto_start_api,
         auto_start_ollama=auto_start_ollama,
+        prefs=dict(persisted_ui_state),
     )
 
     _print_header(state)
@@ -990,6 +1139,8 @@ def main() -> int:
         think_action = True
     elif bool(args.nothink):
         think_action = False
+    elif isinstance(persisted_runtime.get("think_enabled"), bool):
+        think_action = bool(persisted_runtime.get("think_enabled"))
     elif config.thinking_enabled is not None:
         think_action = config.thinking_enabled
 
@@ -1006,6 +1157,8 @@ def main() -> int:
         json_action = True
     elif bool(args.nojson):
         json_action = False
+    elif isinstance(persisted_runtime.get("json_mode_enabled"), bool):
+        json_action = bool(persisted_runtime.get("json_mode_enabled"))
     elif config.console_json_mode_enabled:
         json_action = True
 
@@ -1016,6 +1169,9 @@ def main() -> int:
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")
+
+    if _ensure_connected_or_start(state):
+        _apply_persisted_runtime_settings(state)
 
     if state.think_enabled is not None:
         print(f"Thinking: {'on' if state.think_enabled else 'off'}")

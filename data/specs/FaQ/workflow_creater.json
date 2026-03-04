@@ -1,0 +1,217 @@
+{
+  "schema_version": 6,
+  "id": "workflow_master",
+  "title": "Unified Studio Creator Workflow",
+  "description": "Единый контракт студии для создания/обновления персонажей и modes в одном модуле /studio.",
+  "studio_public_contract": {
+    "supported_commands": [
+      "/studio",
+      "/studio start [seed]",
+      "/studio status",
+      "/studio apply",
+      "/studio cancel",
+      "/apply",
+      "/cancel"
+    ],
+    "removed_commands": {
+      "/specs ...": "Команда удалена. Используй /studio ...",
+      "/studio mode ...": "Команда удалена. Используй /studio ..."
+    },
+    "local_handling": {
+      "apply_cancel_local_only": true,
+      "description": "Команды apply/cancel обрабатываются локально внутри studio и не попадают в основной prompt модели."
+    }
+  },
+  "runtime_state_contract": {
+    "key": "studio_generator",
+    "required_fields": [
+      "active",
+      "phase",
+      "seed_prompt",
+      "operation_type",
+      "targets",
+      "draft_changes",
+      "confidence_map",
+      "unresolved_fields",
+      "step_options",
+      "last_llm",
+      "last_result"
+    ],
+    "targets_shape": {
+      "character_ids": "array<string>",
+      "mode_ids": "array<string>",
+      "scope": "global|character|mixed"
+    }
+  },
+  "creator_flow": {
+    "phases": [
+      "seed_capture",
+      "clarify",
+      "review",
+      "done"
+    ],
+    "operation_types": [
+      "create_character",
+      "update_character",
+      "update_modes",
+      "mixed",
+      "build_character_pack"
+    ],
+    "intent_matrix": {
+      "character_create": "seed содержит create/new/создай/новый без update -> create_character",
+      "character_update": "seed содержит update/change/обнови/измени без create -> update_character",
+      "mixed": "seed содержит одновременно character + mode -> mixed",
+      "ambiguous": "если интент неочевиден -> clarify по operation_type"
+    },
+    "mode_scope_rules": {
+      "mode_for_character": "если в seed формат 'для <character>' и нет global -> scope=character",
+      "mode_global_and_character": "если есть и global, и 'для <character>' -> scope=mixed",
+      "target_required": "при scope=character|mixed studio обязана запросить target_character_id, если он не resolved"
+    },
+    "question_ux": {
+      "numbered_choices": "1..N",
+      "custom_choice": "0. Ввести свой вариант",
+      "impact_block": [
+        "Изменит",
+        "Файлы",
+        "Для персонажа",
+        "Результат"
+      ]
+    },
+    "llm_profile": {
+      "source": "config.model_config.PROFILES.keys()",
+      "strict_enum": true,
+      "allow_custom": false,
+      "show_full_list": true
+    }
+  },
+  "file_layout_contracts": [
+    {
+      "file": "data/specs/taxonomy.json",
+      "must_have_root_blocks": [
+        "schema_version",
+        "modes",
+        "aliases"
+      ],
+      "required_nested_blocks": [
+        "aliases.modes.chat",
+        "aliases.modes.task",
+        "aliases.modes.coding",
+        "aliases.modes.debug"
+      ]
+    },
+    {
+      "file": "data/specs/modes_spec.json",
+      "must_have_root_blocks": [
+        "schema_version",
+        "modes"
+      ],
+      "required_nested_blocks": [
+        "modes.<mode>.description",
+        "modes.<mode>.legacy_mode",
+        "modes.<mode>.output_format_default",
+        "modes.<mode>.persona_effects"
+      ]
+    },
+    {
+      "file": "data/specs/characters/{character_id}/character.json",
+      "must_have_root_blocks": [
+        "schema_version",
+        "character_id",
+        "id",
+        "name",
+        "default_mood",
+        "default_mode",
+        "llm_profile",
+        "locks"
+      ]
+    },
+    {
+      "file": "data/specs/characters/{character_id}/persona_state.json",
+      "must_have_root_blocks": [
+        "schema_version",
+        "character_id",
+        "name",
+        "mood",
+        "traits",
+        "locks",
+        "bans",
+        "learned"
+      ]
+    },
+    {
+      "file": "data/specs/characters/{character_id}/persona_spec.json",
+      "must_have_root_blocks": [
+        "schema_version",
+        "identity",
+        "locks_map",
+        "bans_template",
+        "moods",
+        "modes",
+        "traits_rules"
+      ],
+      "encoding_rule": "locks_map.informal_you должен быть ровно: Use informal address form ('ты')."
+    },
+    {
+      "file": "data/specs/characters/{character_id}/evolution_spec.json",
+      "must_have_root_blocks": [
+        "schema_version",
+        "rules",
+        "cleanup"
+      ]
+    }
+  ],
+  "apply_policy": {
+    "json_strategy": "patch-merge",
+    "preserve_unknown_fields": true,
+    "remove_requires_explicit_intent": true,
+    "create_update_mixed": {
+      "always_write_specs": true,
+      "always_write_blueprint": true,
+      "always_write_artifacts": true,
+      "files": [
+        "character.json",
+        "persona_state.json",
+        "persona_spec.json",
+        "evolution_spec.json",
+        "studio_blueprint.json"
+      ]
+    },
+    "update_modes": {
+      "sync_global": [
+        "data/specs/taxonomy.json",
+        "data/specs/modes_spec.json"
+      ],
+      "sync_character_when_scope": "scope=character|mixed -> sync persona_spec target character"
+    }
+  },
+  "tests": {
+    "must_cover": [
+      "create_character_explicit_intent_no_redundant_action_question",
+      "update_character_explicit_intent_existing_candidates",
+      "target_character_id_create_smart_candidates",
+      "target_character_id_update_ranked_existing",
+      "llm_profile_full_dynamic_enum_no_custom",
+      "impact_block_verbose_for_character_steps",
+      "create_apply_writes_specs_and_blueprint",
+      "update_apply_patch_merge_preserves_unknown_fields",
+      "mode_add_intent_does_not_ask_add_or_update_again_when_explicit",
+      "studio_apply_cancel_local_short_circuit",
+      "short_apply_cancel_local_short_circuit",
+      "post_apply_next_chat_goes_main_model",
+      "negative_apply_missing_fields_keeps_studio_active",
+      "removed_specs_and_studio_mode_commands_return_removed_message",
+      "utf8_strings_no_mojibake_in_help_and_studio_messages"
+    ]
+  },
+  "definition_of_done": {
+    "rules": [
+      "Studio commands and lifecycle соответствуют public contract",
+      "apply/cancel локальны и не доходят до main-model prompt",
+      "creator в auto-first режиме задает только необходимые уточнения",
+      "llm_profile строго валидируется по dynamic enum",
+      "create/update/mixed всегда создают specs + blueprint + artifacts",
+      "тесты из раздела tests покрывают критические сценарии"
+    ]
+  }
+}

@@ -9,7 +9,7 @@ from typing import Any
 from config.paths import BASE_DIR, DATA_DIR, MODELS_DIR, ensure_dirs, resolve_memory_dir
 
 
-VALID_PROFILES = {"FAST", "BALANCED", "QUALITY", "ECONOM"}
+VALID_PROFILES = {"FAST", "BALANCED", "QUALITY", "ECONOM", "AUTONOMOUS"}
 VALID_PROVIDERS = {"ollama", "auto"}
 VALID_SAFETY_MODES = {"read_only_tools", "allow_os_actions"}
 
@@ -75,7 +75,15 @@ class AppSettings:
     openai_max_retries: int = 2
     
     # Tools & Search
-    search_api_url: str = "https://www.googleapis.com/customsearch/v1?key=API_KEY&cx=SEARCH_ENGINE_ID"
+    search_api_url: str = "http://127.0.0.1:8080/search?format=json"
+    search_provider: str = "searxng"
+    search_strict_endpoint: bool = True
+    search_timeout_sec: float = 12.0
+    web_fetch_timeout_sec: int = 12
+    web_fetch_retries: int = 1
+    web_clean_max_chars: int = 4000
+    web_clean_min_chars: int = 200
+    web_clean_language_hint: str = ""
     
     # Voice
     voice_tts_voice: str = "ru-RU-DmitryNeural"
@@ -103,7 +111,7 @@ class AppSettings:
     console_timeout_sec: float = 2.5
     console_stream_timeout_sec: float = 600.0
     console_store_turn: bool = True
-    console_show_thinking: bool = True  
+    console_show_thinking: bool = False  
     console_thinking_first: bool = True
     console_json_mode_enabled: bool = False
     console_auto_start_api: bool = True
@@ -233,7 +241,23 @@ def load_config(force_reload: bool = False) -> AppSettings:
         openai_api_url=str(_pick("OPENAI_BASE_URL", json_cfg, dotenv_cfg, "https://api.openai.com/v1")).strip(),
         openai_timeout_sec=float(_pick("OPENAI_TIMEOUT_SEC", json_cfg, dotenv_cfg, 120.0)),
         openai_max_retries=max(0, _to_int(_pick("OPENAI_MAX_RETRIES", json_cfg, dotenv_cfg, 2), default=2)),
-        search_api_url=str(_pick("MMIS_SEARCH_API_URL", json_cfg, dotenv_cfg, "")).strip(),
+        search_api_url=str(
+            _pick("MMIS_SEARCH_API_URL", json_cfg, dotenv_cfg, "http://127.0.0.1:8080/search?format=json")
+        ).strip(),
+        search_provider=str(_pick("MMIS_SEARCH_PROVIDER", json_cfg, dotenv_cfg, "searxng")).strip().lower(),
+        search_strict_endpoint=_to_bool(_pick("MMIS_SEARCH_STRICT_ENDPOINT", json_cfg, dotenv_cfg, True)),
+        search_timeout_sec=max(3.0, float(_pick("MMIS_SEARCH_TIMEOUT_SEC", json_cfg, dotenv_cfg, 12.0))),
+        web_fetch_timeout_sec=max(3, _to_int(_pick("MMIS_WEB_FETCH_TIMEOUT_SEC", json_cfg, dotenv_cfg, 12), default=12)),
+        web_fetch_retries=max(0, _to_int(_pick("MMIS_WEB_FETCH_RETRIES", json_cfg, dotenv_cfg, 1), default=1)),
+        web_clean_max_chars=max(
+            256,
+            _to_int(_pick("MMIS_WEB_CLEAN_MAX_CHARS", json_cfg, dotenv_cfg, 4000), default=4000),
+        ),
+        web_clean_min_chars=max(
+            40,
+            _to_int(_pick("MMIS_WEB_CLEAN_MIN_CHARS", json_cfg, dotenv_cfg, 200), default=200),
+        ),
+        web_clean_language_hint=str(_pick("MMIS_WEB_CLEAN_LANGUAGE_HINT", json_cfg, dotenv_cfg, "")).strip(),
         voice_tts_voice=str(_pick("MMIS_VOICE_TTS_VOICE", json_cfg, dotenv_cfg, "ru-RU-DmitryNeural")).strip(),
         voice_tts_rate=str(_pick("MMIS_VOICE_TTS_RATE", json_cfg, dotenv_cfg, "+0%")).strip(),
         voice_tts_volume=str(_pick("MMIS_VOICE_TTS_VOLUME", json_cfg, dotenv_cfg, "+0%")).strip(),

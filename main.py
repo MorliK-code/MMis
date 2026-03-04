@@ -111,8 +111,27 @@ def build_container(settings: AppSettings) -> AppContainer:
     voice = VoiceManager() if settings.voice_enabled else None
     screen = ScreenAnalyzer() if settings.screen_enabled else None
     automation = _build_automation(settings=settings, event_store=event_store) if settings.automation_enabled else None
-    internet_search = SearchClient(endpoint=settings.search_api_url) if settings.internet_enabled else None
-    internet_scraper = WebScraper() if settings.internet_enabled else None
+    internet_search = (
+        SearchClient(
+            endpoint=settings.search_api_url,
+            provider=settings.search_provider,
+            strict_endpoint=bool(settings.search_strict_endpoint),
+            timeout_s=float(settings.search_timeout_sec),
+        )
+        if settings.internet_enabled
+        else None
+    )
+    internet_scraper = (
+        WebScraper(
+            timeout_s=int(settings.web_fetch_timeout_sec),
+            retries=int(settings.web_fetch_retries),
+            clean_max_chars=int(settings.web_clean_max_chars),
+            clean_min_chars=int(settings.web_clean_min_chars),
+            clean_language_hint=str(settings.web_clean_language_hint or ""),
+        )
+        if settings.internet_enabled
+        else None
+    )
 
     return AppContainer(
         settings=settings,

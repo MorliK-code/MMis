@@ -92,7 +92,7 @@ class ShortMemoryV2Tests(unittest.TestCase):
             self.assertIn("topics:", summary)
             self.assertTrue(list(summary_meta.get("topics") or []))
 
-    def test_persona_snapshot_is_saved_every_n_turns(self) -> None:
+    def test_persona_snapshot_event_is_not_saved(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             sm = ShortMemory(
@@ -147,9 +147,8 @@ class ShortMemoryV2Tests(unittest.TestCase):
                 }
             )
 
-            snapshots = [x for x in sm.tail(10) if str(x.get("type") or "") == "persona_snapshot"]
-            self.assertEqual(len(snapshots), 1)
-            self.assertIn("mood=serious", str(snapshots[0].get("text") or ""))
+            snapshots = [x for x in sm.tail(20) if str(x.get("type") or "").strip().lower() == "persona_snapshot"]
+            self.assertEqual(len(snapshots), 0)
 
 
 if __name__ == "__main__":

@@ -38,18 +38,30 @@ class CacheUsageTests(unittest.TestCase):
                 raw={"provider": "unit"},
             )
 
-            c1 = SearchClient(cache_ttl_s=600, cache_dir=root, use_disk_cache=True)
-            c1._search_duckduckgo = lambda _q: [expected]  # type: ignore[method-assign]
+            c1 = SearchClient(
+                endpoint="http://searxng:8080/search?format=json",
+                strict_endpoint=True,
+                cache_ttl_s=600,
+                cache_dir=root,
+                use_disk_cache=True,
+            )
+            c1._search_endpoint = lambda _q: [expected]  # type: ignore[method-assign]
             first = c1.search(q, k=1)
             self.assertEqual(len(first), 1)
             self.assertEqual(first[0].url, expected.url)
 
-            c2 = SearchClient(cache_ttl_s=600, cache_dir=root, use_disk_cache=True)
+            c2 = SearchClient(
+                endpoint="http://searxng:8080/search?format=json",
+                strict_endpoint=True,
+                cache_ttl_s=600,
+                cache_dir=root,
+                use_disk_cache=True,
+            )
 
-            def _should_not_call(_q):
+            def _should_not_call(*_args, **_kwargs):
                 raise AssertionError("network call should not happen on cache hit")
 
-            c2._search_duckduckgo = _should_not_call  # type: ignore[method-assign]
+            c2._search_endpoint = _should_not_call  # type: ignore[method-assign]
             second = c2.search(q, k=1)
             self.assertEqual(len(second), 1)
             self.assertEqual(second[0].url, expected.url)

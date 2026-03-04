@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from metadata.taxonomy import MODES, normalize_lang
+from core.mode_selector import normalize_mode_name
+from metadata.taxonomy import normalize_lang
 from modules.character.feedback_detector import detect_feedback
 
 
@@ -123,12 +124,4 @@ def _canonicalize_lang_tag(*, tags: list[str], lang: str) -> list[str]:
 
 def _resolve_mode(*, meta: dict[str, Any]) -> str:
     source = str(meta.get("mode") or meta.get("active_mode") or "friend_chat").strip().lower()
-    if source in set(str(x).strip().lower() for x in MODES):
-        return source
-    mapped = {
-        "chat": "friend_chat",
-        "task": "helper",
-        "coding": "engineer",
-        "debug": "debugger",
-    }.get(source, "")
-    return mapped or "friend_chat"
+    return normalize_mode_name(source, allow_custom=True)

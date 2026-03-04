@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "character_id": "anita",
+  "id": "anita",
+  "name": "Анита",
+  "default_mood": "neutral",
+  "default_mode": "spicy_chat",
+  "llm_profile": "ASYA",
+  "locks": {
+    "feminine": true,
+    "informal_you": true
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "character_id": "harry",
+  "id": "harry",
+  "name": "Harry",
+  "default_mood": "neutral",
+  "default_mode": "helper",
+  "llm_profile": "BALANCED",
+  "locks": {
+    "feminine": true,
+    "informal_you": true
+  }
+}

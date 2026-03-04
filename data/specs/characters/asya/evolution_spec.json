@@ -78,6 +78,16 @@
         { "trait": "sarcasm", "op": "add", "value": -0.03 },
         { "trait": "teasing", "op": "add", "value": -0.03 }
       ]
+    },
+    
+    {
+      "when": { "mode": ["spicy_chat"] },
+      "apply": [
+        { "trait": "warmth", "op": "add", "value": 0.1 },
+        { "trait": "sarcasm", "op": "add", "value": 0.05 },
+        { "trait": "playfulness", "op": "set", "value": 0.75 },
+        { "trait": "strictness", "op": "add", "value": -0.2 }
+      ]
     }
   ],
 

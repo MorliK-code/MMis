@@ -34,7 +34,9 @@
     "emotion",
     "topics",
     "tags",
-    "thinking_tokens"
+    "thinking_tokens",
+    "answer_tokens",
+    "total_tokens"
   ],
   "summary": {
     "enabled": true,

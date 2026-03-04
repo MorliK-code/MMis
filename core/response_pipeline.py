@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.spec_registry import load_character_spec, load_spec
+from core.spec_registry import invalidate_spec_cache, load_character_spec, load_spec
 from config.settings import load_config
 from modules.character.dialog_policies import (
     compute_dialog_flags as dialog_compute_dialog_flags,
@@ -21,12 +21,12 @@ from modules.character.dialog_policies import (
 )
 from core.character_runtime import CharacterRuntime
 from core.character_runtime import PromptPack
-from core.mode_selector import ModeSelector, normalize_mode_name
+from core.mode_selector import ModeSelector, list_runtime_modes, normalize_mode_name
 from llm.provider_base import LLMProviderBase, LLMRequest, Message, ToolCall, ToolSpec
 from llm.tokenizer import estimate_tokens
-from metadata.taxonomy import MODES
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
+from modules.studio.studio_generator import StudioGenerator
 from prompt_engine import PromptEngine
 from utils.datetime_local import now_local_ts, parse_time_to_epoch
 from utils.logger import get_logger, log_json
@@ -36,6 +36,9 @@ from core.web_rag_stage import WebRetrieveStage
 PROFILE_FAST = "FAST"
 PROFILE_BALANCED = "BALANCED"
 PROFILE_QUALITY = "QUALITY"
+PROFILE_ECONOM = "ECONOM"
+PROFILE_ASYA = "ASYA"
+PROFILE_AUTONOMOUS = "AUTONOMOUS"
 WEB_TRACE_LOGGER = get_logger("web.trace")
 
 
@@ -228,7 +231,8 @@ class ModeSelectStage(PipelineStage):
                 ctx.meta.get("active_mode"),
                 ctx.state.get("mode"),
                 "friend_chat",
-            )
+            ),
+            allow_custom=True,
         )
         mode_lock = _to_bool(
             _pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False),
@@ -243,7 +247,7 @@ class ModeSelectStage(PipelineStage):
             tags=tags,
         )
 
-        target = normalize_mode_name(decision.mode)
+        target = normalize_mode_name(decision.mode, allow_custom=True)
         should_switch = self._selector.should_switch(current_mode=active_mode, decision=decision)
         if should_switch:
             ctx.memory_ops.append(
@@ -282,7 +286,7 @@ class PlanStage(PipelineStage):
     name = "plan"
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        mode = normalize_mode_name(_pick(ctx.state.get("active_mode"), ctx.state.get("mode"), "friend_chat"))
+        mode = normalize_mode_name(_pick(ctx.state.get("active_mode"), ctx.state.get("mode"), "friend_chat"), allow_custom=True)
         goal = _pick(
             ctx.state.get("active_goal"),
             ctx.state.get("current_task"),
@@ -487,7 +491,9 @@ class PromptBuildStage(PipelineStage):
             ctx.logs.append("stage=prompt_build skipped(route)")
             return ctx
         prompt_state = dict(ctx.state or {})
-        prompt_state.setdefault("context_tags", dict(ctx.tags))
+        merged_tags = _as_dict(prompt_state.get("context_tags"))
+        merged_tags.update(dict(ctx.tags or {}))
+        prompt_state["context_tags"] = merged_tags
         if ctx.plan:
             prompt_state["plan"] = ctx.plan
         if ctx.memory_context:
@@ -501,10 +507,32 @@ class PromptBuildStage(PipelineStage):
             if not isinstance(rules, list):
                 rules = [] if rules is None else [rules]
             rules.append(
-                "Если включён thinking mode — пиши внутренние рассуждения ТОЛЬКО внутри тегов <think>...</think> "
-                "и финальный ответ снаружи. Не упоминай эти теги пользователю."
+                "Р•СЃР»Рё РІРєР»СЋС‡С‘РЅ thinking mode вЂ” РїРёС€Рё РІРЅСѓС‚СЂРµРЅРЅРёРµ СЂР°СЃСЃСѓР¶РґРµРЅРёСЏ РўРћР›Р¬РљРћ РІРЅСѓС‚СЂРё С‚РµРіРѕРІ <think>...</think> "
+                "Рё С„РёРЅР°Р»СЊРЅС‹Р№ РѕС‚РІРµС‚ СЃРЅР°СЂСѓР¶Рё. РќРµ СѓРїРѕРјРёРЅР°Р№ СЌС‚Рё С‚РµРіРё РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ."
             )
             ctx.policies["rules"] = rules
+
+        web_intent = str(ctx.tags.get("web_query_intent") or "").strip().lower()
+        web_used = str(ctx.tags.get("web_used") or "").strip().lower() == "true"
+        web_fresh_missing = str(ctx.tags.get("web_fresh_missing") or "").strip().lower() == "true"
+        if web_fresh_missing:
+            _append_policy_rule(
+                ctx.policies,
+                "Time-sensitive data could not be confirmed from live web sources. Do not fabricate current numbers; explicitly state that verification failed and ask to retry.",
+            )
+            ctx.tags["web_guardrail"] = "fresh_missing_no_fabrication"
+            tags_map = _as_dict(prompt_state.get("context_tags"))
+            tags_map["web_guardrail"] = "fresh_missing_no_fabrication"
+            prompt_state["context_tags"] = tags_map
+        elif web_used and web_intent in {"fx_rate", "weather"}:
+            _append_policy_rule(
+                ctx.policies,
+                "When answering FX/weather requests, rely on fetched web evidence, include source domain and timestamp, and report a range if sources disagree.",
+            )
+            ctx.tags["web_guardrail"] = "cite_source_and_time"
+            tags_map = _as_dict(prompt_state.get("context_tags"))
+            tags_map["web_guardrail"] = "cite_source_and_time"
+            prompt_state["context_tags"] = tags_map
         ctx.prompt_pack = self.character_runtime.build(
             state=prompt_state,
             user_msg=ctx.clean_user_msg,
@@ -549,10 +577,97 @@ class GenerateStage(PipelineStage):
         self,
         provider: LLMProviderBase,
         character_runtime: CharacterRuntime,
+        studio_generator: StudioGenerator | None = None,
     ):
         self.provider = provider
         self.character_runtime = character_runtime
         self.character_engine = character_runtime
+        self.studio_generator = studio_generator or StudioGenerator()
+        self._studio_sessions: dict[str, dict[str, Any]] = {}
+
+    def _studio_key(self, ctx: PipelineContext) -> str:
+        return str(
+            _pick(
+                ctx.meta.get("conversation_id"),
+                ctx.state.get("conversation_id"),
+                "default",
+            )
+        ).strip().lower() or "default"
+
+    def _studio_state(self, ctx: PipelineContext) -> dict[str, Any]:
+        local = dict(ctx.state.get(StudioGenerator.KEY) or {})
+        if local:
+            return local
+        return dict(self._studio_sessions.get(self._studio_key(ctx), {}) or {})
+
+    def _save_studio_state(self, ctx: PipelineContext, row: dict[str, Any]) -> None:
+        payload = dict(row or {})
+        ctx.state[StudioGenerator.KEY] = payload
+        ctx.structured_output[StudioGenerator.KEY] = payload
+        key = self._studio_key(ctx)
+        if self.studio_generator.is_active({StudioGenerator.KEY: payload}):
+            self._studio_sessions[key] = payload
+        else:
+            self._studio_sessions.pop(key, None)
+
+    def is_studio_active(self, *, conversation_id: str = "", state: dict[str, Any] | None = None) -> bool:
+        state_map = _as_dict(state)
+        local = _as_dict(state_map.get(StudioGenerator.KEY))
+        if self.studio_generator.is_active({StudioGenerator.KEY: local}):
+            return True
+        key = str(_pick(conversation_id, state_map.get("conversation_id"), "default")).strip().lower() or "default"
+        cached = _as_dict(self._studio_sessions.get(key))
+        return bool(self.studio_generator.is_active({StudioGenerator.KEY: cached}))
+
+    @staticmethod
+    def _scopes_map(ctx: PipelineContext) -> dict[str, Any]:
+        row = dict(ctx.state.get("command_scopes") or {})
+        out: dict[str, Any] = {}
+        for key in ("chat", "studio"):
+            out[key] = dict(row.get(key) or {})
+        return out
+
+    @staticmethod
+    def _scope_get(ctx: PipelineContext, scope: str, key: str, default=None):
+        scopes = dict(ctx.state.get("command_scopes") or {})
+        scoped = dict(scopes.get(str(scope or "").strip().lower()) or {})
+        return scoped.get(str(key or "").strip(), default)
+
+    def _scope_set(self, ctx: PipelineContext, scope: str, **updates) -> None:
+        scope_key = str(scope or "").strip().lower() or "chat"
+        scopes = self._scopes_map(ctx)
+        target = dict(scopes.get(scope_key) or {})
+        target.update({str(k): v for k, v in dict(updates or {}).items() if str(k).strip()})
+        scopes[scope_key] = target
+        ctx.state["command_scopes"] = scopes
+        ctx.structured_output["command_scopes"] = dict(scopes)
+        ctx.memory_ops.append({"op": "state_scoped_settings", "value": dict(scopes)})
+
+    @staticmethod
+    def _apply_studio_telemetry(ctx: PipelineContext, studio_state: dict[str, Any]) -> None:
+        root = _as_dict(studio_state)
+        llm = _as_dict(root.get("last_llm"))
+        thinking = str(llm.get("thinking") or "").strip()
+        if thinking:
+            ctx.thinking = thinking
+        prompt_eval = _to_int(llm.get("prompt_eval_count"), None)
+        eval_count = _to_int(llm.get("eval_count"), None)
+        total_tokens = _to_int(llm.get("total_tokens"), None)
+        if prompt_eval is None and eval_count is None and total_tokens is None:
+            return
+        stats = _as_dict(ctx.stats)
+        if prompt_eval is not None:
+            stats["prompt_eval_count"] = int(prompt_eval)
+        if eval_count is not None:
+            stats["eval_count"] = int(eval_count)
+        if total_tokens is not None:
+            stats["total_tokens"] = int(total_tokens)
+        else:
+            stats["total_tokens"] = int((stats.get("prompt_eval_count") or 0) + (stats.get("eval_count") or 0))
+        model_name = str(llm.get("model") or "").strip()
+        if model_name and not str(stats.get("served_model") or "").strip():
+            stats["served_model"] = model_name
+        ctx.stats = stats
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.route == "system_event":
@@ -571,6 +686,46 @@ class GenerateStage(PipelineStage):
                 return ctx
             ctx.text = "Unknown command. Use /help"
             ctx.logs.append("stage=generate command=unknown")
+            return ctx
+
+        # Unified global studio generator (specs + character branches) in chat turns.
+        studio_state = self._studio_state(ctx)
+        if ctx.route == "chat" and self.studio_generator.is_active({StudioGenerator.KEY: studio_state}):
+            reply = self.studio_generator.ingest(
+                {StudioGenerator.KEY: studio_state},
+                ctx.clean_user_msg or ctx.user_msg,
+                provider=self.provider,
+                model=_pick(ctx.meta.get("model"), ctx.state.get("model"), ctx.policies.get("model")),
+                command_alias="",
+            )
+            self._save_studio_state(ctx, dict(reply.state or {}))
+            self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+            ctx.text = str(reply.text or "")
+            if reply.memory_ops:
+                ctx.memory_ops.extend(list(reply.memory_ops or []))
+            if reply.payload:
+                ctx.structured_output["studio"] = dict(reply.payload)
+            ctx.logs.append("stage=generate route=chat studio_generator=1")
+            return ctx
+
+        if ctx.route == "chat" and bool(ctx.meta.get("web_guardrail_local_reply")):
+            intent = str(ctx.meta.get("web_query_intent") or ctx.tags.get("web_query_intent") or "").strip().lower()
+            if intent == "fx_rate":
+                ctx.text = (
+                    "Не смогла подтвердить актуальный курс USD/UAH из веб-источников прямо сейчас. "
+                    "Проверь ещё раз через /web курс доллара в Украине."
+                )
+            elif intent == "weather":
+                ctx.text = (
+                    "Не смогла подтвердить актуальную погоду из веб-источников прямо сейчас. "
+                    "Проверь ещё раз через /web погода в Киеве."
+                )
+            else:
+                ctx.text = (
+                    "Не смогла подтвердить актуальные данные из веб-источников прямо сейчас. "
+                    "Повтори запрос через /web."
+                )
+            ctx.logs.append("stage=generate route=chat web_guardrail=local_reply")
             return ctx
 
         req = self._build_request(ctx)
@@ -623,7 +778,7 @@ class GenerateStage(PipelineStage):
 
         try:
             for chunk in stream(req):
-                # 1) thinking из провайдера (Ollama отдаёт thinking_delta отдельно)
+                # 1) thinking РёР· РїСЂРѕРІР°Р№РґРµСЂР° (Ollama РѕС‚РґР°С‘С‚ thinking_delta РѕС‚РґРµР»СЊРЅРѕ)
                 thinking_delta = str(getattr(chunk, "thinking_delta", "") or "")
                 if thinking_delta:
                     thinking_parts.append(thinking_delta)
@@ -633,10 +788,10 @@ class GenerateStage(PipelineStage):
                         except Exception:
                             pass
 
-                # 2) обычный текст
+                # 2) РѕР±С‹С‡РЅС‹Р№ С‚РµРєСЃС‚
                 text_delta = str(getattr(chunk, "text_delta", "") or "")
                 if text_delta:
-                    # на всякий случай также поддерживаем <think>...</think> в самом тексте
+                    # РЅР° РІСЃСЏРєРёР№ СЃР»СѓС‡Р°Р№ С‚Р°РєР¶Рµ РїРѕРґРґРµСЂР¶РёРІР°РµРј <think>...</think> РІ СЃР°РјРѕРј С‚РµРєСЃС‚Рµ
                     visible, thinking_from_text = parser.feed(text_delta)
                     if thinking_from_text:
                         thinking_parts.append(thinking_from_text)
@@ -690,6 +845,157 @@ class GenerateStage(PipelineStage):
 
     def _handle_internal_command(self, ctx: PipelineContext) -> bool:
         cmd = str(ctx.clean_user_msg or "").strip().lower()
+        if cmd.startswith("/studio"):
+            ctx.meta["force_output_format"] = True
+        studio_state = self._studio_state(ctx)
+        studio_active = self.studio_generator.is_active({StudioGenerator.KEY: studio_state})
+        scope = "studio" if studio_active else "chat"
+
+        if cmd.startswith("/specs"):
+            ctx.text = "Команда удалена. Используй /studio ..."
+            ctx.logs.append("stage=generate command=specs:removed")
+            return True
+
+        if cmd.startswith("/studio mode"):
+            ctx.text = "Команда удалена. Используй /studio ..."
+            ctx.logs.append("stage=generate command=studio:mode_removed")
+            return True
+
+        model = _pick(ctx.meta.get("model"), ctx.state.get("model"), ctx.policies.get("model"))
+
+        if cmd in {"/apply", "/cancel"} and studio_active:
+            if cmd == "/cancel":
+                reply = self.studio_generator.cancel({StudioGenerator.KEY: studio_state}, command_alias="studio")
+                self._save_studio_state(ctx, dict(reply.state or {}))
+                self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+                ctx.text = str(reply.text or "")
+                if reply.memory_ops:
+                    ctx.memory_ops.extend(list(reply.memory_ops or []))
+                if reply.payload:
+                    ctx.structured_output["studio"] = dict(reply.payload)
+                ctx.logs.append("stage=generate command=studio:cancel_local")
+                return True
+            reply = self.studio_generator.apply(
+                {StudioGenerator.KEY: studio_state},
+                provider=self.provider,
+                model=model,
+                command_alias="studio",
+            )
+            self._save_studio_state(ctx, dict(reply.state or {}))
+            self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+            if bool(getattr(reply, "done", False)) and not str(getattr(reply, "error", "") or "").strip():
+                invalidate_spec_cache()
+            ctx.text = str(reply.text or "")
+            if reply.memory_ops:
+                ctx.memory_ops.extend(list(reply.memory_ops or []))
+            if reply.payload:
+                ctx.structured_output["studio"] = dict(reply.payload)
+            ctx.logs.append("stage=generate command=studio:apply_local")
+            return True
+
+        if cmd.startswith("/studio"):
+            studio_row = self._studio_state(ctx)
+
+            if cmd in {"/studio", "/studio help", "/studio status"}:
+                if cmd == "/studio" and not self.studio_generator.is_active({StudioGenerator.KEY: studio_row}):
+                    reply = self.studio_generator.start(
+                        {StudioGenerator.KEY: studio_row},
+                        seed="",
+                        provider=self.provider,
+                        model=model,
+                        command_alias="studio",
+                    )
+                else:
+                    reply = self.studio_generator.status(
+                        {StudioGenerator.KEY: studio_row},
+                        provider=self.provider,
+                        model=model,
+                        command_alias="studio",
+                    )
+                self._save_studio_state(ctx, dict(reply.state or {}))
+                self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+                ctx.text = str(reply.text or "")
+                if reply.memory_ops:
+                    ctx.memory_ops.extend(list(reply.memory_ops or []))
+                if reply.payload:
+                    ctx.structured_output["studio"] = dict(reply.payload)
+                ctx.logs.append("stage=generate command=studio:status")
+                return True
+
+            if cmd.startswith("/studio start"):
+                seed = ""
+                parts = str(ctx.clean_user_msg or "").strip().split(" ", 2)
+                if len(parts) >= 3:
+                    seed = str(parts[2] or "").strip()
+                reply = self.studio_generator.start(
+                    {StudioGenerator.KEY: studio_row},
+                    seed=seed,
+                    provider=self.provider,
+                    model=model,
+                    command_alias="studio",
+                )
+                self._save_studio_state(ctx, dict(reply.state or {}))
+                self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+                ctx.state["quality_profile"] = PROFILE_AUTONOMOUS
+                ctx.text = str(reply.text or "")
+                ctx.logs.append("stage=generate command=studio:start")
+                return True
+
+            if cmd == "/studio cancel":
+                reply = self.studio_generator.cancel({StudioGenerator.KEY: studio_row}, command_alias="studio")
+                self._save_studio_state(ctx, dict(reply.state or {}))
+                self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+                ctx.text = str(reply.text or "")
+                if reply.memory_ops:
+                    ctx.memory_ops.extend(list(reply.memory_ops or []))
+                if reply.payload:
+                    ctx.structured_output["studio"] = dict(reply.payload)
+                # local short-circuit: command is handled inside studio and never dispatched to main generation request
+                ctx.logs.append("stage=generate command=studio:cancel_local")
+                return True
+
+            if cmd == "/studio apply":
+                reply = self.studio_generator.apply(
+                    {StudioGenerator.KEY: studio_row},
+                    provider=self.provider,
+                    model=model,
+                    command_alias="studio",
+                )
+                self._save_studio_state(ctx, dict(reply.state or {}))
+                self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+                if bool(getattr(reply, "done", False)) and not str(getattr(reply, "error", "") or "").strip():
+                    invalidate_spec_cache()
+                ctx.text = str(reply.text or "")
+                if reply.memory_ops:
+                    ctx.memory_ops.extend(list(reply.memory_ops or []))
+                if reply.payload:
+                    ctx.structured_output["studio"] = dict(reply.payload)
+                # local short-circuit: command is handled inside studio and never dispatched to main generation request
+                ctx.logs.append("stage=generate command=studio:apply_local")
+                return True
+
+            if cmd.startswith("/studio answer "):
+                answer = str(ctx.clean_user_msg or "").split(" ", 2)[2] if len(str(ctx.clean_user_msg or "").split(" ", 2)) >= 3 else ""
+                reply = self.studio_generator.ingest(
+                    {StudioGenerator.KEY: studio_row},
+                    answer,
+                    provider=self.provider,
+                    model=model,
+                    command_alias="studio",
+                )
+                self._save_studio_state(ctx, dict(reply.state or {}))
+                self._apply_studio_telemetry(ctx, dict(reply.state or {}))
+                ctx.text = str(reply.text or "")
+                if reply.memory_ops:
+                    ctx.memory_ops.extend(list(reply.memory_ops or []))
+                if reply.payload:
+                    ctx.structured_output["studio"] = dict(reply.payload)
+                ctx.logs.append("stage=generate command=studio:answer")
+                return True
+
+            ctx.text = "Неизвестная команда studio. Используй /studio status|start|apply|cancel"
+            ctx.logs.append("stage=generate command=studio:unknown")
+            return True
 
         if cmd in {"/characters", "/character list"}:
             ids = self.character_engine.list_ids()
@@ -719,6 +1025,14 @@ class GenerateStage(PipelineStage):
             return True
         
         if cmd.startswith("/character "):
+            parts = [x for x in str(ctx.clean_user_msg or "").strip().split(" ") if x]
+            if len(parts) >= 2 and str(parts[1]).strip().lower() in {"delete", "remove", "del", "rm"}:
+                if len(parts) < 3:
+                    ctx.text = "Usage: /character delete <character_id>"
+                    ctx.logs.append("stage=generate command=character:delete:usage")
+                    return True
+                return self._handle_character_delete_command(ctx, str(parts[2]).strip().lower())
+
             target = cmd.split(" ", 1)[1].strip().lower()
             if not target:
                 return False
@@ -786,36 +1100,56 @@ class GenerateStage(PipelineStage):
             return self._handle_trait_command(ctx, cmd)
         
         if cmd == "/think":
-            ctx.text = "Thinking mode enabled."
-            ctx.memory_ops.append({"op": "state_think", "value": True})
+            if scope == "chat":
+                ctx.text = "Thinking mode enabled."
+                ctx.memory_ops.append({"op": "state_think", "value": True})
+            else:
+                self._scope_set(ctx, scope, think=True)
+                ctx.text = f"Thinking mode enabled for scope: {scope}."
             ctx.ui_actions.append({"type": "toggle_think", "enabled": True})
             ctx.logs.append("stage=generate command=think")
             return True
     
         if cmd == "/nothink":
-            ctx.text = "Thinking mode disabled."
-            ctx.memory_ops.append({"op": "state_think", "value": False})
+            if scope == "chat":
+                ctx.text = "Thinking mode disabled."
+                ctx.memory_ops.append({"op": "state_think", "value": False})
+            else:
+                self._scope_set(ctx, scope, think=False)
+                ctx.text = f"Thinking mode disabled for scope: {scope}."
             ctx.ui_actions.append({"type": "toggle_think", "enabled": False})
             ctx.logs.append("stage=generate command=nothink")
             return True
         
         if cmd == "/web":
-            ctx.text = "Web mode enabled."
-            ctx.memory_ops.append({"op": "state_web_mode", "value": "on"})
+            if scope == "chat":
+                ctx.text = "Web mode enabled."
+                ctx.memory_ops.append({"op": "state_web_mode", "value": "on"})
+            else:
+                self._scope_set(ctx, scope, web_mode="on")
+                ctx.text = f"Web mode enabled for scope: {scope}."
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "on"})
             ctx.logs.append("stage=generate command=web mode=on")
             return True
         
         if cmd == "/no-web":
-            ctx.text = "Web mode disabled."
-            ctx.memory_ops.append({"op": "state_web_mode", "value": "off"})
+            if scope == "chat":
+                ctx.text = "Web mode disabled."
+                ctx.memory_ops.append({"op": "state_web_mode", "value": "off"})
+            else:
+                self._scope_set(ctx, scope, web_mode="off")
+                ctx.text = f"Web mode disabled for scope: {scope}."
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "off"})
             ctx.logs.append("stage=generate command=no-web mode=off")
             return True
 
         if cmd in {"/web-auto", "/web_auto", "/auto-web"}:
-            ctx.text = "Web mode set to auto."
-            ctx.memory_ops.append({"op": "state_web_mode", "value": "auto"})
+            if scope == "chat":
+                ctx.text = "Web mode set to auto."
+                ctx.memory_ops.append({"op": "state_web_mode", "value": "auto"})
+            else:
+                self._scope_set(ctx, scope, web_mode="auto")
+                ctx.text = f"Web mode set to auto for scope: {scope}."
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "auto"})
             ctx.logs.append("stage=generate command=web-auto mode=auto")
             return True
@@ -828,7 +1162,8 @@ class GenerateStage(PipelineStage):
                     ctx.meta.get("active_mode"),
                     ctx.state.get("mode"),
                     "friend_chat",
-                )
+                ),
+                allow_custom=True,
             )
             strict_modes = {
                 str(x).strip().lower()
@@ -836,7 +1171,9 @@ class GenerateStage(PipelineStage):
                 if str(x).strip()
             }
             strict_default = mode in strict_modes
-            of = _coerce_output_format_state(_pick_value(ctx.state.get("output_format"), ctx.meta.get("output_format"), {}))
+            scoped_of = self._scope_get(ctx, scope, "output_format", None) if scope != "chat" else None
+            base_of = scoped_of if isinstance(scoped_of, dict) else _pick_value(ctx.state.get("output_format"), ctx.meta.get("output_format"), {})
+            of = _coerce_output_format_state(base_of)
             manual_params = of.get("show_parameters")
             manual_summary = of.get("show_summary")
             eff_params = bool(manual_params) if isinstance(manual_params, bool) else bool(strict_default)
@@ -885,7 +1222,12 @@ class GenerateStage(PipelineStage):
                 value = {"show_parameters": bool(enabled)}
             else:
                 value = {"show_summary": bool(enabled)}
-            ctx.memory_ops.append({"op": "state_output_format", "value": value})
+            if scope == "chat":
+                ctx.memory_ops.append({"op": "state_output_format", "value": value})
+            else:
+                current = _coerce_output_format_state(self._scope_get(ctx, scope, "output_format", {}))
+                current.update(dict(value))
+                self._scope_set(ctx, scope, output_format=current)
             ctx.text = f"Output {field} {'enabled' if enabled else 'disabled'}."
             ctx.logs.append(f"stage=generate command=output:{field}:{'on' if enabled else 'off'}")
             return True
@@ -933,15 +1275,23 @@ class GenerateStage(PipelineStage):
             return True
         
         if cmd in {"/mode", "/mode current"}:
-            current_mode = normalize_mode_name(
-                _pick(
-                    ctx.state.get("active_mode"),
-                    ctx.meta.get("active_mode"),
-                    ctx.state.get("mode"),
-                    "friend_chat",
+            if scope == "chat":
+                current_mode = normalize_mode_name(
+                    _pick(
+                        ctx.state.get("active_mode"),
+                        ctx.meta.get("active_mode"),
+                        ctx.state.get("mode"),
+                        "friend_chat",
+                    ),
+                    allow_custom=True,
                 )
-            )
-            locked = bool(_pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False))
+                locked = bool(_pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False))
+            else:
+                current_mode = normalize_mode_name(
+                    str(self._scope_get(ctx, scope, "active_mode", "friend_chat") or "friend_chat"),
+                    allow_custom=True,
+                )
+                locked = bool(self._scope_get(ctx, scope, "mode_lock", False))
             ctx.text = f"Mode: {current_mode} ({'locked' if locked else 'auto'})"
             ctx.logs.append("stage=generate command=mode:show")
             return True
@@ -984,7 +1334,8 @@ class GenerateStage(PipelineStage):
                     ctx.meta.get("active_mode"),
                     ctx.state.get("mode"),
                     "friend_chat",
-                )
+                ),
+                allow_custom=True,
             )
             if not modes:
                 ctx.text = f"No modes configured for '{target_character}'."
@@ -1004,24 +1355,37 @@ class GenerateStage(PipelineStage):
             if target_raw:
                 if target_raw in {"off", "auto"}:
                     ctx.text = "Mode auto enabled (lock off)."
-                    ctx.memory_ops.append({"op": "state_mode_lock", "value": False})
+                    if scope == "chat":
+                        ctx.memory_ops.append({"op": "state_mode_lock", "value": False})
+                    else:
+                        self._scope_set(ctx, scope, mode_lock=False)
                     ctx.logs.append("stage=generate command=mode:auto")
                     return True
-                target = normalize_mode_name(target_raw)
-                if target_raw not in set(str(x).strip().lower() for x in MODES) and target != target_raw:
-                    allowed = ", ".join(sorted(str(x) for x in MODES))
+                safe_raw = "".join(ch for ch in str(target_raw or "") if ch.isalnum() or ch in {"_", "-", " "}).strip()
+                if not safe_raw:
+                    allowed = ", ".join(list_runtime_modes())
                     ctx.text = f"Unknown mode '{target_raw}'. Available: {allowed}"
-                    ctx.logs.append(f"stage=generate command=mode:unknown:{target_raw}")
+                    ctx.logs.append(f"stage=generate command=mode:unknown_token:{target_raw}")
                     return True
-                ctx.text = f"Mode switched to: {target}"
-                ctx.memory_ops.append(
-                    {
-                        "op": "state_mode",
-                        "value": target,
-                        "reason": "manual_mode_command",
-                        "confidence": 1.0,
-                    }
-                )
+                target = normalize_mode_name(target_raw, allow_custom=True)
+                if not str(target or "").strip():
+                    allowed = ", ".join(list_runtime_modes())
+                    ctx.text = f"Unknown mode '{target_raw}'. Available: {allowed}"
+                    ctx.logs.append(f"stage=generate command=mode:unknown_empty:{target_raw}")
+                    return True
+                ctx.text = f"Mode switched to: {target} (lock on)."
+                if scope == "chat":
+                    ctx.memory_ops.append(
+                        {
+                            "op": "state_mode",
+                            "value": target,
+                            "reason": "manual_mode_command",
+                            "confidence": 1.0,
+                        }
+                    )
+                    ctx.memory_ops.append({"op": "state_mode_lock", "value": True})
+                else:
+                    self._scope_set(ctx, scope, active_mode=target, mode_lock=True)
                 ctx.logs.append(f"stage=generate command=mode:{target}")
                 return True
 
@@ -1033,12 +1397,18 @@ class GenerateStage(PipelineStage):
                 ctx.logs.append("stage=generate command=mode_lock:usage")
                 return True
             ctx.text = f"Mode lock {'enabled' if enabled else 'disabled'}."
-            ctx.memory_ops.append({"op": "state_mode_lock", "value": bool(enabled)})
+            if scope == "chat":
+                ctx.memory_ops.append({"op": "state_mode_lock", "value": bool(enabled)})
+            else:
+                self._scope_set(ctx, scope, mode_lock=bool(enabled))
             ctx.logs.append(f"stage=generate command=mode_lock:{'on' if enabled else 'off'}")
             return True
 
         if cmd in {"/mode_lock", "/mode_lock status"}:
-            locked = bool(_pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False))
+            if scope == "chat":
+                locked = bool(_pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False))
+            else:
+                locked = bool(self._scope_get(ctx, scope, "mode_lock", False))
             ctx.text = f"Mode lock: {'on' if locked else 'off'}"
             ctx.logs.append("stage=generate command=mode_lock:show")
             return True
@@ -1223,13 +1593,197 @@ class GenerateStage(PipelineStage):
         ctx.text = "Usage: /trait list | /trait set <name> <value> | /trait remove <name>"
         return True
 
+    def _handle_character_delete_command(self, ctx: PipelineContext, target: str) -> bool:
+        character_id = str(target or "").strip().lower()
+        if not character_id:
+            ctx.text = "Usage: /character delete <character_id>"
+            ctx.logs.append("stage=generate command=character:delete:usage")
+            return True
+
+        known = set(self.character_engine.list_ids())
+        if character_id not in known:
+            ctx.text = f"Unknown character '{character_id}'. Available: {', '.join(sorted(known))}"
+            ctx.logs.append(f"stage=generate command=character:delete:unknown:{character_id}")
+            return True
+        if character_id == "default":
+            ctx.text = "Character 'default' cannot be deleted."
+            ctx.logs.append("stage=generate command=character:delete:blocked_default")
+            return True
+        if len(known) <= 1:
+            ctx.text = "Cannot delete the last remaining character."
+            ctx.logs.append("stage=generate command=character:delete:blocked_last")
+            return True
+
+        current = str(
+            _pick(
+                ctx.state.get("active_character_id"),
+                ctx.state.get("active_personality_id"),
+            )
+        ).strip().lower()
+        if not current and hasattr(self.character_engine, "get_active_character_id"):
+            try:
+                current = str(self.character_engine.get_active_character_id(ctx.state) or "").strip().lower()
+            except Exception:
+                current = ""
+
+        switched_to = ""
+        if current == character_id:
+            fallback_candidates = [x for x in sorted(known) if x != character_id]
+            if not fallback_candidates:
+                ctx.text = "Cannot delete the last remaining character."
+                ctx.logs.append("stage=generate command=character:delete:blocked_last")
+                return True
+            switched_to = str(fallback_candidates[0]).strip().lower()
+            try:
+                try:
+                    self.character_engine.set_active_character(switched_to, locked=False, switch_ts=now_local_ts())
+                except TypeError:
+                    self.character_engine.set_active_character(switched_to)
+            except Exception:
+                # Memory ops below still keep current turn state consistent.
+                pass
+            ctx.state["active_character_id"] = switched_to
+            ctx.state["active_personality_id"] = switched_to
+            ctx.memory_ops.append(
+                {
+                    "op": "state_character",
+                    "value": switched_to,
+                    "locked": False,
+                    "ts": now_local_ts(),
+                    "reason": "character_delete_fallback",
+                }
+            )
+            ctx.memory_ops.append(
+                {
+                    "op": "state_personality",
+                    "value": switched_to,
+                    "locked": False,
+                    "ts": now_local_ts(),
+                    "reason": "character_delete_fallback",
+                }
+            )
+
+        removed = self._delete_character_data(character_id)
+        for cache_name in ("_meta_cache", "_profiles_cache"):
+            cache = getattr(self.character_engine, cache_name, None)
+            if isinstance(cache, dict):
+                cache.pop(character_id, None)
+        try:
+            storage = getattr(self.character_engine, "storage", None)
+            if storage is not None and hasattr(storage, "load_manifest") and hasattr(storage, "save_manifest"):
+                manifest = dict(storage.load_manifest() or {})
+                rows = [x for x in list(manifest.get("characters") or []) if isinstance(x, dict)]
+                rows = [x for x in rows if str(x.get("id") or "").strip().lower() != character_id]
+                manifest["characters"] = rows
+                active_id = str(manifest.get("active_character_id") or "").strip().lower()
+                if active_id == character_id:
+                    if switched_to:
+                        manifest["active_character_id"] = switched_to
+                    elif rows:
+                        manifest["active_character_id"] = str(rows[0].get("id") or "default").strip().lower() or "default"
+                    else:
+                        manifest["active_character_id"] = "default"
+                storage.save_manifest(manifest)
+            if storage is not None and hasattr(storage, "sync_manifest"):
+                storage.sync_manifest()
+            if storage is not None and hasattr(storage, "append_manifest_event"):
+                storage.append_manifest_event(
+                    {
+                        "type": "character_deleted",
+                        "character_id": character_id,
+                        "switched_to": switched_to,
+                        "removed_files": int(removed.get("removed_files", 0) or 0),
+                        "removed_dirs": int(removed.get("removed_dirs", 0) or 0),
+                        "errors": int(removed.get("errors", 0) or 0),
+                    }
+                )
+        except Exception:
+            pass
+
+        current_ids = set(self.character_engine.list_ids())
+        if character_id in current_ids:
+            ctx.text = f"Character delete failed: {character_id}"
+            ctx.logs.append(f"stage=generate command=character:delete:failed:{character_id}")
+            return True
+
+        details = f"Character deleted: {character_id}"
+        if switched_to:
+            details += f". Active character switched to: {switched_to}"
+        ctx.text = details
+        ctx.logs.append(f"stage=generate command=character:delete:{character_id}")
+        return True
+
+    def _delete_character_data(self, character_id: str) -> dict[str, int]:
+        summary = {
+            "removed_files": 0,
+            "removed_dirs": 0,
+            "errors": 0,
+        }
+        storage = getattr(self.character_engine, "storage", None)
+        if storage is None:
+            summary["errors"] = 1
+            return summary
+
+        targets: list[Path] = []
+        for attr in ("root", "spec_root", "character_logs_root"):
+            base = getattr(storage, attr, None)
+            if base is None:
+                continue
+            try:
+                base_path = Path(base).expanduser().resolve()
+                target = (base_path / character_id).resolve()
+                target.relative_to(base_path)
+            except Exception:
+                summary["errors"] += 1
+                continue
+            targets.append(target)
+
+        for target in targets:
+            if not target.exists():
+                continue
+            for row in sorted(target.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                try:
+                    if row.is_file():
+                        row.unlink()
+                        summary["removed_files"] += 1
+                    elif row.is_dir():
+                        os.rmdir(row)
+                        summary["removed_dirs"] += 1
+                except Exception:
+                    summary["errors"] += 1
+            try:
+                if target.exists():
+                    os.rmdir(target)
+                    summary["removed_dirs"] += 1
+            except Exception:
+                if target.exists():
+                    summary["errors"] += 1
+        return summary
+
     def _build_request(self, ctx: PipelineContext) -> LLMRequest:
+        scope = "chat"
+        studio_row = _as_dict(_as_dict(ctx.state).get(StudioGenerator.KEY))
+        if self.studio_generator.is_active({StudioGenerator.KEY: studio_row}):
+            scope = "studio"
+        scoped_think = self._scope_get(ctx, scope, "think", None)
+        if isinstance(scoped_think, bool):
+            ctx.meta["think"] = bool(scoped_think)
+        scoped_web_mode = str(self._scope_get(ctx, scope, "web_mode", "") or "").strip().lower()
+        if scoped_web_mode in {"on", "off", "auto"}:
+            ctx.meta["web_mode"] = scoped_web_mode
+        scoped_output = self._scope_get(ctx, scope, "output_format", None)
+        if isinstance(scoped_output, dict):
+            ctx.state["output_format"] = _coerce_output_format_state(scoped_output)
+        if str(ctx.profile or "").strip().upper() == PROFILE_AUTONOMOUS:
+            ctx.meta["think"] = True
         if ctx.route == "chat":
             if ctx.prompt_messages:
                 messages = list(ctx.prompt_messages)
             else:
                 prompt_state = dict(ctx.state or {})
-                prompt_state.setdefault("context_tags", dict(ctx.tags))
+                merged_tags = _as_dict(prompt_state.get("context_tags"))
+                merged_tags.update(dict(ctx.tags or {}))
+                prompt_state["context_tags"] = merged_tags
                 if ctx.plan:
                     prompt_state["plan"] = ctx.plan
                 ctx.prompt_pack = self.character_runtime.build(
@@ -1258,6 +1812,9 @@ class GenerateStage(PipelineStage):
             None,
         )
         req_max_tokens = _to_int(_pick_value(ctx.meta.get("max_tokens"), ctx.policies.get("max_tokens"), None), None)
+        if req_max_tokens is None and str(ctx.profile or "").strip().upper() == PROFILE_AUTONOMOUS:
+            provider_name = str(type(self.provider).__name__ or "").strip().lower()
+            req_max_tokens = -1 if "ollama" in provider_name else None
         if req_max_tokens is None:
             verbosity = _to_float(
                 _pick_value(
@@ -1427,13 +1984,16 @@ class OutputFormatStage(PipelineStage):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         text = _normalize_text(ctx.text)
-        if ctx.route != "chat":
-            ctx.structured_output = {
+        force_format = bool(ctx.meta.get("force_output_format", False))
+        if ctx.route != "chat" and not force_format:
+            merged_output = dict(ctx.structured_output or {})
+            merged_output.update({
                 "parameters": None,
                 "summary": None,
                 "text": text,
                 "formatted": False,
-            }
+            })
+            ctx.structured_output = merged_output
             ctx.logs.append("stage=output_format skipped(route)")
             return ctx
 
@@ -1442,12 +2002,14 @@ class OutputFormatStage(PipelineStage):
         json_mode = bool(ctx.meta.get("json_mode", False))
         response_format = _pick_value(ctx.meta.get("response_format"), ctx.policies.get("response_format"), None)
         if require_json or json_mode or isinstance(response_format, dict):
-            ctx.structured_output = {
+            merged_output = dict(ctx.structured_output or {})
+            merged_output.update({
                 "parameters": None,
                 "summary": None,
                 "text": text,
                 "formatted": False,
-            }
+            })
+            ctx.structured_output = merged_output
             ctx.logs.append("stage=output_format skipped(json_mode)")
             return ctx
 
@@ -1458,7 +2020,8 @@ class OutputFormatStage(PipelineStage):
                 ctx.meta.get("active_mode"),
                 ctx.state.get("mode"),
                 "friend_chat",
-            )
+            ),
+            allow_custom=True,
         )
         strict_modes = {
             str(x).strip().lower()
@@ -1494,12 +2057,14 @@ class OutputFormatStage(PipelineStage):
         else:
             ctx.text = text
 
-        ctx.structured_output = {
+        merged_output = dict(ctx.structured_output or {})
+        merged_output.update({
             "parameters": (dict(parameters) if show_parameters else None),
             "summary": (str(summary) if show_summary else None),
             "text": str(text),
             "formatted": bool(formatted),
-        }
+        })
+        ctx.structured_output = merged_output
         ctx.logs.append(
             "stage=output_format "
             f"mode={mode} formatted={int(formatted)} "
@@ -1521,7 +2086,26 @@ class OutputFormatStage(PipelineStage):
         topics = _extract_topics_from_tags(ctx.tags)
         traits = _extract_output_traits(ctx.state, ctx.traits)
         tags = [str(x).strip().lower() for x in _as_list(ctx.tags.get("metadata_tags")) if str(x).strip()]
+        completion_tokens = max(0, int(_to_int(_as_dict(ctx.stats).get("eval_count"), 0) or 0))
+        answer_estimated = max(0, int(estimate_tokens(str(ctx.text or "")) or 0))
         thinking_tokens = max(0, int(estimate_tokens(str(ctx.thinking or "")) or 0))
+
+        if completion_tokens > 0:
+            if thinking_tokens > 0:
+                # If provider reports completion tokens, keep totals consistent.
+                answer_tokens = max(0, int(completion_tokens - thinking_tokens))
+                if answer_tokens <= 0:
+                    answer_tokens = answer_estimated
+            else:
+                # Thinking can be hidden/non-rendered; infer from completion budget.
+                answer_tokens = answer_estimated or completion_tokens
+                inferred_thinking = max(0, int(completion_tokens - answer_tokens))
+                if inferred_thinking > 0:
+                    thinking_tokens = inferred_thinking
+        else:
+            answer_tokens = answer_estimated
+
+        total_tokens = max(0, int(answer_tokens + thinking_tokens))
         character_id = str(
             _pick(
                 ctx.state.get("active_character_id"),
@@ -1540,6 +2124,8 @@ class OutputFormatStage(PipelineStage):
             "topics": topics,
             "tags": tags,
             "thinking_tokens": thinking_tokens,
+            "answer_tokens": answer_tokens,
+            "total_tokens": total_tokens,
         }
         fields = [str(x).strip() for x in list(self._output_spec.get("parameters_fields") or []) if str(x).strip()]
         selected = _select_parameter_fields(base, fields=fields)
@@ -1625,6 +2211,10 @@ class MemoryWriteStage(PipelineStage):
     name = "memory_write"
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
+        studio_active = bool(_as_dict(_as_dict(ctx.state).get(StudioGenerator.KEY)).get("active", False))
+        if studio_active:
+            ctx.logs.append("stage=memory_write skipped(scoped_dialog)")
+            return ctx
         store_turn = bool(ctx.meta.get("store_turn", True))
         if not store_turn:
             ctx.logs.append("stage=memory_write skipped")
@@ -1636,7 +2226,8 @@ class MemoryWriteStage(PipelineStage):
         if ctx.route in {"chat", "command"} and ctx.clean_user_msg:
             turn_tags = dict(ctx.tags)
             turn_tags["active_mode"] = normalize_mode_name(
-                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat")
+                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat"),
+                allow_custom=True,
             )
             personality_id = str(
                 ctx.state.get("active_character_id")
@@ -1656,7 +2247,8 @@ class MemoryWriteStage(PipelineStage):
         if ctx.route in {"chat", "command"} and ctx.text:
             turn_tags = dict(ctx.tags)
             turn_tags["active_mode"] = normalize_mode_name(
-                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat")
+                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat"),
+                allow_custom=True,
             )
             personality_id = str(
                 ctx.state.get("active_character_id")
@@ -1703,6 +2295,7 @@ class ResponsePipeline:
         metadata_extractor: MetadataExtractor | None = None,
         prompt_engine: PromptEngine | None = None,
         memory_manager=None,
+        studio_generator: StudioGenerator | None = None,
     ):
         self.provider = provider
         self.character_engine = character_runtime or CharacterRuntime()
@@ -1724,6 +2317,7 @@ class ResponsePipeline:
             "generate": GenerateStage(
                 provider=self.provider,
                 character_runtime=self.character_runtime,
+                studio_generator=studio_generator,
             ),
             "postprocess": PostprocessStage(),
             "tool_router": ToolRouterStage(),
@@ -1777,6 +2371,12 @@ class ResponsePipeline:
                 "output_format",
                 "memory_write",
             ),
+            PROFILE_AUTONOMOUS: (
+                "preprocess",
+                "generate",
+                "postprocess",
+                "output_format",
+            ),
         }
 
     def run(
@@ -1807,8 +2407,10 @@ class ResponsePipeline:
         force_web = _is_forced_web_request(ctx.user_msg)
         input_preview = _text_preview(ctx.user_msg, 120)
 
-        stage_names = self._resolve_stage_names(ctx.profile, ctx.meta, ctx.policies)
+        stage_profile = self._resolve_stage_profile(ctx.profile)
+        stage_names = self._resolve_stage_names(stage_profile, ctx.meta, ctx.policies)
         ctx.logs.append(f"profile={ctx.profile}")
+        ctx.logs.append(f"stage_profile={stage_profile}")
         ctx.logs.append(f"stages={','.join(stage_names)}")
         ctx.logs.append(
             "stage=web_trace start "
@@ -1885,7 +2487,20 @@ class ResponsePipeline:
             stats=dict(ctx.stats or {}),
         )
 
+    def is_studio_active(self, *, conversation_id: str = "", state: dict[str, Any] | None = None) -> bool:
+        state_map = _as_dict(state)
+        local = _as_dict(state_map.get(StudioGenerator.KEY))
+        if bool(local.get("active", False)):
+            return True
+        stage = self._stages.get("generate")
+        if isinstance(stage, GenerateStage):
+            return bool(stage.is_studio_active(conversation_id=conversation_id, state=state_map))
+        return False
+
     def _resolve_profile(self, *, meta, state, policies) -> str:
+        studio_gen = _as_dict(_as_dict(state).get(StudioGenerator.KEY))
+        if bool(studio_gen.get("active", False)):
+            return PROFILE_AUTONOMOUS
         preferred = _pick(
             _as_dict(meta).get("profile"),
             _as_dict(meta).get("quality_profile"),
@@ -1895,7 +2510,18 @@ class ResponsePipeline:
             PROFILE_BALANCED,
         )
         norm = str(preferred or PROFILE_BALANCED).strip().upper()
-        return norm if norm in self._profiles else PROFILE_BALANCED
+        valid_profiles = set(self._profiles.keys()) | {PROFILE_ECONOM, PROFILE_ASYA}
+        return norm if norm in valid_profiles else PROFILE_BALANCED
+
+    def _resolve_stage_profile(self, profile: str) -> str:
+        norm = str(profile or "").strip().upper()
+        if norm == PROFILE_ASYA:
+            return PROFILE_BALANCED
+        if norm == PROFILE_ECONOM:
+            return PROFILE_FAST
+        if norm in self._profiles:
+            return norm
+        return PROFILE_BALANCED
 
     def _resolve_stage_names(self, profile: str, meta: dict[str, Any], policies: dict[str, Any]) -> list[str]:
         base = list(self._profiles.get(profile, self._profiles[PROFILE_BALANCED]))
@@ -2012,6 +2638,20 @@ def _parse_tools(value) -> list[ToolSpec]:
             )
         )
     return out
+
+
+def _append_policy_rule(policies: dict[str, Any], rule: str) -> None:
+    text = str(rule or "").strip()
+    if not text:
+        return
+    rules = policies.get("rules")
+    if not isinstance(rules, list):
+        rules = [] if rules is None else [rules]
+    low = {str(x).strip().lower() for x in rules if str(x).strip()}
+    if text.lower() in low:
+        return
+    rules.append(text)
+    policies["rules"] = rules
 
 
 def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
@@ -2182,7 +2822,7 @@ def _unwrap_safety_output_json(text: str, *, preserve_json: bool) -> tuple[str, 
 _DROP_ROLE_LINE_RE = re.compile(r"^\s*(?:thinking|you|user|system)\s*>\s*", flags=re.IGNORECASE)
 _ASSISTANT_LINE_PREFIX_RE = re.compile(r"^\s*assistant\s*>\s*", flags=re.IGNORECASE)
 _MODEL_LINE_RE = re.compile(r"^\s*\[model:[^\]]+\]\s*$", flags=re.IGNORECASE)
-_THINKING_HEADER_RE = re.compile(r"^\s*\[thinking\](?:\s*[РІР‚вЂќ-]\s*)?$", flags=re.IGNORECASE)
+_THINKING_HEADER_RE = re.compile(r"^\s*\[thinking\].*$", flags=re.IGNORECASE)
 
 
 def _enforce_response_hygiene(text: str) -> str:
@@ -2261,7 +2901,7 @@ def _dedupe_key(text: str) -> str:
     src = _normalize_text(text).lower()
     if not src:
         return ""
-    src = re.sub(r"[\"'`Р’В«Р’В»РІР‚С›РІР‚СљРІР‚Сњ]", "", src)
+    src = re.sub(r"[\"'`Р В РІР‚в„ўР вЂ™Р’В«Р В РІР‚в„ўР вЂ™Р’В»Р В Р вЂ Р В РІР‚С™Р РЋРІР‚С”Р В Р вЂ Р В РІР‚С™Р РЋРЎв„ўР В Р вЂ Р В РІР‚С™Р РЋРЎС™]", "", src)
     src = re.sub(r"[\s\.,;:!?()\[\]{}\-_/\\]+", " ", src)
     return src.strip()
 
@@ -2339,7 +2979,7 @@ def _compute_greeting_flags(
     }
     recent_disable_directive = _recent_user_disable_directive(
         state_map=state_map,
-        terms_list=_as_list(_pick_value(policy_cfg.get("terms_list"), ["РјРёР»Р°С€РєР°"])),
+        terms_list=_as_list(_pick_value(policy_cfg.get("terms_list"), ["Р В РЎВР В РЎвЂР В Р’В»Р В Р’В°Р РЋРІвЂљВ¬Р В РЎвЂќР В Р’В°"])),
         disable_patterns=_as_list(_pick_value(policy_cfg.get("terms_disable_patterns"), [])),
     )
     if recent_disable_directive:
@@ -2597,10 +3237,10 @@ def _recent_user_disable_directive(
 ) -> bool:
     terms = [str(x or "").strip().lower() for x in list(terms_list or []) if str(x or "").strip()]
     if not terms:
-        terms = ["РјРёР»Р°С€РєР°"]
+        terms = ["Р В РЎВР В РЎвЂР В Р’В»Р В Р’В°Р РЋРІвЂљВ¬Р В РЎвЂќР В Р’В°"]
     patterns = [str(x or "").strip().lower() for x in list(disable_patterns or []) if str(x or "").strip()]
     if not patterns:
-        patterns = ["РЅРµ РЅР°Р·С‹РІР°Р№", "РїСЂРµРєСЂР°С‚Рё РЅР°Р·С‹РІР°С‚СЊ", "РЅРµ Р·РѕРІРё", "РїСЂРµРєСЂР°С‚Рё Р·РІР°С‚СЊ"]
+        patterns = ["Р В Р вЂ¦Р В Р’Вµ Р В Р вЂ¦Р В Р’В°Р В Р’В·Р РЋРІР‚в„–Р В Р вЂ Р В Р’В°Р В РІвЂћвЂ“", "Р В РЎвЂ”Р РЋР вЂљР В Р’ВµР В РЎвЂќР РЋР вЂљР В Р’В°Р РЋРІР‚С™Р В РЎвЂ Р В Р вЂ¦Р В Р’В°Р В Р’В·Р РЋРІР‚в„–Р В Р вЂ Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰", "Р В Р вЂ¦Р В Р’Вµ Р В Р’В·Р В РЎвЂўР В Р вЂ Р В РЎвЂ", "Р В РЎвЂ”Р РЋР вЂљР В Р’ВµР В РЎвЂќР РЋР вЂљР В Р’В°Р РЋРІР‚С™Р В РЎвЂ Р В Р’В·Р В Р вЂ Р В Р’В°Р РЋРІР‚С™Р РЋР Р‰"]
 
     history = list(_as_list(state_map.get("history")))
     user_rows = [row for row in history if str(_as_dict(row).get("role") or "").strip().lower() == "user"]
@@ -3085,11 +3725,11 @@ def _set_nested(payload: dict[str, Any], field: str, value: Any) -> None:
 
 
 _CHECKIN_RE = re.compile(
-    r"(как\s+(?:у\s+тебя\s+)?дела|как\s+ты|как\s+сам|что\s+нового|как\s+настроение|how\s+are\s+you)",
+    r"(РєР°Рє\s+(?:Сѓ\s+С‚РµР±СЏ\s+)?РґРµР»Р°|РєР°Рє\s+С‚С‹|РєР°Рє\s+СЃР°Рј|С‡С‚Рѕ\s+РЅРѕРІРѕРіРѕ|РєР°Рє\s+РЅР°СЃС‚СЂРѕРµРЅРёРµ|how\s+are\s+you)",
     flags=re.IGNORECASE,
 )
 _QUESTION_START_RE = re.compile(
-    r"^\s*(как|что|почему|зачем|когда|где|кто|чем|какой|какая|какие|сколько|how|what|why|where|when)\b",
+    r"^\s*(РєР°Рє|С‡С‚Рѕ|РїРѕС‡РµРјСѓ|Р·Р°С‡РµРј|РєРѕРіРґР°|РіРґРµ|РєС‚Рѕ|С‡РµРј|РєР°РєРѕР№|РєР°РєР°СЏ|РєР°РєРёРµ|СЃРєРѕР»СЊРєРѕ|how|what|why|where|when)\b",
     flags=re.IGNORECASE,
 )
 
@@ -3136,8 +3776,8 @@ def _looks_like_echo_response(*, answer: str, user_msg: str) -> bool:
 def _echo_fallback_text(user_msg: str) -> str:
     src = _normalize_text(user_msg)
     if _CHECKIN_RE.search(src):
-        return "У меня все нормально, спасибо. Как ты?"
-    return "Поняла. Я на связи и готова помочь. Уточни, что именно нужно."
+        return "РЈ РјРµРЅСЏ РІСЃРµ РЅРѕСЂРјР°Р»СЊРЅРѕ, СЃРїР°СЃРёР±Рѕ. РљР°Рє С‚С‹?"
+    return "РџРѕРЅСЏР»Р°. РЇ РЅР° СЃРІСЏР·Рё Рё РіРѕС‚РѕРІР° РїРѕРјРѕС‡СЊ. РЈС‚РѕС‡РЅРё, С‡С‚Рѕ РёРјРµРЅРЅРѕ РЅСѓР¶РЅРѕ."
 
 
 def _as_dict(value) -> dict[str, Any]:
@@ -3224,7 +3864,7 @@ def _verbosity_to_max_tokens(level: float) -> int:
 
 def _normalize_text(value) -> str:
     text = _repair_mojibake(str(value or ""))
-    text = text.replace("\ufeff", "").replace("Р“Р‡Р’В»Р’С—", "")
+    text = text.replace("\ufeff", "").replace("Р В РІР‚СљР В РІР‚РЋР В РІР‚в„ўР вЂ™Р’В»Р В РІР‚в„ўР РЋРІР‚вЂќ", "")
     text = unicodedata.normalize("NFKC", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\xa0", " ")
     text = re.sub(r"[\u200B-\u200F\u2060\uFEFF]", "", text)
@@ -3239,7 +3879,7 @@ def _repair_mojibake(text: str) -> str:
         return ""
     if _contains_cyrillic(src):
         return src
-    if "Гђ" not in src and "Г‘" not in src:
+    if "Р вЂњРЎвЂ™" not in src and "Р вЂњРІР‚В" not in src:
         return src
     try:
         repaired = src.encode("latin1", errors="ignore").decode("utf-8", errors="ignore")

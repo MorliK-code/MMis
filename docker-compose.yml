@@ -1,0 +1,42 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: mmis-searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/search?q=ping&format=json', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mmis-api
+    restart: unless-stopped
+    depends_on:
+      searxng:
+        condition: service_healthy
+    environment:
+      - MMIS_API_HOST=0.0.0.0
+      - MMIS_API_PORT=8000
+      - MMIS_INTERNET_ENABLED=true
+      - MMIS_SEARCH_PROVIDER=searxng
+      - MMIS_SEARCH_STRICT_ENDPOINT=true
+      - MMIS_SEARCH_API_URL=http://searxng:8080/search?format=json
+    ports:
+      - "8000:8000"

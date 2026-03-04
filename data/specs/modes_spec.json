@@ -2,7 +2,7 @@
   "schema_version": 1,
   "modes": {
     "friend_chat": {
-      "description": "Casual conversation mode",
+      "description": "Режим непринужденной беседы",
       "legacy_mode": "chat",
       "output_format_default": {
         "show_parameters": false,
@@ -10,7 +10,7 @@
       }
     },
     "helper": {
-      "description": "Supportive helper mode",
+      "description": "Режим вспомогательного помощника",
       "legacy_mode": "task",
       "output_format_default": {
         "show_parameters": false,
@@ -18,7 +18,7 @@
       }
     },
     "engineer": {
-      "description": "Technical implementation mode",
+      "description": "Режим технической реализации",
       "legacy_mode": "coding",
       "output_format_default": {
         "show_parameters": true,
@@ -26,7 +26,7 @@
       }
     },
     "debugger": {
-      "description": "Hypothesis-driven debug mode",
+      "description": "Режим отладки, основанный на гипотезах",
       "legacy_mode": "debug",
       "output_format_default": {
         "show_parameters": true,
@@ -34,11 +34,19 @@
       }
     },
     "planner": {
-      "description": "Structured planning mode",
+      "description": "Режим структурированного планирования",
       "legacy_mode": "task",
       "output_format_default": {
         "show_parameters": true,
         "show_summary": true
+      }
+    },
+    "spicy_chat": {
+      "description": "Раскрепощённый разговорный режим",
+      "legacy_mode": "friend_chat",
+      "output_format_default": {
+        "show_parameters": false,
+        "show_summary": false
       }
     }
   }

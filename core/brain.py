@@ -102,20 +102,35 @@ class Brain:
                     return result
 
         state_snapshot = self.state_manager.snapshot()
+        conversation_id = str(meta_map.get("conversation_id") or "").strip()
+        if not conversation_id:
+            conversation_id = str(getattr(state_snapshot, "conversation_id", "") or "").strip()
+        if not conversation_id:
+            conversation_id = str(_as_dict(getattr(state_snapshot, "raw", {})).get("conversation_id") or "").strip()
+        conversation_id = conversation_id.lower() or "default"
+        studio_active = False
+        if route == "chat" and hasattr(self.pipeline, "is_studio_active"):
+            try:
+                studio_active = bool(self.pipeline.is_studio_active(conversation_id=conversation_id, state=state_snapshot.raw))
+            except Exception:
+                studio_active = False
+        non_persistent_turn = bool(route == "command" or (route == "chat" and studio_active))
+
         self._sync_active_character_manifest(state_snapshot.raw)
         track_state = bool(meta_map.get("track_state", True))
-        if track_state and route in {"chat", "command"} and text:
+        state_updates_enabled = bool(track_state and (route == "system_event" or not non_persistent_turn))
+        if state_updates_enabled and route in {"chat", "command"} and text:
             self.state_manager.update_on_user_message(
                 text,
                 {
-                    "conversation_id": meta_map.get("conversation_id") or state_snapshot.conversation_id,
+                    "conversation_id": conversation_id,
                     "mode": meta_map.get("mode") or state_snapshot.mode,
                     "quality_profile": meta_map.get("quality_profile") or state_snapshot.quality_profile,
                     "active_goal": meta_map.get("active_goal") or state_snapshot.active_goal,
                 },
             )
             state_snapshot = self.state_manager.snapshot()
-        elif track_state and route == "system_event":
+        elif state_updates_enabled and route == "system_event":
             self.state_manager.update_on_event(event_name, meta_map)
             state_snapshot = self.state_manager.snapshot()
 
@@ -152,6 +167,7 @@ class Brain:
         meta_for_pipeline.setdefault("mode_lock", state_snapshot.mode_lock)
         meta_for_pipeline.setdefault("output_format", state_snapshot.output_format)
         meta_for_pipeline.setdefault("track_state", track_state)
+        meta_for_pipeline.setdefault("non_persistent_turn", non_persistent_turn)
         
         cfg = load_config()
         meta_for_pipeline.setdefault("safety_mode", cfg.safety_mode)
@@ -173,13 +189,14 @@ class Brain:
                 event_name=event_name,
                 meta=meta_for_pipeline,
                 result=result,
-                track_state=track_state,
+                track_state=state_updates_enabled,
             )
             self._persist_turns(
                 route=route,
                 user_text=text,
                 result=result,
                 meta=meta_for_pipeline,
+                non_persistent_turn=non_persistent_turn,
             )
         except Exception as exc:
             result = self._build_error_result(route=route, error=exc)
@@ -256,6 +273,10 @@ class Brain:
                 value = str(op.get("value") or "").strip().lower()
                 if value in {"auto", "on", "off"}:
                     self.state_manager.patch({"web_mode": value})
+            elif key == "state_scoped_settings":
+                value = op.get("value")
+                if isinstance(value, dict):
+                    self.state_manager.patch({"command_scopes": dict(value)})
             elif key == "state_personality":
                 value = str(op.get("value") or "").strip().lower()
                 if value:
@@ -263,27 +284,33 @@ class Brain:
                     blend = op.get("blend") if isinstance(op.get("blend"), dict) else None
                     ts = op.get("ts")
                     ts_val = parse_time_to_epoch(ts, 0.0) if ts is not None else None
-                    if ts_val <= 0:
+                    if ts_val is None or float(ts_val) <= 0:
                         ts_val = None
-                    self.state_manager.set_active_personality(
-                        value,
-                        locked=(bool(locked) if isinstance(locked, bool) else None),
-                        blend=blend,
-                        switch_ts=ts_val,
-                    )
+                    try:
+                        self.state_manager.set_active_personality(
+                            value,
+                            locked=(bool(locked) if isinstance(locked, bool) else None),
+                            blend=blend,
+                            switch_ts=ts_val,
+                        )
+                    except Exception:
+                        pass
             elif key == "state_character":
                 value = str(op.get("value") or "").strip().lower()
                 if value:
                     locked = op.get("locked")
                     ts = op.get("ts")
                     ts_val = parse_time_to_epoch(ts, 0.0) if ts is not None else None
-                    if ts_val <= 0:
+                    if ts_val is None or float(ts_val) <= 0:
                         ts_val = None
-                    self.state_manager.set_active_character(
-                        value,
-                        locked=(bool(locked) if isinstance(locked, bool) else None),
-                        switch_ts=ts_val,
-                    )
+                    try:
+                        self.state_manager.set_active_character(
+                            value,
+                            locked=(bool(locked) if isinstance(locked, bool) else None),
+                            switch_ts=ts_val,
+                        )
+                    except Exception:
+                        pass
                     try:
                         character_engine = getattr(self.pipeline, "character_engine", None)
                         if character_engine is not None and hasattr(character_engine, "set_active_character"):
@@ -378,8 +405,11 @@ class Brain:
         user_text: str,
         result: BrainResult,
         meta: dict[str, Any],
+        non_persistent_turn: bool = False,
     ) -> None:
         if route not in {"chat", "command"}:
+            return
+        if bool(non_persistent_turn):
             return
         if not bool(meta.get("store_turn", True)):
             return

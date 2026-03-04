@@ -56,6 +56,31 @@ _UNBAN_COLON_PHRASE_RE = re.compile(
 
 _FEEDBACK_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "less_compliments",
+        (
+            "\\b(?:\\u043c\\u0435\\u043d\\u044c\\u0448\\u0435|\\u043f\\u043e\\u043c\\u0435\\u043d\\u044c\\u0448\\u0435)\\s+\\u043a\\u043e\\u043c\\u043f\\u043b\\u0438\\u043c\\u0435\\u043d\\u0442\\u043e\\u0432\\b",
+            r"\bfewer\s+compliments\b",
+            r"\bless\s+compliments\b",
+        ),
+    ),
+    (
+        "more_compliments",
+        (
+            "\\b(?:\\u0431\\u043e\\u043b\\u044c\\u0448\\u0435|\\u043f\\u043e\\u0431\\u043e\\u043b\\u044c\\u0448\\u0435)\\s+\\u043a\\u043e\\u043c\\u043f\\u043b\\u0438\\u043c\\u0435\\u043d\\u0442\\u043e\\u0432\\b",
+            r"\bmore\s+compliments\b",
+            r"\bcompliment\s+me\s+more\b",
+        ),
+    ),
+    (
+        "no_compliments",
+        (
+            "\\b\\u0431\\u0435\\u0437\\s+\\u043a\\u043e\\u043c\\u043f\\u043b\\u0438\\u043c\\u0435\\u043d\\u0442\\u043e\\u0432\\b",
+            "\\b\\u043d\\u0435\\s+\\u043d\\u0430\\u0434\\u043e\\s+\\u043a\\u043e\\u043c\\u043f\\u043b\\u0438\\u043c\\u0435\\u043d\\u0442\\u043e\\u0432\\b",
+            r"\bno\s+compliments\b",
+            r"\bdon't\s+compliment\s+me\b",
+        ),
+    ),
+    (
         "less_warmth",
         (
             r"\b(меньше|менее)\s+дружелюб",
@@ -122,6 +147,9 @@ _FEEDBACK_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\bподробнее\b",
             r"\bдетальнее\b",
             r"\bразвернуто\b",
+            "\\b(?:\\u0431\\u043e\\u043b\\u044c\\u0448\\u0435|\\u0434\\u043e\\u0431\\u0430\\u0432\\u044c)\\s+\\u0444\\u0438\\u0434\\u0431\\u0435\\u043a\\s+\\u043f\\u0430\\u0442\\u0442?\\u0435\\u0440\\u043d\\u043e\\u0432?\\b",
+            "\\bmore\\s+feedback\\s+patterns?\\b",
+            "\\badd\\s+more\\s+feedback\\s+patterns?\\b",
             r"\blonger\s+answers\b",
             r"\bmore\s+details\b",
         ),

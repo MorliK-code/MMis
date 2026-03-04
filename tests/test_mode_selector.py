@@ -6,7 +6,7 @@ enable_unittest_json_output()
 
 import unittest
 
-from core.mode_selector import ModeSelector
+from core.mode_selector import ModeSelector, normalize_mode_name
 
 
 class ModeSelectorTests(unittest.TestCase):
@@ -65,6 +65,10 @@ class ModeSelectorTests(unittest.TestCase):
         )
         self.assertEqual(decision.mode, "friend_chat")
         self.assertTrue(self.selector.should_switch(current_mode="debugger", decision=decision))
+
+    def test_normalize_allows_custom_mode_when_enabled(self) -> None:
+        self.assertEqual(normalize_mode_name("my_custom_mode", allow_custom=True), "my_custom_mode")
+        self.assertEqual(normalize_mode_name("my_custom_mode"), "friend_chat")
 
 
 if __name__ == "__main__":

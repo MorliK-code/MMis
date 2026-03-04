@@ -44,9 +44,6 @@ class ShortMemory:
             return
         with self._lock:
             self._items.append(row)
-            snapshot_row = self._build_persona_snapshot_row(row)
-            if snapshot_row is not None:
-                self._items.append(snapshot_row)
             self._trim_and_update_summary()
         self._autosave()
 
@@ -222,8 +219,9 @@ class ShortMemory:
                 if not key:
                     continue
                 topic_counts[key] = int(topic_counts.get(key, 0)) + 1
-            if str(row.get("type") or "").strip().lower() == "persona_snapshot":
-                persona_snapshot = _normalize_persona_snapshot(row.get("persona_snapshot") or meta_map.get("persona_snapshot"))
+            row_persona = _normalize_persona_snapshot(row.get("persona_snapshot") or meta_map.get("persona_snapshot"))
+            if row_persona:
+                persona_snapshot = row_persona
             if _is_error_row(intent=intent, tags=tags, text=text):
                 if text:
                     errors.append(text)

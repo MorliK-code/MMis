@@ -31,7 +31,8 @@
     "helper",
     "engineer",
     "debugger",
-    "planner"
+    "planner",
+    "spicy_chat"
   ],
   "topics": [
     "python",
@@ -140,7 +141,9 @@
       "chat": "friend_chat",
       "task": "helper",
       "coding": "engineer",
-      "debug": "debugger"
+      "debug": "debugger",
+      "flirty": "spicy_chat",
+      "spicy": "spicy_chat"
     }
   }
 }

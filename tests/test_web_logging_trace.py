@@ -46,8 +46,8 @@ class _StubProvider(LLMProviderBase):
 
 
 class _FakeSearch:
-    def search(self, query: str, recency_days=None, domain_filter=None, k: int = 5):
-        _ = (recency_days, domain_filter, k)
+    def search(self, query: str, recency_days=None, domain_filter=None, k: int = 5, volatile: bool = False, query_intent: str = ""):
+        _ = (recency_days, domain_filter, k, volatile, query_intent)
         return [
             SearchResult(
                 title="Exchange Rate",

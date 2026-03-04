@@ -182,6 +182,14 @@ def load_character_spec(character_id: str, name: str, *, required: bool = True) 
     return get_spec_registry().load_character_spec(character_id=character_id, name=name, required=required)
 
 
+def invalidate_spec_cache() -> None:
+    global _REGISTRY_SINGLETON
+    with _REGISTRY_LOCK:
+        if _REGISTRY_SINGLETON is None:
+            return
+        _REGISTRY_SINGLETON.invalidate()
+
+
 def validate_no_txt_paths(config: Any = None) -> None:
     registry = get_spec_registry()
     registry.validate_no_txt_refs()
@@ -226,4 +234,3 @@ def _collect_cfg_txt_paths(payload: dict[str, Any], *, prefix: str = "") -> list
         if any(token in k for token in ("prompt", "spec", "path", "file", "template")):
             out.append(f"{path_name}={value}")
     return out
-

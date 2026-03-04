@@ -131,9 +131,16 @@ MMis/
 
 | File | Chto eto | Zachem eto | Chto mozhno delat |
 |---|---|---|---|
-| `search.py` | Structured web search client | Aktualnaya informatsiya i snippety | Dobavit cache TTL i domain scoring |
-| `scraper.py` | Fetch + readable extraction | Poluchenie chistogo teksta po URL | Dobavit chunking i anti-bloat limits |
+| `search.py` | Structured web search client (SearxNG-first) | Aktualnaya informatsiya i snippety | Derzhat strict endpoint i fallback policy |
+| `scraper.py` | Fetch + readable extraction + cleaner integration | Poluchenie chistogo teksta po URL | Kontrolirovat limity i metadata ochistki |
+| `content_cleaner.py` | Trafilatura + BS4 boilerplate cleaner | Udalyaet cookie/ads/comments/banner/popups | Rasshiryat noise-patterny pod novye saity |
 | `__init__.py` | Export internet API | Udobnaya integratsiya v tools | Derzhat tonkim |
+
+Runbook (Docker web stack):
+- `docker compose up --build`
+- API: `http://127.0.0.1:8000/health`
+- SearxNG: `http://127.0.0.1:8080/search?q=test&format=json`
+- Env for API in compose: `MMIS_SEARCH_PROVIDER=searxng`, `MMIS_SEARCH_STRICT_ENDPOINT=true`, `MMIS_SEARCH_API_URL=http://searxng:8080/search?format=json`
 
 ### `modules/screen/`
 

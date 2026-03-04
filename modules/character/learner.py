@@ -118,6 +118,9 @@ def update_persona(
             continue
 
         if item in {
+            "less_compliments",
+            "more_compliments",
+            "no_compliments",
             "less_warmth",
             "more_warmth",
             "no_teasing",
@@ -298,6 +301,9 @@ def _implicit_trait_deltas(signals: dict[str, Any]) -> dict[str, float]:
 
 def _feedback_trait_deltas(item: str) -> dict[str, float]:
     mapping: dict[str, dict[str, float]] = {
+        "less_compliments": {"warmth": -0.04, "humor": -0.03, "emoji_rate": -0.02},
+        "more_compliments": {"warmth": 0.04, "humor": 0.03, "emoji_rate": 0.02},
+        "no_compliments": {"warmth": -0.05, "humor": -0.04, "emoji_rate": -0.03},
         "less_warmth": {"warmth": -0.05},
         "more_warmth": {"warmth": 0.05},
         "no_teasing": {"teasing": -0.05},

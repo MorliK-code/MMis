@@ -65,6 +65,26 @@ class ModeCommandsTests(unittest.TestCase):
         ops = [x for x in result.memory_ops if str(x.get("op")) == "state_mode"]
         self.assertTrue(ops)
         self.assertEqual(str(ops[-1].get("value")), "debugger")
+        lock_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_mode_lock"]
+        self.assertTrue(lock_ops)
+        self.assertTrue(bool(lock_ops[-1].get("value")))
+
+    def test_mode_auto_command_disables_lock(self) -> None:
+        result = self._run_command("/mode auto")
+        self.assertIn("Mode auto enabled", result.text)
+        lock_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_mode_lock"]
+        self.assertTrue(lock_ops)
+        self.assertFalse(bool(lock_ops[-1].get("value")))
+
+    def test_custom_mode_is_accepted_and_locked(self) -> None:
+        result = self._run_command("/mode my_custom_mode")
+        self.assertIn("Mode switched to: my_custom_mode", result.text)
+        mode_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_mode"]
+        self.assertTrue(mode_ops)
+        self.assertEqual(str(mode_ops[-1].get("value")), "my_custom_mode")
+        lock_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_mode_lock"]
+        self.assertTrue(lock_ops)
+        self.assertTrue(bool(lock_ops[-1].get("value")))
 
     def test_mode_lock_command_sets_flag(self) -> None:
         result = self._run_command("/mode_lock on")

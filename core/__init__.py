@@ -20,6 +20,7 @@ __all__ = [
     "PROFILE_FAST",
     "PROFILE_BALANCED",
     "PROFILE_QUALITY",
+    "PROFILE_AUTONOMOUS",
 ]
 
 _LAZY = {
@@ -40,6 +41,7 @@ _LAZY = {
     "PROFILE_FAST": "core.response_pipeline",
     "PROFILE_BALANCED": "core.response_pipeline",
     "PROFILE_QUALITY": "core.response_pipeline",
+    "PROFILE_AUTONOMOUS": "core.response_pipeline",
 }
 
 

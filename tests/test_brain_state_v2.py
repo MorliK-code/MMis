@@ -38,6 +38,29 @@ class BrainStateV2Tests(unittest.TestCase):
             self.assertIn("characters", payload)
             self.assertIsInstance(payload.get("characters"), dict)
 
+    def test_state_keeps_short_actions_and_places_context_block_higher(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mmis_brain_state_order_") as tmp:
+            state_path = Path(tmp) / "brain_state.json"
+            runtime = CharacterRuntime(state_path=state_path, autosave=False)
+            runtime.set_mode("engineer")
+            runtime.set_mode_lock(True)
+            runtime.set_mode_lock(False)
+            runtime.set_output_format(show_parameters=True, show_summary=False)
+            runtime.update_on_user_message("hello", meta={"intent": "chat", "emotion": "neutral"})
+            runtime.save()
+
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            global_state = dict(payload.get("global") or {})
+            self.assertLessEqual(len(list(global_state.get("last_actions") or [])), 3)
+            self.assertLessEqual(len(list(payload.get("last_actions") or [])), 3)
+
+            keys = list(payload.keys())
+            self.assertIn("context_tags", keys)
+            self.assertIn("cooldowns", keys)
+            self.assertIn("address_terms", keys)
+            self.assertLess(keys.index("context_tags"), keys.index("cooldowns"))
+            self.assertLess(keys.index("context_tags"), keys.index("address_terms"))
+
 
 if __name__ == "__main__":
     unittest.main()

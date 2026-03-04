@@ -4,6 +4,7 @@ from typing import Any
 
 from core.mode_selector import normalize_mode_name
 from core.spec_registry import load_character_spec
+from modules.character.mode_profile import MODE_BLEND_ALPHA, resolve_mode_profile
 
 
 def compile_system_persona(
@@ -21,10 +22,10 @@ def compile_system_persona(
     locks = dict(state.get("locks") or {})
     bans = [str(x).strip() for x in list(state.get("bans") or []) if str(x).strip()]
     mood = str(state.get("mood") or "neutral").strip().lower() or "neutral"
-    mode = normalize_mode_name(active_mode)
+    mode = normalize_mode_name(active_mode, allow_custom=True)
 
     identity = _build_identity(spec=spec, character_id=cid, locks=locks)
-    constraints = _build_mode_constraints(spec=spec, mode=mode)
+    constraints, mode_debug = _build_mode_constraints(spec=spec, mode=mode, character_id=cid)
     tone_lines, tone_debug = _build_tone_block(spec=spec, traits=traits)
     lock_lines = _build_lock_ban_block(spec=spec, locks=locks, bans=bans)
     mood_lines = _build_mood_lines(spec=spec, mood=mood)
@@ -47,6 +48,9 @@ def compile_system_persona(
         "bans": list(bans),
         "priority_order": ["locks", "mode", "persona", "mood"],
         "spec_version": int(spec.get("schema_version") or 1),
+        "mode_profile_source": str(mode_debug.get("mode_profile_source") or ""),
+        "mode_profile_id": str(mode_debug.get("mode_profile_id") or mode),
+        "mode_blend_alpha": float(mode_debug.get("mode_blend_alpha") or MODE_BLEND_ALPHA),
     }
     return "\n\n".join(blocks).strip(), debug
 
@@ -100,15 +104,17 @@ def _build_identity(*, spec: dict[str, Any], character_id: str, locks: dict[str,
     return lines
 
 
-def _build_mode_constraints(*, spec: dict[str, Any], mode: str) -> list[str]:
-    modes = dict(spec.get("modes") or {})
-    selected = [str(x).strip() for x in list(modes.get(mode) or []) if str(x).strip()]
-    if not selected:
-        selected = [str(x).strip() for x in list(modes.get("friend_chat") or []) if str(x).strip()]
+def _build_mode_constraints(*, spec: dict[str, Any], mode: str, character_id: str) -> tuple[list[str], dict[str, Any]]:
+    profile = resolve_mode_profile(mode=mode, character_id=character_id, persona_spec=spec)
+    selected = [str(x).strip() for x in list(profile.prompt_lines or []) if str(x).strip()]
     if not selected:
         selected = ["Keep friendly conversational tone."]
     selected.insert(0, f"Active mode: {mode}.")
-    return selected
+    return selected, {
+        "mode_profile_source": profile.source,
+        "mode_profile_id": profile.profile_id,
+        "mode_blend_alpha": MODE_BLEND_ALPHA,
+    }
 
 
 def _build_mood_lines(*, spec: dict[str, Any], mood: str) -> list[str]:

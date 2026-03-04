@@ -50,7 +50,7 @@
   "persona_spec": {
     "schema_version": 1,
     "identity": [
-      "Ты - ассистентка по имени {character_name}.",
+      "Ты - {character_name}.",
       "Пиши на языке пользователя, если он явно не попросил другой язык."
     ],
     "locks_map": {

@@ -43,6 +43,16 @@ class CharacterSignalsTests(unittest.TestCase):
         )
         self.assertEqual(sig.mode, "debugger")
 
+    def test_custom_mode_is_not_dropped(self) -> None:
+        sig = build_character_signals(
+            text="",
+            metadata={
+                "mode": "spicy_custom",
+                "metadata_tags": [],
+            },
+        )
+        self.assertEqual(sig.mode, "spicy_custom")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from _output_utils import enable_unittest_json_output
+
 enable_unittest_json_output()
 
 import io
@@ -50,6 +51,42 @@ class ConsoleStreamingTests(unittest.TestCase):
 
     def test_sanitize_stream_text_removes_carriage_returns(self):
         self.assertEqual(_sanitize_stream_text("ab\rcd"), "ab\ncd")
+
+    def test_finalize_mismatch_does_not_append_duplicate_tail(self):
+        renderer = _ConsoleChunkRenderer()
+        printer = _StreamRealtimePrinter(renderer, prefer_thinking_first=False, show_thinking=False)
+        sink = io.StringIO()
+
+        with redirect_stdout(sink):
+            printer.on_answer("Привет")
+            printer.finalize_with_final(answer_final="Добрый день")
+
+        # Mismatch must not append guessed tail.
+        self.assertEqual(printer.rendered_answer(), "Привет")
+
+    def test_finalize_prefix_tail_appends_once(self):
+        renderer = _ConsoleChunkRenderer()
+        printer = _StreamRealtimePrinter(renderer, prefer_thinking_first=False, show_thinking=False)
+        sink = io.StringIO()
+
+        with redirect_stdout(sink):
+            printer.on_answer("abc")
+            printer.finalize_with_final(answer_final="abcdef")
+            printer.finalize_with_final(answer_final="abcdef")
+
+        self.assertEqual(printer.rendered_answer(), "abcdef")
+
+    def test_on_answer_drops_overlapping_chunk_prefix(self):
+        renderer = _ConsoleChunkRenderer()
+        printer = _StreamRealtimePrinter(renderer, prefer_thinking_first=False, show_thinking=False)
+        sink = io.StringIO()
+
+        with redirect_stdout(sink):
+            printer.on_answer("Курс доллара ")
+            printer.on_answer("доллара сегодня ")
+            printer.finalize()
+
+        self.assertEqual(printer.rendered_answer(), "Курс доллара сегодня ")
 
 
 if __name__ == "__main__":  # pragma: no cover

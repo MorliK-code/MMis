@@ -167,7 +167,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         if native is not None:
             answer = str(native.get("answer") or "")
             stats = {"served_model": _runtime.model, "native_command": True}
-            if bool(req.store_turn):
+            if bool(req.store_turn) and _should_store_metadata(text=text):
                 _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
                 _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
             return ChatResponse(
@@ -215,7 +215,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         _runtime.last_stats = stats
         _runtime.last_thinking = thinking
 
-        if bool(req.store_turn):
+        if bool(req.store_turn) and _should_store_metadata(text=text, structured_output=structured):
             _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
             _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
 
@@ -257,7 +257,7 @@ def chat_stream(req: ChatRequest):
                     "parameters": None,
                     "summary": None,
                 }
-                if bool(req.store_turn):
+                if bool(req.store_turn) and _should_store_metadata(text=text):
                     _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
                     _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
                 for chunk in _split_chunks(answer, chunk_size=48):
@@ -340,6 +340,8 @@ def chat_stream(req: ChatRequest):
 
         answer_raw = str(result.text or "")
         answer, thinking = _split_visible_and_thinking(answer_raw)
+        if not thinking.strip():
+            thinking = str(getattr(result, "thinking", "") or "").strip()
         structured = dict(getattr(result, "structured_output", {}) or {})
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
@@ -358,7 +360,7 @@ def chat_stream(req: ChatRequest):
         }
         _runtime.last_thinking = thinking
 
-        if bool(req.store_turn):
+        if bool(req.store_turn) and _should_store_metadata(text=text, structured_output=structured):
             _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
             _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
 
@@ -493,7 +495,7 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
         return {
             "answer": (
                 "Native API commands:\n"
-                "/health\n/models\n/model [name]\n/think\n/nothink\n/json\n/nojson\n/help"
+                "/health\n/models\n/model [name]\n/think\n/nothink\n/json\n/nojson\n/character delete <id>\n/help"
             )
         }
     if cmd == "/health":
@@ -595,6 +597,18 @@ def _metadata_model_dir(model: str) -> Path:
     path = _runtime.meta_root / slug
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _should_store_metadata(*, text: str, structured_output: dict[str, Any] | None = None) -> bool:
+    msg = str(text or "").strip()
+    if not msg:
+        return False
+    if msg.startswith("/"):
+        return False
+    payload = dict(structured_output or {})
+    if "studio_generator" in payload or "studio" in payload:
+        return False
+    return True
 
 
 def _append_metadata_row(*, model: str, role: str, text: str, context: str) -> None:

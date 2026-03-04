@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.mode_selector import normalize_mode_name
+from modules.character.mode_profile import (
+    MODE_BLEND_ALPHA,
+    blend_mode_dialog_levels,
+    blend_mode_traits,
+    resolve_mode_profile,
+)
 from modules.character.persona_compiler import compile_system_persona
 from modules.character.storage import CharacterStorage
 
@@ -60,6 +67,16 @@ class CharacterComposer:
             mood=mood,
             overlay_mods=overlay_mods,
         )
+        active_mode = normalize_mode_name(
+            str(meta.get("active_mode") or dm.get("active_mode") or "friend_chat"),
+            allow_custom=True,
+        )
+        mode_profile = resolve_mode_profile(mode=active_mode, character_id=character_id)
+        style_coefficients = blend_mode_dialog_levels(
+            base_levels=style_coefficients,
+            dialog_targets=mode_profile.dialog_targets,
+            alpha=MODE_BLEND_ALPHA,
+        )
 
         effective_traits: dict[str, float] = {}
         persona_traits: dict[str, float] = {}
@@ -104,15 +121,22 @@ class CharacterComposer:
         persona_payload["mood"] = mood
         traits_payload = dict(persona_payload.get("traits") or {})
         traits_payload.update(persona_traits)
+        traits_payload = blend_mode_traits(
+            base_traits=traits_payload,
+            trait_targets=mode_profile.trait_targets,
+            alpha=MODE_BLEND_ALPHA,
+        )
         persona_payload["traits"] = traits_payload
-        active_mode = str(meta.get("active_mode") or dm.get("active_mode") or "friend_chat").strip().lower() or "friend_chat"
+        for key in ("warmth", "sarcasm", "strictness", "verbosity", "empathy", "teasing"):
+            if key in traits_payload:
+                effective_traits[key] = float(_to_float(traits_payload.get(key), 0.5))
         prompt, _ = compile_system_persona(
             character_id=character_id,
             persona_state=persona_payload,
             active_mode=active_mode,
         )
         used = [f"spec:characters/{character_id}/persona_spec.json", f"spec:characters/{character_id}/persona_state.json"]
-        active_traits = sorted(persona_traits.keys())
+        active_traits = sorted([k for k in ("warmth", "sarcasm", "strictness", "verbosity", "empathy", "teasing") if k in traits_payload])
         return CharacterComposeResult(
             prompt=prompt,
             mood=mood,

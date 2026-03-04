@@ -56,13 +56,15 @@ class MemoryManager:
         retrieve_score_threshold: float = 0.28,
         prompt_registry: PromptRegistry | None = None,
     ):
-        self.short_memory = short_memory or ShortMemory(limit=80, summary_trigger=60)
-        self.long_memory = long_memory or LongMemory()
-        self.vector_store = vector_store or VectorStore(dim=128)
-        self.fact_extractor = fact_extractor or FactExtractor()
-        self.user_profile_store = user_profile_store or UserProfileStore()
-        self.assistant_profile_store = assistant_profile_store or AssistantProfileStore()
-        self.event_store = event_store or EventStore()
+        self.short_memory = short_memory if short_memory is not None else ShortMemory(limit=80, summary_trigger=60)
+        self.long_memory = long_memory if long_memory is not None else LongMemory()
+        self.vector_store = vector_store if vector_store is not None else VectorStore(dim=128)
+        self.fact_extractor = fact_extractor if fact_extractor is not None else FactExtractor()
+        self.user_profile_store = user_profile_store if user_profile_store is not None else UserProfileStore()
+        self.assistant_profile_store = (
+            assistant_profile_store if assistant_profile_store is not None else AssistantProfileStore()
+        )
+        self.event_store = event_store if event_store is not None else EventStore()
         self.retrieve_score_threshold = max(0.0, min(1.0, float(retrieve_score_threshold)))
         self._prompt_registry = prompt_registry or PromptRegistry()
 
