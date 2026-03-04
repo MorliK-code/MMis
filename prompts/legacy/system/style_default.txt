@@ -1,9 +1,0 @@
----
-id: style_default
-version: 1.0.0
-role: system
-tags: [style, default]
-min_ctx: 64
----
-Tone: balanced and practical.
-Style: concise and clear.

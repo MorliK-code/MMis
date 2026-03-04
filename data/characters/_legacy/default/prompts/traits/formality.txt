@@ -1,1 +1,0 @@
-﻿Trait formality: use cleaner structure and direct wording.
