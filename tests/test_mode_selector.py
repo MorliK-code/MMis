@@ -15,18 +15,18 @@ class ModeSelectorTests(unittest.TestCase):
 
     def test_traceback_prefers_debugger(self) -> None:
         decision = self.selector.decide(
-            active_mode="friend_chat",
+            active_mode="chatting",
             mode_lock=False,
             intent="bug_report",
             emotion="frustrated",
             tags=["has_traceback", "topic_python"],
         )
         self.assertEqual(decision.mode, "debugger")
-        self.assertTrue(self.selector.should_switch(current_mode="friend_chat", decision=decision))
+        self.assertTrue(self.selector.should_switch(current_mode="chatting", decision=decision))
 
     def test_code_task_prefers_engineer(self) -> None:
         decision = self.selector.decide(
-            active_mode="friend_chat",
+            active_mode="chatting",
             mode_lock=False,
             intent="task",
             emotion="neutral",
@@ -36,7 +36,7 @@ class ModeSelectorTests(unittest.TestCase):
 
     def test_planning_prefers_planner(self) -> None:
         decision = self.selector.decide(
-            active_mode="friend_chat",
+            active_mode="chatting",
             mode_lock=False,
             intent="planning",
             emotion="neutral",
@@ -63,12 +63,12 @@ class ModeSelectorTests(unittest.TestCase):
             emotion="neutral",
             tags=["intent_chat", "emotion_neutral"],
         )
-        self.assertEqual(decision.mode, "friend_chat")
+        self.assertEqual(decision.mode, "chatting")
         self.assertTrue(self.selector.should_switch(current_mode="debugger", decision=decision))
 
     def test_normalize_allows_custom_mode_when_enabled(self) -> None:
         self.assertEqual(normalize_mode_name("my_custom_mode", allow_custom=True), "my_custom_mode")
-        self.assertEqual(normalize_mode_name("my_custom_mode"), "friend_chat")
+        self.assertEqual(normalize_mode_name("my_custom_mode"), "chatting")
 
 
 if __name__ == "__main__":

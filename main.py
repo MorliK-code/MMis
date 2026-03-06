@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from typing import Any
 
-from config.logging_config import setup_logging
-from config.model_config import ModelProfile, get_profile
-from config.paths import BASE_DIR, ensure_dirs
-from config.settings import AppSettings, load_config
+from config.settings import AppSettings, BASE_DIR, ModelProfile, ensure_dirs, get_profile, load_config, setup_logging
 from core.brain import Brain
 from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
@@ -29,6 +27,7 @@ from modules.automation import BrowserConfig, BrowserController, OSActions, OSAc
 from modules.internet import SearchClient, WebScraper
 from modules.screen import ScreenAnalyzer
 from modules.voice import VoiceManager
+from utils.api_process_cleaner import clean_mmis_api_processes
 
 
 LOGGER = logging.getLogger(__name__)
@@ -229,6 +228,7 @@ def run_ui() -> int:
 def run_api(settings: AppSettings) -> int:
     import uvicorn
 
+    clean_mmis_api_processes(tag="mmis", root=os.getcwd(), exclude_pid=os.getpid())
     uvicorn.run("api.app:app", host=settings.host, port=settings.port, reload=False)
     return 0
 

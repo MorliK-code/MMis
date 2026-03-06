@@ -13,8 +13,17 @@ from core.response_pipeline import PipelineResult, ResponsePipeline
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
 from memory.memory_manager import MemoryManager
+from memory.text_sanitizer import (
+    clean_assistant_text_for_memory,
+    contains_memory_service_sections,
+    sanitize_assistant_memory_text,
+)
 from metadata.metadata_extractor import MetadataExtractor
 from utils.datetime_local import parse_time_to_epoch
+from utils.logger import get_logger, log_json
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -151,6 +160,7 @@ class Brain:
         state_map.setdefault("last_signals", state_snapshot.last_signals)
         state_map.setdefault("last_actions", state_snapshot.last_actions)
         state_map.setdefault("web_mode", state_snapshot.web_mode)
+        state_map.setdefault("web_auto_profile", state_snapshot.web_auto_profile)
         state_map.setdefault("thinking_enabled", state_snapshot.thinking_enabled)
         state_map.setdefault("output_format", state_snapshot.output_format)
 
@@ -273,6 +283,10 @@ class Brain:
                 value = str(op.get("value") or "").strip().lower()
                 if value in {"auto", "on", "off"}:
                     self.state_manager.patch({"web_mode": value})
+            elif key == "state_web_auto_profile":
+                value = str(op.get("value") or "").strip().lower()
+                if value in {"balanced", "aggressive"}:
+                    self.state_manager.patch({"web_auto_profile": value})
             elif key == "state_scoped_settings":
                 value = op.get("value")
                 if isinstance(value, dict):
@@ -470,7 +484,27 @@ class Brain:
                 turn_id=turn_id,
             )
 
-        assistant_payload = str(result.text or "").strip()
+        assistant_sanitized = clean_assistant_text_for_memory(result)
+        assistant_payload = str(assistant_sanitized.text or "").strip()
+        if assistant_sanitized.reason in {"structured_output_text", "response_block_extract", "fallback_strip"}:
+            log_json(
+                LOGGER,
+                "memory_text_sanitized",
+                reason=assistant_sanitized.reason,
+                changed=bool(assistant_sanitized.changed),
+                had_service_sections=bool(assistant_sanitized.had_service_sections),
+            )
+        if contains_memory_service_sections(assistant_payload):
+            LOGGER.warning("assistant memory payload still contains service sections; forcing sanitize")
+            guard = sanitize_assistant_memory_text(text=assistant_payload)
+            assistant_payload = str(guard.text or "").strip()
+            log_json(
+                LOGGER,
+                "memory_text_sanitized",
+                reason=f"guard_{str(guard.reason or 'fallback_strip')}",
+                changed=bool(guard.changed),
+                had_service_sections=bool(guard.had_service_sections),
+            )
         if assistant_payload:
             try:
                 answer_ms = float(result.stats.get("answer_ms") or 0.0)
@@ -656,8 +690,8 @@ class Brain:
         active_mode = str(
             raw.get("active_mode")
             or state_map.get("active_mode")
-            or "friend_chat"
-        ).strip().lower() or "friend_chat"
+            or "chatting"
+        ).strip().lower() or "chatting"
         if not traits and not mood:
             return {}
         return {

@@ -45,7 +45,7 @@ class PersonaCompilerTests(unittest.TestCase):
             active_mode="spicy_chat",
         )
         self.assertIn("Active mode: spicy_chat.", text)
-        self.assertNotEqual(str(debug.get("mode_profile_id") or ""), "friend_chat")
+        self.assertNotEqual(str(debug.get("mode_profile_id") or ""), "chatting")
         self.assertIn(
             str(debug.get("mode_profile_source") or ""),
             {"builtin_preset", "semantic_preset", "modes_spec.persona_effects"},

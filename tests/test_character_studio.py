@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from config.model_config import PROFILES
+from config.settings import get_model_profiles
 from core.response_pipeline import PROFILE_AUTONOMOUS, PipelineContext, ResponsePipeline
 from llm.provider_base import (
     LLMProviderBase,
@@ -22,6 +22,8 @@ from llm.provider_base import (
     Usage,
 )
 from modules.studio.studio_generator import StudioGenerator
+
+PROFILES = get_model_profiles()
 
 
 class _StudioStubProvider(LLMProviderBase):
@@ -36,14 +38,14 @@ class _StudioStubProvider(LLMProviderBase):
         if task == "seed_extract":
             payload = {
                 "operation_type": "build_character_pack",
-                "targets": {"character_ids": ["luna_program"], "mode_ids": ["friend_chat", "helper"], "scope": "character"},
+                "targets": {"character_ids": ["luna_program"], "mode_ids": ["chatting", "helper"], "scope": "character"},
                 "character": {
                     "character_id": "luna_program",
                     "display_name": "Luna",
                     "vibe": "balanced",
                     "technicality": 0.8,
                     "energy": 0.55,
-                    "default_mode": "friend_chat",
+                    "default_mode": "chatting",
                     "extra_modes": ["helper"],
                     "llm_profile": "BALANCED",
                     "set_active": True,
@@ -61,7 +63,7 @@ class _StudioStubProvider(LLMProviderBase):
         elif task == "build_pack":
             payload = {
                 "character": {"id": "luna_program", "name": "Luna", "vibe": "balanced", "llm_profile": "BALANCED"},
-                "modes": [{"id": "friend_chat", "description": "Friendly mode"}, {"id": "helper", "description": "Helper mode"}],
+                "modes": [{"id": "chatting", "description": "Friendly mode"}, {"id": "helper", "description": "Helper mode"}],
                 "dialog_policy": {"do": ["Be helpful"], "avoid": ["Be vague"], "escalation": ["Ask follow-up"]},
                 "prompts": {"system": "You are Luna.", "style": "Pragmatic", "boundaries": "Keep safe"},
                 "samples": {"opener": "Привет", "clarification_question": "Уточни цель", "refusal_safe": "Не могу"},
@@ -75,7 +77,7 @@ class _StudioStubProvider(LLMProviderBase):
                             "character_id": "luna_program",
                             "id": "luna_program",
                             "name": "Luna",
-                            "default_mode": "friend_chat",
+                            "default_mode": "chatting",
                             "default_mood": "neutral",
                             "llm_profile": "BALANCED"
                         }
@@ -132,7 +134,7 @@ class CharacterStudioTests(unittest.TestCase):
             provider = _StudioStubProvider()
             pipeline = ResponsePipeline(provider=provider, studio_generator=studio)
 
-            state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+            state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
 
             r1 = pipeline.run(
                 route="command",

@@ -14,7 +14,12 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.response_pipeline import ResponsePipeline, _enforce_response_hygiene
+from core.response_pipeline import (
+    ResponsePipeline,
+    _apply_time_sensitive_web_failsafe,
+    _enforce_response_hygiene,
+    _filter_retrieved_memories_for_time_sensitive_web,
+)
 from llm.provider_base import (
     LLMProviderBase,
     LLMRequest,
@@ -142,6 +147,30 @@ class ResponseHygieneTests(unittest.TestCase):
         )
         self.assertEqual(out.lower().count("милашка"), 1)
         self.assertIn("terms_limited_to_one", applied)
+
+    def test_time_sensitive_web_failsafe_removes_flirty_opener(self) -> None:
+        src = "Ах, ты опять спрашиваешь о курсе? Курс USD/UAH: 43.10 (источник: minfin.com.ua, 2026-03-05)."
+        out = _apply_time_sensitive_web_failsafe(
+            src,
+            web_intent="fx_rate",
+            web_response_style="factual_direct",
+        )
+        self.assertFalse(out.lower().startswith("ах, ты опять"))
+        self.assertIn("Курс USD/UAH", out)
+
+    def test_time_sensitive_memory_filter_drops_noisy_message_blocks(self) -> None:
+        items = [
+            {"text": "[SUMMARY]\nАх, ты опять спрашиваешь о новостях?", "source": "message", "topic": "chat"},
+            {
+                "text": "[WEB] Rate\nsource_url: https://minfin.com.ua\nsource_domain: minfin.com.ua\nfetched_at: 2026-03-05T00:00:00Z\ntext: usd/uah 43.1",
+                "source": "web",
+                "topic": "web:fx_rate",
+            },
+        ]
+        filtered, dropped = _filter_retrieved_memories_for_time_sensitive_web(items)
+        self.assertEqual(dropped, 1)
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(str(filtered[0].get("topic") or ""), "web:fx_rate")
 
 
 if __name__ == "__main__":

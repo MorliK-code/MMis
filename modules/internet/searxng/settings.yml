@@ -6,7 +6,7 @@ general:
 
 server:
   bind_address: "0.0.0.0"
-  port: 8080
+  port: 8088
   secret_key: "mmis-searxng-secret-change-me"
   limiter: false
   public_instance: false
@@ -26,3 +26,29 @@ engines:
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
+    disabled: true
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    disabled: false

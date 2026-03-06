@@ -46,13 +46,26 @@ class CommandScopesTests(unittest.TestCase):
         )
 
     def test_chat_scope_keeps_global_ops(self) -> None:
-        result = self._run("command", "/web", {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"})
+        result = self._run("command", "/web", {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"})
         ops = [x for x in result.memory_ops if str(x.get("op")) == "state_web_mode"]
         self.assertTrue(ops)
         self.assertEqual(str(ops[-1].get("value") or ""), "on")
 
+    def test_web_auto_profile_is_global_in_chat_scope(self) -> None:
+        result = self._run(
+            "command",
+            "/web-auto aggressive",
+            {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"},
+        )
+        mode_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_web_mode"]
+        profile_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_web_auto_profile"]
+        self.assertTrue(mode_ops)
+        self.assertEqual(str(mode_ops[-1].get("value") or ""), "auto")
+        self.assertTrue(profile_ops)
+        self.assertEqual(str(profile_ops[-1].get("value") or ""), "aggressive")
+
     def test_studio_scope_uses_scoped_settings(self) -> None:
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
         start = self._run("command", "/studio start demo", state)
         state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
         result = self._run("command", "/web", state)
@@ -61,8 +74,22 @@ class CommandScopesTests(unittest.TestCase):
         web_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_web_mode"]
         self.assertFalse(web_ops)
 
+    def test_web_auto_profile_is_scoped_in_studio(self) -> None:
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
+        start = self._run("command", "/studio start demo", state)
+        state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
+        result = self._run("command", "/web-auto aggressive", state)
+        scoped_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_scoped_settings"]
+        profile_ops = [x for x in result.memory_ops if str(x.get("op")) == "state_web_auto_profile"]
+        self.assertTrue(scoped_ops)
+        self.assertFalse(profile_ops)
+        scoped_value = dict(scoped_ops[-1].get("value") or {})
+        studio_scope = dict(scoped_value.get("studio") or {})
+        self.assertEqual(str(studio_scope.get("web_mode") or ""), "auto")
+        self.assertEqual(str(studio_scope.get("web_auto_profile") or ""), "aggressive")
+
     def test_studio_dialog_not_written_to_turn_memory(self) -> None:
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
         start = self._run("command", "/studio start demo", state)
         state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
 

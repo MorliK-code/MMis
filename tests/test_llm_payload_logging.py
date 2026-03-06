@@ -33,6 +33,24 @@ class _FakeOllamaClient:
         }
 
 
+class _FakeOllamaClientNoThinkSupport:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def chat(self, **kwargs):
+        payload = dict(kwargs)
+        self.calls.append(payload)
+        if len(self.calls) == 1 and payload.get("think") is True:
+            raise RuntimeError('"model-ollama-test" does not support thinking (status code: 400)')
+        return {
+            "model": str(kwargs.get("model") or ""),
+            "message": {"content": "ok"},
+            "prompt_eval_count": 1,
+            "eval_count": 1,
+            "total_duration": 1000,
+        }
+
+
 class _FakeOpenAICompletions:
     def __init__(self) -> None:
         self.last_kwargs = None
@@ -151,6 +169,24 @@ class PayloadLoggingTests(unittest.TestCase):
         self.assertEqual(row.get("message_roles"), ["system", "user"])
         self.assertEqual(row.get("message_order"), ["0:system", "1:user"])
         self.assertEqual(row.get("system_message"), "s")
+
+    def test_ollama_retries_without_think_when_model_does_not_support_it(self) -> None:
+        provider = OllamaProvider(default_model="model-ollama-test", retries=0)
+        fake_client = _FakeOllamaClientNoThinkSupport()
+        provider._client = fake_client
+
+        req = LLMRequest(
+            model="model-ollama-test",
+            messages=[Message(role="user", content="u")],
+            metadata={"think": True},
+        )
+
+        res = provider.generate(req)
+
+        self.assertEqual(str(res.text), "ok")
+        self.assertEqual(len(fake_client.calls), 2)
+        self.assertTrue(bool(fake_client.calls[0].get("think")))
+        self.assertNotIn("think", fake_client.calls[1])
 
 
 if __name__ == "__main__":

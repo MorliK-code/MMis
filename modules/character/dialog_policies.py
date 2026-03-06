@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config.paths import DATA_DIR
+from config.settings import DATA_DIR
 from config.settings import load_config
 from utils.datetime_local import parse_time_to_epoch
 

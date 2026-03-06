@@ -13,7 +13,7 @@ class CharacterSignals:
     lang: str = "unknown"
     intent: str = "chat"
     emotion: str = "neutral"
-    mode: str = "friend_chat"
+    mode: str = "chatting"
     topics: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     user_feedback: list[str] = field(default_factory=list)
@@ -23,7 +23,7 @@ class CharacterSignals:
             "lang": str(self.lang or "unknown"),
             "intent": str(self.intent or "chat"),
             "emotion": str(self.emotion or "neutral"),
-            "mode": str(self.mode or "friend_chat"),
+            "mode": str(self.mode or "chatting"),
             "topics": [str(x) for x in list(self.topics or []) if str(x).strip()],
             "tags": [str(x) for x in list(self.tags or []) if str(x).strip()],
             "user_feedback": [str(x) for x in list(self.user_feedback or []) if str(x).strip()],
@@ -123,5 +123,5 @@ def _canonicalize_lang_tag(*, tags: list[str], lang: str) -> list[str]:
 
 
 def _resolve_mode(*, meta: dict[str, Any]) -> str:
-    source = str(meta.get("mode") or meta.get("active_mode") or "friend_chat").strip().lower()
+    source = str(meta.get("mode") or meta.get("active_mode") or "chatting").strip().lower()
     return normalize_mode_name(source, allow_custom=True)

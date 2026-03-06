@@ -66,6 +66,46 @@ class CacheUsageTests(unittest.TestCase):
             self.assertEqual(len(second), 1)
             self.assertEqual(second[0].url, expected.url)
 
+    def test_search_client_volatile_writes_disk_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            q = "volatile write check"
+            expected = SearchResult(
+                title="volatile title",
+                snippet="volatile snippet",
+                url="https://example.com/volatile",
+                source="example.com",
+                published_date="2026-03-05",
+                score=0.0,
+                raw={"provider": "unit"},
+            )
+            c1 = SearchClient(
+                endpoint="http://searxng:8080/search?format=json",
+                strict_endpoint=True,
+                cache_ttl_s=600,
+                cache_dir=root,
+                use_disk_cache=True,
+            )
+            c1._search_endpoint = lambda _q: [expected]  # type: ignore[method-assign]
+            first = c1.search(q, k=1, volatile=True, query_intent="fx_rate")
+            self.assertEqual(len(first), 1)
+
+            c2 = SearchClient(
+                endpoint="http://searxng:8080/search?format=json",
+                strict_endpoint=True,
+                cache_ttl_s=600,
+                cache_dir=root,
+                use_disk_cache=True,
+            )
+
+            def _should_not_call(*_args, **_kwargs):
+                raise AssertionError("network call should not happen on cached volatile result")
+
+            c2._search_endpoint = _should_not_call  # type: ignore[method-assign]
+            second = c2.search(q, k=1, query_intent="fx_rate")
+            self.assertEqual(len(second), 1)
+            self.assertEqual(second[0].url, expected.url)
+
 
 if __name__ == "__main__":
     unittest.main()

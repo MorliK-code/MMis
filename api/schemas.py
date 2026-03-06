@@ -25,6 +25,9 @@ class HealthResponse(BaseModel):
     thinking_enabled: bool
     web_mode: str
     json_mode_enabled: bool
+    active_profile: str
+    quality_profile: str
+    profile_parameters: dict
 
 
 class ModelsResponse(BaseModel):

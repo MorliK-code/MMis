@@ -110,7 +110,7 @@ class ShortMemoryV2Tests(unittest.TestCase):
                     "intent": "chat",
                     "meta": {
                         "turn_id": 1,
-                        "active_mode": "friend_chat",
+                        "active_mode": "chatting",
                         "persona_snapshot": {
                             "character_id": "asya",
                             "mood": "neutral",

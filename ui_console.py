@@ -9,13 +9,17 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from ui.api_client import ApiClient, ApiClientError
-from config.settings import load_config
+from config.settings import get_config_payload, load_config, update_config_values
+from utils.api_process_cleaner import clean_mmis_api_processes
 
 
 CONSOLE_BUILD_ID = "2026-02-28-r2"
+MMIS_API_TAG = "mmis"
 config = load_config()
+_UI_RUNTIME_KEYS = {"mode_lock", "active_mode", "output_parameters", "output_summary"}
 
 @dataclass
 class ConsoleState:
@@ -74,6 +78,7 @@ def _save_ui_state(state: ConsoleState) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _sync_ui_state_to_settings_file(state)
     except Exception:
         return
 
@@ -88,10 +93,91 @@ def _runtime_prefs(state: ConsoleState) -> dict:
     return runtime
 
 
+def _sanitize_runtime_for_config(runtime: dict) -> dict:
+    src = dict(runtime or {})
+    out: dict = {}
+    if isinstance(src.get("mode_lock"), bool):
+        out["mode_lock"] = bool(src.get("mode_lock"))
+    active_mode = str(src.get("active_mode") or "").strip()
+    if active_mode:
+        out["active_mode"] = active_mode
+    if isinstance(src.get("output_parameters"), bool):
+        out["output_parameters"] = bool(src.get("output_parameters"))
+    if isinstance(src.get("output_summary"), bool):
+        out["output_summary"] = bool(src.get("output_summary"))
+    return out
+
+
 def _set_runtime_pref(state: ConsoleState, key: str, value) -> None:
     runtime = _runtime_prefs(state)
     runtime[str(key)] = value
     _save_ui_state(state)
+    _sync_runtime_pref_to_settings_file(str(key), value)
+
+
+def _cfg_get_dotted(payload: dict, dotted: str, default=None):
+    cur = dict(payload or {})
+    for part in [x for x in str(dotted or "").split(".") if x]:
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur.get(part)
+    return cur
+
+
+def _sync_ui_state_to_settings_file(state: ConsoleState) -> None:
+    runtime = _sanitize_runtime_for_config(_runtime_prefs(state))
+    updates = {
+        "ui.console.store_turn": bool(state.store_turn),
+        "ui.console.show_thinking": bool(state.show_thinking),
+        "ui.console.thinking_first": bool(state.thinking_first),
+        "ui.console.runtime": runtime,
+    }
+    try:
+        update_config_values(updates)
+    except Exception:
+        return
+
+
+def _sync_runtime_pref_to_settings_file(key: str, value) -> None:
+    field = str(key or "").strip().lower()
+    if not field:
+        return
+    updates: dict[str, object] = {}
+    if field in _UI_RUNTIME_KEYS:
+        updates[f"ui.console.runtime.{field}"] = value
+
+    if field == "model":
+        text = str(value or "").strip()
+        if text:
+            updates["llm.model_name"] = text
+    elif field == "think_enabled":
+        updates["llm.thinking_enabled"] = bool(value)
+    elif field == "web_mode":
+        text = str(value or "").strip().lower()
+        if text in {"on", "off", "auto"}:
+            updates["internet.web_mode"] = text
+    elif field == "web_auto_profile":
+        text = str(value or "").strip().lower()
+        if text in {"balanced", "aggressive"}:
+            updates["internet.web_auto_profile"] = text
+    elif field == "json_mode_enabled":
+        flag = bool(value)
+        updates["llm.json_mode_enabled"] = flag
+    if not updates:
+        return
+    try:
+        update_config_values(updates)
+    except Exception:
+        return
+
+
+def _load_console_runtime_from_settings_file() -> dict:
+    try:
+        payload = get_config_payload(force_reload=True)
+    except Exception:
+        return {}
+    runtime = _cfg_get_dotted(payload, "ui.console.runtime", {})
+    return _sanitize_runtime_for_config(dict(runtime) if isinstance(runtime, dict) else {})
 
 
 def _send_backend_command_silent(state: ConsoleState, command_text: str) -> bool:
@@ -111,12 +197,6 @@ def _send_backend_command_silent(state: ConsoleState, command_text: str) -> bool
 
 def _apply_persisted_runtime_settings(state: ConsoleState) -> None:
     runtime = _runtime_prefs(state)
-    web_mode = str(runtime.get("web_mode") or "").strip().lower()
-    if web_mode in {"on", "off", "auto"}:
-        try:
-            state.web_mode = str(state.api.set_web_mode(web_mode))
-        except ApiClientError:
-            pass
 
     mode_lock = runtime.get("mode_lock")
     if isinstance(mode_lock, bool):
@@ -194,7 +274,7 @@ def _print_header(state: ConsoleState) -> None:
             _print_health_short(state, startup=True)
             _ensure_model_backend(state)
             return
-    print("Запусти вручную: python main.py --mode api")
+    print("Запусти вручную: python api_main.py --mmis-tag mmis")
 
 
 def _print_help() -> None:
@@ -204,6 +284,8 @@ def _print_help() -> None:
     print("/help                        показать эту справку")
     print("/connect [url]               переподключиться к API (можно указать URL)")
     print("/restartapi                  перезапустить локальный API-процесс")
+    print("/restartall                  полный рестарт UI+API в этом же окне")
+    print("/cleanapi                    убить все MMis API-процессы (tag=mmis)")
     print("/models                      показать доступные модели")
     print("/model                       показать текущую модель")
     print("/model <name>                переключить модель")
@@ -220,7 +302,9 @@ def _print_help() -> None:
     print("/nothink                     выключить thinking у модели")
     print("/web                         включить web-поиск (SearxNG backend)")
     print("/no-web                      выключить web-поиск")
-    print("/web-auto                    auto web: high-priority for rates/weather/today/latest")
+    print("/web-auto                    включить auto web (текущий web_auto_profile)")
+    print("/web-auto balanced|aggressive переключить профиль auto-решений web")
+    print("/web-auto status             показать текущий web_auto_profile")
     print("/output status               показать формат вывода")
     print("/output parameters on|off    включить/выключить блок [PARAMETERS]")
     print("/output summary on|off       включить/выключить блок [SUMMARY]")
@@ -293,6 +377,25 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             print("API restart failed.")
         return True
 
+    if key in {"/restartall", "/restart", "/restart-app", "/reboot"}:
+        if _restart_full_app(state):
+            print("Full app restarted (UI+API).")
+            _print_health_short(state)
+            _ensure_model_backend(state)
+            return True
+        print("Full app restart failed.")
+        return True
+
+    if key in {"/cleanapi", "/api-clean"}:
+        stopped_model = _stop_runtime_ollama_model(state)
+        killed = clean_mmis_api_processes(tag=MMIS_API_TAG, root=Path(__file__).resolve().parent)
+        state.online = False
+        state.api_process = None
+        if stopped_model:
+            print("Ollama runtime model unloaded.")
+        print(f"MMis API cleanup: killed {killed} process(es).")
+        return True
+
     if key == "/models":
         if not _ensure_connected_or_start(state):
             return True
@@ -359,17 +462,37 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         if not _ensure_connected_or_start(state):
             return True
 
-        target = "on" if key == "/web" else ("off" if key == "/no-web" else "auto")
-        try:
-            actual = str(state.api.set_web_mode(target))
-            state.web_mode = actual
-            _set_runtime_pref(state, "web_mode", str(actual).strip().lower())
-            print(f"Web mode: {actual}")
-            if arg :
-                _send_chat(state, arg)
-        except ApiClientError as exc:
-            state.online = False
-            print(f"API error: {exc}")
+        if key in {"/web", "/no-web"}:
+            target = "on" if key == "/web" else "off"
+            try:
+                actual = str(state.api.set_web_mode(target))
+                state.web_mode = actual
+                _set_runtime_pref(state, "web_mode", str(actual).strip().lower())
+                print(f"Web mode: {actual}")
+                if arg:
+                    _send_chat(state, arg)
+            except ApiClientError as exc:
+                state.online = False
+                print(f"API error: {exc}")
+            return True
+
+        web_auto_arg = str(arg or "").strip().lower()
+        if not web_auto_arg:
+            try:
+                actual = str(state.api.set_web_mode("auto"))
+                state.web_mode = actual
+                _set_runtime_pref(state, "web_mode", str(actual).strip().lower())
+                print(f"Web mode: {actual}")
+            except ApiClientError as exc:
+                state.online = False
+                print(f"API error: {exc}")
+            return True
+        if web_auto_arg not in {"balanced", "aggressive", "status"}:
+            print("Usage: /web-auto [balanced|aggressive|status]")
+            return True
+        rc = _send_chat(state, raw, command_output=True)
+        if rc == 0 and web_auto_arg in {"balanced", "aggressive"}:
+            _set_runtime_pref(state, "web_auto_profile", web_auto_arg)
         return True
     
     if key in {"/json", "/nojson"}:
@@ -831,6 +954,15 @@ def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) 
             model = str(getattr(reply, "model", "") or "")
             if model:
                 print(f"[model: {model}]")
+            stats_map = getattr(reply, "stats", {}) if isinstance(getattr(reply, "stats", None), dict) else {}
+            params_map = getattr(reply, "parameters", {}) if isinstance(getattr(reply, "parameters", None), dict) else {}
+            web_trace_id = str(
+                stats_map.get("web_trace_id")
+                or params_map.get("web_trace_id")
+                or ""
+            ).strip()
+            if web_trace_id:
+                print(f"[web_trace_id: {web_trace_id}]")
             if state.show_thinking:
                 thinking = str(getattr(reply, "thinking", "") or "")
                 if str(streamed_thinking or "").strip():
@@ -903,7 +1035,7 @@ def _ensure_connected_or_start(state: ConsoleState) -> bool:
         return True
     if state.auto_start_api and _start_api_process(state) and _wait_for_api(state, timeout_s=18.0):
         return True
-    print("API offline. Запусти: python main.py --mode api")
+    print("API offline. Запусти: python api_main.py --mmis-tag mmis")
     return False
 
 
@@ -956,6 +1088,136 @@ def _start_ollama_process(state: ConsoleState) -> bool:
         return False
 
 
+def _is_local_api_base_url(base_url: str) -> bool:
+    raw = str(base_url or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _stop_runtime_ollama_model(state: ConsoleState, *, check_api_health: bool = True) -> bool:
+    if not _is_local_api_base_url(getattr(state.api, "base_url", "")):
+        return False
+
+    if check_api_health and bool(state.online):
+        try:
+            state.api.health()
+        except Exception:
+            pass
+
+    get_runtime_model = getattr(state.api, "get_runtime_model", None)
+    if not callable(get_runtime_model):
+        return False
+    model = str(get_runtime_model() or "").strip()
+    if not model or not _looks_like_ollama_runtime(model):
+        return False
+    targets = _resolve_ollama_stop_targets(model)
+    if not targets:
+        return False
+
+    try:
+        for _ in range(2):
+            for target in targets:
+                subprocess.run(
+                    ["ollama", "stop", str(target)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=12.0,
+                )
+            if _wait_ollama_models_unloaded(targets, timeout_s=3.0):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _resolve_ollama_stop_targets(model: str) -> list[str]:
+    target = str(model or "").strip()
+    if not target:
+        return []
+    ps_rows = _ollama_cli_name_id_rows(["ollama", "ps"])
+    if not ps_rows:
+        return [target]
+
+    target_low = target.lower()
+    list_rows = _ollama_cli_name_id_rows(["ollama", "list"])
+    target_ids = {str(row_id or "").strip().lower() for row_name, row_id in list_rows if str(row_name or "").strip().lower() == target_low}
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for row_name, row_id in ps_rows:
+        name = str(row_name or "").strip()
+        low = name.lower()
+        row_id_low = str(row_id or "").strip().lower()
+        if not name:
+            continue
+        if low == target_low or (target_ids and row_id_low in target_ids):
+            if low not in seen:
+                seen.add(low)
+                out.append(name)
+    if not out:
+        out.append(target)
+    return out
+
+
+def _wait_ollama_models_unloaded(models: list[str], *, timeout_s: float = 3.0) -> bool:
+    targets = {str(x or "").strip().lower() for x in list(models or []) if str(x or "").strip()}
+    if not targets:
+        return True
+    deadline = time.time() + max(0.5, float(timeout_s))
+    while time.time() < deadline:
+        if not _ollama_ps_has_any(targets):
+            return True
+        time.sleep(0.25)
+    return (not _ollama_ps_has_any(targets))
+
+
+def _ollama_ps_has_any(targets_lower: set[str]) -> bool:
+    targets = {str(x or "").strip().lower() for x in set(targets_lower or set()) if str(x or "").strip()}
+    if not targets:
+        return False
+    rows = _ollama_cli_name_id_rows(["ollama", "ps"])
+    for row_name, _ in rows:
+        name = str(row_name or "").strip().lower()
+        if name in targets:
+            return True
+    return False
+
+
+def _ollama_cli_name_id_rows(command: list[str]) -> list[tuple[str, str]]:
+    try:
+        row = subprocess.run(
+            list(command or []),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=8.0,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except Exception:
+        return []
+    if int(row.returncode or 0) != 0:
+        return []
+    lines = [str(line or "").strip() for line in str(row.stdout or "").splitlines() if str(line or "").strip()]
+    if len(lines) < 2:
+        return []
+    out: list[tuple[str, str]] = []
+    for line in lines[1:]:
+        parts = str(line).split()
+        if len(parts) < 2:
+            continue
+        out.append((str(parts[0]), str(parts[1])))
+    return out
+
+
 def _looks_like_ollama_runtime(model: str) -> bool:
     src = str(model or "").strip().lower()
     if not src:
@@ -999,14 +1261,16 @@ def _start_api_process(state: ConsoleState) -> bool:
         return True
 
     root = Path(__file__).resolve().parent
-    main_py = root / "main.py"
-    if not main_py.exists():
-        print(f"main.py not found: {main_py}")
+    api_main = root / "api_main.py"
+    if not api_main.exists():
+        print(f"api_main.py not found: {api_main}")
         return False
+
+    clean_mmis_api_processes(tag=MMIS_API_TAG, root=root)
 
     try:
         state.api_process = subprocess.Popen(
-            [sys.executable, str(main_py), "--mode", "api"],
+            [sys.executable, str(api_main), "--mmis-tag", MMIS_API_TAG],
             cwd=str(root),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1041,9 +1305,11 @@ def _restart_api_process(state: ConsoleState) -> bool:
 def _stop_api_process(state: ConsoleState) -> None:
     proc = state.api_process
     if proc is None:
+        _stop_runtime_ollama_model(state)
         return
     if proc.poll() is not None:
         state.api_process = None
+        _stop_runtime_ollama_model(state, check_api_health=False)
         return
     try:
         proc.terminate()
@@ -1054,10 +1320,22 @@ def _stop_api_process(state: ConsoleState) -> None:
         except Exception:
             pass
     state.api_process = None
+    _stop_runtime_ollama_model(state, check_api_health=False)
 
 
 def _cleanup(state: ConsoleState) -> None:
     _stop_api_process(state)
+
+
+def _restart_full_app(state: ConsoleState) -> bool:
+    root = Path(__file__).resolve().parent
+    _save_ui_state(state)
+    _stop_api_process(state)
+    clean_mmis_api_processes(tag=MMIS_API_TAG, root=root)
+    state.online = False
+    if not _start_api_process(state):
+        return False
+    return _wait_for_api(state, timeout_s=18.0)
 
 def _looks_like_shell_command(text: str) -> bool:
     src = str(text or "").strip()
@@ -1073,19 +1351,21 @@ def main() -> int:
     _configure_stdout()
     args = _build_parser().parse_args()
     persisted_ui_state = _load_ui_state()
+    settings_runtime = _load_console_runtime_from_settings_file()
 
     api_url = str(args.api_url).strip() or config.api_url
     persisted_runtime = dict(persisted_ui_state.get("runtime") or {}) if isinstance(persisted_ui_state.get("runtime"), dict) else {}
+    if settings_runtime:
+        persisted_runtime = {**persisted_runtime, **settings_runtime}
+        persisted_ui_state["runtime"] = dict(persisted_runtime)
     model_name = str(args.model).strip()
     if not model_name:
-        model_name = str(persisted_runtime.get("model") or "").strip() or config.console_model
+        model_name = str(config.model_name or "").strip()
     timeout = float(args.timeout) if args.timeout is not None else float(config.console_timeout_sec)
     stream_timeout = float(args.stream_timeout) if args.stream_timeout is not None else float(config.console_stream_timeout_sec)
 
     if args.no_store:
         store_turn = False
-    elif isinstance(persisted_ui_state.get("store_turn"), bool):
-        store_turn = bool(persisted_ui_state.get("store_turn"))
     else:
         store_turn = config.console_store_turn
     
@@ -1093,16 +1373,12 @@ def main() -> int:
         show_thinking = True
     elif args.hide_thinking:
         show_thinking = False
-    elif isinstance(persisted_ui_state.get("show_thinking"), bool):
-        show_thinking = bool(persisted_ui_state.get("show_thinking"))
     else:
         show_thinking = config.console_show_thinking
     if bool(args.thinking_first):
         thinking_first = True
     elif bool(args.thinking_last):
         thinking_first = False
-    elif isinstance(persisted_ui_state.get("thinking_first"), bool):
-        thinking_first = bool(persisted_ui_state.get("thinking_first"))
     else:
         thinking_first = bool(config.console_thinking_first)
 
@@ -1139,10 +1415,8 @@ def main() -> int:
         think_action = True
     elif bool(args.nothink):
         think_action = False
-    elif isinstance(persisted_runtime.get("think_enabled"), bool):
-        think_action = bool(persisted_runtime.get("think_enabled"))
-    elif config.thinking_enabled is not None:
-        think_action = config.thinking_enabled
+    else:
+        think_action = bool(config.thinking_enabled)
 
     if think_action is not None:
         if _ensure_connected_or_start(state):
@@ -1157,10 +1431,8 @@ def main() -> int:
         json_action = True
     elif bool(args.nojson):
         json_action = False
-    elif isinstance(persisted_runtime.get("json_mode_enabled"), bool):
-        json_action = bool(persisted_runtime.get("json_mode_enabled"))
-    elif config.console_json_mode_enabled:
-        json_action = True
+    else:
+        json_action = bool(config.json_mode_enabled)
 
     if json_action is not None:
         if _ensure_connected_or_start(state):
@@ -1171,6 +1443,16 @@ def main() -> int:
                 print(f"API error: {exc}")
 
     if _ensure_connected_or_start(state):
+        web_mode_cfg = str(config.web_mode or "").strip().lower()
+        if web_mode_cfg in {"on", "off", "auto"}:
+            try:
+                state.web_mode = str(state.api.set_web_mode(web_mode_cfg))
+            except ApiClientError as exc:
+                state.online = False
+                print(f"API error: {exc}")
+        web_auto_profile_cfg = str(config.web_auto_profile or "").strip().lower()
+        if web_auto_profile_cfg in {"balanced", "aggressive"}:
+            _send_backend_command_silent(state, f"/web-auto {web_auto_profile_cfg}")
         _apply_persisted_runtime_settings(state)
 
     if state.think_enabled is not None:

@@ -5,9 +5,9 @@ from typing import Iterable
 
 from core.spec_registry import load_spec
 
-_DEFAULT_MODES = ("friend_chat", "helper", "engineer", "debugger", "planner", "spicy_chat")
+_DEFAULT_MODES = ("chatting", "helper", "engineer", "debugger", "planner")
 _LEGACY_TO_MODE = {
-    "chat": "friend_chat",
+    "chat": "chatting",
     "task": "helper",
     "coding": "engineer",
     "debug": "debugger",
@@ -25,7 +25,7 @@ class ModeDecision:
 def normalize_mode_name(value: str, *, allow_custom: bool = False) -> str:
     text = _sanitize_mode_token(value)
     if not text:
-        return "friend_chat"
+        return "chatting"
 
     mode_set, aliases = runtime_mode_catalog()
     mapped = aliases.get(text, text)
@@ -40,7 +40,7 @@ def normalize_mode_name(value: str, *, allow_custom: bool = False) -> str:
         custom = _sanitize_mode_token(mapped)
         if custom:
             return custom
-    return "friend_chat"
+    return "chatting"
 
 
 def list_runtime_modes() -> list[str]:
@@ -133,9 +133,9 @@ class ModeSelector:
             return ModeDecision(mode="helper", confidence=0.82, reason="frustrated_emotion")
 
         if intent_key in {"chat", "clarification"} and not signal_tags:
-            return ModeDecision(mode="friend_chat", confidence=0.85, reason="casual_chat")
+            return ModeDecision(mode="chatting", confidence=0.85, reason="casual_chat")
 
-        return ModeDecision(mode="friend_chat", confidence=0.72, reason="default")
+        return ModeDecision(mode="chatting", confidence=0.72, reason="default")
 
     def should_switch(self, *, current_mode: str, decision: ModeDecision) -> bool:
         if decision.locked:

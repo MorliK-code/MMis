@@ -11,7 +11,7 @@
     "character_id": "your_character_id",
     "name": "Имя персонажа",
     "default_mood": "neutral",
-    "default_mode": "friend_chat",
+    "default_mode": "chatting",
     "llm_profile": "BALANCED",
     "locks": {
       "feminine": true,

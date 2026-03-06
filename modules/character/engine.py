@@ -177,7 +177,7 @@ class CharacterEngine:
             context_meta={
                 "intent": str(context_tags.get("intent") or ""),
                 "is_technical": is_technical,
-                "active_mode": str(context_tags.get("active_mode") or state.get("mode") or "friend_chat"),
+                "active_mode": str(context_tags.get("active_mode") or state.get("mode") or "chatting"),
             },
         )
         return composed.prompt
@@ -240,7 +240,7 @@ class CharacterEngine:
             character=character,
             state=state,
             traits=merged,
-            context_meta={"active_mode": str(meta_map.get("active_mode") or meta_map.get("mode") or "friend_chat")},
+            context_meta={"active_mode": str(meta_map.get("active_mode") or meta_map.get("mode") or "chatting")},
         )
         self.storage.append_event(
             cid,

@@ -24,14 +24,14 @@ from api.schemas import (
     ThinkingRequest,
     WebModeRequest,
 )
-from config.settings import load_config
+from config.settings import get_profile, load_config
 from core.brain import Brain
 from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
 from utils.logger import get_logger, log_json
 
 
-cfg = load_config()
+cfg = load_config(force_reload=True)
 validate_no_txt_paths(cfg)
 app = FastAPI(title="MMis API", version="2.1.0")
 LOGGER = get_logger(__name__)
@@ -39,15 +39,26 @@ LOGGER = get_logger(__name__)
 
 class _Runtime:
     def __init__(self):
+        self.settings = load_config(force_reload=True)
         self.lock = Lock()
-        self.provider = build_provider(cfg.llm_default_provider, default_model=cfg.model_name)
+        self.provider = build_provider(self.settings.llm_default_provider, default_model=self.settings.model_name)
+        provider_raw = str(self.settings.llm_default_provider or "ollama").strip().lower()
+        self.provider_name = "openai" if provider_raw == "openai" else "ollama"
+        self.active_profile = str(self.settings.active_profile or "BALANCED").strip().upper() or "BALANCED"
+        quality_raw = str(self.active_profile or "BALANCED").strip().upper()
+        if quality_raw == "ECONOM":
+            self.quality_profile = "FAST"
+        elif quality_raw in {"FAST", "BALANCED", "QUALITY"}:
+            self.quality_profile = quality_raw
+        else:
+            self.quality_profile = "BALANCED"
         self.brain = Brain(provider=self.provider)
-        self.model = str(cfg.model_name or "").strip()
-        self.thinking_enabled = bool(cfg.thinking_enabled)
-        self.web_mode = cfg.web_mode if bool(cfg.internet_enabled) else "off"
-        self.json_mode_enabled = bool(cfg.json_mode_enabled)
+        self.model = str(self.settings.model_name or "").strip()
+        self.thinking_enabled = bool(self.settings.thinking_enabled)
+        self.web_mode = self.settings.web_mode if bool(self.settings.internet_enabled) else "off"
+        self.json_mode_enabled = bool(self.settings.json_mode_enabled)
 
-        self.meta_root = Path(cfg.memory_dir) / "metadata"
+        self.meta_root = Path(self.settings.memory_dir) / "metadata"
         self.meta_root.mkdir(parents=True, exist_ok=True)
         self._message_seq = self._load_last_message_id()
         self.last_stats: dict[str, Any] = {}
@@ -84,16 +95,53 @@ class _Runtime:
 _runtime = _Runtime()
 
 
+def _resolved_profile_payload() -> tuple[Any, dict[str, Any]]:
+    profile = get_profile(_runtime.active_profile)
+    payload = {
+        "generation": {
+            "temperature": float(profile.generation.temperature),
+            "top_p": float(profile.generation.top_p),
+            "repeat_penalty": float(profile.generation.repeat_penalty),
+            "max_tokens": (
+                int(profile.generation.max_tokens)
+                if profile.generation.max_tokens is not None
+                else None
+            ),
+            "stop": [str(x) for x in list(profile.generation.stop or ()) if str(x)],
+        },
+        "ollama": {
+            "num_thread": int(profile.ollama.num_thread),
+            "num_ctx": int(profile.ollama.num_ctx),
+            "num_gpu": int(profile.ollama.num_gpu),
+            "num_batch": int(profile.ollama.num_batch),
+            "keep_alive": str(profile.ollama.keep_alive),
+        },
+        "openai": {
+            "model": str(profile.openai.model),
+            "reasoning_effort": str(profile.openai.reasoning_effort),
+        },
+    }
+    return profile, payload
+
+
+def _build_health_response() -> HealthResponse:
+    _profile, profile_payload = _resolved_profile_payload()
+    return HealthResponse(
+        status="ok",
+        model=_runtime.model,
+        thinking_enabled=bool(_runtime.thinking_enabled),
+        json_mode_enabled=bool(_runtime.json_mode_enabled),
+        web_mode=str(_runtime.web_mode),
+        active_profile=str(_runtime.active_profile or "BALANCED"),
+        quality_profile=str(_runtime.quality_profile or "BALANCED"),
+        profile_parameters=profile_payload,
+    )
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     with _runtime.lock:
-        return HealthResponse(
-            status="ok",
-            model=_runtime.model,
-            thinking_enabled=bool(_runtime.thinking_enabled),
-            json_mode_enabled=bool(_runtime.json_mode_enabled),
-            web_mode=str(_runtime.web_mode),
-        )
+        return _build_health_response()
 
 
 @app.get("/models", response_model=ModelsResponse)
@@ -120,13 +168,7 @@ def set_model(req: ModelSetRequest) -> ModelsResponse:
 def set_thinking(req: ThinkingRequest) -> HealthResponse:
     with _runtime.lock:
         _runtime.thinking_enabled = bool(req.enabled)
-        return HealthResponse(
-            status="ok",
-            model=_runtime.model,
-            thinking_enabled=bool(_runtime.thinking_enabled),
-            json_mode_enabled=bool(_runtime.json_mode_enabled),
-            web_mode=str(_runtime.web_mode),
-        )
+        return _build_health_response()
 
 @app.post("/web-mode", response_model=HealthResponse)
 def set_web_mode(req: WebModeRequest) -> HealthResponse:
@@ -136,25 +178,13 @@ def set_web_mode(req: WebModeRequest) -> HealthResponse:
     
     with _runtime.lock:
         _runtime.web_mode = mode
-        return HealthResponse(
-            status="ok",
-            model=_runtime.model,
-            thinking_enabled=bool(_runtime.thinking_enabled),
-            web_mode=str(_runtime.web_mode),
-            json_mode_enabled=bool(_runtime.json_mode_enabled),
-            )
+        return _build_health_response()
 
 @app.post("/json-mode", response_model=HealthResponse)
 def set_json_mode(req: JsonModeRequest) -> HealthResponse:
     with _runtime.lock:
         _runtime.json_mode_enabled = bool(req.enabled)
-        return HealthResponse(
-            status="ok",
-            model=_runtime.model,
-            thinking_enabled=bool(_runtime.thinking_enabled),
-            json_mode_enabled=bool(_runtime.json_mode_enabled),
-            web_mode=str(_runtime.web_mode),
-        )
+        return _build_health_response()
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
@@ -190,14 +220,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         )
         result = _runtime.brain.handle_message(
             text,
-            meta={
-                "model": _runtime.model,
-                "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
-                "web_mode":str(_runtime.web_mode),
-                "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
-                "store_turn": bool(req.store_turn),
-                "source": "api",
-            },
+            meta=_build_chat_meta(req=req, source="api"),
         )
 
         answer_raw = str(result.text or "")
@@ -296,16 +319,12 @@ def chat_stream(req: ChatRequest):
                     )
                     result = _runtime.brain.handle_message(
                         text,
-                        meta={
-                            "model": _runtime.model,
-                            "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
-                            "web_mode":str(_runtime.web_mode),
-                            "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
-                            "store_turn": bool(req.store_turn),
-                            "source": "api",
-                            "stream_on_answer_chunk": _on_answer,
-                            "stream_on_thinking_chunk": _on_thinking,
-                        },
+                        meta=_build_chat_meta(
+                            req=req,
+                            source="api",
+                            stream_on_answer_chunk=_on_answer,
+                            stream_on_thinking_chunk=_on_thinking,
+                        ),
                     )
                     state["result"] = result
             except Exception as exc:
@@ -482,6 +501,39 @@ def _apply_runtime_model(target: str) -> tuple[bool, str, list[str]]:
     return True, "", models
 
 
+def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str, Any]:
+    profile, _ = _resolved_profile_payload()
+    meta: dict[str, Any] = {
+        "model": _runtime.model,
+        "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
+        "web_mode": str(_runtime.web_mode),
+        "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
+        "store_turn": bool(req.store_turn),
+        "source": str(source or "api"),
+        "quality_profile": str(_runtime.quality_profile or "BALANCED"),
+        "temperature": float(profile.generation.temperature),
+        "top_p": float(profile.generation.top_p),
+        "repeat_penalty": float(profile.generation.repeat_penalty),
+    }
+    if profile.generation.max_tokens is not None:
+        meta["max_tokens"] = int(profile.generation.max_tokens)
+    if profile.generation.stop:
+        meta["stop"] = [str(x) for x in list(profile.generation.stop) if str(x)]
+    if str(_runtime.provider_name or "").strip().lower() == "ollama":
+        meta.update(
+            {
+                "num_thread": int(profile.ollama.num_thread),
+                "num_ctx": int(profile.ollama.num_ctx),
+                "num_gpu": int(profile.ollama.num_gpu),
+                "num_batch": int(profile.ollama.num_batch),
+                "keep_alive": str(profile.ollama.keep_alive),
+            }
+        )
+    if extra:
+        meta.update(dict(extra))
+    return meta
+
+
 def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
     src = str(text or "").strip()
     if not src.startswith("/"):
@@ -499,13 +551,20 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
             )
         }
     if cmd == "/health":
+        profile, _ = _resolved_profile_payload()
         return {
             "answer": (
                 f"status: ok\n"
                 f"model: {_runtime.model}\n"
                 f"thinking: {'on' if _runtime.thinking_enabled else 'off'}\n"
                 f"web_mode: {_runtime.web_mode}\n"
-                f"json_mode: {'on' if _runtime.json_mode_enabled else 'off'}"
+                f"json_mode: {'on' if _runtime.json_mode_enabled else 'off'}\n"
+                f"active_profile: {_runtime.active_profile}\n"
+                f"quality_profile: {_runtime.quality_profile}\n"
+                f"temperature: {float(profile.generation.temperature):.3f}\n"
+                f"top_p: {float(profile.generation.top_p):.3f}\n"
+                f"repeat_penalty: {float(profile.generation.repeat_penalty):.3f}\n"
+                f"max_tokens: {int(profile.generation.max_tokens) if profile.generation.max_tokens is not None else 'none'}"
             )
         }
     if cmd == "/models":
@@ -544,6 +603,9 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
         return {"answer": "Web: off"}
 
     if cmd in {"/web-auto", "/web_auto", "/autoweb"}:
+        if arg:
+            _runtime.web_mode = "auto"
+            return None
         _runtime.web_mode = "auto"
         return {"answer": "Web: auto"}
     if cmd == "/json":

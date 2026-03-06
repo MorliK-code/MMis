@@ -63,7 +63,7 @@ class CharacterCommandsTests(unittest.TestCase):
 
     @staticmethod
     def _run_command(pipeline: ResponsePipeline, command: str, *, state: dict | None = None):
-        row = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        row = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
         if isinstance(state, dict):
             row.update(state)
         return pipeline.run(

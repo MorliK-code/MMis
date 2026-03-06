@@ -77,6 +77,7 @@ class WebRetrieveMemoryPayloadTests(unittest.TestCase):
         self.assertEqual(str(out.tags.get("web_query_intent") or ""), "fx_rate")
         self.assertEqual(str(out.tags.get("web_fresh_required") or ""), "true")
         self.assertEqual(str(out.tags.get("web_fresh_missing") or ""), "false")
+        self.assertEqual(str(out.tags.get("web_response_style") or ""), "factual_direct")
         self.assertEqual(str(fake_search.last_call.get("query_intent") or ""), "fx_rate")
         self.assertTrue(bool(fake_search.last_call.get("volatile")))
 
@@ -99,8 +100,50 @@ class WebRetrieveMemoryPayloadTests(unittest.TestCase):
         out = stage.run(ctx)
         self.assertEqual(str(out.tags.get("web_used") or ""), "true")
         self.assertEqual(str(out.tags.get("web_query_intent") or ""), "weather")
+        self.assertEqual(str(out.tags.get("web_response_style") or ""), "factual_direct")
         self.assertEqual(str(fake_search.last_call.get("query_intent") or ""), "weather")
         self.assertEqual(int(fake_search.last_call.get("recency_days") or 0), 1)
+
+    def test_recipe_lookup_in_auto_mode_uses_web_for_generic_query(self) -> None:
+        fake_search = _FakeSearch()
+        stage = WebRetrieveStage(
+            search_client=fake_search,
+            scraper=_FakeScraper(),
+            cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+        )
+        ctx = SimpleNamespace(
+            clean_user_msg="найди мне точный рецепт безе",
+            user_msg="найди мне точный рецепт безе",
+            state={"web_mode": "auto", "web_auto_profile": "balanced"},
+            meta={"web_mode": "auto", "web_auto_profile": "balanced"},
+            tags={"intent": "question", "intent_conf": 0.93},
+            logs=[],
+            retrieved_memories=[],
+        )
+        out = stage.run(ctx)
+        self.assertEqual(str(out.tags.get("web_used") or ""), "true")
+        self.assertEqual(str(out.tags.get("web_query_intent") or ""), "generic")
+        self.assertEqual(str(fake_search.last_call.get("query_intent") or ""), "generic")
+
+    def test_smalltalk_in_auto_aggressive_does_not_use_web(self) -> None:
+        fake_search = _FakeSearch()
+        stage = WebRetrieveStage(
+            search_client=fake_search,
+            scraper=_FakeScraper(),
+            cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+        )
+        ctx = SimpleNamespace(
+            clean_user_msg="how are you?",
+            user_msg="how are you?",
+            state={"web_mode": "auto", "web_auto_profile": "aggressive"},
+            meta={"web_mode": "auto", "web_auto_profile": "aggressive"},
+            tags={"intent": "chat", "intent_conf": 0.95},
+            logs=[],
+            retrieved_memories=[],
+        )
+        out = stage.run(ctx)
+        self.assertEqual(str(out.tags.get("web_used") or ""), "false")
+        self.assertEqual(fake_search.last_call, {})
 
     def test_fx_query_retries_with_alternative_when_first_search_empty(self) -> None:
         class _RetrySearch:

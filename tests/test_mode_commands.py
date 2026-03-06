@@ -51,7 +51,7 @@ class ModeCommandsTests(unittest.TestCase):
         return self.pipeline.run(
             route="command",
             user_msg=cmd,
-            state={"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"},
+            state={"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"},
             meta={"source": "test", "store_turn": False},
             retrieved_memories=[],
             traits={},

@@ -289,7 +289,7 @@ def _implicit_trait_deltas(signals: dict[str, Any]) -> dict[str, float]:
         add("empathy", 0.010)
         add("patience", 0.010)
         add("directness", 0.002)
-    elif mode == "friend_chat":
+    elif mode == "chatting":
         add("warmth", 0.006)
         add("humor", 0.006)
         add("emoji_rate", 0.008)

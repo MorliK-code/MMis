@@ -7,6 +7,7 @@ enable_unittest_json_output()
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
@@ -72,7 +73,7 @@ class WebRetrieveResilienceTests(unittest.TestCase):
                 state={
                     "history": [],
                     "quality_profile": "BALANCED",
-                    "active_mode": "friend_chat",
+                    "active_mode": "chatting",
                     "web_mode": "on",
                 },
                 meta={"source": "test", "web_mode": "on", "store_turn": False},
@@ -128,7 +129,7 @@ class WebRetrieveResilienceTests(unittest.TestCase):
                 state={
                     "history": [],
                     "quality_profile": "BALANCED",
-                    "active_mode": "friend_chat",
+                    "active_mode": "chatting",
                     "web_mode": "on",
                 },
                 meta={"source": "test", "web_mode": "on", "store_turn": False},
@@ -141,6 +142,74 @@ class WebRetrieveResilienceTests(unittest.TestCase):
             self.assertIn("stage=web_retrieve fetch_snippet_fallback", joined)
             self.assertIn("web_used=true", joined)
             self.assertIsNotNone(provider.last_request)
+
+    def test_time_sensitive_web_adds_factual_policy_rule(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mmis_web_resilience_") as tmpdir:
+            root = Path(tmpdir)
+            runtime = CharacterRuntime(
+                state_path=root / "brain_state.json",
+                state_store_dir=root / "brain_state_store",
+                autosave=False,
+            )
+            provider = _StubProvider()
+            pipeline = ResponsePipeline(provider=provider, character_runtime=runtime)
+
+            class _OkSearch:
+                def search(self, query: str, recency_days=None, domain_filter=None, k: int = 5, volatile: bool = False, query_intent: str = ""):
+                    _ = (query, recency_days, domain_filter, k, volatile, query_intent)
+                    from modules.internet.search import SearchResult
+
+                    return [
+                        SearchResult(
+                            title="USD/UAH market",
+                            snippet="USD/UAH around 43.2",
+                            url="https://minfin.com.ua/currency/usd/",
+                            source="minfin.com.ua",
+                            published_date="2026-03-05",
+                        )
+                    ]
+
+            class _OkScraper:
+                def scrape(self, url: str):
+                    _ = url
+                    return SimpleNamespace(
+                        title="USD/UAH",
+                        text="Market quote page",
+                        metadata={"clean_method": "bs4", "removed_blocks": 1},
+                    )
+
+            pipeline._stages["web_retrieve"] = WebRetrieveStage(
+                search_client=_OkSearch(),
+                scraper=_OkScraper(),
+                cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+            )
+
+            _ = pipeline.run(
+                route="chat",
+                user_msg="/web курс доллара",
+                state={
+                    "history": [],
+                    "quality_profile": "BALANCED",
+                    "active_mode": "chatting",
+                    "web_mode": "on",
+                },
+                meta={"source": "test", "web_mode": "on", "store_turn": False},
+                retrieved_memories=[],
+                traits={},
+                policies={},
+            )
+
+            req = provider.last_request
+            self.assertIsNotNone(req)
+            system_text = str((req.messages[0].content if req and req.messages else "") or "")
+            self.assertTrue(
+                ("avoid rhetorical openers" in system_text)
+                or ("direct and factual without rhetorical/flirty openers" in system_text)
+            )
+            self.assertTrue(
+                ("source domain and fetch/publish time" in system_text)
+                or ("source domain and timestamp" in system_text)
+            )
 
 
 if __name__ == "__main__":

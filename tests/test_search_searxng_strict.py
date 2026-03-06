@@ -86,10 +86,23 @@ class SearchSearxngStrictTests(unittest.TestCase):
             with patch("modules.internet.search._http_get", side_effect=[json.dumps(payload_a), json.dumps(payload_b)]) as mocked_get:
                 first = client.search("usd uah", k=1, query_intent="fx_rate")
                 second = client.search("usd uah", k=1, volatile=True, query_intent="fx_rate")
+            cached_client = SearchClient(
+                endpoint="http://searxng:8080/search?format=json",
+                strict_endpoint=True,
+                cache_dir=Path(tmpdir),
+            )
+
+            def _should_not_call(_q: str):
+                raise AssertionError("network call should not happen when volatile write is cached")
+
+            cached_client._search_endpoint = _should_not_call  # type: ignore[method-assign]
+            third = cached_client.search("usd uah", k=1, query_intent="fx_rate")
         self.assertEqual(len(first), 1)
         self.assertEqual(len(second), 1)
+        self.assertEqual(len(third), 1)
         self.assertEqual(first[0].url, "https://example.com/a")
         self.assertEqual(second[0].url, "https://example.com/b")
+        self.assertEqual(third[0].url, "https://example.com/b")
         self.assertEqual(mocked_get.call_count, 2)
 
     def test_fx_market_first_ranking_prefers_market_source(self) -> None:
@@ -111,6 +124,31 @@ class SearchSearxngStrictTests(unittest.TestCase):
         ]
         ranked = _rank_results(items, query="курс доллара usd uah", recency_days=1, query_intent="fx_rate")
         self.assertEqual(ranked[0].source, "minfin.com.ua")
+        self.assertIsInstance(ranked[0].score_breakdown, dict)
+        self.assertIn("freshness", dict(ranked[0].score_breakdown or {}))
+        self.assertIn("trust", dict(ranked[0].score_breakdown or {}))
+        self.assertIn("lexical", dict(ranked[0].score_breakdown or {}))
+        self.assertIn("source_priority", dict(ranked[0].score_breakdown or {}))
+
+    def test_generic_ranking_prefers_priority_source(self) -> None:
+        items = [
+            SearchResult(
+                title="Точный рецепт безе",
+                snippet="рецепт безе шаг за шагом",
+                url="https://example-blog.com/recipe",
+                source="example-blog.com",
+                published_date="2026-03-04",
+            ),
+            SearchResult(
+                title="Точный рецепт безе",
+                snippet="рецепт безе шаг за шагом",
+                url="https://allrecipes.com/best-meringue",
+                source="allrecipes.com",
+                published_date="2026-03-04",
+            ),
+        ]
+        ranked = _rank_results(items, query="точный рецепт безе", recency_days=None, query_intent="generic")
+        self.assertEqual(ranked[0].source, "allrecipes.com")
 
     def test_json_403_falls_back_to_searx_html_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

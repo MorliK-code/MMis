@@ -3,7 +3,7 @@
   "character_id": "asya",
   "name": "Ася",
   "default_mood": "neutral",
-  "default_mode": "friend_chat",
+  "default_mode": "chatting",
   "model_profile": "ASYA",
   "locks": {
     "feminine": true,

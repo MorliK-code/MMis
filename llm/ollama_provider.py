@@ -436,30 +436,49 @@ class OllamaProvider(LLMProviderBase):
     def _chat_with_retry(self, *, req: LLMRequest, model: str, stream: bool):
         attempts = max(1, int(self.retries) + 1)
         last_exc: Exception | None = None
-        for attempt in range(attempts):
+        attempt = 0
+        disable_think = False
+        while attempt < attempts:
+            attempt += 1
             try:
-                return self._chat_once(req=req, model=model, stream=stream)
+                return self._chat_once(req=req, model=model, stream=stream, disable_think=disable_think)
             except Exception as exc:
                 last_exc = exc
+                think_requested = bool(dict(req.metadata or {}).get("think"))
+                think_unsupported = think_requested and self._is_thinking_unsupported_error(exc)
+                if think_unsupported and not disable_think:
+                    disable_think = True
+                    attempts = max(attempts, attempt + 1)
+                    LOGGER.warning(
+                        "ollama request failed attempt=%s/%s model=%s stream=%s error=%s; retry without think",
+                        attempt,
+                        attempts,
+                        model,
+                        bool(stream),
+                        exc,
+                    )
+                    continue
                 LOGGER.warning(
                     "ollama request failed attempt=%s/%s model=%s stream=%s error=%s",
-                    attempt + 1,
+                    attempt,
                     attempts,
                     model,
                     bool(stream),
                     exc,
                 )
-                if attempt >= attempts - 1:
+                if attempt >= attempts:
                     break
-                time.sleep(0.25 * (attempt + 1))
+                time.sleep(0.25 * attempt)
         raise RuntimeError(str(last_exc or "Ollama request failed"))
 
-    def _chat_once(self, *, req: LLMRequest, model: str, stream: bool):
+    def _chat_once(self, *, req: LLMRequest, model: str, stream: bool, disable_think: bool = False):
         messages = [_message_to_dict(m) for m in list(req.messages or [])]
         options = self._build_options(req)
         tools = [_tools for _tools in [_toolspec_to_ollama(t) for t in list(req.tools or [])] if _tools]
 
         think = req.metadata.get("think")
+        if disable_think:
+            think = None
         keep_alive = req.metadata.get("keep_alive")
         fmt: str | dict[str, Any] | None = None
         if req.json_mode:
@@ -471,12 +490,13 @@ class OllamaProvider(LLMProviderBase):
             "model": model,
             "messages": messages,
             "stream": bool(stream),
-            "think": think,
             "tools": (tools or None),
             "format": fmt,
             "options": options or None,
             "keep_alive": keep_alive,
         }
+        if think is not None:
+            request_payload["think"] = think
         log_json(
             LOGGER,
             "llm_request_payload",
@@ -488,6 +508,21 @@ class OllamaProvider(LLMProviderBase):
         if stream:
             return payload
         return _as_dict(payload)
+
+    @staticmethod
+    def _is_thinking_unsupported_error(exc: Exception) -> bool:
+        text = str(exc or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "does not support thinking",
+            "unknown field \"think\"",
+            "unknown field 'think'",
+            "unsupported parameter: think",
+            "unsupported parameter 'think'",
+            "unsupported parameter \"think\"",
+        )
+        return any(marker in text for marker in markers)
 
     @staticmethod
     def _build_options(req: LLMRequest) -> dict[str, Any]:

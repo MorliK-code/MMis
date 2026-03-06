@@ -10,8 +10,7 @@ import unittest
 from pathlib import Path
 
 from core.character_runtime import CharacterRuntime
-from config.paths import DATA_DIR
-from config.settings import load_config
+from config.settings import DATA_DIR, load_config
 from modules.character.storage import CharacterStorage
 
 

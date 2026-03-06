@@ -4,18 +4,19 @@ services:
     container_name: mmis-searxng
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${SEARXNG_HOST_PORT:-8080}:${SEARXNG_CONTAINER_PORT:-8080}"
     environment:
       - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_CONTAINER_PORT=${SEARXNG_CONTAINER_PORT:-8080}
     volumes:
-      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./modules/internet/searxng/settings.yml:/etc/searxng/settings.yml:ro
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/search?q=ping&format=json', timeout=5)",
+          "import os, urllib.request; p=os.getenv('SEARXNG_CONTAINER_PORT','8080'); urllib.request.urlopen(f'http://127.0.0.1:{p}/search?q=ping&format=json', timeout=5)",
         ]
       interval: 15s
       timeout: 5s

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +30,14 @@ _NEWS_RE = re.compile(
     r"\b(latest|breaking|release|version|changelog|новост|релиз|обновлен|верс|анонс|announce)\b",
     flags=re.I,
 )
+_LOOKUP_RE = re.compile(
+    r"\b(find|search|lookup|look up|source|verify|recipe|найд|поиск|ищи|источник|проверь|рецепт|знайди|пошук|джерел|перевір)\b",
+    flags=re.I,
+)
+_SMALLTALK_RE = re.compile(
+    r"\b(привет|как дела|что нового|поговори|hello|hi|how are you|small talk|chat)\b",
+    flags=re.I,
+)
 
 _FX_DOMAIN_FILTER = [
     "minfin.com.ua",
@@ -51,23 +60,134 @@ _WEATHER_DOMAIN_FILTER = [
 LOGGER = get_logger(__name__)
 
 
-def _needs_web(text: str, tags: dict[str, Any], meta: dict[str, Any], *, query_intent: str) -> bool:
-    if meta.get("no_web") is True:
+@dataclass(frozen=True)
+class AutoWebDecision:
+    needs_web: bool
+    score: float
+    threshold: float
+    reasons: list[str]
+    profile: str = "balanced"
+
+
+def _sha1_text(value: str) -> str:
+    src = str(value or "")
+    if not src:
+        return ""
+    return hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _snippet500(value: str) -> str:
+    return str(value or "")[:500]
+
+
+def _emit_trace_event(ctx, event: str, payload: dict[str, Any]) -> None:
+    emitter = _as_dict(getattr(ctx, "meta", {})).get("emit_web_trace_event")
+    if callable(emitter):
+        try:
+            emitter(str(event or "").strip(), dict(payload or {}))
+            return
+        except Exception:
+            pass
+    trace = str(_as_dict(getattr(ctx, "meta", {})).get("web_trace_id") or "").strip() or "-"
+    log_json(LOGGER, str(event or "").strip(), trace=trace, **dict(payload or {}))
+
+
+def _resolve_web_auto_profile(meta: dict[str, Any], state: dict[str, Any] | None = None) -> str:
+    state_map = _as_dict(state)
+    raw = str(
+        _as_dict(meta).get("web_auto_profile")
+        or state_map.get("web_auto_profile")
+        or "balanced"
+    ).strip().lower()
+    return raw if raw in {"balanced", "aggressive"} else "balanced"
+
+
+def _has_precision_marker(text: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
         return False
+    markers = ("точн", "актуал", "latest", "exact", "precise", "достовер", "провер")
+    return any(token in low for token in markers)
 
-    # Explicit web request from user/client.
+
+def _to_float01(value: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except Exception:
+        return 0.0
+
+
+def _auto_web_decision(
+    text: str,
+    tags: dict[str, Any],
+    meta: dict[str, Any],
+    *,
+    query_intent: str,
+    web_auto_profile: str,
+) -> AutoWebDecision:
+    profile = str(web_auto_profile or "balanced").strip().lower()
+    threshold = 0.42 if profile == "aggressive" else 0.58
+    reasons: list[str] = []
+
+    if meta.get("no_web") is True:
+        return AutoWebDecision(needs_web=False, score=0.0, threshold=threshold, reasons=["no_web"], profile=profile)
     if meta.get("use_web") is True:
-        return True
-
-    # High-priority live-data intents are always web-backed in auto mode.
+        return AutoWebDecision(needs_web=True, score=1.0, threshold=threshold, reasons=["explicit_use_web"], profile=profile)
     if query_intent in {"fx_rate", "weather", "news_release"}:
-        return True
+        return AutoWebDecision(
+            needs_web=True,
+            score=1.0,
+            threshold=threshold,
+            reasons=[f"critical_intent:{query_intent}"],
+            profile=profile,
+        )
 
-    intent = str(tags.get("intent", "")).lower()
-    if intent in {"question", "implementation", "action_request", "chat"} and _TIME_SENSITIVE_RE.search(text or ""):
-        return True
+    src = str(text or "")
+    low = src.lower()
+    intent = str(tags.get("intent") or "").strip().lower()
+    if _SMALLTALK_RE.search(low) and intent in {"chat", "smalltalk", "chatting"}:
+        return AutoWebDecision(
+            needs_web=False,
+            score=0.0,
+            threshold=threshold,
+            reasons=["smalltalk_hard_skip"],
+            profile=profile,
+        )
+    score = 0.0
 
-    return False
+    if _LOOKUP_RE.search(src):
+        score += 0.34
+        reasons.append("lookup_marker")
+    if _has_precision_marker(src):
+        score += 0.22
+        reasons.append("precision_marker")
+    if _TIME_SENSITIVE_RE.search(src):
+        score += 0.24
+        reasons.append("time_sensitive")
+    if intent in {"question", "implementation", "action_request"} or "?" in src:
+        score += 0.16
+        reasons.append("question_like")
+
+    intent_conf = _to_float01(tags.get("intent_conf"))
+    if intent_conf > 0.0 and intent_conf < 0.72:
+        score += (0.72 - intent_conf) * 0.45
+        reasons.append("low_intent_conf")
+
+    if _SMALLTALK_RE.search(low) and intent in {"chat", "smalltalk", "chatting"}:
+        score -= 0.35
+        reasons.append("smalltalk_penalty")
+    if len(src.strip()) <= 7:
+        score -= 0.08
+        reasons.append("very_short_penalty")
+
+    score = max(0.0, min(1.0, score))
+    return AutoWebDecision(
+        needs_web=(score >= threshold),
+        score=score,
+        threshold=threshold,
+        reasons=reasons,
+        profile=profile,
+    )
 
 
 def _strip_web_prefix(text: str) -> str:
@@ -91,6 +211,10 @@ def _clip(s: str, n: int) -> str:
     if len(s) <= n:
         return s
     return s[: n - 1].rstrip() + "..."
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _top_domains(results: list[SearchResult], *, limit: int = 3) -> list[str]:
@@ -229,10 +353,16 @@ def _set_web_flags(
     fresh_missing: bool,
     web_used: bool | None = None,
 ) -> None:
+    response_style = "factual_direct" if str(query_intent or "").strip().lower() in {
+        "fx_rate",
+        "weather",
+        "news_release",
+    } else "default"
     tags = dict(getattr(ctx, "tags", {}) or {})
     tags["web_query_intent"] = str(query_intent or "generic")
     tags["web_fresh_required"] = "true" if bool(fresh_required) else "false"
     tags["web_fresh_missing"] = "true" if bool(fresh_missing) else "false"
+    tags["web_response_style"] = response_style
     if web_used is not None:
         tags["web_used"] = "true" if bool(web_used) else "false"
     ctx.tags = tags
@@ -241,6 +371,7 @@ def _set_web_flags(
         ctx.meta["web_query_intent"] = str(query_intent or "generic")
         ctx.meta["web_fresh_required"] = bool(fresh_required)
         ctx.meta["web_fresh_missing"] = bool(fresh_missing)
+        ctx.meta["web_response_style"] = response_style
         ctx.meta["web_guardrail_local_reply"] = bool(fresh_missing and str(query_intent or "") in {"fx_rate", "weather"})
         if web_used is not None:
             ctx.meta["web_used"] = bool(web_used)
@@ -290,8 +421,10 @@ class WebRetrieveStage:
         mode = str((ctx.meta or {}).get("web_mode") or (ctx.state or {}).get("web_mode") or "auto").lower()
         if mode not in {"on", "off", "auto"}:
             mode = "auto"
+        auto_profile = _resolve_web_auto_profile(ctx.meta or {}, ctx.state or {})
         if isinstance(getattr(ctx, "meta", None), dict):
             ctx.meta["web_mode"] = mode
+            ctx.meta["web_auto_profile"] = auto_profile
 
         text = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
         preview = _clip(text.replace("\n", " "), 120)
@@ -306,6 +439,15 @@ class WebRetrieveStage:
             text_len=len(text),
             text_preview=preview,
         )
+        _emit_trace_event(
+            ctx,
+            "web_retrieve_start",
+            {
+                "mode": mode,
+                "text_len": len(text),
+                "text_preview": preview,
+            },
+        )
 
         if not text:
             _set_web_flags(
@@ -317,6 +459,7 @@ class WebRetrieveStage:
             )
             ctx.logs.append(f"stage=web_retrieve skipped(empty_text) trace={trace}")
             log_json(LOGGER, "web_retrieve_skip", trace=trace, reason="empty_text")
+            _emit_trace_event(ctx, "web_retrieve_skip", {"reason": "empty_text"})
             return ctx
 
         query = _strip_web_prefix(text)
@@ -334,6 +477,7 @@ class WebRetrieveStage:
         if not query:
             ctx.logs.append(f"stage=web_retrieve skipped(empty_query) trace={trace}")
             log_json(LOGGER, "web_retrieve_skip", trace=trace, reason="empty_query")
+            _emit_trace_event(ctx, "web_retrieve_skip", {"reason": "empty_query"})
             return ctx
 
         if mode == "off":
@@ -346,6 +490,7 @@ class WebRetrieveStage:
             )
             ctx.logs.append(f"stage=web_retrieve skipped(mode=off) trace={trace}")
             log_json(LOGGER, "web_retrieve_skip", trace=trace, reason="mode_off")
+            _emit_trace_event(ctx, "web_retrieve_skip", {"reason": "mode_off"})
             return ctx
 
         if not bool(self._app.internet_enabled):
@@ -358,10 +503,18 @@ class WebRetrieveStage:
             )
             ctx.logs.append(f"stage=web_retrieve skipped(internet_disabled) trace={trace}")
             log_json(LOGGER, "web_retrieve_skip", trace=trace, reason="internet_disabled")
+            _emit_trace_event(ctx, "web_retrieve_skip", {"reason": "internet_disabled"})
             return ctx
 
         force = (mode == "on") or (query != text)
-        needs_web = _needs_web(query, ctx.tags or {}, ctx.meta or {}, query_intent=query_intent)
+        decision = _auto_web_decision(
+            query,
+            ctx.tags or {},
+            ctx.meta or {},
+            query_intent=query_intent,
+            web_auto_profile=auto_profile,
+        )
+        needs_web = bool(decision.needs_web)
         domain_filter = _domain_filter_for_intent(query_intent)
         volatile = bool(force or query_intent in {"fx_rate", "weather"} or recency is not None)
         if isinstance(getattr(ctx, "meta", None), dict):
@@ -372,6 +525,7 @@ class WebRetrieveStage:
         ctx.logs.append(
             "stage=web_retrieve decision "
             f"trace={trace} force={int(bool(force))} needs_web={int(bool(needs_web))} "
+            f"profile={auto_profile} score={decision.score:.3f}/{decision.threshold:.3f} "
             f"intent={query_intent} fresh_required={int(fresh_required)} "
             f"query_len={len(query)} query_preview={query_preview}"
         )
@@ -381,15 +535,58 @@ class WebRetrieveStage:
             trace=trace,
             force=bool(force),
             needs_web=bool(needs_web),
+            web_auto_profile=str(auto_profile),
+            decision_score=float(decision.score),
+            decision_threshold=float(decision.threshold),
+            decision_reasons=list(decision.reasons),
             query_intent=query_intent,
             fresh_required=bool(fresh_required),
             query_len=len(query),
             query_preview=query_preview,
         )
+        _emit_trace_event(
+            ctx,
+            "web_retrieve_decision",
+            {
+                "force": bool(force),
+                "needs_web": bool(needs_web),
+                "web_auto_profile": str(auto_profile),
+                "decision_score": float(decision.score),
+                "decision_threshold": float(decision.threshold),
+                "decision_reasons": list(decision.reasons),
+                "query_intent": query_intent,
+                "fresh_required": bool(fresh_required),
+                "volatile": bool(volatile),
+                "recency_days": (int(recency) if recency is not None else None),
+                "domain_filter": list(domain_filter or []),
+                "query_len": len(query),
+                "query_preview": query_preview,
+                "why": "forced" if force else ("auto_match" if needs_web else "auto_skip"),
+            },
+        )
 
         if not force and not needs_web:
             ctx.logs.append(f"stage=web_retrieve skipped(auto=no) trace={trace}")
-            log_json(LOGGER, "web_retrieve_skip", trace=trace, reason="auto_no")
+            log_json(
+                LOGGER,
+                "web_retrieve_skip",
+                trace=trace,
+                reason="auto_no",
+                web_auto_profile=str(auto_profile),
+                decision_score=float(decision.score),
+                decision_threshold=float(decision.threshold),
+            )
+            _emit_trace_event(
+                ctx,
+                "web_retrieve_skip",
+                {
+                    "reason": "auto_no",
+                    "web_auto_profile": str(auto_profile),
+                    "decision_score": float(decision.score),
+                    "decision_threshold": float(decision.threshold),
+                    "decision_reasons": list(decision.reasons),
+                },
+            )
             return ctx
 
         if query != text:
@@ -410,6 +607,21 @@ class WebRetrieveStage:
             domain_filter=list(domain_filter or []),
             volatile=bool(volatile),
             k=int(self._cfg.k_search),
+        )
+        _emit_trace_event(
+            ctx,
+            "web_search_request",
+            {
+                "query": str(query),
+                "query_intent": query_intent,
+                "provider": str(getattr(self._search, "provider", "") or ""),
+                "endpoint": str(getattr(self._search, "endpoint", "") or ""),
+                "k": int(self._cfg.k_search),
+                "volatile": bool(volatile),
+                "recency_days": (int(recency) if recency is not None else None),
+                "domain_filter": list(domain_filter or []),
+                "cache_policy": "read_bypass_write" if volatile else "default",
+            },
         )
 
         try:
@@ -438,6 +650,15 @@ class WebRetrieveStage:
                 fresh_required=bool(fresh_required),
                 error=type(exc).__name__,
             )
+            _emit_trace_event(
+                ctx,
+                "web_search_fail",
+                {
+                    "query_intent": query_intent,
+                    "fresh_required": bool(fresh_required),
+                    "error": type(exc).__name__,
+                },
+            )
             return ctx
 
         if not results and query_intent in {"fx_rate", "weather"}:
@@ -452,6 +673,14 @@ class WebRetrieveStage:
                     trace=trace,
                     query_intent=query_intent,
                     alt_query=alt_query,
+                )
+                _emit_trace_event(
+                    ctx,
+                    "web_search_retry",
+                    {
+                        "query_intent": query_intent,
+                        "alt_query": alt_query,
+                    },
                 )
                 try:
                     results = self._search.search(
@@ -484,6 +713,31 @@ class WebRetrieveStage:
             results=len(results),
             domains=list(domains),
         )
+        _emit_trace_event(
+            ctx,
+            "web_search_results",
+            {
+                "query": str(_as_dict(ctx.meta).get("web_query_effective") or query),
+                "query_intent": query_intent,
+                "result_count": int(len(results)),
+                "domains": list(domains),
+                "top_results": [
+                    {
+                        "rank": idx + 1,
+                        "title": str(getattr(item, "title", "") or ""),
+                        "url": str(getattr(item, "url", "") or ""),
+                        "domain": str(getattr(item, "source", "") or ""),
+                        "published_date": str(getattr(item, "published_date", "") or ""),
+                        "score_total": float(getattr(item, "score", 0.0) or 0.0),
+                        "score_breakdown": dict(getattr(item, "score_breakdown", {}) or {}),
+                        "snippet_500": _snippet500(str(getattr(item, "snippet", "") or "")),
+                        "snippet_sha1": _sha1_text(str(getattr(item, "snippet", "") or "")),
+                        "snippet_len": len(str(getattr(item, "snippet", "") or "")),
+                    }
+                    for idx, item in enumerate(list(results)[:5])
+                ],
+            },
+        )
 
         if not results:
             _set_web_flags(
@@ -502,6 +756,17 @@ class WebRetrieveStage:
                 fetched=0,
                 fresh_missing=bool(fresh_required),
                 web_used=False,
+            )
+            _emit_trace_event(
+                ctx,
+                "web_retrieve_done",
+                {
+                    "query_intent": query_intent,
+                    "query_len": len(query),
+                    "fetched": 0,
+                    "web_used": False,
+                    "fresh_missing": bool(fresh_required),
+                },
             )
             return ctx
 
@@ -530,6 +795,16 @@ class WebRetrieveStage:
                     idx=(idx + 1),
                     domain=domain,
                     error=type(exc).__name__,
+                )
+                _emit_trace_event(
+                    ctx,
+                    "web_fetch_fail",
+                    {
+                        "idx": idx + 1,
+                        "url": url,
+                        "domain": domain or str(r.source or ""),
+                        "error": type(exc).__name__,
+                    },
                 )
                 # Fallback: keep search snippet as web evidence when page scrape is blocked.
                 snippet = _clip(str(r.snippet or ""), 320)
@@ -571,6 +846,24 @@ class WebRetrieveStage:
                     idx=(idx + 1),
                     domain=domain,
                     snippet_len=len(snippet),
+                )
+                _emit_trace_event(
+                    ctx,
+                    "web_fetch_item",
+                    {
+                        "idx": idx + 1,
+                        "url": url,
+                        "domain": domain or str(r.source or ""),
+                        "status": 0,
+                        "final_url": url,
+                        "clean_method": "search_snippet_fallback",
+                        "removed_blocks": 0,
+                        "raw_len": 0,
+                        "clean_len": 0,
+                        "text_500": _snippet500(snippet),
+                        "text_sha1": _sha1_text(snippet),
+                        "text_len": len(snippet),
+                    },
                 )
                 continue
 
@@ -622,6 +915,24 @@ class WebRetrieveStage:
                 text_len=len(body),
                 clean_method=clean_method,
             )
+            _emit_trace_event(
+                ctx,
+                "web_fetch_item",
+                {
+                    "idx": idx + 1,
+                    "url": url,
+                    "domain": domain or str(r.source or ""),
+                    "status": int(getattr(page, "status_code", 0) or 0),
+                    "final_url": str(getattr(page, "final_url", "") or url),
+                    "clean_method": clean_method,
+                    "removed_blocks": int(page_meta.get("removed_blocks") or 0),
+                    "raw_len": int(page_meta.get("raw_len") or 0),
+                    "clean_len": int(page_meta.get("clean_len") or len(body)),
+                    "text_500": _snippet500(body),
+                    "text_sha1": _sha1_text(body),
+                    "text_len": len(body),
+                },
+            )
 
         fresh_missing = bool(fresh_required and fetched <= 0)
         _set_web_flags(
@@ -648,5 +959,17 @@ class WebRetrieveStage:
             fetched=fetched,
             fresh_missing=bool(fresh_missing),
             web_used=bool(fetched > 0),
+        )
+        _emit_trace_event(
+            ctx,
+            "web_retrieve_done",
+            {
+                "query_intent": query_intent,
+                "query_len": len(query),
+                "fetched": int(fetched),
+                "web_used": bool(fetched > 0),
+                "fresh_missing": bool(fresh_missing),
+                "results": int(len(results)),
+            },
         )
         return ctx

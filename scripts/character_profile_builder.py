@@ -76,7 +76,7 @@ def _default_persona_spec_seed() -> dict[str, Any]:
             "teasing": ["Легкие подколы допустимы только в безопасном, позитивном контексте."],
         },
         "modes": {
-            "friend_chat": [
+            "chatting": [
                 "Живой диалог, короткие естественные реакции, уместная теплота.",
                 "Флирт и игривость - только по явному запросу пользователя и без 18+.",
             ],
@@ -238,7 +238,7 @@ def _starter_plus_blueprint(character_id: str) -> dict[str, Any]:
             "name": name,
             "version": "1.0.0",
             "default_mood": "neutral",
-            "default_mode": "friend_chat",
+            "default_mode": "chatting",
             "llm_profile": "BALANCED",
             "locks": {"feminine": True, "informal_you": True},
         },
@@ -405,7 +405,7 @@ def _normalize_blueprint(
 
     char_name = str(name_override or character.get("name") or persona_state.get("name") or _display_name(character_id)).strip()
     default_mood = str(character.get("default_mood") or persona_state.get("mood") or "neutral").strip().lower() or "neutral"
-    default_mode = str(character.get("default_mode") or "friend_chat").strip().lower() or "friend_chat"
+    default_mode = str(character.get("default_mode") or "chatting").strip().lower() or "chatting"
     llm_profile = str(character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED"
 
     locks = _coerce_locks(_pick_first(persona_state.get("locks"), character.get("locks"), {}))

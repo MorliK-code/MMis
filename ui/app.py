@@ -55,14 +55,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from config.model_config import (
-    MMIS_VOICE_INPUT_DIR,
-    MMIS_VOICE_OUTPUT_DIR,
-    MMIS_VOICE_TTS_RATE,
-    MMIS_VOICE_TTS_VOICE,
-    MMIS_VOICE_TTS_VOLUME,
-    MemoryStorageDir,
-)
+from config.settings import load_config
 from ui.chat_sessions import (
     history_from_serializable as chat_history_from_serializable,
     history_to_serializable as chat_history_to_serializable,
@@ -88,6 +81,15 @@ from ui.widgets import (
     _ToggleSwitch,
 )
 from ui.workers import ReplyResult, ReplyWorker
+
+
+_cfg = load_config()
+MemoryStorageDir = Path(_cfg.memory_dir).expanduser().resolve()
+MMIS_VOICE_INPUT_DIR = Path(_cfg.voice_input_dir or (MemoryStorageDir / "voice" / "input")).expanduser().resolve()
+MMIS_VOICE_OUTPUT_DIR = Path(_cfg.voice_output_dir or (MemoryStorageDir / "voice" / "output")).expanduser().resolve()
+MMIS_VOICE_TTS_VOICE = str(_cfg.voice_tts_voice or "ru-RU-DmitryNeural")
+MMIS_VOICE_TTS_RATE = str(_cfg.voice_tts_rate or "+0%")
+MMIS_VOICE_TTS_VOLUME = str(_cfg.voice_tts_volume or "+0%")
 
 
 class MainWindow(QMainWindow):

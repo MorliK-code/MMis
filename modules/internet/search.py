@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urlencode, urlparse, url
 from urllib.request import Request, urlopen
 
 from utils.cache import DiskTTLCache
-from utils.logger import get_logger
+from utils.logger import get_logger, log_json
 
 
 _USER_AGENT = "MMisBot/1.0 (+https://local.mmis)"
@@ -54,6 +54,28 @@ _TRUST_NEWS_RELEASE = {
     "wikipedia.org": 0.10,
 }
 
+_SOURCE_PRIORITY_GENERIC = {
+    "wikipedia.org": 0.12,
+    "allrecipes.com": 0.14,
+    "seriouseats.com": 0.12,
+    "docs.python.org": 0.10,
+    "developer.mozilla.org": 0.10,
+    "github.com": 0.08,
+}
+
+_SOURCE_PRIORITY_NEWS = {
+    "openai.com": 0.10,
+    "github.com": 0.08,
+    "docs.python.org": 0.08,
+    "reuters.com": 0.10,
+    "apnews.com": 0.09,
+}
+
+_SOURCE_PRIORITY_PENALTY_GENERIC = {
+    "pinterest.com": -0.12,
+    "quora.com": -0.08,
+}
+
 
 @dataclass(frozen=True)
 class SearchResult:
@@ -63,10 +85,12 @@ class SearchResult:
     source: str
     published_date: str = ""
     score: float = 0.0
+    score_breakdown: dict[str, float] | None = None
     raw: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out = asdict(self)
+        out["score_breakdown"] = dict(self.score_breakdown or {})
         out["raw"] = dict(self.raw or {})
         return out
 
@@ -124,9 +148,27 @@ class SearchClient:
             cached = self._cache_get(cache_key)
             if cached is not None:
                 LOGGER.debug("search cache hit provider=%s intent=%s", self.provider, intent)
+                log_json(
+                    LOGGER,
+                    "search_cache_policy",
+                    provider=self.provider,
+                    query=text,
+                    query_intent=intent,
+                    cache_mode="default",
+                    cache_hit=True,
+                )
                 return cached[:limit]
         else:
             LOGGER.debug("search cache bypass provider=%s intent=%s mode=volatile", self.provider, intent)
+            log_json(
+                LOGGER,
+                "search_cache_policy",
+                provider=self.provider,
+                query=text,
+                query_intent=intent,
+                cache_mode="read_bypass_write",
+                cache_hit=False,
+            )
 
         results: list[SearchResult] = []
         if self.endpoint:
@@ -141,15 +183,40 @@ class SearchClient:
 
         ranked = _rank_results(results, query=text, recency_days=recency_days, query_intent=intent)
         final = ranked[:limit]
-        if final and not volatile:
+        if final:
             self._cache_set(cache_key, final)
+            cache_mode = "read_bypass_write" if volatile else "default"
+        else:
+            cache_mode = "read_bypass_no_write" if volatile else "default"
         LOGGER.debug(
             "search done provider=%s intent=%s results=%s returned=%s cache_mode=%s",
             self.provider,
             intent,
             len(results),
             len(final),
-            ("bypass" if volatile else "default"),
+            cache_mode,
+        )
+        log_json(
+            LOGGER,
+            "search_done",
+            provider=self.provider,
+            query=text,
+            query_intent=intent,
+            cache_mode=cache_mode,
+            result_count=len(results),
+            returned_count=len(final),
+            top_results=[
+                {
+                    "rank": idx + 1,
+                    "title": str(item.title or ""),
+                    "url": str(item.url or ""),
+                    "domain": str(item.source or ""),
+                    "published_date": str(item.published_date or ""),
+                    "score_total": float(item.score or 0.0),
+                    "score_breakdown": dict(item.score_breakdown or {}),
+                }
+                for idx, item in enumerate(final[:5])
+            ],
         )
         return final
 
@@ -418,6 +485,7 @@ def _search_result_from_dict(row: dict[str, Any]) -> SearchResult | None:
         source=str(row.get("source") or ""),
         published_date=str(row.get("published_date") or ""),
         score=float(row.get("score") or 0.0),
+        score_breakdown=dict(row.get("score_breakdown") or {}),
         raw=dict(row.get("raw") or {}),
     )
 
@@ -430,6 +498,8 @@ def _rank_results(
 ) -> list[SearchResult]:
     tokens = {x.lower() for x in re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", str(query or "")) if x}
     intent = _normalize_query_intent(query_intent)
+    source_priority_map: dict[str, float] = {}
+    penalty_map: dict[str, float] = {}
     if intent == "fx_rate":
         trusted_domains = dict(_TRUST_FX_MARKET_FIRST)
         overlap_w, freshness_w = 0.56, 0.30
@@ -439,9 +509,13 @@ def _rank_results(
     elif intent == "news_release":
         trusted_domains = dict(_TRUST_NEWS_RELEASE)
         overlap_w, freshness_w = 0.62, 0.24
+        source_priority_map = dict(_SOURCE_PRIORITY_NEWS)
+        penalty_map: dict[str, float] = {}
     else:
         trusted_domains = dict(_TRUST_GENERIC)
         overlap_w, freshness_w = 0.72, 0.18
+        source_priority_map = dict(_SOURCE_PRIORITY_GENERIC)
+        penalty_map = dict(_SOURCE_PRIORITY_PENALTY_GENERIC)
 
     now = dt.datetime.utcnow().date()
     ranked: list[SearchResult] = []
@@ -458,6 +532,14 @@ def _rank_results(
             if item.source == domain or item.source.endswith(f".{domain}"):
                 trust = max(trust, score)
 
+        source_priority = 0.0
+        for domain, score in source_priority_map.items():
+            if item.source == domain or item.source.endswith(f".{domain}"):
+                source_priority = max(source_priority, float(score))
+        for domain, penalty in penalty_map.items():
+            if item.source == domain or item.source.endswith(f".{domain}"):
+                source_priority = min(source_priority, float(penalty))
+
         freshness = 0.0
         if recency_days is not None and recency_days > 0 and item.published_date:
             try:
@@ -467,14 +549,23 @@ def _rank_results(
             except Exception:
                 freshness = 0.0
 
-        score = (overlap_w * overlap) + trust + (freshness_w * freshness)
+        score = (overlap_w * overlap) + trust + (freshness_w * freshness) + source_priority
+        lexical_component = overlap_w * overlap
+        freshness_component = freshness_w * freshness
+        breakdown = {
+            "lexical": round(float(lexical_component), 6),
+            "trust": round(float(trust), 6),
+            "freshness": round(float(freshness_component), 6),
+            "source_priority": round(float(source_priority), 6),
+        }
         LOGGER.debug(
-            "search rank intent=%s domain=%s overlap=%.3f freshness=%.3f trust=%.3f score=%.3f",
+            "search rank intent=%s domain=%s overlap=%.3f freshness=%.3f trust=%.3f source_priority=%.3f score=%.3f",
             intent,
             str(item.source or ""),
             overlap,
             freshness,
             trust,
+            source_priority,
             score,
         )
         ranked.append(
@@ -485,6 +576,7 @@ def _rank_results(
                 source=item.source,
                 published_date=item.published_date,
                 score=score,
+                score_breakdown=breakdown,
                 raw=item.raw,
             )
         )

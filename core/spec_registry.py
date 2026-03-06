@@ -5,7 +5,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from config.paths import DATA_DIR
+from config.settings import DATA_DIR
 
 
 _SPEC_FILES = {

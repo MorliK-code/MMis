@@ -111,6 +111,10 @@ class PromptEngine:
         if formatting_prompt_enabled:
             formatting_doc_text = str(self._safe_doc(key="response.formatting", fallback_text="").get("text", "")).strip()
         formatting_doc = {"text": formatting_doc_text}
+        dynamic_rules = self._build_dynamic_rules_block(
+            state_map=state_map,
+            policies_map=policies_map,
+        )
         
         character_prompt_block = str(state_map.get("character_prompt_block") or "").strip()
         if not character_prompt_block and active_character:
@@ -146,7 +150,7 @@ class PromptEngine:
             ),
             ContextBlock(
                 id="rules",
-                content=_join_non_empty([safety_doc["text"], formatting_doc["text"]]),
+                content=_join_non_empty([safety_doc["text"], formatting_doc["text"], dynamic_rules]),
                 bucket="rules",
                 priority=96,
                 required=True,
@@ -378,6 +382,38 @@ class PromptEngine:
             return json.dumps(value, ensure_ascii=False)
         except Exception:
             return str(value)
+
+    @staticmethod
+    def _build_dynamic_rules_block(*, state_map: dict[str, Any], policies_map: dict[str, Any]) -> str:
+        rows: list[str] = []
+        for key in ("rules", "policy_rules", "constraints"):
+            value = policies_map.get(key)
+            if isinstance(value, list):
+                candidates = list(value)
+            elif value is None:
+                candidates = []
+            else:
+                candidates = [value]
+            for item in candidates:
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                rows.append(text if text.startswith("- ") else f"- {text}")
+
+        context = _as_dict(state_map.get("context_tags"))
+        style = str(context.get("web_response_style") or "").strip().lower()
+        if style == "factual_direct":
+            rows.append("- Time-sensitive web answers must be direct and factual without rhetorical/flirty openers.")
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for row in rows:
+            key = str(row or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
+        return "\n".join(deduped).strip()
 
 
 def _resolve_persona_name(

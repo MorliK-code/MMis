@@ -10,8 +10,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from config.paths import CACHE_DIR
-from config.settings import load_config
+from config.settings import CACHE_DIR, load_config
 from utils.logger import get_logger
 
 

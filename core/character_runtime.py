@@ -145,10 +145,11 @@ class StateSnapshot:
     cooldowns: dict[str, Any]
     address_terms: dict[str, Any]
     raw: dict[str, Any] = field(default_factory=dict)
-    active_mode: str = "friend_chat"
+    active_mode: str = "chatting"
     mode_lock: bool = False
     mode_until: str = ""
     web_mode: str = "auto"
+    web_auto_profile: str = "balanced"
     thinking_enabled: bool = False
     output_format: dict[str, Any] = field(default_factory=dict)
     last_signals: dict[str, Any] = field(default_factory=dict)
@@ -356,10 +357,11 @@ class CharacterRuntime:
             "conversation_id": conversation_id,
             "turn_id": 0,
             "active_character_id": "asya",
-            "active_mode": "friend_chat",
+            "active_mode": "chatting",
             "mode_lock": False,
             "mode_until": "",
             "web_mode": "auto",
+            "web_auto_profile": "balanced",
             "thinking_enabled": False,
             "output_format": dict(output_format),
             "quality_profile": "BALANCED",
@@ -380,6 +382,7 @@ class CharacterRuntime:
             "mode_lock": bool(global_state["mode_lock"]),
             "mode_until": "",
             "web_mode": str(global_state["web_mode"]),
+            "web_auto_profile": str(global_state["web_auto_profile"]),
             "thinking_enabled": bool(global_state["thinking_enabled"]),
             "output_format": dict(output_format),
             "last_signals": {},
@@ -441,6 +444,10 @@ class CharacterRuntime:
     def _coerce_web_mode(self, value: Any) -> str:
         text = str(value or "auto").strip().lower()
         return text if text in {"auto", "on", "off"} else "auto"
+
+    def _coerce_web_auto_profile(self, value: Any) -> str:
+        text = str(value or "balanced").strip().lower()
+        return text if text in {"balanced", "aggressive"} else "balanced"
 
     @staticmethod
     def _coerce_nullable_bool(value) -> bool | None:
@@ -540,6 +547,7 @@ class CharacterRuntime:
             "active_goal": str(self._state.get("active_goal") or "").strip(),
             "thinking_enabled": self._coerce_bool(self._state.get("thinking_enabled"), default=False),
             "web_mode": self._coerce_web_mode(self._state.get("web_mode")),
+            "web_auto_profile": self._coerce_web_auto_profile(self._state.get("web_auto_profile")),
             "turn_id": int(self._state.get("turn_id") or 0),
             "traits": traits,
             "locks": {str(k): bool(v) for k, v in locks.items() if str(k).strip()},
@@ -588,6 +596,7 @@ class CharacterRuntime:
             "mode_lock": self._coerce_bool(src.get("mode_lock"), default=False),
             "mode_until": to_local_iso(src.get("mode_until"), default=""),
             "web_mode": self._coerce_web_mode(src.get("web_mode")),
+            "web_auto_profile": self._coerce_web_auto_profile(src.get("web_auto_profile")),
             "thinking_enabled": self._coerce_bool(src.get("thinking_enabled"), default=False),
             "output_format": self._coerce_output_format(src.get("output_format")),
             "quality_profile": self._normalize_profile(src.get("quality_profile")),
@@ -613,6 +622,7 @@ class CharacterRuntime:
                 "mode_lock": src_global.get("mode_lock", flat.get("mode_lock")),
                 "mode_until": src_global.get("mode_until", flat.get("mode_until")),
                 "web_mode": src_global.get("web_mode", flat.get("web_mode")),
+                "web_auto_profile": src_global.get("web_auto_profile", flat.get("web_auto_profile")),
                 "thinking_enabled": src_global.get("thinking_enabled", flat.get("thinking_enabled")),
                 "output_format": src_global.get("output_format", flat.get("output_format")),
                 "quality_profile": src_global.get("quality_profile", flat.get("quality_profile")),
@@ -629,10 +639,11 @@ class CharacterRuntime:
         self._state["conversation_id"] = str(global_payload.get("conversation_id") or "")
         self._state["turn_id"] = int(global_payload.get("turn_id") or 0)
         self._state["active_character_id"] = str(global_payload.get("active_character_id") or "asya")
-        self._state["active_mode"] = str(global_payload.get("active_mode") or "friend_chat")
+        self._state["active_mode"] = str(global_payload.get("active_mode") or "chatting")
         self._state["mode_lock"] = self._coerce_bool(global_payload.get("mode_lock"), default=False)
         self._state["mode_until"] = str(global_payload.get("mode_until") or "")
         self._state["web_mode"] = str(global_payload.get("web_mode") or "auto")
+        self._state["web_auto_profile"] = self._coerce_web_auto_profile(global_payload.get("web_auto_profile"))
         self._state["thinking_enabled"] = self._coerce_bool(global_payload.get("thinking_enabled"), default=False)
         self._state["output_format"] = self._coerce_output_format(global_payload.get("output_format"))
         self._state["quality_profile"] = str(global_payload.get("quality_profile") or "BALANCED")
@@ -749,6 +760,7 @@ class CharacterRuntime:
             merged["mode_lock"] = self._coerce_bool(merged.get("mode_lock"), default=False)
             merged["mode_until"] = to_local_iso(merged.get("mode_until"), default="")
             merged["web_mode"] = self._coerce_web_mode(merged.get("web_mode"))
+            merged["web_auto_profile"] = self._coerce_web_auto_profile(merged.get("web_auto_profile"))
             merged["thinking_enabled"] = self._coerce_bool(merged.get("thinking_enabled"), default=False)
             merged["output_format"] = self._coerce_output_format(merged.get("output_format"))
             merged["last_signals"] = dict(merged.get("last_signals") or {})
@@ -808,6 +820,7 @@ class CharacterRuntime:
             "mode_lock",
             "mode_until",
             "web_mode",
+            "web_auto_profile",
             "thinking_enabled",
             "output_format",
             "quality_profile",
@@ -853,6 +866,7 @@ class CharacterRuntime:
             "mode_lock",
             "mode_until",
             "web_mode",
+            "web_auto_profile",
             "thinking_enabled",
             "output_format",
             "quality_profile",
@@ -998,6 +1012,7 @@ class CharacterRuntime:
             mode_lock=self._coerce_bool(raw.get("mode_lock"), default=False),
             mode_until=to_local_iso(raw.get("mode_until"), default=""),
             web_mode=self._coerce_web_mode(raw.get("web_mode")),
+            web_auto_profile=self._coerce_web_auto_profile(raw.get("web_auto_profile")),
             thinking_enabled=self._coerce_bool(raw.get("thinking_enabled"), default=False),
             output_format=self._coerce_output_format(raw.get("output_format")),
             last_signals=dict(raw.get("last_signals") or {}),
@@ -1052,7 +1067,7 @@ class CharacterRuntime:
             self._append_last_action(
                 {
                     "type": "MODE_CHANGED",
-                    "active_mode": str(self._state.get("active_mode") or "friend_chat"),
+                    "active_mode": str(self._state.get("active_mode") or "chatting"),
                     "mode_lock": bool(self._state.get("mode_lock", False)),
                     "_state_before": before_state,
                 }
@@ -1076,7 +1091,7 @@ class CharacterRuntime:
             self._append_last_action(
                 {
                     "type": "MODE_CHANGED",
-                    "active_mode": str(self._state.get("active_mode") or "friend_chat"),
+                    "active_mode": str(self._state.get("active_mode") or "chatting"),
                     "mode_lock": bool(enabled),
                     "_state_before": before_state,
                 }
@@ -1250,7 +1265,7 @@ class CharacterRuntime:
             if isinstance(state, dict):
                 merged.update(dict(state))
             active_character = str(merged.get("active_character_id") or "asya").strip().lower() or "asya"
-            active_mode = self._normalize_active_mode(merged.get("active_mode") or merged.get("mode") or "friend_chat")
+            active_mode = self._normalize_active_mode(merged.get("active_mode") or merged.get("mode") or "chatting")
             mode_lock = bool(merged.get("mode_lock", False))
             characters = dict(merged.get("characters") or {})
             entry = dict(characters.get(active_character) or {})
@@ -1311,9 +1326,10 @@ class CharacterRuntime:
             active_tasks = [dict(x) for x in self._coerce_dict_list(merged.get("active_tasks"))][:8]
             return {
                 "active_character_id": str(merged.get("active_character_id") or "asya").strip().lower() or "asya",
-                "active_mode": self._normalize_active_mode(merged.get("active_mode") or merged.get("mode") or "friend_chat"),
+                "active_mode": self._normalize_active_mode(merged.get("active_mode") or merged.get("mode") or "chatting"),
                 "mode_lock": self._coerce_bool(merged.get("mode_lock"), default=False),
                 "web_mode": self._coerce_web_mode(merged.get("web_mode")),
+                "web_auto_profile": self._coerce_web_auto_profile(merged.get("web_auto_profile")),
                 "thinking_enabled": self._coerce_bool(merged.get("thinking_enabled"), default=False),
                 "output_format": self._coerce_output_format(merged.get("output_format")),
                 "quality_profile": self._normalize_profile(merged.get("quality_profile")),
@@ -1410,7 +1426,7 @@ class CharacterRuntime:
                 self._state["mode"] = "voice"
             elif event in {"voice_stop", "voice.stop", "voice:stopped"}:
                 self._state["mode"] = "chat"
-                self._state["active_mode"] = "friend_chat"
+                self._state["active_mode"] = "chatting"
             self._append_last_action(
                 {
                     "type": "EVENT",
@@ -1469,7 +1485,7 @@ class CharacterRuntime:
                 "intent": str(meta_map.get("intent") or "").strip().lower(),
                 "emotion": str(meta_map.get("mood") or meta_map.get("emotion") or "").strip().lower(),
                 "topic": str(meta_map.get("topic") or "").strip().lower(),
-                "active_mode": str(self._state.get("active_mode") or "friend_chat"),
+                "active_mode": str(self._state.get("active_mode") or "chatting"),
                 "has_code": bool(meta_map.get("has_code", False)),
                 "has_traceback": bool(meta_map.get("has_traceback", False)),
             }
@@ -2115,7 +2131,7 @@ class CharacterRuntime:
             context_meta={
                 "intent": str(meta_map.get("intent") or ""),
                 "is_technical": bool(meta_map.get("is_technical", False)),
-                "active_mode": str(meta_map.get("active_mode") or self._state.get("active_mode") or "friend_chat"),
+                "active_mode": str(meta_map.get("active_mode") or self._state.get("active_mode") or "chatting"),
             },
         )
         trait_values = self._flat_trait_values(merged)
@@ -2716,13 +2732,13 @@ class CharacterRuntime:
         locks.setdefault("informal_you", True)
         persona_payload["locks"] = locks
         persona_payload["bans"] = [str(x).strip() for x in list(persona_payload.get("bans") or []) if str(x).strip()]
-        mode = self._normalize_active_mode(state.get("active_mode") or state.get("mode") or "friend_chat")
+        mode = self._normalize_active_mode(state.get("active_mode") or state.get("mode") or "chatting")
         text, _ = compile_system_persona(character_id=character, persona_state=persona_payload, active_mode=mode)
         return _normalize_text(text)
 
     def _build_state_summary_block(self, state: dict[str, Any]) -> str:
         """Построить блок state summary."""
-        mode = _normalize_text(state.get("active_mode") or state.get("mode")) or "friend_chat"
+        mode = _normalize_text(state.get("active_mode") or state.get("mode")) or "chatting"
         task = (
             _normalize_text(state.get("current_task"))
             or _normalize_text(state.get("task"))
@@ -3016,7 +3032,7 @@ class CharacterRuntime:
                 or meta.get("mode")
                 or state.get("active_mode")
                 or state.get("mode")
-                or "friend_chat"
+                or "chatting"
             ).strip().lower(),
             "topic": str(meta.get("topic") or "").strip().lower(),
             "tags": [str(x).strip().lower() for x in tags if str(x).strip()],
@@ -3361,14 +3377,14 @@ class CharacterRuntime:
     def _normalize_active_mode(value: Any) -> str:
         text = str(value or "").strip().lower()
         if text in {"voice", "silent"}:
-            return "friend_chat"
+            return "chatting"
         return normalize_mode_name(text, allow_custom=True)
 
     @staticmethod
     def _active_to_legacy_mode(value: Any) -> str:
         mode = CharacterRuntime._normalize_active_mode(value)
         mapping = {
-            "friend_chat": "chat",
+            "chatting": "chat",
             "helper": "task",
             "engineer": "coding",
             "debugger": "debug",

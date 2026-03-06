@@ -86,7 +86,7 @@ class WebTraceLoggingTests(unittest.TestCase):
                 state={
                     "history": [],
                     "quality_profile": "BALANCED",
-                    "active_mode": "friend_chat",
+                    "active_mode": "chatting",
                     "web_mode": "on",
                 },
                 meta={"source": "test", "web_mode": "on", "store_turn": False},

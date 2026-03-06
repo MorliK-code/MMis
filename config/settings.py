@@ -1,17 +1,231 @@
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import os
+import sys
 from dataclasses import asdict, dataclass, field
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from config.paths import BASE_DIR, DATA_DIR, MODELS_DIR, ensure_dirs, resolve_memory_dir
+from config.config_manager import ConfigManager
 
 
-VALID_PROFILES = {"FAST", "BALANCED", "QUALITY", "ECONOM", "AUTONOMOUS"}
-VALID_PROVIDERS = {"ollama", "auto"}
+VALID_PROFILES = {"FAST", "BALANCED", "QUALITY", "ECONOM", "AUTONOMOUS", "ASYA"}
+VALID_PROVIDERS = {"ollama", "auto", "openai"}
 VALID_SAFETY_MODES = {"read_only_tools", "allow_os_actions"}
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+CONFIG_DIR = BASE_DIR / "config"
+DATA_DIR = BASE_DIR / "data"
+MODELS_DIR = BASE_DIR / "models"
+LOG_DIR = DATA_DIR / "logs"
+CACHE_DIR = DATA_DIR / "cache"
+DEFAULT_MEMORY_DIR = DATA_DIR / "memory_storage"
+LEGACY_MEMORY_DIR = BASE_DIR / "memory_storage"
+DIR_PATH_TOKEN = "{dir_path}"
+_DIR_PATH_TOKEN_LOW = DIR_PATH_TOKEN.lower()
+
+
+def _expand_dir_path_token(value: Any) -> str:
+    src = str(value or "")
+    if not src:
+        return src
+    low = src.lower()
+    if _DIR_PATH_TOKEN_LOW not in low:
+        return src
+    out: list[str] = []
+    idx = 0
+    token_len = len(DIR_PATH_TOKEN)
+    base_text = str(BASE_DIR)
+    while idx < len(src):
+        if low[idx : idx + token_len] == _DIR_PATH_TOKEN_LOW:
+            out.append(base_text)
+            idx += token_len
+            continue
+        out.append(src[idx])
+        idx += 1
+    return "".join(out)
+
+
+def _resolve_path_value(value: Any, default: Path | None = None) -> Path:
+    src = str(value or "").strip()
+    if not src:
+        if default is None:
+            return BASE_DIR.resolve()
+        return Path(default).expanduser().resolve()
+    expanded = _expand_dir_path_token(src)
+    path = Path(expanded).expanduser()
+    if not path.is_absolute():
+        path = (BASE_DIR / path)
+    return path.resolve()
+
+
+def _path_to_config_string(value: str | Path) -> str:
+    path = Path(value).expanduser().resolve()
+    try:
+        rel = path.relative_to(BASE_DIR.resolve())
+        rel_text = str(rel).replace("/", "\\")
+        if not rel_text or rel_text == ".":
+            return DIR_PATH_TOKEN
+        return f"{DIR_PATH_TOKEN}\\{rel_text}"
+    except Exception:
+        return str(path)
+
+
+def _from_env_path(name: str) -> Path | None:
+    raw = str(os.getenv(name, "")).strip()
+    return Path(raw).expanduser() if raw else None
+
+
+def _resolve_memory_dir_default() -> Path:
+    env_path = _from_env_path("MMIS_MEMORY_DIR")
+    if env_path is not None:
+        return env_path
+    use_legacy = str(os.getenv("MMIS_USE_LEGACY_MEMORY_DIR", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if use_legacy:
+        return LEGACY_MEMORY_DIR
+    return DEFAULT_MEMORY_DIR
+
+
+def resolve_memory_dir() -> Path:
+    cache = globals().get("_SETTINGS_CACHE")
+    if cache is not None and getattr(cache, "memory_dir", None):
+        return _resolve_path_value(cache.memory_dir, _resolve_memory_dir_default())
+    cfg_raw = str(os.getenv("MMIS_CONFIG_FILE", "")).strip()
+    if cfg_raw:
+        cfg_file = Path(cfg_raw).expanduser().resolve()
+    else:
+        cfg_file = (BASE_DIR / "config" / "config.json").resolve()
+    try:
+        if cfg_file.exists():
+            payload = json.loads(cfg_file.read_text(encoding="utf-8-sig") or "{}")
+            if isinstance(payload, dict):
+                memory_row = payload.get("memory")
+                value = memory_row.get("memory_dir") if isinstance(memory_row, dict) else None
+                if str(value or "").strip():
+                    return _resolve_path_value(value, _resolve_memory_dir_default())
+    except Exception:
+        pass
+    return _resolve_path_value(None, _resolve_memory_dir_default())
+
+
+MEMORY_DIR = resolve_memory_dir()
+CHROMA_DIR = MEMORY_DIR / "chroma_db"
+
+
+def ensure_dirs(memory_dir: str | Path | None = None) -> dict[str, Path]:
+    mem_dir = _to_path(memory_dir, resolve_memory_dir()) if memory_dir is not None else resolve_memory_dir()
+    cfg = globals().get("_SETTINGS_CACHE")
+    cache_dir = _to_path(cfg.cache_dir, CACHE_DIR.resolve()) if cfg is not None and cfg.cache_dir else CACHE_DIR.resolve()
+    logs_dir = _to_path(cfg.log_dir, LOG_DIR.resolve()) if cfg is not None and cfg.log_dir else LOG_DIR.resolve()
+    data_dir = _to_path(cfg.data_dir, DATA_DIR.resolve()) if cfg is not None and cfg.data_dir else DATA_DIR.resolve()
+    models_dir = _to_path(cfg.models_dir, MODELS_DIR.resolve()) if cfg is not None and cfg.models_dir else MODELS_DIR.resolve()
+    chroma_dir = mem_dir / "chroma_db"
+    dirs = {
+        "base": BASE_DIR,
+        "config": CONFIG_DIR,
+        "data": data_dir,
+        "models": models_dir,
+        "memory": mem_dir,
+        "logs": logs_dir,
+        "cache": cache_dir,
+        "chroma": chroma_dir,
+        "profiles": mem_dir / "profiles",
+        "summaries": mem_dir / "summaries",
+    }
+    for path in dirs.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return dirs
+
+
+def safe_join(base: str | Path, user_path: str | Path) -> Path:
+    root = Path(base).expanduser().resolve()
+    target = (root / Path(user_path)).resolve()
+    try:
+        target.relative_to(root)
+    except Exception as exc:
+        raise ValueError(f"Path escapes base directory: {target}") from exc
+    return target
+
+
+ROOT_DIR = BASE_DIR
+LOGS_DIR = LOG_DIR
+NEW_MEMORY_DIR = DEFAULT_MEMORY_DIR
+
+
+def ensure_data_dirs() -> None:
+    ensure_dirs()
+
+
+@dataclass(frozen=True)
+class GenerationProfile:
+    temperature: float = 0.7
+    top_p: float = 0.9
+    repeat_penalty: float = 1.1
+    max_tokens: int | None = None
+    stop: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class OllamaProfile:
+    num_thread: int = 6
+    num_ctx: int = 8192
+    num_gpu: int = 1
+    num_batch: int = 128
+    keep_alive: str = "5m"
+
+
+@dataclass(frozen=True)
+class OpenAIProfile:
+    model: str = ""
+    reasoning_effort: str = "medium"
+
+
+@dataclass(frozen=True)
+class ModelProfile:
+    name: str
+    generation: GenerationProfile
+    ollama: OllamaProfile
+    openai: OpenAIProfile
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "generation": asdict(self.generation),
+            "ollama": asdict(self.ollama),
+            "openai": asdict(self.openai),
+        }
+
+
+_LOG_FORMAT_DEFAULT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+_LOG_CHANNEL_PREFIXES_DEFAULT: dict[str, list[str]] = {
+    "llm": ["llm"],
+    "memory": ["memory", "metadata"],
+    "tools": ["modules", "tools"],
+    "ui": ["ui", "api", "ui_console", "ui_pyside6"],
+    "web": ["web", "core.web_rag_stage", "tools.modules.internet"],
+}
+_LOG_WEB_TRACE_LOGGER_DEFAULT = "web.trace"
+_LOG_SETUP_DONE = False
+
+
+class _LoggerPrefixFilter(logging.Filter):
+    def __init__(self, prefixes: tuple[str, ...]):
+        super().__init__()
+        self.prefixes = tuple(str(x or "").strip().lower() for x in prefixes if str(x or "").strip())
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        name = str(getattr(record, "name", "") or "").strip().lower()
+        if not name:
+            return False
+        for prefix in self.prefixes:
+            if name == prefix or name.startswith(prefix + "."):
+                return True
+        return False
 
 
 @dataclass(frozen=True)
@@ -25,16 +239,16 @@ class AppSettings:
     llm_default_provider: str = "ollama"
     model_name: str = "qcwind/qwen3-8b-instruct-Q4-K-M"
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8027
     thinking_enabled: bool = True
     web_mode: str = "auto"
+    web_auto_profile: str = "balanced"
     json_mode_enabled: bool = False
     internet_enabled: bool = True
     automation_enabled: bool = True
     screen_enabled: bool = True
     voice_enabled: bool = True
     safety_mode: str = "read_only_tools"
-    read_only_tools: bool = True
     prompt_response_safety_filter_enabled: bool = False
     prompt_response_formatting_enabled: bool = True
     data_dir: Path = DATA_DIR
@@ -50,22 +264,26 @@ class AppSettings:
     dialog_greeting_exclusions: list[str] = field(default_factory=list)
     config_file: Path | None = None
     feature_flags: dict[str, bool] = field(default_factory=dict)
-    
-    # --- Consolidated Settings ---
+
     # Logging
     log_level: str = "INFO"
     log_file: Path | str | None = None
     log_colors: bool = True
     log_max_bytes: int = 10485760
     log_backup_count: int = 5
-    
+    log_format: str = _LOG_FORMAT_DEFAULT
+    log_channels: dict[str, list[str]] = field(default_factory=lambda: copy.deepcopy(_LOG_CHANNEL_PREFIXES_DEFAULT))
+    log_web_trace_enabled: bool = True
+    log_web_trace_logger: str = _LOG_WEB_TRACE_LOGGER_DEFAULT
+
     # Metadata
     metadata_model: str = "qwen3:1.7b"
     metadata_model_fallbacks: list[str] = field(default_factory=list)
-    
+
     # LLM Providers
     llm_max_tokens_lower_bound: int = 2048
     llm_max_tokens_upper_bound: int = 8192
+    llm_profiles: dict[str, Any] = field(default_factory=dict)
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_timeout_sec: float = 120.0
     ollama_retries: int = 1
@@ -73,7 +291,7 @@ class AppSettings:
     openai_api_url: str = "https://api.openai.com/v1"
     openai_timeout_sec: float = 120.0
     openai_max_retries: int = 2
-    
+
     # Tools & Search
     search_api_url: str = "http://127.0.0.1:8080/search?format=json"
     search_provider: str = "searxng"
@@ -84,14 +302,14 @@ class AppSettings:
     web_clean_max_chars: int = 4000
     web_clean_min_chars: int = 200
     web_clean_language_hint: str = ""
-    
+
     # Voice
     voice_tts_voice: str = "ru-RU-DmitryNeural"
     voice_tts_rate: str = "+0%"
     voice_tts_volume: str = "+0%"
     voice_input_dir: Path | None = None
     voice_output_dir: Path | None = None
-    
+
     # Chat & Memory
     short_memory_limit: int = 10
     chat_recall_results: int = 3
@@ -99,23 +317,19 @@ class AppSettings:
     chat_proofread: bool = False
     chat_proofread_strict: bool = False
     model_fallbacks: list[str] = field(default_factory=list)
-    
-    llm_max_tokens_lower_bound: int = 2048
-    llm_max_tokens_upper_bound: int = 8192
 
     # Hardware
     gpu_vram_gb: int | None = None
-    
+
     # UI Console
-    console_model: str = ""
     console_timeout_sec: float = 2.5
     console_stream_timeout_sec: float = 600.0
     console_store_turn: bool = True
-    console_show_thinking: bool = False  
+    console_show_thinking: bool = False
     console_thinking_first: bool = True
-    console_json_mode_enabled: bool = False
     console_auto_start_api: bool = True
     console_auto_start_ollama: bool = True
+    console_runtime: dict[str, Any] = field(default_factory=dict)
 
     @property
     def api_url(self) -> str:
@@ -123,7 +337,18 @@ class AppSettings:
 
     def to_dict(self) -> dict[str, Any]:
         row = asdict(self)
-        for key in ("data_dir", "models_dir", "memory_dir", "cache_dir", "log_dir", "db_path", "config_file"):
+        for key in (
+            "data_dir",
+            "models_dir",
+            "memory_dir",
+            "cache_dir",
+            "log_dir",
+            "db_path",
+            "config_file",
+            "voice_input_dir",
+            "voice_output_dir",
+            "log_file",
+        ):
             if row.get(key) is not None:
                 row[key] = str(row[key])
         return row
@@ -141,159 +366,21 @@ def load_config(force_reload: bool = False) -> AppSettings:
     if _SETTINGS_CACHE is not None and not force_reload:
         return _SETTINGS_CACHE
 
-    config_file = _resolve_config_file()
-    dotenv_file = _resolve_dotenv_file()
-    json_cfg = _read_json_file(config_file) if config_file is not None else {}
-    dotenv_cfg = _read_dotenv_file(dotenv_file) if dotenv_file is not None else {}
+    manager = get_config_manager()
+    bootstrap_seed = None
+    if not manager.path.exists():
+        dotenv_file = _resolve_dotenv_file()
+        dotenv_cfg = _read_dotenv_file(dotenv_file) if dotenv_file is not None else {}
+        bootstrap_seed = _bootstrap_seed_from_env(dotenv_cfg=dotenv_cfg)
+    payload = manager.load_or_create(bootstrap_seed=bootstrap_seed)
 
-    active_profile = _norm_upper(_pick("MMIS_ACTIVE_PROFILE", json_cfg, dotenv_cfg, "BALANCED"))
-    llm_provider = _norm_lower(_pick("MMIS_LLM_PROVIDER", json_cfg, dotenv_cfg, "ollama"))
-    safety_mode = _norm_lower(_pick("MMIS_SAFETY_MODE", json_cfg, dotenv_cfg, "read_only_tools"))
-
-    memory_dir = _resolve_memory_path(json_cfg=json_cfg, dotenv_cfg=dotenv_cfg)
-    dirs = ensure_dirs(memory_dir=memory_dir)
-    db_default = str(memory_dir / "memory.db")
-
-    settings = AppSettings(
-        app_name=_norm_str(_pick("MMIS_APP_NAME", json_cfg, dotenv_cfg, "MMis")),
-        debug=_to_bool(_pick("MMIS_DEBUG", json_cfg, dotenv_cfg, False)),
-        locale=_norm_str(_pick("MMIS_LOCALE", json_cfg, dotenv_cfg, "ru_RU")),
-        default_language=_norm_str(_pick("MMIS_DEFAULT_LANGUAGE", json_cfg, dotenv_cfg, "ru")),
-        startup_mode=_norm_lower(_pick("MMIS_START_MODE", json_cfg, dotenv_cfg, "api")),
-        active_profile=active_profile,
-        llm_default_provider=llm_provider,
-        model_name=_norm_str(_pick("MMIS_MODEL_NAME", json_cfg, dotenv_cfg, "qcwind/qwen3-8b-instruct-Q4-K-M")),
-        host=_norm_str(_pick("MMIS_API_HOST", json_cfg, dotenv_cfg, "127.0.0.1")),
-        port=_to_int(_pick("MMIS_API_PORT", json_cfg, dotenv_cfg, 8000), default=8000),
-        thinking_enabled=_to_bool(
-            _pick(
-                "MMIS_THINKING_ENABLED",
-                json_cfg,
-                dotenv_cfg,
-                _pick("MMIS_THINKING_ENABLE", json_cfg, dotenv_cfg, True),
-            )
-        ),
-        web_mode=_norm_lower(_pick("MMIS_WEB_MODE", json_cfg, dotenv_cfg, "auto")),
-        json_mode_enabled=_to_bool(_pick("MMIS_JSON_MODE", json_cfg, dotenv_cfg, False)),
-        internet_enabled=_to_bool(_pick("MMIS_INTERNET_ENABLED", json_cfg, dotenv_cfg, True)),
-        automation_enabled=_to_bool(_pick("MMIS_AUTOMATION_ENABLED", json_cfg, dotenv_cfg, True)),
-        screen_enabled=_to_bool(_pick("MMIS_SCREEN_ENABLED", json_cfg, dotenv_cfg, True)),
-        voice_enabled=_to_bool(_pick("MMIS_VOICE_ENABLED", json_cfg, dotenv_cfg, True)),
-        safety_mode=safety_mode,
-        read_only_tools=(safety_mode != "allow_os_actions"),
-        prompt_response_safety_filter_enabled=_to_bool(
-            _pick("MMIS_PROMPT_RESPONSE_SAFETY_FILTER_ENABLED", json_cfg, dotenv_cfg, True)
-        ),
-        prompt_response_formatting_enabled=_to_bool(
-            _pick("MMIS_PROMPT_RESPONSE_FORMATTING_ENABLED", json_cfg, dotenv_cfg, True)
-        ),
-        data_dir=DATA_DIR,
-        models_dir=MODELS_DIR,
-        memory_dir=memory_dir,
-        cache_dir=Path(_norm_str(_pick("MMIS_CACHE_DIR", json_cfg, dotenv_cfg, str(dirs["cache"]))))
-        .expanduser()
-        .resolve(),
-        log_dir=Path(_norm_str(_pick("MMIS_LOG_DIR", json_cfg, dotenv_cfg, str(dirs["logs"])))).expanduser().resolve(),
-        db_path=Path(_norm_str(_pick("MMIS_DB_PATH", json_cfg, dotenv_cfg, db_default))).expanduser().resolve(),
-        dialog_new_session_after_min=max(
-            1,
-            _to_int(_pick("MMIS_DIALOG_NEW_SESSION_AFTER_MIN", json_cfg, dotenv_cfg, 360), default=360),
-        ),
-        dialog_greeting_max_words=max(
-            1,
-            _to_int(_pick("MMIS_DIALOG_GREETING_MAX_WORDS", json_cfg, dotenv_cfg, 6), default=6),
-        ),
-        dialog_greeting_max_chars=max(
-            8,
-            _to_int(_pick("MMIS_DIALOG_GREETING_MAX_CHARS", json_cfg, dotenv_cfg, 35), default=35),
-        ),
-        dialog_greetings=_to_csv_list(
-            _pick(
-                "MMIS_DIALOG_GREETINGS",
-                json_cfg,
-                dotenv_cfg,
-                "привет,приветик,здарова,здравствуйте,доброе утро,добрый день,добрый вечер,hi,hello,hey,yo",
-            )
-        ),
-        dialog_greeting_exclusions=_to_csv_list(
-            _pick(
-                "MMIS_DIALOG_GREETING_EXCLUSIONS",
-                json_cfg,
-                dotenv_cfg,
-                "слово привет,передай привет,передайте привет,приветствие,в коде привет,обсуждение слова привет,перевод привет",
-            )
-        ),
-        config_file=config_file,
-        feature_flags=_collect_feature_flags(json_cfg=json_cfg, dotenv_cfg=dotenv_cfg),
-        log_level=str(_pick("MMIS_LOG_LEVEL", json_cfg, dotenv_cfg, "DEBUG" if _to_bool(_pick("MMIS_DEBUG", json_cfg, dotenv_cfg, False)) else "INFO")).strip().upper(),
-        log_file=Path(str(_pick("MMIS_LOG_FILE", json_cfg, dotenv_cfg, ""))).expanduser() if str(_pick("MMIS_LOG_FILE", json_cfg, dotenv_cfg, "")).strip() else None,
-        log_colors=_to_bool(_pick("MMIS_LOG_COLORS", json_cfg, dotenv_cfg, True)),
-        log_max_bytes=max(262144, _to_int(_pick("MMIS_LOG_MAX_BYTES", json_cfg, dotenv_cfg, 10485760), default=10485760)),
-        log_backup_count=max(1, _to_int(_pick("MMIS_LOG_BACKUP_COUNT", json_cfg, dotenv_cfg, 5), default=5)),
-        metadata_model=str(_pick("MMIS_METADATA_MODEL", json_cfg, dotenv_cfg, "qwen3:1.7b")).strip(),
-        metadata_model_fallbacks=_to_csv_list(_pick("MMIS_METADATA_MODEL_FALLBACKS", json_cfg, dotenv_cfg, "phi3:mini,llama3.2:1b")),
-        llm_max_tokens_lower_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_LOWER_BOUND", json_cfg, dotenv_cfg, 2048), default=2048)),
-        llm_max_tokens_upper_bound=max(1, _to_int(_pick("MMIS_LLM_MAX_TOKENS_UPPER_BOUND", json_cfg, dotenv_cfg, 8192), default=8192)),
-        ollama_base_url=str(_pick("OLLAMA_HOST", json_cfg, dotenv_cfg, "http://127.0.0.1:11434")).strip(),
-        ollama_timeout_sec=float(_pick("OLLAMA_TIMEOUT_SEC", json_cfg, dotenv_cfg, 120.0)),
-        ollama_retries=max(0, _to_int(_pick("OLLAMA_RETRIES", json_cfg, dotenv_cfg, 1), default=1)),
-        openai_api_key=str(_pick("OPENAI_API_KEY", json_cfg, dotenv_cfg, "")).strip(),
-        openai_api_url=str(_pick("OPENAI_BASE_URL", json_cfg, dotenv_cfg, "https://api.openai.com/v1")).strip(),
-        openai_timeout_sec=float(_pick("OPENAI_TIMEOUT_SEC", json_cfg, dotenv_cfg, 120.0)),
-        openai_max_retries=max(0, _to_int(_pick("OPENAI_MAX_RETRIES", json_cfg, dotenv_cfg, 2), default=2)),
-        search_api_url=str(
-            _pick("MMIS_SEARCH_API_URL", json_cfg, dotenv_cfg, "http://127.0.0.1:8080/search?format=json")
-        ).strip(),
-        search_provider=str(_pick("MMIS_SEARCH_PROVIDER", json_cfg, dotenv_cfg, "searxng")).strip().lower(),
-        search_strict_endpoint=_to_bool(_pick("MMIS_SEARCH_STRICT_ENDPOINT", json_cfg, dotenv_cfg, True)),
-        search_timeout_sec=max(3.0, float(_pick("MMIS_SEARCH_TIMEOUT_SEC", json_cfg, dotenv_cfg, 12.0))),
-        web_fetch_timeout_sec=max(3, _to_int(_pick("MMIS_WEB_FETCH_TIMEOUT_SEC", json_cfg, dotenv_cfg, 12), default=12)),
-        web_fetch_retries=max(0, _to_int(_pick("MMIS_WEB_FETCH_RETRIES", json_cfg, dotenv_cfg, 1), default=1)),
-        web_clean_max_chars=max(
-            256,
-            _to_int(_pick("MMIS_WEB_CLEAN_MAX_CHARS", json_cfg, dotenv_cfg, 4000), default=4000),
-        ),
-        web_clean_min_chars=max(
-            40,
-            _to_int(_pick("MMIS_WEB_CLEAN_MIN_CHARS", json_cfg, dotenv_cfg, 200), default=200),
-        ),
-        web_clean_language_hint=str(_pick("MMIS_WEB_CLEAN_LANGUAGE_HINT", json_cfg, dotenv_cfg, "")).strip(),
-        voice_tts_voice=str(_pick("MMIS_VOICE_TTS_VOICE", json_cfg, dotenv_cfg, "ru-RU-DmitryNeural")).strip(),
-        voice_tts_rate=str(_pick("MMIS_VOICE_TTS_RATE", json_cfg, dotenv_cfg, "+0%")).strip(),
-        voice_tts_volume=str(_pick("MMIS_VOICE_TTS_VOLUME", json_cfg, dotenv_cfg, "+0%")).strip(),
-        voice_input_dir=Path(str(_pick("MMIS_VOICE_INPUT_DIR", json_cfg, dotenv_cfg, str(memory_dir / "voice" / "input")))).expanduser(),
-        voice_output_dir=Path(str(_pick("MMIS_VOICE_OUTPUT_DIR", json_cfg, dotenv_cfg, str(memory_dir / "voice" / "output")))).expanduser(),
-        short_memory_limit=_to_int(_pick("MMIS_SHORT_MEMORY_LIMIT", json_cfg, dotenv_cfg, 10), default=10),
-        chat_recall_results=_to_int(_pick("MMIS_CHAT_RECALL_RESULTS", json_cfg, dotenv_cfg, 3), default=3),
-        chat_events_limit=_to_int(_pick("MMIS_CHAT_EVENTS_LIMIT", json_cfg, dotenv_cfg, 10), default=10),
-        chat_proofread=_to_bool(_pick("MMIS_CHAT_PROOFREAD", json_cfg, dotenv_cfg, False)),
-        chat_proofread_strict=_to_bool(_pick("MMIS_CHAT_PROOFREAD_STRICT", json_cfg, dotenv_cfg, False)),
-        model_fallbacks=_to_csv_list(_pick("MMIS_MODEL_FALLBACKS", json_cfg, dotenv_cfg, "")),
-        gpu_vram_gb=_to_int_or_none(_pick("MMIS_GPU_VRAM_GB", json_cfg, dotenv_cfg, None)),
-        console_model=str(_pick("MMIS_CONSOLE_MODEL", json_cfg, dotenv_cfg, "")).strip(),
-        console_timeout_sec=float(_pick("MMIS_CONSOLE_TIMEOUT_SEC", json_cfg, dotenv_cfg, 2.5)),
-        console_stream_timeout_sec=float(_pick("MMIS_CONSOLE_STREAM_TIMEOUT_SEC", json_cfg, dotenv_cfg, 600.0)),
-        console_store_turn=_to_bool(_pick("MMIS_CONSOLE_STORE_TURN", json_cfg, dotenv_cfg, True)),
-        console_show_thinking=_to_bool(_pick("MMIS_CONSOLE_SHOW_THINKING", json_cfg, dotenv_cfg, True)),
-        console_thinking_first=_to_bool(
-            _pick(
-                "MMIS_CONSOLE_THINKING_FIRST",
-                json_cfg,
-                dotenv_cfg,
-                _pick("MMIS_THINKING_FIRST", json_cfg, dotenv_cfg, True),
-            )
-        ),
-        console_json_mode_enabled=_to_bool(_pick("MMIS_CONSOLE_JSON_MODE", json_cfg, dotenv_cfg, False)),
-        console_auto_start_api=_to_bool(_pick("MMIS_CONSOLE_AUTO_API", json_cfg, dotenv_cfg, True)),
-        console_auto_start_ollama=_to_bool(_pick("MMIS_CONSOLE_AUTO_OLLAMA", json_cfg, dotenv_cfg, True)),
-    )
+    settings = _settings_from_payload(payload=payload, config_file=manager.path)
     _validate_settings(settings)
 
     settings.log_dir.mkdir(parents=True, exist_ok=True)
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
     settings.memory_dir.mkdir(parents=True, exist_ok=True)
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
-    
     if settings.voice_input_dir:
         settings.voice_input_dir.mkdir(parents=True, exist_ok=True)
     if settings.voice_output_dir:
@@ -307,61 +394,769 @@ def load_settings(force_reload: bool = False) -> AppSettings:
     return load_config(force_reload=force_reload)
 
 
-def _resolve_config_file() -> Path | None:
+def get_config_manager() -> ConfigManager:
+    cfg_path = _resolve_config_file()
+    return ConfigManager(path=cfg_path, defaults=_default_config_tree(), project_dir=BASE_DIR)
+
+
+def get_config_payload(force_reload: bool = False) -> dict[str, Any]:
+    manager = get_config_manager()
+    bootstrap_seed = None
+    if force_reload:
+        global _SETTINGS_CACHE
+        _SETTINGS_CACHE = None
+    if not manager.path.exists():
+        dotenv_file = _resolve_dotenv_file()
+        dotenv_cfg = _read_dotenv_file(dotenv_file) if dotenv_file is not None else {}
+        bootstrap_seed = _bootstrap_seed_from_env(dotenv_cfg=dotenv_cfg)
+    return manager.load_or_create(bootstrap_seed=bootstrap_seed)
+
+
+def update_config_value(dotted_path: str, value: Any) -> AppSettings:
+    manager = get_config_manager()
+    manager.update(str(dotted_path or ""), value)
+    return load_config(force_reload=True)
+
+
+def update_config_values(updates: dict[str, Any]) -> AppSettings:
+    manager = get_config_manager()
+    manager.update_many(dict(updates or {}))
+    return load_config(force_reload=True)
+
+
+def _default_model_profiles_tree() -> dict[str, Any]:
+    return {
+        "FAST": {
+            "name": "FAST",
+            "generation": {
+                "temperature": 0.55,
+                "top_p": 0.9,
+                "repeat_penalty": 1.05,
+                "max_tokens": 512,
+                "stop": [],
+            },
+            "ollama": {
+                "num_thread": 8,
+                "num_ctx": 4096,
+                "num_gpu": 1,
+                "num_batch": 64,
+                "keep_alive": "2m",
+            },
+            "openai": {
+                "model": "",
+                "reasoning_effort": "low",
+            },
+        },
+        "BALANCED": {
+            "name": "BALANCED",
+            "generation": {
+                "temperature": 0.7,
+                "top_p": 0.92,
+                "repeat_penalty": 1.1,
+                "max_tokens": 1024,
+                "stop": [],
+            },
+            "ollama": {
+                "num_thread": 6,
+                "num_ctx": 8192,
+                "num_gpu": 1,
+                "num_batch": 128,
+                "keep_alive": "5m",
+            },
+            "openai": {
+                "model": "",
+                "reasoning_effort": "medium",
+            },
+        },
+        "QUALITY": {
+            "name": "QUALITY",
+            "generation": {
+                "temperature": 0.82,
+                "top_p": 0.95,
+                "repeat_penalty": 1.2,
+                "max_tokens": 2048,
+                "stop": [],
+            },
+            "ollama": {
+                "num_thread": 6,
+                "num_ctx": 12288,
+                "num_gpu": 1,
+                "num_batch": 160,
+                "keep_alive": "10m",
+            },
+            "openai": {
+                "model": "",
+                "reasoning_effort": "high",
+            },
+        },
+        "ECONOM": {
+            "name": "ECONOM",
+            "generation": {
+                "temperature": 0.45,
+                "top_p": 0.88,
+                "repeat_penalty": 1.12,
+                "max_tokens": 384,
+                "stop": [],
+            },
+            "ollama": {
+                "num_thread": 4,
+                "num_ctx": 3072,
+                "num_gpu": 0,
+                "num_batch": 48,
+                "keep_alive": "1m",
+            },
+            "openai": {
+                "model": "",
+                "reasoning_effort": "low",
+            },
+        },
+        "ASYA": {
+            "name": "ASYA",
+            "generation": {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "repeat_penalty": 1.2,
+                "max_tokens": -1,
+                "stop": [],
+            },
+            "ollama": {
+                "num_thread": 6,
+                "num_ctx": 8192,
+                "num_gpu": 1,
+                "num_batch": 128,
+                "keep_alive": "5m",
+            },
+            "openai": {
+                "model": "",
+                "reasoning_effort": "medium",
+            },
+        },
+        "AUTONOMOUS": {
+            "name": "AUTONOMOUS",
+            "generation": {
+                "temperature": 0.6,
+                "top_p": 0.9,
+                "repeat_penalty": 1.08,
+                "max_tokens": -1,
+                "stop": [],
+            },
+            "ollama": {
+                "num_thread": 6,
+                "num_ctx": 16384,
+                "num_gpu": 1,
+                "num_batch": 192,
+                "keep_alive": "15m",
+            },
+            "openai": {
+                "model": "",
+                "reasoning_effort": "high",
+            },
+        },
+    }
+
+
+def _default_config_tree() -> dict[str, Any]:
+    memory_dir = _resolve_memory_dir_default().expanduser().resolve()
+    cache_dir = CACHE_DIR.resolve()
+    log_dir = LOG_DIR.resolve()
+    return {
+        "app": {
+            "name": "MMis",
+            "debug": False,
+            "locale": "ru_RU",
+            "default_language": "ru",
+        },
+        "startup": {
+            "mode": "api",
+            "active_profile": "BALANCED",
+            "safety_mode": "read_only_tools",
+        },
+        "api": {
+            "host": "127.0.0.1",
+            "port": 8027,
+        },
+        "llm": {
+            "provider": "ollama",
+            "model_name": "qcwind/qwen3-8b-instruct-Q4-K-M",
+            "model_fallbacks": [],
+            "thinking_enabled": True,
+            "json_mode_enabled": False,
+            "profiles": _default_model_profiles_tree(),
+            "max_tokens": {
+                "lower_bound": 2048,
+                "upper_bound": 8192,
+            },
+            "metadata": {
+                "model": "qwen3:1.7b",
+                "fallbacks": [],
+            },
+            "providers": {
+                "ollama": {
+                    "base_url": "http://127.0.0.1:11434",
+                    "timeout_sec": 120.0,
+                    "retries": 1,
+                },
+                "openai": {
+                    "api_key": "",
+                    "api_url": "https://api.openai.com/v1",
+                    "timeout_sec": 120.0,
+                    "max_retries": 2,
+                },
+            },
+        },
+        "internet": {
+            "enabled": True,
+            "web_mode": "auto",
+            "web_auto_profile": "balanced",
+            "search": {
+                "api_url": "http://127.0.0.1:8080/search?format=json",
+                "provider": "searxng",
+                "strict_endpoint": True,
+                "timeout_sec": 12.0,
+            },
+            "fetch": {
+                "timeout_sec": 12,
+                "retries": 1,
+                "clean_max_chars": 4000,
+                "clean_min_chars": 200,
+                "clean_language_hint": "",
+            },
+        },
+        "modules": {
+            "automation_enabled": True,
+            "screen_enabled": True,
+        },
+        "prompt": {
+            "response_safety_filter_enabled": False,
+            "response_formatting_enabled": True,
+        },
+        "memory": {
+            "memory_dir": _path_to_config_string(memory_dir),
+            "cache_dir": _path_to_config_string(cache_dir),
+            "log_dir": _path_to_config_string(log_dir),
+            "db_path": _path_to_config_string(memory_dir / "memory.db"),
+            "short_memory_limit": 10,
+            "chat_recall_results": 3,
+            "chat_events_limit": 10,
+            "chat_proofread": False,
+            "chat_proofread_strict": False,
+        },
+        "dialog": {
+            "new_session_after_min": 360,
+            "greeting_max_words": 6,
+            "greeting_max_chars": 35,
+            "greetings": [],
+            "greeting_exclusions": [],
+        },
+        "voice": {
+            "enabled": True,
+            "tts": {
+                "voice": "ru-RU-DmitryNeural",
+                "rate": "+0%",
+                "volume": "+0%",
+            },
+            "paths": {
+                "input_dir": _path_to_config_string(memory_dir / "voice" / "input"),
+                "output_dir": _path_to_config_string(memory_dir / "voice" / "output"),
+            },
+        },
+        "logging": {
+            "level": "INFO",
+            "file": "",
+            "colors": True,
+            "max_bytes": 10485760,
+            "backup_count": 5,
+            "format": _LOG_FORMAT_DEFAULT,
+            "channels": copy.deepcopy(_LOG_CHANNEL_PREFIXES_DEFAULT),
+            "web_trace_enabled": True,
+            "web_trace_logger": _LOG_WEB_TRACE_LOGGER_DEFAULT,
+        },
+        "ui": {
+            "console": {
+                "timeout_sec": 2.5,
+                "stream_timeout_sec": 600.0,
+                "store_turn": True,
+                "show_thinking": False,
+                "thinking_first": True,
+                "auto_start_api": True,
+                "auto_start_ollama": True,
+                "runtime": {
+                    "mode_lock": False,
+                    "active_mode": "",
+                    "output_parameters": False,
+                    "output_summary": False,
+                },
+            },
+        },
+        "features": {
+            "flags": {},
+            "extra_legacy": {},
+        },
+        "hardware": {
+            "gpu_vram_gb": None,
+        },
+        "paths": {
+            "data_dir": _path_to_config_string(DATA_DIR),
+            "models_dir": _path_to_config_string(MODELS_DIR),
+        },
+    }
+
+
+def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> AppSettings:
+    row = dict(payload or {})
+
+    memory_dir = _to_path(_get_dotted(row, "memory.memory_dir"), _resolve_memory_dir_default().expanduser().resolve())
+    dirs = ensure_dirs(memory_dir=memory_dir)
+    cache_dir = _to_path(_get_dotted(row, "memory.cache_dir"), dirs["cache"])
+    log_dir = _to_path(_get_dotted(row, "memory.log_dir"), dirs["logs"])
+    db_path = _to_path(_get_dotted(row, "memory.db_path"), memory_dir / "memory.db")
+
+    voice_input = _to_path(_get_dotted(row, "voice.paths.input_dir"), memory_dir / "voice" / "input")
+    voice_output = _to_path(_get_dotted(row, "voice.paths.output_dir"), memory_dir / "voice" / "output")
+
+    log_file_raw = _get_dotted(row, "logging.file")
+    log_file = None
+    if str(log_file_raw or "").strip():
+        log_file = Path(str(log_file_raw)).expanduser()
+
+    safety_mode = _norm_lower(_pick_value(_get_dotted(row, "startup.safety_mode"), "read_only_tools"))
+
+    runtime = _normalize_ui_console_runtime(_as_dict(_get_dotted(row, "ui.console.runtime")))
+    features_flags = _as_dict(_get_dotted(row, "features.flags"))
+    profile_rows = _as_dict(_get_dotted(row, "llm.profiles"))
+    if not profile_rows:
+        profile_rows = copy.deepcopy(_default_model_profiles_tree())
+    profile_rows = _normalize_profile_rows(profile_rows)
+    log_channels = _normalize_log_channels(_as_dict(_get_dotted(row, "logging.channels")))
+
+    settings = AppSettings(
+        app_name=_norm_str(_get_dotted(row, "app.name") or "MMis"),
+        debug=_to_bool(_get_dotted(row, "app.debug")),
+        locale=_norm_str(_get_dotted(row, "app.locale") or "ru_RU"),
+        default_language=_norm_str(_get_dotted(row, "app.default_language") or "ru"),
+        startup_mode=_norm_lower(_get_dotted(row, "startup.mode") or "api"),
+        active_profile=_norm_upper(_get_dotted(row, "startup.active_profile") or "BALANCED"),
+        llm_default_provider=_norm_lower(_get_dotted(row, "llm.provider") or "ollama"),
+        model_name=_norm_str(_get_dotted(row, "llm.model_name") or "qcwind/qwen3-8b-instruct-Q4-K-M"),
+        host=_norm_str(_get_dotted(row, "api.host") or "127.0.0.1"),
+        port=_to_int(_get_dotted(row, "api.port"), default=8027),
+        thinking_enabled=_to_bool(_get_dotted(row, "llm.thinking_enabled")),
+        web_mode=_norm_lower(_get_dotted(row, "internet.web_mode") or "auto"),
+        web_auto_profile=_norm_lower(_get_dotted(row, "internet.web_auto_profile") or "balanced"),
+        json_mode_enabled=_to_bool(_get_dotted(row, "llm.json_mode_enabled")),
+        internet_enabled=_to_bool(_get_dotted(row, "internet.enabled")),
+        automation_enabled=_to_bool(_get_dotted(row, "modules.automation_enabled")),
+        screen_enabled=_to_bool(_get_dotted(row, "modules.screen_enabled")),
+        voice_enabled=_to_bool(_get_dotted(row, "voice.enabled")),
+        safety_mode=safety_mode,
+        prompt_response_safety_filter_enabled=_to_bool(_get_dotted(row, "prompt.response_safety_filter_enabled")),
+        prompt_response_formatting_enabled=_to_bool(_get_dotted(row, "prompt.response_formatting_enabled")),
+        data_dir=_to_path(_get_dotted(row, "paths.data_dir"), DATA_DIR),
+        models_dir=_to_path(_get_dotted(row, "paths.models_dir"), MODELS_DIR),
+        memory_dir=memory_dir,
+        cache_dir=cache_dir,
+        log_dir=log_dir,
+        db_path=db_path,
+        dialog_new_session_after_min=max(1, _to_int(_get_dotted(row, "dialog.new_session_after_min"), default=360)),
+        dialog_greeting_max_words=max(1, _to_int(_get_dotted(row, "dialog.greeting_max_words"), default=6)),
+        dialog_greeting_max_chars=max(8, _to_int(_get_dotted(row, "dialog.greeting_max_chars"), default=35)),
+        dialog_greetings=_to_csv_list(_get_dotted(row, "dialog.greetings")),
+        dialog_greeting_exclusions=_to_csv_list(_get_dotted(row, "dialog.greeting_exclusions")),
+        config_file=Path(config_file).expanduser().resolve(),
+        feature_flags={str(k): _to_bool(v) for k, v in features_flags.items()},
+        log_level=_norm_upper(_get_dotted(row, "logging.level") or "INFO"),
+        log_file=log_file,
+        log_colors=_to_bool(_get_dotted(row, "logging.colors")),
+        log_max_bytes=max(262144, _to_int(_get_dotted(row, "logging.max_bytes"), default=10485760)),
+        log_backup_count=max(1, _to_int(_get_dotted(row, "logging.backup_count"), default=5)),
+        log_format=_norm_str(_get_dotted(row, "logging.format") or _LOG_FORMAT_DEFAULT),
+        log_channels=log_channels,
+        log_web_trace_enabled=_to_bool(_pick_value(_get_dotted(row, "logging.web_trace_enabled"), True)),
+        log_web_trace_logger=_norm_str(_get_dotted(row, "logging.web_trace_logger") or _LOG_WEB_TRACE_LOGGER_DEFAULT),
+        metadata_model=_norm_str(_get_dotted(row, "llm.metadata.model") or "qwen3:1.7b"),
+        metadata_model_fallbacks=_to_csv_list(_get_dotted(row, "llm.metadata.fallbacks")),
+        llm_max_tokens_lower_bound=max(1, _to_int(_get_dotted(row, "llm.max_tokens.lower_bound"), default=2048)),
+        llm_max_tokens_upper_bound=max(1, _to_int(_get_dotted(row, "llm.max_tokens.upper_bound"), default=8192)),
+        llm_profiles=profile_rows,
+        ollama_base_url=_norm_str(_get_dotted(row, "llm.providers.ollama.base_url") or "http://127.0.0.1:11434"),
+        ollama_timeout_sec=float(_pick_value(_get_dotted(row, "llm.providers.ollama.timeout_sec"), 120.0)),
+        ollama_retries=max(0, _to_int(_get_dotted(row, "llm.providers.ollama.retries"), default=1)),
+        openai_api_key=_norm_str(_get_dotted(row, "llm.providers.openai.api_key")),
+        openai_api_url=_norm_str(_get_dotted(row, "llm.providers.openai.api_url") or "https://api.openai.com/v1"),
+        openai_timeout_sec=float(_pick_value(_get_dotted(row, "llm.providers.openai.timeout_sec"), 120.0)),
+        openai_max_retries=max(0, _to_int(_get_dotted(row, "llm.providers.openai.max_retries"), default=2)),
+        search_api_url=_norm_str(_get_dotted(row, "internet.search.api_url") or "http://127.0.0.1:8080/search?format=json"),
+        search_provider=_norm_lower(_get_dotted(row, "internet.search.provider") or "searxng"),
+        search_strict_endpoint=_to_bool(_get_dotted(row, "internet.search.strict_endpoint")),
+        search_timeout_sec=max(3.0, float(_pick_value(_get_dotted(row, "internet.search.timeout_sec"), 12.0))),
+        web_fetch_timeout_sec=max(3, _to_int(_get_dotted(row, "internet.fetch.timeout_sec"), default=12)),
+        web_fetch_retries=max(0, _to_int(_get_dotted(row, "internet.fetch.retries"), default=1)),
+        web_clean_max_chars=max(256, _to_int(_get_dotted(row, "internet.fetch.clean_max_chars"), default=4000)),
+        web_clean_min_chars=max(40, _to_int(_get_dotted(row, "internet.fetch.clean_min_chars"), default=200)),
+        web_clean_language_hint=_norm_str(_get_dotted(row, "internet.fetch.clean_language_hint")),
+        voice_tts_voice=_norm_str(_get_dotted(row, "voice.tts.voice") or "ru-RU-DmitryNeural"),
+        voice_tts_rate=_norm_str(_get_dotted(row, "voice.tts.rate") or "+0%"),
+        voice_tts_volume=_norm_str(_get_dotted(row, "voice.tts.volume") or "+0%"),
+        voice_input_dir=voice_input,
+        voice_output_dir=voice_output,
+        short_memory_limit=max(1, _to_int(_get_dotted(row, "memory.short_memory_limit"), default=10)),
+        chat_recall_results=max(1, _to_int(_get_dotted(row, "memory.chat_recall_results"), default=3)),
+        chat_events_limit=max(1, _to_int(_get_dotted(row, "memory.chat_events_limit"), default=10)),
+        chat_proofread=_to_bool(_get_dotted(row, "memory.chat_proofread")),
+        chat_proofread_strict=_to_bool(_get_dotted(row, "memory.chat_proofread_strict")),
+        model_fallbacks=_to_csv_list(_get_dotted(row, "llm.model_fallbacks")),
+        gpu_vram_gb=_to_int_or_none(_get_dotted(row, "hardware.gpu_vram_gb")),
+        console_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.timeout_sec"), 2.5)),
+        console_stream_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.stream_timeout_sec"), 600.0)),
+        console_store_turn=_to_bool(_get_dotted(row, "ui.console.store_turn")),
+        console_show_thinking=_to_bool(_get_dotted(row, "ui.console.show_thinking")),
+        console_thinking_first=_to_bool(_get_dotted(row, "ui.console.thinking_first")),
+        console_auto_start_api=_to_bool(_get_dotted(row, "ui.console.auto_start_api")),
+        console_auto_start_ollama=_to_bool(_get_dotted(row, "ui.console.auto_start_ollama")),
+        console_runtime=runtime,
+    )
+    return settings
+
+
+def get_model_profiles(*, force_reload: bool = False) -> dict[str, ModelProfile]:
+    settings = load_config(force_reload=force_reload)
+    rows = _normalize_profile_rows(settings.llm_profiles)
+    out: dict[str, ModelProfile] = {}
+    for key, payload in rows.items():
+        out[key] = _profile_from_row(name=key, payload=payload)
+    return out
+
+
+def get_profile(name: str | None) -> ModelProfile:
+    profiles = get_model_profiles()
+    key = str(name or "BALANCED").strip().upper()
+    if key not in profiles:
+        key = "BALANCED"
+    return _apply_hardware_guards(profiles[key])
+
+
+def merge_profile(profile: ModelProfile | str, overrides: dict[str, Any] | None = None) -> ModelProfile:
+    base = get_profile(profile if isinstance(profile, str) else profile.name)
+    if isinstance(profile, ModelProfile):
+        base = profile
+    patch = dict(overrides or {})
+    if not patch:
+        return _apply_hardware_guards(base)
+
+    payload = base.to_dict()
+    _deep_merge(payload, patch)
+    merged = _profile_from_row(name=str(payload.get("name") or base.name), payload=payload)
+    return _apply_hardware_guards(merged)
+
+
+def build_ollama_options(task_type: str) -> dict[str, Any]:
+    _ = task_type
+    profile = get_profile(load_config().active_profile)
+    max_tokens = profile.generation.max_tokens
+    num_predict = int(max_tokens if max_tokens is not None else 768)
+    return {
+        "temperature": float(profile.generation.temperature),
+        "top_p": float(profile.generation.top_p),
+        "repeat_penalty": float(profile.generation.repeat_penalty),
+        "num_predict": num_predict,
+    }
+
+
+def setup_logging(settings: AppSettings | None = None, *, force: bool = False) -> None:
+    global _LOG_SETUP_DONE
+    if _LOG_SETUP_DONE and not force:
+        return
+
+    cfg = settings or load_config()
+    log_level_name = str(cfg.log_level).strip().upper()
+    level = getattr(logging, log_level_name, logging.INFO)
+    max_bytes = int(cfg.log_max_bytes)
+    backup_count = int(cfg.log_backup_count)
+    fmt = str(cfg.log_format or _LOG_FORMAT_DEFAULT)
+
+    log_dir = Path(str(cfg.log_dir or LOG_DIR)).expanduser().resolve()
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    if force:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+    if not _has_stream_handler(root):
+        root.addHandler(_console_handler(level, fmt=fmt))
+    if not _has_file_handler(root, "app.log"):
+        root.addHandler(_file_handler(log_dir / "app.log", level, fmt=fmt, max_bytes=max_bytes, backup_count=backup_count))
+
+    channels = _normalize_log_channels(cfg.log_channels)
+    for channel, prefixes in channels.items():
+        filename = f"{channel}.log"
+        if _has_file_handler(root, filename):
+            continue
+        handler = _file_handler(log_dir / filename, level, fmt=fmt, max_bytes=max_bytes, backup_count=backup_count)
+        handler.addFilter(_LoggerPrefixFilter(tuple(prefixes)))
+        root.addHandler(handler)
+
+    if bool(cfg.log_web_trace_enabled):
+        if not _has_file_handler(root, "web_trace.jsonl"):
+            trace_logger = str(cfg.log_web_trace_logger or _LOG_WEB_TRACE_LOGGER_DEFAULT).strip() or _LOG_WEB_TRACE_LOGGER_DEFAULT
+            web_trace_handler = _file_handler(
+                log_dir / "web_trace.jsonl",
+                level,
+                fmt=fmt,
+                max_bytes=max_bytes,
+                backup_count=backup_count,
+            )
+            web_trace_handler.setFormatter(logging.Formatter("%(message)s"))
+            web_trace_handler.addFilter(_LoggerPrefixFilter((trace_logger,)))
+            root.addHandler(web_trace_handler)
+
+    for channel, prefixes in channels.items():
+        logging.getLogger(channel).setLevel(level)
+        for prefix in prefixes:
+            logging.getLogger(prefix).setLevel(level)
+
+    logging.captureWarnings(True)
+    _LOG_SETUP_DONE = True
+
+
+configure_logging = setup_logging
+
+
+def _profile_from_row(*, name: str, payload: dict[str, Any]) -> ModelProfile:
+    defaults = copy.deepcopy(_default_model_profiles_tree().get(str(name or "BALANCED").strip().upper(), _default_model_profiles_tree()["BALANCED"]))
+    src = copy.deepcopy(payload if isinstance(payload, dict) else {})
+    _deep_merge(defaults, src)
+    generation_row = _as_dict(defaults.get("generation"))
+    ollama_row = _as_dict(defaults.get("ollama"))
+    openai_row = _as_dict(defaults.get("openai"))
+
+    stop_values = generation_row.get("stop")
+    if isinstance(stop_values, list):
+        stop_tuple = tuple(str(x) for x in stop_values if str(x or "").strip())
+    elif isinstance(stop_values, tuple):
+        stop_tuple = tuple(str(x) for x in stop_values if str(x or "").strip())
+    else:
+        stop_tuple = ()
+
+    generation = GenerationProfile(
+        temperature=float(_pick_value(generation_row.get("temperature"), 0.7)),
+        top_p=float(_pick_value(generation_row.get("top_p"), 0.9)),
+        repeat_penalty=float(_pick_value(generation_row.get("repeat_penalty"), 1.1)),
+        max_tokens=_to_int_or_none(generation_row.get("max_tokens")),
+        stop=stop_tuple,
+    )
+    ollama = OllamaProfile(
+        num_thread=max(1, _to_int(ollama_row.get("num_thread"), default=6)),
+        num_ctx=max(512, _to_int(ollama_row.get("num_ctx"), default=8192)),
+        num_gpu=max(0, _to_int(ollama_row.get("num_gpu"), default=1)),
+        num_batch=max(1, _to_int(ollama_row.get("num_batch"), default=128)),
+        keep_alive=_norm_str(_pick_value(ollama_row.get("keep_alive"), "5m")) or "5m",
+    )
+    openai = OpenAIProfile(
+        model=_norm_str(openai_row.get("model")),
+        reasoning_effort=_norm_lower(_pick_value(openai_row.get("reasoning_effort"), "medium")) or "medium",
+    )
+    profile_name = _norm_upper(_pick_value(defaults.get("name"), name, "BALANCED")) or "BALANCED"
+    return ModelProfile(name=profile_name, generation=generation, ollama=ollama, openai=openai)
+
+
+def _apply_hardware_guards(profile: ModelProfile) -> ModelProfile:
+    app_settings = load_config()
+    vram = app_settings.gpu_vram_gb
+    if vram is None:
+        return profile
+    ollama = profile.ollama
+    if vram <= 4:
+        ollama = OllamaProfile(
+            num_thread=min(ollama.num_thread, 6),
+            num_ctx=min(ollama.num_ctx, 4096),
+            num_gpu=min(ollama.num_gpu, 1),
+            num_batch=min(ollama.num_batch, 64),
+            keep_alive=ollama.keep_alive,
+        )
+    elif vram <= 6:
+        ollama = OllamaProfile(
+            num_thread=min(ollama.num_thread, 8),
+            num_ctx=min(ollama.num_ctx, 6144),
+            num_gpu=min(ollama.num_gpu, 1),
+            num_batch=min(ollama.num_batch, 96),
+            keep_alive=ollama.keep_alive,
+        )
+    return ModelProfile(name=profile.name, generation=profile.generation, ollama=ollama, openai=profile.openai)
+
+
+def _normalize_profile_rows(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    src = dict(value or {})
+    out: dict[str, dict[str, Any]] = {}
+    for key, raw in src.items():
+        name = _norm_upper(key)
+        if not name:
+            continue
+        if isinstance(raw, ModelProfile):
+            out[name] = raw.to_dict()
+            continue
+        if not isinstance(raw, dict):
+            continue
+        payload = copy.deepcopy(raw)
+        payload["name"] = _norm_upper(_pick_value(payload.get("name"), name)) or name
+        out[name] = payload
+    if not out:
+        return copy.deepcopy(_default_model_profiles_tree())
+    return out
+
+
+def _normalize_log_channels(value: dict[str, Any]) -> dict[str, list[str]]:
+    src = dict(value or {})
+    out: dict[str, list[str]] = {}
+    for channel, prefixes in src.items():
+        key = _norm_lower(channel)
+        if not key:
+            continue
+        items: list[str] = []
+        if isinstance(prefixes, list):
+            items = [_norm_str(x) for x in prefixes]
+        elif isinstance(prefixes, tuple):
+            items = [_norm_str(x) for x in prefixes]
+        elif isinstance(prefixes, str):
+            items = [_norm_str(prefixes)]
+        items = [x for x in items if x]
+        if items:
+            out[key] = items
+    if not out:
+        return copy.deepcopy(_LOG_CHANNEL_PREFIXES_DEFAULT)
+    return out
+
+
+def _normalize_ui_console_runtime(value: dict[str, Any]) -> dict[str, Any]:
+    src = dict(value or {})
+    out: dict[str, Any] = {}
+    if isinstance(src.get("mode_lock"), bool):
+        out["mode_lock"] = bool(src.get("mode_lock"))
+    active_mode = _norm_str(src.get("active_mode"))
+    if active_mode:
+        out["active_mode"] = active_mode
+    if isinstance(src.get("output_parameters"), bool):
+        out["output_parameters"] = bool(src.get("output_parameters"))
+    if isinstance(src.get("output_summary"), bool):
+        out["output_summary"] = bool(src.get("output_summary"))
+    return out
+
+
+def _console_handler(level: int, *, fmt: str) -> logging.Handler:
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter(str(fmt or _LOG_FORMAT_DEFAULT)))
+    return handler
+
+
+def _file_handler(path: Path, level: int, *, fmt: str, max_bytes: int, backup_count: int) -> logging.Handler:
+    handler = RotatingFileHandler(
+        path,
+        mode="a",
+        maxBytes=max(1024, int(max_bytes)),
+        backupCount=max(1, int(backup_count)),
+        encoding="utf-8",
+        delay=True,
+    )
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter(str(fmt or _LOG_FORMAT_DEFAULT)))
+    return handler
+
+
+def _has_file_handler(logger: logging.Logger, filename: str) -> bool:
+    needle = str(filename).lower()
+    for handler in logger.handlers:
+        base = getattr(handler, "baseFilename", "")
+        if base and str(base).lower().endswith(needle):
+            return True
+    return False
+
+
+def _has_stream_handler(logger: logging.Logger) -> bool:
+    for handler in logger.handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            return True
+    return False
+
+
+def _bootstrap_seed_from_env(*, dotenv_cfg: dict[str, str]) -> dict[str, Any]:
+    seed: dict[str, Any] = {}
+    mappings: list[tuple[str, str, Callable[[Any], Any]]] = [
+        ("MMIS_APP_NAME", "app.name", _norm_str),
+        ("MMIS_DEBUG", "app.debug", _to_bool),
+        ("MMIS_LOCALE", "app.locale", _norm_str),
+        ("MMIS_DEFAULT_LANGUAGE", "app.default_language", _norm_str),
+        ("MMIS_START_MODE", "startup.mode", _norm_lower),
+        ("MMIS_ACTIVE_PROFILE", "startup.active_profile", _norm_upper),
+        ("MMIS_SAFETY_MODE", "startup.safety_mode", _norm_lower),
+        ("MMIS_API_HOST", "api.host", _norm_str),
+        ("MMIS_API_PORT", "api.port", lambda x: _to_int(x, default=8027)),
+        ("MMIS_LLM_PROVIDER", "llm.provider", _norm_lower),
+        ("MMIS_MODEL_NAME", "llm.model_name", _norm_str),
+        ("MMIS_THINKING_ENABLED", "llm.thinking_enabled", _to_bool),
+        ("MMIS_JSON_MODE", "llm.json_mode_enabled", _to_bool),
+        ("MMIS_WEB_MODE", "internet.web_mode", _norm_lower),
+        ("MMIS_WEB_AUTO_PROFILE", "internet.web_auto_profile", _norm_lower),
+        ("MMIS_INTERNET_ENABLED", "internet.enabled", _to_bool),
+        ("MMIS_AUTOMATION_ENABLED", "modules.automation_enabled", _to_bool),
+        ("MMIS_SCREEN_ENABLED", "modules.screen_enabled", _to_bool),
+        ("MMIS_VOICE_ENABLED", "voice.enabled", _to_bool),
+        ("MMIS_DATA_DIR", "paths.data_dir", _norm_str),
+        ("MMIS_MODELS_DIR", "paths.models_dir", _norm_str),
+        ("MMIS_MEMORY_DIR", "memory.memory_dir", _norm_str),
+        ("MMIS_CACHE_DIR", "memory.cache_dir", _norm_str),
+        ("MMIS_LOG_DIR", "memory.log_dir", _norm_str),
+        ("MMIS_DB_PATH", "memory.db_path", _norm_str),
+        ("MMIS_LOG_LEVEL", "logging.level", _norm_upper),
+        ("MMIS_LOG_FILE", "logging.file", _norm_str),
+        ("MMIS_LOG_COLORS", "logging.colors", _to_bool),
+        ("MMIS_LOG_MAX_BYTES", "logging.max_bytes", lambda x: _to_int(x, default=10485760)),
+        ("MMIS_LOG_BACKUP_COUNT", "logging.backup_count", lambda x: _to_int(x, default=5)),
+        ("MMIS_METADATA_MODEL", "llm.metadata.model", _norm_str),
+        ("MMIS_METADATA_MODEL_FALLBACKS", "llm.metadata.fallbacks", _to_csv_list),
+        ("MMIS_LLM_MAX_TOKENS_LOWER_BOUND", "llm.max_tokens.lower_bound", lambda x: _to_int(x, default=2048)),
+        ("MMIS_LLM_MAX_TOKENS_UPPER_BOUND", "llm.max_tokens.upper_bound", lambda x: _to_int(x, default=8192)),
+        ("OLLAMA_HOST", "llm.providers.ollama.base_url", _norm_str),
+        ("OLLAMA_TIMEOUT_SEC", "llm.providers.ollama.timeout_sec", float),
+        ("OLLAMA_RETRIES", "llm.providers.ollama.retries", lambda x: _to_int(x, default=1)),
+        ("OPENAI_API_KEY", "llm.providers.openai.api_key", _norm_str),
+        ("OPENAI_BASE_URL", "llm.providers.openai.api_url", _norm_str),
+        ("OPENAI_TIMEOUT_SEC", "llm.providers.openai.timeout_sec", float),
+        ("OPENAI_MAX_RETRIES", "llm.providers.openai.max_retries", lambda x: _to_int(x, default=2)),
+    ]
+    for env_key, dotted, parser in mappings:
+        value = _env_pick(env_key, dotenv_cfg=dotenv_cfg)
+        if value is None:
+            continue
+        parsed = parser(value)
+        if parsed is None:
+            continue
+        _set_dotted(seed, dotted, parsed)
+    use_legacy = _env_pick("MMIS_USE_LEGACY_MEMORY_DIR", dotenv_cfg=dotenv_cfg)
+    if str(use_legacy or "").strip().lower() in {"1", "true", "yes", "on"}:
+        if _get_dotted(seed, "memory.memory_dir") is None:
+            _set_dotted(seed, "memory.memory_dir", _path_to_config_string(LEGACY_MEMORY_DIR))
+    return seed
+
+
+def _resolve_config_file() -> Path:
     env_raw = str(os.getenv("MMIS_CONFIG_FILE", "")).strip()
     if env_raw:
-        path = Path(env_raw).expanduser()
-        if not path.exists():
-            raise ValueError(f"MMIS_CONFIG_FILE does not exist: {path}")
-        return path
-    default = BASE_DIR / "config" / "config.json"
-    return default if default.exists() else None
+        return Path(env_raw).expanduser().resolve()
+    return (BASE_DIR / "config" / "config.json").resolve()
 
 
 def _resolve_dotenv_file() -> Path | None:
     env_raw = str(os.getenv("MMIS_DOTENV_FILE", "")).strip()
     if env_raw:
-        path = Path(env_raw).expanduser()
-        if not path.exists():
-            raise ValueError(f"MMIS_DOTENV_FILE does not exist: {path}")
-        return path
+        return Path(env_raw).expanduser().resolve()
     default = BASE_DIR / ".env"
     return default if default.exists() else None
-
-
-def _resolve_memory_path(*, json_cfg: dict[str, Any], dotenv_cfg: dict[str, str]) -> Path:
-    raw = _pick("MMIS_MEMORY_DIR", json_cfg, dotenv_cfg, "")
-    if _norm_str(raw):
-        return Path(_norm_str(raw)).expanduser().resolve()
-    return resolve_memory_dir().expanduser().resolve()
-
-
-def _collect_feature_flags(*, json_cfg: dict[str, Any], dotenv_cfg: dict[str, str]) -> dict[str, bool]:
-    result: dict[str, bool] = {}
-    ff_json = _json_get(json_cfg, "feature_flags", default={})
-    if isinstance(ff_json, dict):
-        for key, value in ff_json.items():
-            row_key = _norm_lower(key)
-            if row_key:
-                result[row_key] = _to_bool(value)
-
-    for key, value in dotenv_cfg.items():
-        if key.startswith("MMIS_FF_"):
-            result[_norm_lower(key.replace("MMIS_FF_", "", 1))] = _to_bool(value)
-    for key, value in os.environ.items():
-        if key.startswith("MMIS_FF_"):
-            result[_norm_lower(key.replace("MMIS_FF_", "", 1))] = _to_bool(value)
-    return result
-
-
-def _read_json_file(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except Exception as exc:
-        raise ValueError(f"Invalid config json file: {path} ({exc})") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"Config file must contain an object: {path}")
-    return payload
 
 
 def _read_dotenv_file(path: Path) -> dict[str, str]:
@@ -385,11 +1180,98 @@ def _read_dotenv_file(path: Path) -> dict[str, str]:
     return out
 
 
-def _strip_quotes(value: str) -> str:
-    src = str(value or "")
-    if len(src) >= 2 and ((src[0] == '"' and src[-1] == '"') or (src[0] == "'" and src[-1] == "'")):
-        return src[1:-1]
-    return src
+def _validate_settings(settings: AppSettings) -> None:
+    errors: list[str] = []
+    known_profiles = {str(x).upper() for x in dict(settings.llm_profiles or {}).keys()}
+    if not known_profiles:
+        known_profiles = set(VALID_PROFILES)
+    if settings.active_profile not in known_profiles:
+        errors.append(f"startup.active_profile must be one of {sorted(known_profiles)}, got: {settings.active_profile}")
+    if settings.llm_default_provider not in VALID_PROVIDERS:
+        errors.append(f"MMIS_LLM_PROVIDER must be one of {sorted(VALID_PROVIDERS)}, got: {settings.llm_default_provider}")
+    if settings.safety_mode not in VALID_SAFETY_MODES:
+        errors.append(f"MMIS_SAFETY_MODE must be one of {sorted(VALID_SAFETY_MODES)}, got: {settings.safety_mode}")
+    if not settings.host:
+        errors.append("api.host cannot be empty")
+    if settings.port < 1 or settings.port > 65535:
+        errors.append(f"api.port must be in range 1..65535, got: {settings.port}")
+    if not settings.model_name:
+        errors.append("llm.model_name cannot be empty")
+    if not settings.startup_mode:
+        errors.append("startup.mode cannot be empty")
+    if not str(settings.log_format or "").strip():
+        errors.append("logging.format cannot be empty")
+    if str(settings.web_auto_profile or "").strip().lower() not in {"balanced", "aggressive"}:
+        errors.append(
+            f"internet.web_auto_profile must be one of ['aggressive', 'balanced'], got: {settings.web_auto_profile}"
+        )
+    if errors:
+        raise ValueError("Invalid application settings:\n- " + "\n- ".join(errors))
+
+
+def _env_pick(key: str, *, dotenv_cfg: dict[str, str]) -> str | None:
+    if key in os.environ:
+        return os.environ.get(key)
+    return dotenv_cfg.get(key)
+
+
+def _get_dotted(payload: dict[str, Any], dotted: str) -> Any:
+    cur: Any = payload
+    for part in [x for x in str(dotted or "").split(".") if x]:
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _set_dotted(payload: dict[str, Any], dotted: str, value: Any) -> None:
+    parts = [x for x in str(dotted or "").split(".") if x]
+    if not parts:
+        return
+    cur: dict[str, Any] = payload
+    for part in parts[:-1]:
+        node = cur.get(part)
+        if not isinstance(node, dict):
+            node = {}
+            cur[part] = node
+        cur = node
+    cur[parts[-1]] = value
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _pick_value(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _to_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    raw = str(value).strip().lower()
+    return raw in {"1", "true", "yes", "on", "y", "t"}
+
+
+def _to_int(value, *, default: int) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return int(default)
+
+
+def _to_int_or_none(value) -> int | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return int(float(str(value).strip()))
+    except Exception:
+        return None
 
 
 def _to_csv_list(value) -> list[str]:
@@ -411,107 +1293,23 @@ def _to_csv_list(value) -> list[str]:
     return out
 
 
-def _pick(env_key: str, json_cfg: dict[str, Any], dotenv_cfg: dict[str, str], default):
-    if env_key in os.environ:
-        return os.environ.get(env_key)
-    if env_key in dotenv_cfg:
-        return dotenv_cfg.get(env_key)
-
-    json_key = _norm_lower(env_key.replace("MMIS_", "", 1))
-    aliases = {
-        "llm_provider": ("llm_default_provider", "default_provider"),
-        "active_profile": ("profile",),
-        "start_mode": ("mode",),
-        "api_host": ("host",),
-        "api_port": ("port",),
-        "default_language": ("language",),
-    }
-    for key in (json_key, *aliases.get(json_key, ())):
-        from_json = _json_get(json_cfg, key, default=None)
-        if from_json is not None:
-            return from_json
-    return default
+def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> None:
+    for key, value in dict(patch or {}).items():
+        if key not in base:
+            base[key] = copy.deepcopy(value)
+            continue
+        current = base.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            _deep_merge(current, value)
+            continue
+        base[key] = copy.deepcopy(value)
 
 
-def _json_get(payload: dict[str, Any], key: str, default=None):
-    keys = [
-        key,
-        key.lower(),
-        key.upper(),
-        f"app.{key}",
-        f"llm.{key}",
-        f"api.{key}",
-        f"modules.{key}",
-        f"paths.{key}",
-    ]
-    for full_key in keys:
-        value = _lookup_dotted(payload, full_key)
-        if value is not None:
-            return value
-    return default
-
-
-def _lookup_dotted(payload: dict[str, Any], dotted: str):
-    cur: Any = payload
-    for part in str(dotted).split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur.get(part)
-    return cur
-
-
-def _validate_settings(settings: AppSettings) -> None:
-    errors: list[str] = []
-    if settings.active_profile not in VALID_PROFILES:
-        errors.append(f"MMIS_ACTIVE_PROFILE must be one of {sorted(VALID_PROFILES)}, got: {settings.active_profile}")
-    if settings.llm_default_provider not in VALID_PROVIDERS:
-        errors.append(f"MMIS_LLM_PROVIDER must be one of {sorted(VALID_PROVIDERS)}, got: {settings.llm_default_provider}")
-    if settings.safety_mode not in VALID_SAFETY_MODES:
-        errors.append(f"MMIS_SAFETY_MODE must be one of {sorted(VALID_SAFETY_MODES)}, got: {settings.safety_mode}")
-    if not settings.host:
-        errors.append("MMIS_API_HOST cannot be empty")
-    if settings.port < 1 or settings.port > 65535:
-        errors.append(f"MMIS_API_PORT must be in range 1..65535, got: {settings.port}")
-    if not settings.model_name:
-        errors.append("MMIS_MODEL_NAME cannot be empty")
-    if not settings.startup_mode:
-        errors.append("MMIS_START_MODE cannot be empty")
-    if errors:
-        raise ValueError("Invalid application settings:\n- " + "\n- ".join(errors))
-
-
-def _to_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    raw = str(value).strip().lower()
-    return raw in {"1", "true", "yes", "on", "y", "t"}
-
-
-def _to_bool_or_none(value) -> bool | None:
-    if value is None:
-        return None
-    raw = str(value).strip().lower()
-    if not raw or raw == "none":
-        return None
-    return raw in {"1", "true", "yes", "on", "y", "t"}
-
-
-def _to_int(value, *, default: int) -> int:
-    try:
-        return int(str(value).strip())
-    except Exception:
-        return int(default)
-
-
-def _to_int_or_none(value) -> int | None:
-    if value is None or str(value).strip() == "":
-        return None
-    try:
-        return int(float(str(value).strip()))
-    except Exception:
-        return None
+def _strip_quotes(value: str) -> str:
+    src = str(value or "")
+    if len(src) >= 2 and ((src[0] == '"' and src[-1] == '"') or (src[0] == "'" and src[-1] == "'")):
+        return src[1:-1]
+    return src
 
 
 def _norm_str(value) -> str:
@@ -524,3 +1322,7 @@ def _norm_lower(value) -> str:
 
 def _norm_upper(value) -> str:
     return _norm_str(value).upper()
+
+
+def _to_path(value: Any, default: Path) -> Path:
+    return _resolve_path_value(value, default)

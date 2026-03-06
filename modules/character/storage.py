@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from config.paths import DATA_DIR
+from config.settings import DATA_DIR
 from config.settings import load_config
 from utils.datetime_local import now_local_iso, now_local_ts
 
@@ -544,7 +544,7 @@ def _default_persona_spec() -> dict[str, Any]:
             "neutral": ["Mood: neutral. Keep balanced and practical tone."],
         },
         "modes": {
-            "friend_chat": ["Keep friendly conversational tone.", "Light humor is allowed when relevant."],
+            "chatting": ["Keep friendly conversational tone.", "Light humor is allowed when relevant."],
             "helper": ["Prioritize support and clarity.", "Keep warm tone and reduce sarcasm."],
             "engineer": ["Respond in structured technical format.", "Prefer concrete steps and concise explanations."],
             "debugger": ["Use hypothesis-driven debugging flow.", "Ask for diagnostics and exact reproduction steps."],

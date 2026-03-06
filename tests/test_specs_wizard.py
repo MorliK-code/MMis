@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from config.model_config import PROFILES
+from config.settings import get_model_profiles
 from llm.provider_base import (
     LLMProviderBase,
     LLMRequest,
@@ -21,6 +21,8 @@ from llm.provider_base import (
 )
 from modules.character.storage import CharacterStorage
 from modules.studio.studio_generator import StudioGenerator
+
+PROFILES = get_model_profiles()
 
 
 class _SpecsProvider(LLMProviderBase):
@@ -190,8 +192,8 @@ class StudioGeneratorUnifiedWorkflowTests(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": 1,
-                    "modes": ["friend_chat", "helper", "engineer", "debugger", "planner"],
-                    "aliases": {"modes": {"chat": "friend_chat", "task": "helper", "coding": "engineer", "debug": "debugger"}},
+                    "modes": ["chatting", "helper", "engineer", "debugger", "planner"],
+                    "aliases": {"modes": {"chat": "chatting", "task": "helper", "coding": "engineer", "debug": "debugger"}},
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -227,7 +229,7 @@ class StudioGeneratorUnifiedWorkflowTests(unittest.TestCase):
             "character_id": cid,
             "id": cid,
             "name": name,
-            "default_mode": "friend_chat",
+            "default_mode": "chatting",
             "default_mood": "neutral",
             "llm_profile": "BALANCED",
         }
@@ -239,7 +241,7 @@ class StudioGeneratorUnifiedWorkflowTests(unittest.TestCase):
             encoding="utf-8",
         )
         (d / "persona_spec.json").write_text(
-            json.dumps({"schema_version": 1, "identity": [f"You are {name}."], "modes": {"friend_chat": ["Friendly"]}}, ensure_ascii=False, indent=2),
+            json.dumps({"schema_version": 1, "identity": [f"You are {name}."], "modes": {"chatting": ["Friendly"]}}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         (d / "evolution_spec.json").write_text(json.dumps({"schema_version": 1, "rules": []}, ensure_ascii=False, indent=2), encoding="utf-8")

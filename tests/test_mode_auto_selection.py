@@ -50,7 +50,7 @@ class ModeAutoSelectionTests(unittest.TestCase):
                 "history": [],
                 "quality_profile": "BALANCED",
                 "mode": "chat",
-                "active_mode": "friend_chat",
+                "active_mode": "chatting",
                 "mode_lock": mode_lock,
             },
             meta={"source": "test", "store_turn": False},

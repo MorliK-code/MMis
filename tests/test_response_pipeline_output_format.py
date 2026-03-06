@@ -78,14 +78,14 @@ class ResponsePipelineOutputFormatTests(unittest.TestCase):
         self.assertIn("[RESPONSE]", result.text)
         self.assertTrue(bool(dict(result.structured_output or {}).get("formatted")))
 
-    def test_friend_chat_mode_keeps_plain_text_by_default(self) -> None:
+    def test_chatting_mode_keeps_plain_text_by_default(self) -> None:
         pipeline = ResponsePipeline(provider=_SummaryProvider(main_text="Plain friendly answer."))
         result = self._run_chat(
             pipeline,
             state={
                 "history": [],
                 "quality_profile": "BALANCED",
-                "active_mode": "friend_chat",
+                "active_mode": "chatting",
                 "mode_lock": True,
             },
             text="just chat",

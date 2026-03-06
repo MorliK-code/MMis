@@ -48,10 +48,10 @@ _TOPIC_ALIASES = {
 def normalize_mode(value) -> str:
     token = str(value or "").strip().lower()
     if not token:
-        return "friend_chat"
+        return "chatting"
     aliases = {str(k).strip().lower(): str(v).strip().lower() for k, v in dict(_ALIASES.get("modes") or {}).items()}
     token = aliases.get(token, token)
-    return token if token in MODES else "friend_chat"
+    return token if token in MODES else "chatting"
 
 
 def normalize_lang(value) -> str:

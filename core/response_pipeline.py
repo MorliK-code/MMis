@@ -5,6 +5,7 @@ import os
 import re
 import time
 import unicodedata
+import datetime as dt
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -230,7 +231,7 @@ class ModeSelectStage(PipelineStage):
                 ctx.state.get("active_mode"),
                 ctx.meta.get("active_mode"),
                 ctx.state.get("mode"),
-                "friend_chat",
+                "chatting",
             ),
             allow_custom=True,
         )
@@ -286,7 +287,7 @@ class PlanStage(PipelineStage):
     name = "plan"
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        mode = normalize_mode_name(_pick(ctx.state.get("active_mode"), ctx.state.get("mode"), "friend_chat"), allow_custom=True)
+        mode = normalize_mode_name(_pick(ctx.state.get("active_mode"), ctx.state.get("mode"), "chatting"), allow_custom=True)
         goal = _pick(
             ctx.state.get("active_goal"),
             ctx.state.get("current_task"),
@@ -332,7 +333,7 @@ class PersonalityStage(PipelineStage):
                 "intent": str(ctx.tags.get("intent") or ""),
                 "mood": str(ctx.tags.get("mood") or ""),
                 "mode": str(ctx.state.get("mode") or "chat"),
-                "active_mode": str(ctx.state.get("active_mode") or "friend_chat"),
+                "active_mode": str(ctx.state.get("active_mode") or "chatting"),
                 "turn_id": ctx.meta.get("turn_id"),
                 "conversation_id": ctx.meta.get("conversation_id") or ctx.state.get("conversation_id"),
                 "topic": str(ctx.tags.get("topic") or ""),
@@ -515,6 +516,25 @@ class PromptBuildStage(PipelineStage):
         web_intent = str(ctx.tags.get("web_query_intent") or "").strip().lower()
         web_used = str(ctx.tags.get("web_used") or "").strip().lower() == "true"
         web_fresh_missing = str(ctx.tags.get("web_fresh_missing") or "").strip().lower() == "true"
+        web_response_style = str(ctx.tags.get("web_response_style") or "").strip().lower()
+        retrieved_for_prompt = list(_as_list(ctx.retrieved_memories))
+
+        if web_used and web_intent in {"fx_rate", "weather", "news_release"}:
+            filtered, dropped = _filter_retrieved_memories_for_time_sensitive_web(retrieved_for_prompt)
+            retrieved_for_prompt = filtered
+            if dropped > 0:
+                ctx.logs.append(
+                    f"stage=prompt_build web_memory_filter=applied intent={web_intent} dropped={dropped} kept={len(filtered)}"
+                )
+            _append_policy_rule(
+                ctx.policies,
+                "For time-sensitive web answers, respond directly with facts and avoid rhetorical openers like 'Ах, ты опять...' or similar chatter.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "Use fetched web evidence and include source domain and fetch/publish time; if sources disagree, report a range.",
+            )
+
         if web_fresh_missing:
             _append_policy_rule(
                 ctx.policies,
@@ -533,13 +553,40 @@ class PromptBuildStage(PipelineStage):
             tags_map = _as_dict(prompt_state.get("context_tags"))
             tags_map["web_guardrail"] = "cite_source_and_time"
             prompt_state["context_tags"] = tags_map
+        if web_response_style:
+            tags_map = _as_dict(prompt_state.get("context_tags"))
+            tags_map["web_response_style"] = web_response_style
+            prompt_state["context_tags"] = tags_map
         ctx.prompt_pack = self.character_runtime.build(
             state=prompt_state,
             user_msg=ctx.clean_user_msg,
-            retrieved_memories=ctx.retrieved_memories,
+            retrieved_memories=retrieved_for_prompt,
             traits=ctx.traits,
             policies=ctx.policies,
         )
+        emitter = ctx.meta.get("emit_web_trace_event")
+        if callable(emitter):
+            web_rows = [x for x in list(retrieved_for_prompt) if _is_web_memory_item(x)]
+            domains = sorted(
+                {
+                    _web_memory_domain(x)
+                    for x in list(web_rows)
+                    if _web_memory_domain(x)
+                }
+            )
+            emitter(
+                "web_context_injected",
+                {
+                    "retrieved_total": len(list(retrieved_for_prompt)),
+                    "web_context_count": len(list(web_rows)),
+                    "domains": domains,
+                    "truncated_candidates": sum(
+                        1
+                        for x in list(web_rows)
+                        if str(_pick_value(_as_dict(x).get("text"), _as_dict(x).get("content"), "")).rstrip().endswith("...")
+                    ),
+                },
+            )
         ctx.logs.append("stage=prompt_build")
         return ctx
 
@@ -1143,15 +1190,54 @@ class GenerateStage(PipelineStage):
             ctx.logs.append("stage=generate command=no-web mode=off")
             return True
 
-        if cmd in {"/web-auto", "/web_auto", "/auto-web"}:
+        if cmd.startswith("/web-auto") or cmd.startswith("/web_auto") or cmd.startswith("/auto-web"):
+            raw_parts = [x for x in str(ctx.clean_user_msg or "").strip().split(" ") if x]
+            arg = str(raw_parts[1] or "").strip().lower() if len(raw_parts) >= 2 else ""
+            if arg and arg not in {"balanced", "aggressive", "status"}:
+                ctx.text = "Usage: /web-auto [balanced|aggressive|status]"
+                ctx.logs.append(f"stage=generate command=web-auto:usage arg={arg}")
+                return True
+
+            if arg == "status":
+                if scope == "chat":
+                    mode_value = str(ctx.state.get("web_mode") or "auto").strip().lower()
+                    profile_value = str(ctx.state.get("web_auto_profile") or "balanced").strip().lower()
+                else:
+                    mode_value = str(self._scope_get(ctx, scope, "web_mode", "auto") or "auto").strip().lower()
+                    profile_value = str(self._scope_get(ctx, scope, "web_auto_profile", "balanced") or "balanced").strip().lower()
+                if mode_value not in {"on", "off", "auto"}:
+                    mode_value = "auto"
+                if profile_value not in {"balanced", "aggressive"}:
+                    profile_value = "balanced"
+                ctx.text = (
+                    "Web auto status:\n"
+                    f"- scope: {scope}\n"
+                    f"- web_mode: {mode_value}\n"
+                    f"- web_auto_profile: {profile_value}"
+                )
+                ctx.logs.append(f"stage=generate command=web-auto:status scope={scope}")
+                return True
+
+            profile_set = arg if arg in {"balanced", "aggressive"} else ""
             if scope == "chat":
-                ctx.text = "Web mode set to auto."
                 ctx.memory_ops.append({"op": "state_web_mode", "value": "auto"})
+                if profile_set:
+                    ctx.memory_ops.append({"op": "state_web_auto_profile", "value": profile_set})
             else:
-                self._scope_set(ctx, scope, web_mode="auto")
-                ctx.text = f"Web mode set to auto for scope: {scope}."
+                updates: dict[str, Any] = {"web_mode": "auto"}
+                if profile_set:
+                    updates["web_auto_profile"] = profile_set
+                self._scope_set(ctx, scope, **updates)
+
+            if profile_set:
+                ctx.text = f"Web mode set to auto ({profile_set})" + (f" for scope: {scope}." if scope != "chat" else ".")
+            else:
+                ctx.text = "Web mode set to auto." if scope == "chat" else f"Web mode set to auto for scope: {scope}."
             ctx.ui_actions.append({"type": "set_web_mode", "mode": "auto"})
-            ctx.logs.append("stage=generate command=web-auto mode=auto")
+            ctx.logs.append(
+                "stage=generate command=web-auto mode=auto "
+                f"profile={profile_set or '-'} scope={scope}"
+            )
             return True
 
         if cmd in {"/output", "/output status"}:
@@ -1161,7 +1247,7 @@ class GenerateStage(PipelineStage):
                     ctx.state.get("active_mode"),
                     ctx.meta.get("active_mode"),
                     ctx.state.get("mode"),
-                    "friend_chat",
+                    "chatting",
                 ),
                 allow_custom=True,
             )
@@ -1281,14 +1367,14 @@ class GenerateStage(PipelineStage):
                         ctx.state.get("active_mode"),
                         ctx.meta.get("active_mode"),
                         ctx.state.get("mode"),
-                        "friend_chat",
+                        "chatting",
                     ),
                     allow_custom=True,
                 )
                 locked = bool(_pick_value(ctx.state.get("mode_lock"), ctx.meta.get("mode_lock"), False))
             else:
                 current_mode = normalize_mode_name(
-                    str(self._scope_get(ctx, scope, "active_mode", "friend_chat") or "friend_chat"),
+                    str(self._scope_get(ctx, scope, "active_mode", "chatting") or "chatting"),
                     allow_custom=True,
                 )
                 locked = bool(self._scope_get(ctx, scope, "mode_lock", False))
@@ -1333,7 +1419,7 @@ class GenerateStage(PipelineStage):
                     ctx.state.get("active_mode"),
                     ctx.meta.get("active_mode"),
                     ctx.state.get("mode"),
-                    "friend_chat",
+                    "chatting",
                 ),
                 allow_custom=True,
             )
@@ -1439,7 +1525,7 @@ class GenerateStage(PipelineStage):
                 payload = {}
             if not payload:
                 payload = {
-                    "active_mode": str(ctx.state.get("active_mode") or ctx.state.get("mode") or "friend_chat"),
+                    "active_mode": str(ctx.state.get("active_mode") or ctx.state.get("mode") or "chatting"),
                     "mode_lock": bool(ctx.state.get("mode_lock", False)),
                 }
             ctx.text = _format_brain_debug(payload)
@@ -1771,6 +1857,9 @@ class GenerateStage(PipelineStage):
         scoped_web_mode = str(self._scope_get(ctx, scope, "web_mode", "") or "").strip().lower()
         if scoped_web_mode in {"on", "off", "auto"}:
             ctx.meta["web_mode"] = scoped_web_mode
+        scoped_web_auto_profile = str(self._scope_get(ctx, scope, "web_auto_profile", "") or "").strip().lower()
+        if scoped_web_auto_profile in {"balanced", "aggressive"}:
+            ctx.meta["web_auto_profile"] = scoped_web_auto_profile
         scoped_output = self._scope_get(ctx, scope, "output_format", None)
         if isinstance(scoped_output, dict):
             ctx.state["output_format"] = _coerce_output_format_state(scoped_output)
@@ -1890,6 +1979,17 @@ class PostprocessStage(PipelineStage):
                     ctx.logs.append("stage=postprocess terms_removed=" + ",".join(removed))
                 if kept:
                     ctx.logs.append("stage=postprocess terms_kept=" + ",".join(kept))
+
+            web_intent = str(ctx.tags.get("web_query_intent") or "").strip().lower()
+            web_style = str(ctx.tags.get("web_response_style") or "").strip().lower()
+            web_fixed = _apply_time_sensitive_web_failsafe(
+                text,
+                web_intent=web_intent,
+                web_response_style=web_style,
+            )
+            if web_fixed != text:
+                text = web_fixed
+                ctx.logs.append(f"stage=postprocess web_failsafe=applied intent={web_intent}")
 
             if _should_apply_echo_guard(ctx.clean_user_msg) and _looks_like_echo_response(answer=text, user_msg=ctx.clean_user_msg):
                 text = _echo_fallback_text(ctx.clean_user_msg)
@@ -2019,7 +2119,7 @@ class OutputFormatStage(PipelineStage):
                 ctx.state.get("active_mode"),
                 ctx.meta.get("active_mode"),
                 ctx.state.get("mode"),
-                "friend_chat",
+                "chatting",
             ),
             allow_custom=True,
         )
@@ -2123,6 +2223,7 @@ class OutputFormatStage(PipelineStage):
             "emotion": emotion,
             "topics": topics,
             "tags": tags,
+            "web_trace_id": str(_pick(ctx.stats.get("web_trace_id"), ctx.meta.get("web_trace_id"), "")),
             "thinking_tokens": thinking_tokens,
             "answer_tokens": answer_tokens,
             "total_tokens": total_tokens,
@@ -2207,6 +2308,81 @@ class OutputFormatStage(PipelineStage):
         return _squeeze_summary(summary)
 
 
+class WebSecondPassStage(PipelineStage):
+    name = "web_second_pass"
+
+    def __init__(self, *, stages: dict[str, PipelineStage] | None = None):
+        self._stages = stages if isinstance(stages, dict) else {}
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        if ctx.route != "chat":
+            ctx.logs.append("stage=web_second_pass skipped(route)")
+            return ctx
+        web_mode = _resolve_web_mode(ctx.meta, ctx.state)
+        web_auto_profile = _resolve_web_auto_profile(ctx.meta, ctx.state)
+        if web_mode != "auto":
+            ctx.logs.append("stage=web_second_pass skipped(mode)")
+            return ctx
+        if web_auto_profile != "aggressive":
+            ctx.logs.append("stage=web_second_pass skipped(profile)")
+            return ctx
+        if bool(ctx.meta.get("web_second_pass_done", False)):
+            ctx.logs.append("stage=web_second_pass skipped(done)")
+            return ctx
+        if str(ctx.tags.get("web_used") or "").strip().lower() == "true":
+            ctx.logs.append("stage=web_second_pass skipped(web_already_used)")
+            return ctx
+        if not _should_trigger_web_second_pass(ctx):
+            ctx.logs.append("stage=web_second_pass skipped(confident)")
+            return ctx
+
+        ctx.meta["web_second_pass_done"] = True
+        web_stage = self._stages.get("web_retrieve")
+        if web_stage is None:
+            ctx.logs.append("stage=web_second_pass skipped(no_web_stage)")
+            return ctx
+
+        prev_use_web = ctx.meta.get("use_web", None)
+        prev_second_pass = ctx.meta.get("web_second_pass", None)
+        ctx.meta["use_web"] = True
+        ctx.meta["web_second_pass"] = True
+        try:
+            ctx = web_stage.run(ctx)
+        except Exception as exc:
+            ctx.errors.append(f"web_second_pass:web_retrieve:{type(exc).__name__}")
+            ctx.logs.append(f"stage=web_second_pass web_retrieve_error={type(exc).__name__}")
+            return ctx
+        finally:
+            if prev_use_web is None:
+                ctx.meta.pop("use_web", None)
+            else:
+                ctx.meta["use_web"] = prev_use_web
+            if prev_second_pass is None:
+                ctx.meta.pop("web_second_pass", None)
+            else:
+                ctx.meta["web_second_pass"] = prev_second_pass
+
+        if str(ctx.tags.get("web_used") or "").strip().lower() != "true":
+            ctx.logs.append("stage=web_second_pass skipped(no_web_after_retry)")
+            return ctx
+
+        rerun = ("prompt_build", "prompt_engine", "generate", "verify", "postprocess", "output_format")
+        for stage_name in rerun:
+            stage = self._stages.get(stage_name)
+            if stage is None:
+                continue
+            try:
+                ctx = stage.run(ctx)
+            except Exception as exc:
+                ctx.errors.append(f"web_second_pass:{stage_name}:{type(exc).__name__}")
+                ctx.logs.append(f"stage=web_second_pass rerun_stage={stage_name} error={type(exc).__name__}")
+                break
+            if ctx.stop:
+                break
+        ctx.logs.append("stage=web_second_pass applied")
+        return ctx
+
+
 class MemoryWriteStage(PipelineStage):
     name = "memory_write"
 
@@ -2226,7 +2402,7 @@ class MemoryWriteStage(PipelineStage):
         if ctx.route in {"chat", "command"} and ctx.clean_user_msg:
             turn_tags = dict(ctx.tags)
             turn_tags["active_mode"] = normalize_mode_name(
-                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat"),
+                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "chatting"),
                 allow_custom=True,
             )
             personality_id = str(
@@ -2247,7 +2423,7 @@ class MemoryWriteStage(PipelineStage):
         if ctx.route in {"chat", "command"} and ctx.text:
             turn_tags = dict(ctx.tags)
             turn_tags["active_mode"] = normalize_mode_name(
-                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "friend_chat"),
+                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "chatting"),
                 allow_custom=True,
             )
             personality_id = str(
@@ -2325,6 +2501,7 @@ class ResponsePipeline:
             "output_format": OutputFormatStage(provider=self.provider),
             "memory_write": MemoryWriteStage(),
         }
+        self._stages["web_second_pass"] = WebSecondPassStage(stages=self._stages)
         self._profiles: dict[str, tuple[str, ...]] = {
             PROFILE_FAST: (
                 "preprocess",
@@ -2353,6 +2530,7 @@ class ResponsePipeline:
                 "tool_router",
                 "verify",
                 "output_format",
+                "web_second_pass",
                 "memory_write",
             ),
             PROFILE_QUALITY: (
@@ -2369,6 +2547,7 @@ class ResponsePipeline:
                 "verify",
                 "postprocess",
                 "output_format",
+                "web_second_pass",
                 "memory_write",
             ),
             PROFILE_AUTONOMOUS: (
@@ -2403,11 +2582,19 @@ class ResponsePipeline:
         web_trace_id = _resolve_web_trace_id(ctx.meta, ctx.user_msg)
         ctx.meta["web_trace_id"] = web_trace_id
         web_mode = _resolve_web_mode(ctx.meta, ctx.state)
+        web_auto_profile = _resolve_web_auto_profile(ctx.meta, ctx.state)
         ctx.meta.setdefault("web_mode", web_mode)
+        ctx.meta.setdefault("web_auto_profile", web_auto_profile)
         force_web = _is_forced_web_request(ctx.user_msg)
         input_preview = _text_preview(ctx.user_msg, 120)
 
         stage_profile = self._resolve_stage_profile(ctx.profile)
+        ctx.meta["stage_profile"] = stage_profile
+        ctx.meta["emit_web_trace_event"] = lambda event, payload=None: self._emit_web_trace_event(
+            ctx,
+            event=event,
+            payload=payload,
+        )
         stage_names = self._resolve_stage_names(stage_profile, ctx.meta, ctx.policies)
         ctx.logs.append(f"profile={ctx.profile}")
         ctx.logs.append(f"stage_profile={stage_profile}")
@@ -2415,19 +2602,21 @@ class ResponsePipeline:
         ctx.logs.append(
             "stage=web_trace start "
             f"trace={web_trace_id} route={ctx.route} web_mode={web_mode} "
+            f"web_auto_profile={web_auto_profile} "
             f"force={int(bool(force_web))} input_len={len(str(ctx.user_msg or '').strip())} "
             f"input_preview={input_preview}"
         )
-        log_json(
-            WEB_TRACE_LOGGER,
-            "web_trace_start",
-            trace=web_trace_id,
-            route=ctx.route,
-            web_mode=web_mode,
-            force=bool(force_web),
-            input_len=len(str(ctx.user_msg or "").strip()),
-            input_preview=input_preview,
-            profile=ctx.profile,
+        self._emit_web_trace_event(
+            ctx,
+            event="web_trace_start",
+            payload={
+                "force_web": bool(force_web),
+                "input_len": len(str(ctx.user_msg or "").strip()),
+                "input_preview": input_preview,
+                "active_profile": str(ctx.profile or ""),
+                "mode": str(web_mode or "auto"),
+                "auto_profile": str(web_auto_profile or "balanced"),
+            },
         )
 
         for name in stage_names:
@@ -2458,23 +2647,30 @@ class ResponsePipeline:
         ctx.logs.append(
             "stage=web_trace end "
             f"trace={web_trace_id} route={ctx.route} web_mode={web_mode} web_used={web_used} "
+            f"web_auto_profile={web_auto_profile} "
             f"query_len={len(web_query)} results={web_result_count} fetched={web_fetched} "
             f"output_len={output_len} output_preview={output_preview}"
         )
-        log_json(
-            WEB_TRACE_LOGGER,
-            "web_trace_end",
-            trace=web_trace_id,
-            route=ctx.route,
-            web_mode=web_mode,
-            web_used=(web_used == "true"),
-            query_len=len(web_query),
-            results=web_result_count,
-            fetched=web_fetched,
-            output_len=output_len,
-            output_preview=output_preview,
-            errors=len(list(ctx.errors or [])),
+        self._emit_web_trace_event(
+            ctx,
+            event="web_trace_end",
+            payload={
+                "web_used": (web_used == "true"),
+                "query_len": len(web_query),
+                "results": web_result_count,
+                "fetched": web_fetched,
+                "fresh_missing": str(ctx.tags.get("web_fresh_missing") or "").strip().lower() == "true",
+                "guardrail_applied": bool(ctx.meta.get("web_guardrail_local_reply")),
+                "output_len": output_len,
+                "output_preview": output_preview,
+                "errors": len(list(ctx.errors or [])),
+            },
         )
+
+        ctx.stats["web_trace_id"] = str(web_trace_id)
+        meta_payload = _as_dict(ctx.structured_output.get("meta"))
+        meta_payload["web_trace_id"] = str(web_trace_id)
+        ctx.structured_output["meta"] = meta_payload
 
         return PipelineResult(
             text=str(ctx.text or ""),
@@ -2486,6 +2682,27 @@ class ResponsePipeline:
             logs=list(ctx.logs or []),
             stats=dict(ctx.stats or {}),
         )
+
+    def _emit_web_trace_event(self, ctx: PipelineContext, *, event: str, payload: dict[str, Any] | None = None) -> None:
+        web_trace_id = str(ctx.meta.get("web_trace_id") or "").strip() or "-"
+        row = {
+            "trace_id": web_trace_id,
+            "ts": _utc_now_iso(),
+            "conversation_id": str(_pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "")),
+            "turn_id": str(_pick(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), "")),
+            "route": str(ctx.route or ""),
+            "profile": str(ctx.profile or ""),
+            "stage_profile": str(ctx.meta.get("stage_profile") or ""),
+            "web_mode": str(ctx.meta.get("web_mode") or ctx.state.get("web_mode") or "auto"),
+            "web_auto_profile": str(
+                ctx.meta.get("web_auto_profile") or ctx.state.get("web_auto_profile") or "balanced"
+            ),
+            "web_query_intent": str(_pick(ctx.meta.get("web_query_intent"), ctx.tags.get("web_query_intent"), "generic")),
+            "web_fresh_required": _to_bool(_pick(ctx.meta.get("web_fresh_required"), ctx.tags.get("web_fresh_required"), False), default=False),
+            "web_fresh_missing": _to_bool(_pick(ctx.meta.get("web_fresh_missing"), ctx.tags.get("web_fresh_missing"), False), default=False),
+            "payload": dict(payload or {}),
+        }
+        log_json(WEB_TRACE_LOGGER, str(event or "").strip(), **row)
 
     def is_studio_active(self, *, conversation_id: str = "", state: dict[str, Any] | None = None) -> bool:
         state_map = _as_dict(state)
@@ -2823,6 +3040,16 @@ _DROP_ROLE_LINE_RE = re.compile(r"^\s*(?:thinking|you|user|system)\s*>\s*", flag
 _ASSISTANT_LINE_PREFIX_RE = re.compile(r"^\s*assistant\s*>\s*", flags=re.IGNORECASE)
 _MODEL_LINE_RE = re.compile(r"^\s*\[model:[^\]]+\]\s*$", flags=re.IGNORECASE)
 _THINKING_HEADER_RE = re.compile(r"^\s*\[thinking\].*$", flags=re.IGNORECASE)
+_WEB_NOISY_MEMORY_MARKERS = ("[parameters]", "[summary]", "[response]")
+_WEB_NOISY_CHATTER_RE = re.compile(
+    r"^\s*(?:ах|ой|ну)\b.*\b(?:опять|снова|шутк|новост|что посмотреть)\b",
+    flags=re.IGNORECASE,
+)
+_WEB_STYLE_REPLACEMENTS = (
+    re.compile(r"^\s*ах,\s*ты\s+(?:опять|снова)\b[^.!?\n]*[.!?]\s*", flags=re.IGNORECASE),
+    re.compile(r"^\s*ах,\s*ты\b[^.!?\n]*[.!?]\s*", flags=re.IGNORECASE),
+    re.compile(r"^\s*(?:ах|ой|ну)\b[^.!?\n]{0,180}[.!?]\s*", flags=re.IGNORECASE),
+)
 
 
 def _enforce_response_hygiene(text: str) -> str:
@@ -2832,6 +3059,63 @@ def _enforce_response_hygiene(text: str) -> str:
     cleaned = _strip_service_markers(src)
     cleaned = _dedupe_adjacent_blocks(cleaned)
     return _normalize_text(cleaned)
+
+
+def _filter_retrieved_memories_for_time_sensitive_web(items: list[Any]) -> tuple[list[Any], int]:
+    if not items:
+        return [], 0
+    kept: list[Any] = []
+    dropped = 0
+    for item in list(items):
+        row = item if isinstance(item, dict) else {}
+        text = _normalize_text(_pick_value(row.get("text"), row.get("content"), ""))
+        source = str(_pick_value(row.get("source"), _as_dict(row.get("metadata")).get("source"), "") or "").strip().lower()
+        topic = str(_pick_value(row.get("topic"), _as_dict(row.get("metadata")).get("topic"), "") or "").strip().lower()
+        low = text.lower()
+        is_web_evidence = bool(
+            topic.startswith("web:")
+            or source in {"web", "search", "internet"}
+            or "source_url:" in low
+            or low.startswith("[web]")
+            or low.startswith("[web_search]")
+        )
+        is_noisy_block = any(marker in low for marker in _WEB_NOISY_MEMORY_MARKERS)
+        is_noisy_chatter = bool(_WEB_NOISY_CHATTER_RE.search(low))
+        is_chat_like_source = source in {"message", "short", "summary", "chat", "history"}
+        if not is_web_evidence and (is_noisy_block or (is_chat_like_source and is_noisy_chatter)):
+            dropped += 1
+            continue
+        kept.append(item)
+    return kept, dropped
+
+
+def _apply_time_sensitive_web_failsafe(
+    text: str,
+    *,
+    web_intent: str = "",
+    web_response_style: str = "",
+) -> str:
+    src = _normalize_text(text)
+    if not src:
+        return ""
+    intent = str(web_intent or "").strip().lower()
+    style = str(web_response_style or "").strip().lower()
+    if intent not in {"fx_rate", "weather", "news_release"}:
+        return src
+    if style != "factual_direct":
+        return src
+    cleaned = src
+    for _ in range(3):
+        changed = False
+        for rx in _WEB_STYLE_REPLACEMENTS:
+            nxt = rx.sub("", cleaned, count=1)
+            if nxt != cleaned:
+                cleaned = nxt
+                changed = True
+        if not changed:
+            break
+    cleaned = _normalize_text(cleaned)
+    return cleaned or src
 
 
 def _strip_service_markers(text: str) -> str:
@@ -3357,7 +3641,7 @@ def _bool_to_text(value: bool) -> str:
 def _format_persona_debug(payload: dict[str, Any]) -> str:
     row = dict(payload or {})
     character = str(row.get("active_character_id") or row.get("character_id") or "default").strip().lower() or "default"
-    mode = str(row.get("active_mode") or "friend_chat").strip().lower() or "friend_chat"
+    mode = str(row.get("active_mode") or "chatting").strip().lower() or "chatting"
     locked = bool(row.get("mode_lock", False))
     mood = str(row.get("mood") or "neutral").strip().lower() or "neutral"
     traits = dict(row.get("traits") or {})
@@ -3434,7 +3718,7 @@ def _format_persona_debug(payload: dict[str, Any]) -> str:
 def _format_brain_debug(payload: dict[str, Any]) -> str:
     row = dict(payload or {})
     lines = ["brain_debug:"]
-    mode = str(row.get("active_mode") or "friend_chat").strip().lower() or "friend_chat"
+    mode = str(row.get("active_mode") or "chatting").strip().lower() or "chatting"
     mode_lock = bool(row.get("mode_lock", False))
     lines.append(f"- active_mode={mode} ({'locked' if mode_lock else 'auto'})")
     lines.append(f"- web_mode={str(row.get('web_mode') or 'auto').strip().lower() or 'auto'}")
@@ -3725,11 +4009,11 @@ def _set_nested(payload: dict[str, Any], field: str, value: Any) -> None:
 
 
 _CHECKIN_RE = re.compile(
-    r"(РєР°Рє\s+(?:Сѓ\s+С‚РµР±СЏ\s+)?РґРµР»Р°|РєР°Рє\s+С‚С‹|РєР°Рє\s+СЃР°Рј|С‡С‚Рѕ\s+РЅРѕРІРѕРіРѕ|РєР°Рє\s+РЅР°СЃС‚СЂРѕРµРЅРёРµ|how\s+are\s+you)",
+    r"(как\s+(?:у\s+тебя\s+)?дела|как\s+ты|как\s+сам|что\s+нового|как\s+настроение|how\s+are\s+you)",
     flags=re.IGNORECASE,
 )
 _QUESTION_START_RE = re.compile(
-    r"^\s*(РєР°Рє|С‡С‚Рѕ|РїРѕС‡РµРјСѓ|Р·Р°С‡РµРј|РєРѕРіРґР°|РіРґРµ|РєС‚Рѕ|С‡РµРј|РєР°РєРѕР№|РєР°РєР°СЏ|РєР°РєРёРµ|СЃРєРѕР»СЊРєРѕ|how|what|why|where|when)\b",
+    r"^\s*(как|что|почему|зачем|когда|где|кто|чем|какой|какая|какие|сколько|how|what|why|where|when)\b",
     flags=re.IGNORECASE,
 )
 
@@ -3776,8 +4060,8 @@ def _looks_like_echo_response(*, answer: str, user_msg: str) -> bool:
 def _echo_fallback_text(user_msg: str) -> str:
     src = _normalize_text(user_msg)
     if _CHECKIN_RE.search(src):
-        return "РЈ РјРµРЅСЏ РІСЃРµ РЅРѕСЂРјР°Р»СЊРЅРѕ, СЃРїР°СЃРёР±Рѕ. РљР°Рє С‚С‹?"
-    return "РџРѕРЅСЏР»Р°. РЇ РЅР° СЃРІСЏР·Рё Рё РіРѕС‚РѕРІР° РїРѕРјРѕС‡СЊ. РЈС‚РѕС‡РЅРё, С‡С‚Рѕ РёРјРµРЅРЅРѕ РЅСѓР¶РЅРѕ."
+        return "У меня все нормально, спасибо. Как ты?"
+    return "Поняла. Я на связи и готова помочь. Уточни, что именно нужно."
 
 
 def _as_dict(value) -> dict[str, Any]:
@@ -3903,6 +4187,76 @@ def _resolve_web_mode(meta: dict[str, Any], state: dict[str, Any]) -> str:
     return "auto"
 
 
+def _resolve_web_auto_profile(meta: dict[str, Any], state: dict[str, Any]) -> str:
+    raw = str(
+        _pick(
+            _as_dict(meta).get("web_auto_profile"),
+            _as_dict(state).get("web_auto_profile"),
+            "balanced",
+        )
+        or "balanced"
+    ).strip().lower()
+    return raw if raw in {"balanced", "aggressive"} else "balanced"
+
+
+def _has_precision_markers(text: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return False
+    markers = (
+        "найди",
+        "точн",
+        "проверь",
+        "актуал",
+        "источник",
+        "ссылка",
+        "рецепт",
+        "latest",
+        "exact",
+        "verify",
+        "source",
+    )
+    return any(token in low for token in markers)
+
+
+def _should_trigger_web_second_pass(ctx: PipelineContext) -> bool:
+    user_text = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
+    answer = str(ctx.text or "").strip()
+    if not user_text:
+        return False
+    intent = str(ctx.tags.get("intent") or "").strip().lower()
+    smalltalk_re = re.compile(
+        r"\b(\u043a\u0430\u043a \u0434\u0435\u043b\u0430|\u0447\u0442\u043e \u043d\u043e\u0432\u043e\u0433\u043e|\u043f\u0440\u0438\u0432\u0435\u0442|hello|hi|how are you)\b",
+        flags=re.I,
+    )
+    if bool(smalltalk_re.search(user_text)):
+        return False
+    if not answer:
+        return True
+    answer_low = answer.lower()
+    uncertain_markers = (
+        "не уверен",
+        "не знаю",
+        "не могу",
+        "не удалось",
+        "нет данных",
+        "может быть",
+        "possibly",
+        "probably",
+        "not sure",
+        "cannot verify",
+        "can't verify",
+    )
+    if any(token in answer_low for token in uncertain_markers):
+        return True
+    question_like = ("?" in user_text) or (intent in {"question", "implementation", "action_request"})
+    if _has_precision_markers(user_text) and len(answer) < 280:
+        return True
+    if question_like and len(answer) < 140:
+        return True
+    return False
+
+
 def _resolve_web_trace_id(meta: dict[str, Any], user_msg: str) -> str:
     source = _pick(_as_dict(meta).get("web_trace_id"), _as_dict(meta).get("trace_id"))
     if source:
@@ -3910,6 +4264,39 @@ def _resolve_web_trace_id(meta: dict[str, Any], user_msg: str) -> str:
     ts = int(time.time() * 1000)
     msg_len = len(str(user_msg or "").strip())
     return f"web-{ts}-{msg_len}"
+
+
+def _utc_now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def _is_web_memory_item(item: Any) -> bool:
+    row = _as_dict(item)
+    text = _normalize_text(_pick_value(row.get("text"), row.get("content"), "")).lower()
+    source = str(_pick_value(row.get("source"), _as_dict(row.get("metadata")).get("source"), "") or "").strip().lower()
+    topic = str(_pick_value(row.get("topic"), _as_dict(row.get("metadata")).get("topic"), "") or "").strip().lower()
+    return bool(
+        topic.startswith("web:")
+        or source in {"web", "search", "internet"}
+        or "source_url:" in text
+        or text.startswith("[web]")
+        or text.startswith("[web_search]")
+    )
+
+
+def _web_memory_domain(item: Any) -> str:
+    row = _as_dict(item)
+    direct = str(_pick_value(row.get("source_domain"), _as_dict(row.get("metadata")).get("source_domain"), "") or "").strip().lower()
+    if direct:
+        return direct
+    source = str(_pick_value(row.get("source"), _as_dict(row.get("metadata")).get("source"), "") or "").strip().lower()
+    if source and "." in source:
+        return source
+    text = _normalize_text(_pick_value(row.get("text"), row.get("content"), ""))
+    m = re.search(r"source_domain:\s*([^\s]+)", text, flags=re.I)
+    if m:
+        return str(m.group(1) or "").strip().lower()
+    return ""
 
 
 def _is_forced_web_request(text: str) -> bool:

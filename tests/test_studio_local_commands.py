@@ -97,7 +97,7 @@ class StudioLocalCommandsTests(unittest.TestCase):
 
     def test_studio_apply_is_local_and_next_chat_goes_main(self) -> None:
         pipeline, provider = self._new_pipeline()
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
 
         start = self._run(pipeline, route="command", msg="/studio start demo_spec", state=state)
         state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
@@ -119,7 +119,7 @@ class StudioLocalCommandsTests(unittest.TestCase):
 
     def test_studio_cancel_is_local(self) -> None:
         pipeline, provider = self._new_pipeline()
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
 
         start = self._run(pipeline, route="command", msg="/studio start demo_spec", state=state)
         state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
@@ -131,7 +131,7 @@ class StudioLocalCommandsTests(unittest.TestCase):
 
     def test_removed_specs_commands_are_handled_locally(self) -> None:
         pipeline, provider = self._new_pipeline()
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
 
         before_main = provider.main_calls
         result = self._run(pipeline, route="command", msg="/specs start demo", state=state)
@@ -140,7 +140,7 @@ class StudioLocalCommandsTests(unittest.TestCase):
 
     def test_removed_studio_mode_command_is_handled_locally(self) -> None:
         pipeline, provider = self._new_pipeline()
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
 
         before_main = provider.main_calls
         result = self._run(pipeline, route="command", msg="/studio mode specs", state=state)
@@ -149,7 +149,7 @@ class StudioLocalCommandsTests(unittest.TestCase):
 
     def test_apply_with_missing_fields_keeps_studio_active_and_stays_local(self) -> None:
         pipeline, provider = self._new_pipeline()
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
 
         start = self._run(pipeline, route="command", msg="/studio start", state=state)
         state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
@@ -164,7 +164,7 @@ class StudioLocalCommandsTests(unittest.TestCase):
 
     def test_short_apply_cancel_commands_are_local(self) -> None:
         pipeline, provider = self._new_pipeline()
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
 
         start = self._run(pipeline, route="command", msg="/studio start demo_spec", state=state)
         state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
@@ -181,7 +181,7 @@ class StudioLocalCommandsTests(unittest.TestCase):
 
     def test_successful_apply_invalidates_spec_cache(self) -> None:
         pipeline, _provider = self._new_pipeline()
-        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "friend_chat"}
+        state = {"history": [], "quality_profile": "BALANCED", "active_mode": "chatting"}
         start = self._run(pipeline, route="command", msg="/studio start demo_spec", state=state)
         state["studio_generator"] = dict(start.structured_output.get("studio_generator") or {})
         with patch("core.response_pipeline.invalidate_spec_cache") as invalidate:

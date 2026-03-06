@@ -68,7 +68,7 @@ class CharacterComposer:
             overlay_mods=overlay_mods,
         )
         active_mode = normalize_mode_name(
-            str(meta.get("active_mode") or dm.get("active_mode") or "friend_chat"),
+            str(meta.get("active_mode") or dm.get("active_mode") or "chatting"),
             allow_custom=True,
         )
         mode_profile = resolve_mode_profile(mode=active_mode, character_id=character_id)

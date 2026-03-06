@@ -6,8 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from config.model_config import PROFILES
-from config.paths import DATA_DIR
+from config.settings import DATA_DIR, get_model_profiles
 from llm.provider_base import LLMProviderBase, LLMRequest, Message
 from modules.character.mode_profile import resolve_mode_profile
 from modules.character.storage import CharacterStorage
@@ -675,7 +674,7 @@ class StudioGenerator:
                 break
 
         set_active = not any(x in low for x in ["не актив", "not active", "без активации"])
-        default_mode = modes[0] if modes else ("helper" if op in {self.OP_CREATE_CHARACTER, self.OP_UPDATE_CHARACTER, self.OP_MIXED, self.OP_BUILD_PACK} else "friend_chat")
+        default_mode = modes[0] if modes else ("helper" if op in {self.OP_CREATE_CHARACTER, self.OP_UPDATE_CHARACTER, self.OP_MIXED, self.OP_BUILD_PACK} else "chatting")
         extra_modes = [x for x in modes if x != default_mode]
         mode_changes: list[dict[str, Any]] = []
         for mid in modes:
@@ -1225,7 +1224,7 @@ class StudioGenerator:
                 "id": "mode_legacy_mode",
                 "prompt": "Выбери legacy_mode для mode.",
                 "impact": "Нужно для совместимости старого роутинга режимов.",
-                "options": ["chat", "task", "coding", "debug", "friend_chat", "helper", "engineer", "debugger", "planner"],
+                "options": ["chat", "task", "coding", "debug", "chatting", "helper", "engineer", "debugger", "planner"],
             },
             "mode_changes": {
                 "id": "mode_changes",
@@ -2284,7 +2283,7 @@ class StudioGenerator:
         taxonomy.setdefault("aliases", {})
         aliases = dict(taxonomy.get("aliases") or {})
         aliases_modes = dict(aliases.get("modes") or {})
-        aliases_modes.setdefault("chat", "friend_chat")
+        aliases_modes.setdefault("chat", "chatting")
         aliases_modes.setdefault("task", "helper")
         aliases_modes.setdefault("coding", "engineer")
         aliases_modes.setdefault("debug", "debugger")
@@ -2744,7 +2743,7 @@ class StudioGenerator:
         taxonomy.setdefault("aliases", {})
         aliases = dict(taxonomy.get("aliases") or {})
         aliases_modes = dict(aliases.get("modes") or {})
-        aliases_modes.setdefault("chat", "friend_chat")
+        aliases_modes.setdefault("chat", "chatting")
         aliases_modes.setdefault("task", "helper")
         aliases_modes.setdefault("coding", "engineer")
         aliases_modes.setdefault("debug", "debugger")
@@ -3316,7 +3315,7 @@ class StudioGenerator:
     def _available_llm_profiles(self) -> list[str]:
         names: list[str] = []
         seen: set[str] = set()
-        for key in list(PROFILES.keys()):
+        for key in list(get_model_profiles().keys()):
             token = str(key or "").strip().upper()
             if not token or token in seen:
                 continue
@@ -3349,7 +3348,7 @@ class StudioGenerator:
         raw = [self._mode_id(x) for x in list(taxonomy.get("modes") or []) if self._mode_id(x)]
         if raw:
             return list(dict.fromkeys(raw))
-        return ["friend_chat", "helper", "engineer", "debugger", "planner", "spicy_chat"]
+        return ["chatting", "helper", "engineer", "debugger", "planner", "spicy_chat"]
 
     def _known_character_ids(self) -> list[str]:
         out: list[str] = []
@@ -3428,7 +3427,7 @@ class StudioGenerator:
     def _default_mode_lines(mode: str) -> list[str]:
         key = str(mode or "").strip().lower()
         presets = {
-            "friend_chat": ["Keep friendly conversational tone.", "Light humor is allowed when relevant."],
+            "chatting": ["Keep friendly conversational tone.", "Light humor is allowed when relevant."],
             "helper": ["Prioritize support and clarity.", "Keep warm tone and reduce sarcasm."],
             "engineer": ["Respond in structured technical format.", "Prefer concrete steps and concise explanations."],
             "debugger": ["Use hypothesis-driven debugging flow.", "Ask for diagnostics and reproduction steps."],
@@ -3438,7 +3437,7 @@ class StudioGenerator:
         return list(presets.get(key) or [f"Mode {key}: keep consistent style and clear boundaries."])
 
     def _default_mode_spec_entry(self, mode_id: str) -> dict[str, Any]:
-        mid = self._mode_id(mode_id) or "friend_chat"
+        mid = self._mode_id(mode_id) or "chatting"
         profile = resolve_mode_profile(mode=mid)
         return {
             "description": f"Custom mode: {mid}",
@@ -3484,7 +3483,7 @@ class StudioGenerator:
             "id": cid,
             "name": self._display_name(cid),
             "default_mood": "neutral",
-            "default_mode": "friend_chat",
+            "default_mode": "chatting",
             "llm_profile": self._default_llm_profile(),
             "locks": {"feminine": True, "informal_you": True},
         }

@@ -7,9 +7,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from config.logging_config import setup_logging
-from config.paths import LOGS_DIR
-from config.settings import load_config
+from config.settings import LOGS_DIR, load_config, setup_logging
 
 
 @dataclass(frozen=True)

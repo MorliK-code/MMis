@@ -28,7 +28,8 @@ def build_provider(name: str | None = None, *, default_model: str | None = None)
     if name:
         provider_name = str(name).strip().lower()
     else:
-        provider_name = str(load_config().llm_provider).strip().lower()
+        cfg = load_config()
+        provider_name = str(getattr(cfg, "llm_default_provider", "ollama")).strip().lower()
         
     if provider_name == "openai":
         return OpenAIProvider(default_model=default_model)

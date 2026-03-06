@@ -92,7 +92,7 @@ class DebugCommandsTests(unittest.TestCase):
             "last_actions": [
                 {
                     "type": "MODE_CHANGED",
-                    "state_diff": {"active_mode": {"old": "friend_chat", "new": "debugger"}},
+                    "state_diff": {"active_mode": {"old": "chatting", "new": "debugger"}},
                 }
             ],
         }
@@ -119,7 +119,7 @@ class DebugCommandsTests(unittest.TestCase):
                 {
                     "type": "MODE_CHANGED",
                     "ts": "2026-03-03T10:00:00+02:00",
-                    "state_diff": {"active_mode": {"old": "friend_chat", "new": "engineer"}},
+                    "state_diff": {"active_mode": {"old": "chatting", "new": "engineer"}},
                 },
                 {
                     "type": "FEEDBACK_RECEIVED",
@@ -145,7 +145,7 @@ class DebugCommandsTests(unittest.TestCase):
         state = {
             "history": [],
             "quality_profile": "BALANCED",
-            "active_mode": "friend_chat",
+            "active_mode": "chatting",
             "mode_lock": False,
         }
         result = self._run_command("/brain_debug /think", state=state)

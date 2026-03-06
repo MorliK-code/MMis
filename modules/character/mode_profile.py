@@ -22,7 +22,7 @@ class ModeProfile:
 
 
 _BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
-    "friend_chat": {
+    "chatting": {
         "trait_targets": {"warmth": 0.72, "sarcasm": 0.22, "strictness": 0.38, "verbosity": 0.62, "empathy": 0.66, "teasing": 0.38},
         "dialog_targets": {"warmth": 0.72, "sarcasm": 0.30, "strictness": 0.38, "verbosity": 0.60},
         "prompt_lines": ["Friendly conversational mode.", "Natural warm tone with light humor when relevant."],
@@ -78,7 +78,7 @@ def resolve_mode_profile(
     modes_spec = load_spec("modes", required=False)
     mode_entry = dict(dict(modes_spec.get("modes") or {}).get(mode_id) or {})
     profile_id = _resolve_profile_id(mode_id=mode_id, mode_entry=mode_entry)
-    preset = dict(_BUILTIN_PROFILES.get(profile_id) or _BUILTIN_PROFILES["friend_chat"])
+    preset = dict(_BUILTIN_PROFILES.get(profile_id) or _BUILTIN_PROFILES["chatting"])
 
     trait_targets = _coerce_targets(preset.get("trait_targets"), keys=_TRAIT_KEYS)
     dialog_targets = _coerce_targets(preset.get("dialog_targets"), keys=_DIALOG_KEYS)
@@ -159,7 +159,7 @@ def _resolve_profile_id(*, mode_id: str, mode_entry: dict[str, Any]) -> str:
     for profile_id, tokens in _SEMANTIC_MAP:
         if any(token in hint for token in tokens):
             return profile_id
-    return "friend_chat"
+    return "chatting"
 
 
 def _coerce_targets(value: Any, *, keys: tuple[str, ...]) -> dict[str, float]:

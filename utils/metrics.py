@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from config.paths import LOGS_DIR
+from config.settings import LOGS_DIR
 from utils.datetime_local import now_local_ts
 
 

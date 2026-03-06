@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "modes": {
-    "friend_chat": {
+    "chatting": {
       "description": "Режим непринужденной беседы",
       "legacy_mode": "chat",
       "output_format_default": {
@@ -43,7 +43,7 @@
     },
     "spicy_chat": {
       "description": "Раскрепощённый разговорный режим",
-      "legacy_mode": "friend_chat",
+      "legacy_mode": "chatting",
       "output_format_default": {
         "show_parameters": false,
         "show_summary": false

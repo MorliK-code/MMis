@@ -27,7 +27,7 @@
     "tired"
   ],
   "modes": [
-    "friend_chat",
+    "chatting",
     "helper",
     "engineer",
     "debugger",
@@ -138,7 +138,7 @@
       "chroma": "chromadb"
     },
     "modes": {
-      "chat": "friend_chat",
+      "chat": "chatting",
       "task": "helper",
       "coding": "engineer",
       "debug": "debugger",
