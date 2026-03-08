@@ -54,7 +54,7 @@
         "ollama": {
           "num_thread": 6,
           "num_ctx": 8192,
-          "num_gpu": 1,
+          "num_gpu": 9999,
           "num_batch": 128,
           "keep_alive": "5m"
         },
@@ -117,7 +117,7 @@
         "ollama": {
           "num_thread": 6,
           "num_ctx": 8192,
-          "num_gpu": 1,
+          "num_gpu": 9999,
           "num_batch": 128,
           "keep_alive": "5m"
         },
@@ -175,7 +175,7 @@
     "web_mode": "off",
     "web_auto_profile": "balanced",
     "search": {
-      "api_url": "http://127.0.0.1:8088/search?format=json",
+      "api_url": "http://127.0.0.1:8080/search?format=json",
       "provider": "searxng",
       "strict_endpoint": true,
       "timeout_sec": 12.0
@@ -193,7 +193,7 @@
     "screen_enabled": true
   },
   "prompt": {
-    "response_safety_filter_enabled": false,
+    "response_safety_filter_enabled": true,
     "response_formatting_enabled": true
   },
   "memory": {

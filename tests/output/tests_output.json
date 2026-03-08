@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-03-06T14:14:41+02:00",
-  "updated_at": "2026-03-06T14:46:55+02:00",
+  "updated_at": "2026-03-08T17:16:25+02:00",
   "cases": [
     {
       "test_num": 1,
@@ -1190,6 +1190,127 @@
       "test_name": "test_web_auto_status_passthrough",
       "status": "passed",
       "duration_ms": 0.476
+    },
+    {
+      "test_num": 109,
+      "timestamp": "2026-03-08T17:15:59+02:00",
+      "pid": 8256,
+      "test_id": "test_api_health_profile.ApiHealthProfileTests.test_health_exposes_profile_and_parameters",
+      "module": "test_api_health_profile",
+      "class": "ApiHealthProfileTests",
+      "test_name": "test_health_exposes_profile_and_parameters",
+      "status": "passed",
+      "duration_ms": 12.61
+    },
+    {
+      "test_num": 110,
+      "timestamp": "2026-03-08T17:15:59+02:00",
+      "pid": 8256,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_chat_meta_contains_profile_generation_params",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_chat_meta_contains_profile_generation_params",
+      "status": "passed",
+      "duration_ms": 7.569
+    },
+    {
+      "test_num": 111,
+      "timestamp": "2026-03-08T17:15:59+02:00",
+      "pid": 8256,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_chat_meta_uses_get_profile_source_of_truth",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_chat_meta_uses_get_profile_source_of_truth",
+      "status": "passed",
+      "duration_ms": 4.256
+    },
+    {
+      "test_num": 112,
+      "timestamp": "2026-03-08T17:15:59+02:00",
+      "pid": 8256,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_stream_meta_contains_profile_generation_params",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_stream_meta_contains_profile_generation_params",
+      "status": "passed",
+      "duration_ms": 9.229
+    },
+    {
+      "test_num": 113,
+      "timestamp": "2026-03-08T17:16:25+02:00",
+      "pid": 12404,
+      "test_id": "test_api_health_profile.ApiHealthProfileTests.test_health_exposes_profile_and_parameters",
+      "module": "test_api_health_profile",
+      "class": "ApiHealthProfileTests",
+      "test_name": "test_health_exposes_profile_and_parameters",
+      "status": "passed",
+      "duration_ms": 10.198
+    },
+    {
+      "test_num": 114,
+      "timestamp": "2026-03-08T17:16:25+02:00",
+      "pid": 12404,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_chat_meta_contains_profile_generation_params",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_chat_meta_contains_profile_generation_params",
+      "status": "passed",
+      "duration_ms": 9.87
+    },
+    {
+      "test_num": 115,
+      "timestamp": "2026-03-08T17:16:25+02:00",
+      "pid": 12404,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_chat_meta_uses_get_profile_source_of_truth",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_chat_meta_uses_get_profile_source_of_truth",
+      "status": "passed",
+      "duration_ms": 6.794
+    },
+    {
+      "test_num": 116,
+      "timestamp": "2026-03-08T17:16:25+02:00",
+      "pid": 12404,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_stream_meta_contains_profile_generation_params",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_stream_meta_contains_profile_generation_params",
+      "status": "passed",
+      "duration_ms": 11.068
+    },
+    {
+      "test_num": 117,
+      "timestamp": "2026-03-08T17:16:25+02:00",
+      "pid": 12404,
+      "test_id": "test_personality_switching.PersonalitySwitchingTests.test_characters_list_contains_all_character_ids",
+      "module": "test_personality_switching",
+      "class": "PersonalitySwitchingTests",
+      "test_name": "test_characters_list_contains_all_character_ids",
+      "status": "passed",
+      "duration_ms": 80.328
+    },
+    {
+      "test_num": 118,
+      "timestamp": "2026-03-08T17:16:25+02:00",
+      "pid": 12404,
+      "test_id": "test_personality_switching.PersonalitySwitchingTests.test_persona_show_is_character_alias",
+      "module": "test_personality_switching",
+      "class": "PersonalitySwitchingTests",
+      "test_name": "test_persona_show_is_character_alias",
+      "status": "passed",
+      "duration_ms": 66.87
+    },
+    {
+      "test_num": 119,
+      "timestamp": "2026-03-08T17:16:25+02:00",
+      "pid": 12404,
+      "test_id": "test_personality_switching.PersonalitySwitchingTests.test_persona_switch_targets_character",
+      "module": "test_personality_switching",
+      "class": "PersonalitySwitchingTests",
+      "test_name": "test_persona_switch_targets_character",
+      "status": "passed",
+      "duration_ms": 76.063
     }
   ]
 }

@@ -377,7 +377,7 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
             print("API restart failed.")
         return True
 
-    if key in {"/restartall", "/restart", "/restart-app", "/reboot"}:
+    if key in {"/restartall", "/restart-all", "/restart", "/restart-app", "/reboot"}:
         if _restart_full_app(state):
             print("Full app restarted (UI+API).")
             _print_health_short(state)

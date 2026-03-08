@@ -95,8 +95,42 @@ class _Runtime:
 _runtime = _Runtime()
 
 
+def _normalize_profile_name(value: Any, default: str = "BALANCED") -> str:
+    token = str(value or "").strip().upper()
+    if token in {"FAST", "BALANCED", "QUALITY", "ECONOM", "AUTONOMOUS", "ASYA"}:
+        return token
+    return str(default or "BALANCED").strip().upper() or "BALANCED"
+
+
+def _profile_to_quality(profile_name: str) -> str:
+    norm = _normalize_profile_name(profile_name, default="BALANCED")
+    return "FAST" if norm == "ECONOM" else norm
+
+
+def _resolve_effective_profiles() -> tuple[str, str]:
+    active_profile = _normalize_profile_name(_runtime.active_profile, default="BALANCED")
+    try:
+        state_mgr = getattr(_runtime.brain, "state_manager", None)
+        if state_mgr is not None and hasattr(state_mgr, "get_active_character_id") and hasattr(state_mgr, "get_meta"):
+            char_id = str(state_mgr.get_active_character_id() or "").strip().lower()
+            if char_id:
+                meta = state_mgr.get_meta(char_id)
+                llm_profile = ""
+                if isinstance(meta, dict):
+                    llm_profile = str(meta.get("llm_profile") or "").strip()
+                else:
+                    llm_profile = str(getattr(meta, "llm_profile", "") or "").strip()
+                if llm_profile:
+                    active_profile = _normalize_profile_name(llm_profile, default=active_profile)
+    except Exception:
+        pass
+    quality_profile = _profile_to_quality(active_profile)
+    return active_profile, quality_profile
+
+
 def _resolved_profile_payload() -> tuple[Any, dict[str, Any]]:
-    profile = get_profile(_runtime.active_profile)
+    active_profile, _quality_profile = _resolve_effective_profiles()
+    profile = get_profile(active_profile)
     payload = {
         "generation": {
             "temperature": float(profile.generation.temperature),
@@ -125,6 +159,7 @@ def _resolved_profile_payload() -> tuple[Any, dict[str, Any]]:
 
 
 def _build_health_response() -> HealthResponse:
+    active_profile, quality_profile = _resolve_effective_profiles()
     _profile, profile_payload = _resolved_profile_payload()
     return HealthResponse(
         status="ok",
@@ -132,8 +167,8 @@ def _build_health_response() -> HealthResponse:
         thinking_enabled=bool(_runtime.thinking_enabled),
         json_mode_enabled=bool(_runtime.json_mode_enabled),
         web_mode=str(_runtime.web_mode),
-        active_profile=str(_runtime.active_profile or "BALANCED"),
-        quality_profile=str(_runtime.quality_profile or "BALANCED"),
+        active_profile=str(active_profile or "BALANCED"),
+        quality_profile=str(quality_profile or "BALANCED"),
         profile_parameters=profile_payload,
     )
 
@@ -502,7 +537,8 @@ def _apply_runtime_model(target: str) -> tuple[bool, str, list[str]]:
 
 
 def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str, Any]:
-    profile, _ = _resolved_profile_payload()
+    active_profile, quality_profile = _resolve_effective_profiles()
+    profile = get_profile(active_profile)
     meta: dict[str, Any] = {
         "model": _runtime.model,
         "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
@@ -510,7 +546,7 @@ def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str
         "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
         "store_turn": bool(req.store_turn),
         "source": str(source or "api"),
-        "quality_profile": str(_runtime.quality_profile or "BALANCED"),
+        "quality_profile": str(quality_profile or "BALANCED"),
         "temperature": float(profile.generation.temperature),
         "top_p": float(profile.generation.top_p),
         "repeat_penalty": float(profile.generation.repeat_penalty),
@@ -551,7 +587,8 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
             )
         }
     if cmd == "/health":
-        profile, _ = _resolved_profile_payload()
+        active_profile, quality_profile = _resolve_effective_profiles()
+        profile = get_profile(active_profile)
         return {
             "answer": (
                 f"status: ok\n"
@@ -559,8 +596,8 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
                 f"thinking: {'on' if _runtime.thinking_enabled else 'off'}\n"
                 f"web_mode: {_runtime.web_mode}\n"
                 f"json_mode: {'on' if _runtime.json_mode_enabled else 'off'}\n"
-                f"active_profile: {_runtime.active_profile}\n"
-                f"quality_profile: {_runtime.quality_profile}\n"
+                f"active_profile: {active_profile}\n"
+                f"quality_profile: {quality_profile}\n"
                 f"temperature: {float(profile.generation.temperature):.3f}\n"
                 f"top_p: {float(profile.generation.top_p):.3f}\n"
                 f"repeat_penalty: {float(profile.generation.repeat_penalty):.3f}\n"

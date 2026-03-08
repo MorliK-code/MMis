@@ -5,6 +5,7 @@ from _output_utils import enable_unittest_json_output
 enable_unittest_json_output()
 
 import unittest
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -18,11 +19,15 @@ class ApiHealthProfileTests(unittest.TestCase):
         self._orig_active_profile = api_app_module._runtime.active_profile
         self._orig_quality_profile = api_app_module._runtime.quality_profile
         self._orig_get_profile = api_app_module.get_profile
+        self._orig_get_active_character_id = api_app_module._runtime.brain.state_manager.get_active_character_id
+        self._orig_get_meta = api_app_module._runtime.brain.state_manager.get_meta
 
     def tearDown(self) -> None:
         api_app_module._runtime.active_profile = self._orig_active_profile
         api_app_module._runtime.quality_profile = self._orig_quality_profile
         api_app_module.get_profile = self._orig_get_profile
+        api_app_module._runtime.brain.state_manager.get_active_character_id = self._orig_get_active_character_id
+        api_app_module._runtime.brain.state_manager.get_meta = self._orig_get_meta
 
     def test_health_exposes_profile_and_parameters(self) -> None:
         base = get_profile("BALANCED")
@@ -44,8 +49,10 @@ class ApiHealthProfileTests(unittest.TestCase):
             ),
             openai=base.openai,
         )
-        api_app_module._runtime.active_profile = "BALANCED"
-        api_app_module._runtime.quality_profile = "BALANCED"
+        api_app_module._runtime.active_profile = "FAST"
+        api_app_module._runtime.quality_profile = "FAST"
+        api_app_module._runtime.brain.state_manager.get_active_character_id = lambda _state=None: "asya"
+        api_app_module._runtime.brain.state_manager.get_meta = lambda _cid=None: SimpleNamespace(llm_profile="BALANCED")
         api_app_module.get_profile = lambda _name: custom
 
         response = self.client.get("/health")

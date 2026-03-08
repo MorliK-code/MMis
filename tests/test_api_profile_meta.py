@@ -6,6 +6,7 @@ enable_unittest_json_output()
 
 import json
 import unittest
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -23,6 +24,8 @@ class ApiProfileMetaTests(unittest.TestCase):
         self._orig_provider_name = api_app_module._runtime.provider_name
         self._orig_model = api_app_module._runtime.model
         self._orig_get_profile = api_app_module.get_profile
+        self._orig_get_active_character_id = api_app_module._runtime.brain.state_manager.get_active_character_id
+        self._orig_get_meta = api_app_module._runtime.brain.state_manager.get_meta
 
     def tearDown(self) -> None:
         api_app_module._runtime.brain.handle_message = self._orig_handle_message
@@ -31,6 +34,8 @@ class ApiProfileMetaTests(unittest.TestCase):
         api_app_module._runtime.provider_name = self._orig_provider_name
         api_app_module._runtime.model = self._orig_model
         api_app_module.get_profile = self._orig_get_profile
+        api_app_module._runtime.brain.state_manager.get_active_character_id = self._orig_get_active_character_id
+        api_app_module._runtime.brain.state_manager.get_meta = self._orig_get_meta
 
     def test_chat_meta_contains_profile_generation_params(self) -> None:
         quality_profile = get_profile("QUALITY")
@@ -38,6 +43,8 @@ class ApiProfileMetaTests(unittest.TestCase):
         api_app_module._runtime.quality_profile = "QUALITY"
         api_app_module._runtime.provider_name = "ollama"
         api_app_module._runtime.model = "stub-model"
+        api_app_module._runtime.brain.state_manager.get_active_character_id = lambda _state=None: "asya"
+        api_app_module._runtime.brain.state_manager.get_meta = lambda _cid=None: SimpleNamespace(llm_profile="QUALITY")
         captured_meta: dict = {}
 
         def _fake_handle_message(user_msg, meta=None):
@@ -66,6 +73,8 @@ class ApiProfileMetaTests(unittest.TestCase):
         api_app_module._runtime.active_profile = "FAST"
         api_app_module._runtime.quality_profile = "FAST"
         api_app_module._runtime.provider_name = "ollama"
+        api_app_module._runtime.brain.state_manager.get_active_character_id = lambda _state=None: "asya"
+        api_app_module._runtime.brain.state_manager.get_meta = lambda _cid=None: SimpleNamespace(llm_profile="FAST")
         captured_meta: dict = {}
 
         def _fake_handle_message(user_msg, meta=None):
@@ -116,6 +125,8 @@ class ApiProfileMetaTests(unittest.TestCase):
         api_app_module._runtime.active_profile = "BALANCED"
         api_app_module._runtime.quality_profile = "BALANCED"
         api_app_module._runtime.provider_name = "ollama"
+        api_app_module._runtime.brain.state_manager.get_active_character_id = lambda _state=None: "asya"
+        api_app_module._runtime.brain.state_manager.get_meta = lambda _cid=None: SimpleNamespace(llm_profile="BALANCED")
         api_app_module.get_profile = lambda _name: custom_profile
         captured_meta: dict = {}
 

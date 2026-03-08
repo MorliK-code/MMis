@@ -355,8 +355,8 @@ class PersonalityStage(PipelineStage):
         ctx.state["character_prompt_block"] = compiled_persona or str(update.prompt_block or "")
         ctx.state["mood"] = str(update.mood or "")
         if update.llm_profile:
-            if not str(ctx.state.get("quality_profile") or "").strip():
-                ctx.state["quality_profile"] = update.llm_profile
+            # Character preset is source-of-truth for LLM profile.
+            ctx.state["quality_profile"] = str(update.llm_profile).strip().upper()
             ctx.meta.setdefault("personality_llm_profile", update.llm_profile)
             ctx.policies.setdefault("personality_llm_profile", update.llm_profile)
 
