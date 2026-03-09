@@ -156,7 +156,7 @@ class Pyttsx3Engine:
 class TTSService:
     def __init__(self, cache_dir: str | Path | None = None):
         cfg = load_config()
-        default_cache = cfg.memory_dir / "tts_cache"
+        default_cache = cfg.cache_dir / "tts"
         self.cache_dir = Path(cache_dir).expanduser() if cache_dir is not None else default_cache
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()

@@ -20,6 +20,14 @@ LEGACY_FILES = (
     "user_profile_store.json",
     "assistant_profile_store.json",
 )
+LEGACY_DIRS = (
+    "brain_state_store",
+    "metadata",
+    "profiles",
+    "summaries",
+    "tts_cache",
+    "chroma_db",
+)
 
 
 def run_auto_migration(
@@ -47,7 +55,9 @@ def run_auto_migration(
             "target_schema_version": target_schema,
         }
 
-    legacy_existing = [name for name in LEGACY_FILES if (root / name).exists()]
+    legacy_existing_files = [name for name in LEGACY_FILES if (root / name).exists()]
+    legacy_existing_dirs = [name for name in LEGACY_DIRS if (root / name).exists() and (root / name).is_dir()]
+    legacy_existing = list(legacy_existing_files) + list(legacy_existing_dirs)
     if current_schema >= target_schema and not legacy_existing:
         return {
             "ran": False,
@@ -69,8 +79,12 @@ def run_auto_migration(
                 archived.append(name)
             except Exception:
                 try:
-                    shutil.copy2(src, dst)
-                    src.unlink(missing_ok=True)
+                    if src.is_dir():
+                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                        shutil.rmtree(src, ignore_errors=True)
+                    else:
+                        shutil.copy2(src, dst)
+                        src.unlink(missing_ok=True)
                     archived.append(name)
                 except Exception:
                     continue

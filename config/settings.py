@@ -114,7 +114,6 @@ def resolve_memory_dir() -> Path:
 
 
 MEMORY_DIR = resolve_memory_dir()
-CHROMA_DIR = MEMORY_DIR / "chroma_db"
 
 
 def ensure_dirs(memory_dir: str | Path | None = None) -> dict[str, Path]:
@@ -124,7 +123,6 @@ def ensure_dirs(memory_dir: str | Path | None = None) -> dict[str, Path]:
     logs_dir = _to_path(cfg.log_dir, LOG_DIR.resolve()) if cfg is not None and cfg.log_dir else LOG_DIR.resolve()
     data_dir = _to_path(cfg.data_dir, DATA_DIR.resolve()) if cfg is not None and cfg.data_dir else DATA_DIR.resolve()
     models_dir = _to_path(cfg.models_dir, MODELS_DIR.resolve()) if cfg is not None and cfg.models_dir else MODELS_DIR.resolve()
-    chroma_dir = mem_dir / "chroma_db"
     dirs = {
         "base": BASE_DIR,
         "config": CONFIG_DIR,
@@ -133,9 +131,6 @@ def ensure_dirs(memory_dir: str | Path | None = None) -> dict[str, Path]:
         "memory": mem_dir,
         "logs": logs_dir,
         "cache": cache_dir,
-        "chroma": chroma_dir,
-        "profiles": mem_dir / "profiles",
-        "summaries": mem_dir / "summaries",
     }
     for path in dirs.values():
         path.mkdir(parents=True, exist_ok=True)
@@ -322,7 +317,7 @@ class AppSettings:
     memory_migration_auto_on_start: bool = True
     memory_migration_schema_version: int = 2
     memory_version: str = "v2"
-    memory_backend: str = "chroma_hybrid"
+    memory_backend: str = "local"
     memory_embedding_backend: str = "sentence_transformers"
     memory_embedding_model: str = "all-MiniLM-L6-v2"
     memory_embedding_dim: int = 384
@@ -662,7 +657,7 @@ def _default_config_tree() -> dict[str, Any]:
             "log_dir": _path_to_config_string(log_dir),
             "db_path": _path_to_config_string(memory_dir / "memory.db"),
             "version": "v2",
-            "backend": "chroma_hybrid",
+            "backend": "local",
             "embedding": {
                 "backend": "sentence_transformers",
                 "model": "all-MiniLM-L6-v2",
@@ -883,7 +878,7 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
             _to_int(_pick_value(_get_dotted(row, "memory.migration.schema_version"), 2), default=2),
         ),
         memory_version=_norm_lower(_pick_value(_get_dotted(row, "memory.version"), "v2")),
-        memory_backend=_norm_lower(_pick_value(_get_dotted(row, "memory.backend"), "chroma_hybrid")),
+        memory_backend=_norm_lower(_pick_value(_get_dotted(row, "memory.backend"), "local")),
         memory_embedding_backend=_norm_lower(
             _pick_value(_get_dotted(row, "memory.embedding.backend"), "sentence_transformers")
         ),

@@ -37,8 +37,17 @@ class _MemoryManagerStub:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def ingest_message(self, **kwargs) -> None:
-        self.calls.append(dict(kwargs))
+    def ingest_event(self, event) -> None:
+        self.calls.append(
+            {
+                "role": str(getattr(event, "role", "") or ""),
+                "text": str(getattr(event, "text", "") or ""),
+                "namespace": str(getattr(event, "namespace", "") or ""),
+                "scope": str(getattr(getattr(event, "scope", None), "value", "") or ""),
+                "memory_type": str(getattr(getattr(event, "memory_type", None), "value", "") or ""),
+                "metadata": dict(getattr(event, "metadata", {}) or {}),
+            }
+        )
 
 
 class BrainPersistAnswerOnlyTests(unittest.TestCase):

@@ -202,7 +202,7 @@
     "log_dir": "{dir_path}\\data\\logs",
     "db_path": "{dir_path}\\data\\memory_storage\\memory.db",
     "version": "v2",
-    "backend": "chroma_hybrid",
+    "backend": "local",
     "embedding": {
       "backend": "sentence_transformers",
       "model": "all-MiniLM-L6-v2",

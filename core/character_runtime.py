@@ -334,8 +334,8 @@ class CharacterRuntime:
         self.state_path = Path(state_path).expanduser() if state_path is not None else default_path
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         default_store_dir = cfg.memory_dir / "brain_state_store"
+        # Legacy split-store location used only for one-way migration to single-file state.
         self.state_store_dir = Path(state_store_dir).expanduser() if state_store_dir is not None else default_store_dir
-        self.state_store_dir.mkdir(parents=True, exist_ok=True)
         self.autosave = bool(autosave)
         self.history_limit = max(20, int(history_limit))
         self.action_history_limit = max(1, int(action_history_limit))
@@ -804,7 +804,6 @@ class CharacterRuntime:
             self._sync_flat_with_global(prefer_global=False)
             self._ensure_characters_state()
             payload = self._to_json_safe(self._ordered_state_map(self._state))
-            self._save_split_state(payload)
             self.state_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -893,16 +892,27 @@ class CharacterRuntime:
         return out
 
     def _load_payload(self) -> dict[str, Any]:
+        if self.state_path.exists():
+            try:
+                payload = json.loads(self.state_path.read_text(encoding="utf-8-sig"))
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                return payload
+
+        # Legacy fallback: import split state once when single-file state is absent.
         split_payload = self._load_split_state()
         if split_payload:
+            try:
+                normalized = self._to_json_safe(self._ordered_state_map(split_payload))
+                self.state_path.write_text(
+                    json.dumps(normalized, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
             return split_payload
-        if not self.state_path.exists():
-            return {}
-        try:
-            payload = json.loads(self.state_path.read_text(encoding="utf-8-sig"))
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        return {}
 
     def _load_split_state(self) -> dict[str, Any]:
         root = self.state_store_dir
@@ -936,30 +946,6 @@ class CharacterRuntime:
                 continue
             payload[key] = value
         return payload
-
-    def _save_split_state(self, payload: dict[str, Any]) -> None:
-        root = self.state_store_dir
-        root.mkdir(parents=True, exist_ok=True)
-        keys = sorted(str(k) for k in payload.keys())
-        for key in keys:
-            part_path = root / f"{key}.json"
-            part_path.write_text(json.dumps(payload.get(key), ensure_ascii=False, indent=2), encoding="utf-8")
-
-        for old_path in root.glob("*.json"):
-            if old_path.name == "_index.json":
-                continue
-            if old_path.stem not in payload:
-                try:
-                    old_path.unlink()
-                except Exception:
-                    pass
-
-        index = {
-            "version": 2,
-            "updated_at": now_local_iso(),
-            "keys": keys,
-        }
-        (root / "_index.json").write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
 
     @classmethod
     def _to_json_safe(cls, value):

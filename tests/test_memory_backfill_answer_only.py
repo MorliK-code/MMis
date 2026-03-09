@@ -36,7 +36,7 @@ def _seed_memory_dir(root: Path) -> None:
             "type": "user_message",
             "payload": {
                 "role": "user",
-                "text": "I was born in 2003",
+                "text": "I prefer Python",
                 "metadata": {"lang": "en"},
                 "ids": {},
             },
@@ -51,7 +51,7 @@ def _seed_memory_dir(root: Path) -> None:
             "type": "user_message",
             "payload": {
                 "role": "user",
-                "text": "I was born in 2003",
+                "text": "I prefer Python",
                 "metadata": {"lang": "en"},
                 "ids": {},
             },
@@ -86,7 +86,7 @@ def _seed_memory_dir(root: Path) -> None:
         root / "short_memory.json",
         {
             "items": [
-                {"id": "e2", "role": "user", "type": "message", "text": "I was born in 2003", "meta": {}},
+                {"id": "e2", "role": "user", "type": "message", "text": "I prefer Python", "meta": {}},
                 {"id": "e3", "role": "assistant", "type": "message", "text": _FORMATTED_ASSISTANT, "meta": {}},
             ],
             "rolling_summary": "",
@@ -111,15 +111,15 @@ def _seed_memory_dir(root: Path) -> None:
                 },
                 {
                     "id": "doc-fact-old",
-                    "text": "assistant.birth_year=1999",
+                    "text": "assistant.preference=java",
                     "thinking": "",
                     "created_at": 1.0,
                     "updated_at": "2026-03-05T10:00:07+02:00",
                     "source": "fact",
-                    "tags": ["fact", "subject_assistant", "key_birth_year"],
+                    "tags": ["fact", "subject_assistant", "key_preference"],
                     "importance": 0.8,
                     "confidence": 0.9,
-                    "meta": {"fact": {"subject": "assistant", "key": "birth_year", "value": "1999"}},
+                    "meta": {"fact": {"subject": "assistant", "key": "preference", "value": "java"}},
                 },
             ]
         },
@@ -143,7 +143,7 @@ def _seed_memory_dir(root: Path) -> None:
                 },
                 {
                     "id": "fact:doc-fact-old",
-                    "text": "assistant.birth_year=1999",
+                    "text": "assistant.preference=java",
                     "embedding": list(old_embedding),
                     "metadata": {"type": "fact", "source": "fact", "doc_id": "doc-fact-old"},
                 },
@@ -159,8 +159,8 @@ def _seed_memory_dir(root: Path) -> None:
         {
             "profiles": {
                 "default": {
-                    "birth_year": {
-                        "value": "1999",
+                    "preference": {
+                        "value": "java",
                         "confidence": 0.9,
                         "source_event_id": "e3",
                         "source": "fact_add",
@@ -170,13 +170,13 @@ def _seed_memory_dir(root: Path) -> None:
                     }
                 }
             },
-            "versions": {"default": {"birth_year": []}},
+            "versions": {"default": {"preference": []}},
             "pending_facts": {"default": {}},
             "confirmed_facts": {
                 "default": {
-                    "birth_year": {
-                        "key": "birth_year",
-                        "value": "1999",
+                    "preference": {
+                        "key": "preference",
+                        "value": "java",
                         "op": "add",
                         "confidence": 0.9,
                         "count": 2,
@@ -273,21 +273,27 @@ class MemoryBackfillAnswerOnlyTests(unittest.TestCase):
 
             assistant_profile = json.loads((root / "assistant_profile_store.json").read_text(encoding="utf-8"))
             assistant_default = dict(dict(assistant_profile.get("profiles") or {}).get("default") or {})
-            self.assertNotIn("birth_year", assistant_default)
+            self.assertFalse(assistant_default)
 
             user_profile = json.loads((root / "user_profile_store.json").read_text(encoding="utf-8"))
             user_default = dict(dict(user_profile.get("profiles") or {}).get("default") or {})
-            self.assertEqual(str(dict(user_default.get("birth_year") or {}).get("value") or ""), "2003")
+            self.assertFalse(user_default)
 
             long_payload = json.loads((root / "long_memory_docs.json").read_text(encoding="utf-8"))
             long_texts = [str(x.get("text") or "") for x in list(long_payload.get("docs") or [])]
-            self.assertFalse(any("assistant.birth_year=1999" in text for text in long_texts))
-            self.assertTrue(any("user.birth_year=2003" in text for text in long_texts))
+            self.assertFalse(any("assistant.preference=java" in text for text in long_texts))
 
             vector_payload = json.loads((root / "vector_store.json").read_text(encoding="utf-8"))
             vector_texts = [str(x.get("text") or "") for x in list(vector_payload.get("records") or [])]
-            self.assertFalse(any("assistant.birth_year=1999" in text for text in vector_texts))
-            self.assertTrue(any("user.birth_year=2003" in text for text in vector_texts))
+            self.assertFalse(any("assistant.preference=java" in text for text in vector_texts))
+
+            records_path = root / "memory_v2" / "records.json"
+            self.assertTrue(records_path.exists())
+            records_payload = json.loads(records_path.read_text(encoding="utf-8"))
+            records = [dict(x) for x in list(records_payload.get("records") or []) if isinstance(x, dict)]
+            fact_texts = [str(x.get("text") or "") for x in records if str(x.get("memory_type") or "") == "fact"]
+            self.assertTrue(any("user.preference=python" in text.lower() for text in fact_texts))
+            self.assertFalse(any("assistant.preference=java" in text.lower() for text in fact_texts))
 
 
 if __name__ == "__main__":

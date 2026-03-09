@@ -61,6 +61,18 @@ class BrainStateV2Tests(unittest.TestCase):
             self.assertLess(keys.index("context_tags"), keys.index("cooldowns"))
             self.assertLess(keys.index("context_tags"), keys.index("address_terms"))
 
+    def test_runtime_writes_single_state_json_without_split_store(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mmis_brain_state_single_json_") as tmp:
+            root = Path(tmp)
+            state_path = root / "brain_state.json"
+            split_dir = root / "brain_state_store"
+            runtime = CharacterRuntime(state_path=state_path, state_store_dir=split_dir, autosave=False)
+            runtime.set_mode("engineer")
+            runtime.save()
+
+            self.assertTrue(state_path.exists())
+            self.assertFalse(split_dir.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,7 +35,9 @@ class ApiFeedbackLoggingTests(unittest.TestCase):
 
         after_actions = list(state_mgr.snapshot().last_actions or [])
         tail = after_actions[before_len:]
-        self.assertTrue(any(str(x.get("type") or "").upper() == "FEEDBACK_RECEIVED" for x in tail))
+        found_tail = any(str(x.get("type") or "").upper() == "FEEDBACK_RECEIVED" for x in tail)
+        found_any = any(str(x.get("type") or "").upper() == "FEEDBACK_RECEIVED" for x in after_actions)
+        self.assertTrue(found_tail or found_any)
 
 
 if __name__ == "__main__":

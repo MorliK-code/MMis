@@ -3,7 +3,6 @@
 import json
 import time
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -30,7 +29,6 @@ from memory.memory_models import (
     MemoryScope,
     MemoryStatus,
     MemoryType,
-    RetrievalCandidate,
     RetrievalQuery,
     RetrievalResult,
 )
@@ -42,11 +40,6 @@ from utils.logger import get_logger, log_json
 
 
 LOGGER = get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class MemoryDebugSnapshot:
-    payload: dict[str, Any]
 
 
 class MemoryManager:

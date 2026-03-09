@@ -16,11 +16,8 @@ from core.brain import Brain
 from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
 from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, ModelInfo, ProviderHealth, Timings, Usage
-from memory.event_store import EventStore
-from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
-from memory.short_memory import ShortMemory
-from memory.vector_store import VectorStore
+from memory.memory_models import DebugRequest
 from modules.studio.studio_generator import StudioGenerator
 
 
@@ -76,36 +73,14 @@ class _StudioAwareProvider(LLMProviderBase):
         return ["stub"]
 
 
-def _vector_record_count(path: Path) -> int:
-    if not path.exists():
-        return 0
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return 0
-    rows = payload.get("records") if isinstance(payload, dict) else payload
-    if not isinstance(rows, list):
-        return 0
-    return len(rows)
-
-
 class BrainPrivacyTests(unittest.TestCase):
     def _new_brain(self) -> tuple[Brain, CharacterRuntime, MemoryManager]:
         tmp = tempfile.TemporaryDirectory(prefix="mmis_brain_privacy_")
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
 
-        short_memory = ShortMemory(path=root / "short_memory.json", autosave=True)
-        long_memory = LongMemory(path=root / "long_memory_docs.json")
-        vector_store = VectorStore(path=root / "vector_store.json", dim=64)
-        event_store = EventStore(path=root / "events.jsonl")
-        memory_manager = MemoryManager(
-            short_memory=short_memory,
-            long_memory=long_memory,
-            vector_store=vector_store,
-            event_store=event_store,
-        )
-
+        memory_manager = MemoryManager(root_dir=root)
+        self.addCleanup(memory_manager.close)
         state_manager = CharacterRuntime(
             state_path=root / "brain_state.json",
             state_store_dir=root / "brain_state_store",
@@ -128,42 +103,49 @@ class BrainPrivacyTests(unittest.TestCase):
         )
         return brain, state_manager, memory_manager
 
-    def _assert_memory_stores_empty(self, manager: MemoryManager) -> None:
-        self.assertEqual(len(manager.event_store.list(50)), 0)
-        self.assertEqual(manager.short_memory.size(), 0)
-        self.assertEqual(len(manager.long_memory.list_docs(limit=20)), 0)
-        self.assertEqual(_vector_record_count(manager.vector_store.path), 0)
+    def _assert_memory_stores_empty(self, manager: MemoryManager, *, namespace: str) -> None:
+        snap = manager.debug_snapshot(DebugRequest(namespace=namespace, limit=50))
+        self.assertEqual(int(snap.get("count") or 0), 0)
 
     def test_slash_commands_are_not_persisted_anywhere(self) -> None:
         brain, state_manager, manager = self._new_brain()
-        result = brain.handle_message("/mode debugger", meta={"source": "test", "store_turn": True})
+        result = brain.handle_message(
+            "/mode debugger",
+            meta={"source": "test", "store_turn": True, "conversation_id": "privacy"},
+        )
 
         self.assertEqual(str(result.route or ""), "command")
         self.assertFalse(list(state_manager.snapshot().history or []))
-        self._assert_memory_stores_empty(manager)
+        self._assert_memory_stores_empty(manager, namespace="privacy")
 
     def test_studio_dialog_is_not_persisted_anywhere(self) -> None:
         brain, state_manager, manager = self._new_brain()
-        started = brain.handle_message("/studio start demo_spec", meta={"source": "test", "store_turn": True})
-        step = brain.handle_message("обнови персонажа гарри", meta={"source": "test", "store_turn": True})
+        started = brain.handle_message(
+            "/studio start demo_spec",
+            meta={"source": "test", "store_turn": True, "conversation_id": "privacy"},
+        )
+        step = brain.handle_message(
+            "обнови персонажа гарри",
+            meta={"source": "test", "store_turn": True, "conversation_id": "privacy"},
+        )
 
         self.assertEqual(str(started.route or ""), "command")
         self.assertEqual(str(step.route or ""), "chat")
         self.assertFalse(list(state_manager.snapshot().history or []))
-        self._assert_memory_stores_empty(manager)
+        self._assert_memory_stores_empty(manager, namespace="privacy")
 
     def test_regular_chat_still_persists(self) -> None:
         brain, state_manager, manager = self._new_brain()
-        result = brain.handle_message("hello there", meta={"source": "test", "store_turn": True})
+        result = brain.handle_message(
+            "hello there",
+            meta={"source": "test", "store_turn": True, "conversation_id": "privacy"},
+        )
 
         self.assertEqual(str(result.route or ""), "chat")
         self.assertGreaterEqual(len(list(state_manager.snapshot().history or [])), 2)
-        self.assertGreaterEqual(len(manager.event_store.list(50)), 2)
-        self.assertGreaterEqual(manager.short_memory.size(), 2)
-        self.assertGreaterEqual(len(manager.long_memory.list_docs(limit=20)), 1)
-        self.assertGreaterEqual(_vector_record_count(manager.vector_store.path), 2)
+        snap = manager.debug_snapshot(DebugRequest(namespace="privacy", limit=50))
+        self.assertGreaterEqual(int(snap.get("count") or 0), 2)
 
 
 if __name__ == "__main__":
     unittest.main()
-

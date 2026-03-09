@@ -57,7 +57,8 @@ class UtilsInfraTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             inside = safe_path(base / "a.txt", base)
-            self.assertTrue(str(inside).startswith(str(base)))
+            self.assertTrue(inside.is_absolute())
+            self.assertTrue(inside.is_relative_to(base.resolve()))
 
     def test_logger_helpers(self) -> None:
         configure_logging()
