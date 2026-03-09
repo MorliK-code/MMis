@@ -201,6 +201,39 @@
     "cache_dir": "{dir_path}\\data\\cache",
     "log_dir": "{dir_path}\\data\\logs",
     "db_path": "{dir_path}\\data\\memory_storage\\memory.db",
+    "version": "v2",
+    "backend": "chroma_hybrid",
+    "embedding": {
+      "backend": "sentence_transformers",
+      "model": "all-MiniLM-L6-v2",
+      "dim": 384
+    },
+    "retrieval": {
+      "top_k": 8,
+      "rerank_top_k": 8
+    },
+    "documents": {
+      "chunk_size": 1200,
+      "chunk_overlap": 160
+    },
+    "summary": {
+      "trigger": 60,
+      "target_tokens": 220
+    },
+    "context_budget": {
+      "total": 2200,
+      "memory": 700,
+      "docs": 600,
+      "tools": 220,
+      "response_reserve": 260
+    },
+    "lifecycle": {
+      "stale_after_days": 30,
+      "archive_after_days": 90,
+      "temporary_ttl_sec": 3600,
+      "private_runtime_ttl_sec": 900,
+      "working_limit": 120
+    },
     "short_memory_limit": 10,
     "chat_recall_results": 3,
     "chat_events_limit": 10,

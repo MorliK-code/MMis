@@ -17,12 +17,7 @@ from llm.provider_base import LLMProviderBase
 from llm.tokenizer import ApproxTokenizer, Tokenizer
 from memory.auto_migration import run_auto_migration
 from memory.event_store import EventStore
-from memory.fact_extractor import FactExtractor
-from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
-from memory.profile_store import AssistantProfileStore, UserProfileStore
-from memory.short_memory import ShortMemory
-from memory.vector_store import VectorStore
 from metadata.metadata_extractor import MetadataExtractor
 from modules.automation import BrowserConfig, BrowserController, OSActions, OSActionConfig, TaskExecutor
 from modules.internet import SearchClient, WebScraper
@@ -54,11 +49,7 @@ class AppContainer:
     def shutdown(self) -> None:
         _safe_call(self.voice, "shutdown")
         _safe_call(self.character_runtime, "save")
-        _safe_call(self.memory_manager.short_memory, "save")
-        _safe_call(self.memory_manager.long_memory, "save")
-        _safe_call(self.memory_manager.vector_store, "save")
-        _safe_call(self.memory_manager.user_profile_store, "save")
-        _safe_call(self.memory_manager.assistant_profile_store, "save")
+        _safe_call(self.memory_manager, "close")
         _safe_call(self.provider, "shutdown")
         _safe_call(self.provider, "close")
         logging.shutdown()
@@ -86,26 +77,8 @@ def build_container(settings: AppSettings) -> AppContainer:
     )
     metadata_extractor = MetadataExtractor(cache_size=280)
 
-    short_memory = ShortMemory(limit=80, summary_trigger=60)
-    long_memory = LongMemory()
-    vector_store = VectorStore(dim=128)
     event_store = EventStore()
-    fact_extractor = FactExtractor()
-    user_profile_store = UserProfileStore()
-    assistant_profile_store = AssistantProfileStore()
-    memory_manager = MemoryManager(
-        short_memory=short_memory,
-        long_memory=long_memory,
-        vector_store=vector_store,
-        fact_extractor=fact_extractor,
-        user_profile_store=user_profile_store,
-        assistant_profile_store=assistant_profile_store,
-        event_store=event_store,
-        retrieve_score_threshold=0.28,
-        facts_scope=str(settings.memory_facts_scope or "user_only"),
-        include_pending_facts_in_retrieval=bool(settings.memory_include_pending_facts_in_retrieval),
-        confirmation_ttl_sec=int(settings.memory_confirmation_ttl_sec),
-    )
+    memory_manager = MemoryManager(root_dir=settings.memory_dir)
 
     response_pipeline = ResponsePipeline(
         provider=provider,

@@ -1,28 +1,52 @@
 from __future__ import annotations
 
 from memory.auto_migration import run_auto_migration
-from memory.event_store import Event, EventStore
+from memory.document_memory import DocumentMemory
+from memory.embedding_provider import build_embedding_provider
 from memory.fact_extractor import Fact, FactExtractor
-from memory.long_memory import LongMemory, MemoryDoc
-from memory.memory_manager import MemoryItem, MemoryManager
-from memory.profile_store import AssistantProfileStore, ProfileStore, UserProfileStore
-from memory.short_memory import ShortMemory
-from memory.vector_store import VectorStore, embed_text
+from memory.memory_manager import MemoryManager
+from memory.memory_models import (
+    ChunkRecord,
+    ContextBuildRequest,
+    ContextBuildResult,
+    DocumentIngestRequest,
+    DocumentIngestResult,
+    DocumentRecord,
+    IngestResult,
+    MemoryEvent,
+    MemoryLevel,
+    MemoryRecord,
+    MemoryScope,
+    MemoryStatus,
+    MemoryType,
+    RetrievalQuery,
+    RetrievalResult,
+)
+from memory.vector_store import EMBED_VERSION, VectorStore, embed_text
 
 __all__ = [
     "MemoryManager",
-    "MemoryItem",
-    "ShortMemory",
-    "LongMemory",
-    "MemoryDoc",
+    "MemoryRecord",
+    "MemoryEvent",
+    "MemoryLevel",
+    "MemoryScope",
+    "MemoryStatus",
+    "MemoryType",
+    "ContextBuildRequest",
+    "ContextBuildResult",
+    "IngestResult",
+    "RetrievalQuery",
+    "RetrievalResult",
+    "DocumentIngestRequest",
+    "DocumentIngestResult",
+    "DocumentRecord",
+    "ChunkRecord",
     "VectorStore",
+    "EMBED_VERSION",
     "embed_text",
     "Fact",
     "FactExtractor",
-    "Event",
-    "EventStore",
-    "UserProfileStore",
-    "AssistantProfileStore",
-    "ProfileStore",
+    "DocumentMemory",
+    "build_embedding_provider",
     "run_auto_migration",
 ]

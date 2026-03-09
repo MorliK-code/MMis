@@ -13,6 +13,7 @@ from core.response_pipeline import PipelineResult, ResponsePipeline
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
 from memory.memory_manager import MemoryManager
+from memory.memory_models import MemoryEvent, MemoryScope, MemoryType
 from memory.text_sanitizer import (
     clean_assistant_text_for_memory,
     contains_memory_service_sections,
@@ -341,18 +342,28 @@ class Brain:
                 items = list(op.get("items") or [])
                 if items:
                     self.state_manager.set_last_tool_result(items[-1])
+                    try:
+                        self.memory_manager.set_private_runtime_state(
+                            key="last_tool_result",
+                            value=items[-1],
+                            namespace=str(self.state_manager.get("conversation_id") or "default"),
+                        )
+                    except Exception:
+                        pass
             elif key == "conversation_summary":
                 text = str(op.get("text") or "").strip()
                 if text:
                     self.state_manager.set_dialog_summary(text)
                     try:
-                        self.memory_manager.long_memory.add_doc(
-                            text=text,
-                            meta={"source": "rolling_summary"},
-                            source="summary",
-                            tags=["summary", "long_summary"],
-                            importance=0.6,
-                            confidence=0.7,
+                        self.memory_manager.ingest_event(
+                            MemoryEvent(
+                                role="system",
+                                text=text,
+                                namespace=str(self.state_manager.get("conversation_id") or "default"),
+                                scope=MemoryScope.SESSION,
+                                memory_type=MemoryType.SUMMARY,
+                                metadata={"source": "rolling_summary", "importance": 0.6, "confidence": 0.7},
+                            )
                         )
                     except Exception:
                         pass
@@ -478,16 +489,22 @@ class Brain:
                 latency_ms=0.0,
                 personality_id=personality_id,
             )
-            self.memory_manager.ingest_message(
-                role="user",
-                text=user_payload,
-                metadata=user_meta,
-                trace_id=trace_id,
-                source=source,
-                model=model,
-                quality_profile=quality_profile,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
+            self.memory_manager.ingest_event(
+                MemoryEvent(
+                    role="user",
+                    text=user_payload,
+                    namespace=(conversation_id or "default"),
+                    scope=MemoryScope.CONVERSATION,
+                    memory_type=MemoryType.MESSAGE,
+                    metadata={
+                        **dict(user_meta or {}),
+                        "trace_id": trace_id,
+                        "source": source,
+                        "model": model,
+                        "quality_profile": quality_profile,
+                        "turn_id": turn_id,
+                    },
+                )
             )
 
         assistant_sanitized = clean_assistant_text_for_memory(result)
@@ -528,17 +545,23 @@ class Brain:
             )
             if persona_snapshot:
                 assistant_meta["persona_snapshot"] = dict(persona_snapshot)
-            self.memory_manager.ingest_message(
-                role="assistant",
-                text=assistant_payload,
-                thinking=result.thinking,
-                metadata=assistant_meta,
-                trace_id=trace_id,
-                source=source,
-                model=model,
-                quality_profile=quality_profile,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
+            self.memory_manager.ingest_event(
+                MemoryEvent(
+                    role="assistant",
+                    text=assistant_payload,
+                    namespace=(conversation_id or "default"),
+                    scope=MemoryScope.CONVERSATION,
+                    memory_type=MemoryType.MESSAGE,
+                    metadata={
+                        **dict(assistant_meta or {}),
+                        "thinking": str(result.thinking or ""),
+                        "trace_id": trace_id,
+                        "source": source,
+                        "model": model,
+                        "quality_profile": quality_profile,
+                        "turn_id": turn_id,
+                    },
+                )
             )
 
     def _extract_turn_metadata(self, *, text: str, state: dict[str, Any], last_messages) -> dict[str, Any]:

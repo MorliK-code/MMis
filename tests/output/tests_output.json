@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-03-06T14:14:41+02:00",
-  "updated_at": "2026-03-09T16:40:29+02:00",
+  "updated_at": "2026-03-09T22:03:28+02:00",
   "cases": [
     {
       "test_num": 1,
@@ -1465,6 +1465,195 @@
       "test_name": "test_runtime_reads_character_events_from_logs_folder",
       "status": "passed",
       "duration_ms": 70.652
+    },
+    {
+      "test_num": 134,
+      "timestamp": "2026-03-09T22:03:26+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_conflicts.MemoryConflictTests.test_birth_year_update_overwrites_current_and_keeps_history",
+      "module": "tests.test_memory_conflicts",
+      "class": "MemoryConflictTests",
+      "test_name": "test_birth_year_update_overwrites_current_and_keeps_history",
+      "status": "passed",
+      "duration_ms": 33.33
+    },
+    {
+      "test_num": 135,
+      "timestamp": "2026-03-09T22:03:26+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_conflicts.MemoryConflictTests.test_fact_pending_then_confirmed_by_repeat",
+      "module": "tests.test_memory_conflicts",
+      "class": "MemoryConflictTests",
+      "test_name": "test_fact_pending_then_confirmed_by_repeat",
+      "status": "passed",
+      "duration_ms": 10.822
+    },
+    {
+      "test_num": 136,
+      "timestamp": "2026-03-09T22:03:26+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_conflicts.MemoryConflictTests.test_pending_fact_can_be_confirmed_by_yes_message_with_context",
+      "module": "tests.test_memory_conflicts",
+      "class": "MemoryConflictTests",
+      "test_name": "test_pending_fact_can_be_confirmed_by_yes_message_with_context",
+      "status": "passed",
+      "duration_ms": 19.165
+    },
+    {
+      "test_num": 137,
+      "timestamp": "2026-03-09T22:03:26+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_conflicts.MemoryConflictTests.test_yes_without_context_does_not_confirm_pending_fact",
+      "module": "tests.test_memory_conflicts",
+      "class": "MemoryConflictTests",
+      "test_name": "test_yes_without_context_does_not_confirm_pending_fact",
+      "status": "passed",
+      "duration_ms": 16.268
+    },
+    {
+      "test_num": 138,
+      "timestamp": "2026-03-09T22:03:26+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_entities.MemoryEntityTests.test_ingest_extracts_entities_and_entity_tags",
+      "module": "tests.test_memory_entities",
+      "class": "MemoryEntityTests",
+      "test_name": "test_ingest_extracts_entities_and_entity_tags",
+      "status": "passed",
+      "duration_ms": 6.369
+    },
+    {
+      "test_num": 139,
+      "timestamp": "2026-03-09T22:03:27+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_auto_migration_backup_version_and_idempotence",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_auto_migration_backup_version_and_idempotence",
+      "status": "passed",
+      "duration_ms": 303.222
+    },
+    {
+      "test_num": 140,
+      "timestamp": "2026-03-09T22:03:27+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_embedding_is_deterministic_across_processes",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_embedding_is_deterministic_across_processes",
+      "status": "passed",
+      "duration_ms": 372.204
+    },
+    {
+      "test_num": 141,
+      "timestamp": "2026-03-09T22:03:27+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_fact_extractor_name_pattern_is_strict",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_fact_extractor_name_pattern_is_strict",
+      "status": "passed",
+      "duration_ms": 1.476
+    },
+    {
+      "test_num": 142,
+      "timestamp": "2026-03-09T22:03:27+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_migration_removes_assistant_noise_and_keeps_confirmed_user_facts",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_migration_removes_assistant_noise_and_keeps_confirmed_user_facts",
+      "status": "passed",
+      "duration_ms": 163.306
+    },
+    {
+      "test_num": 143,
+      "timestamp": "2026-03-09T22:03:27+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_pending_facts_not_returned_in_retrieval_by_default",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_pending_facts_not_returned_in_retrieval_by_default",
+      "status": "passed",
+      "duration_ms": 23.406
+    },
+    {
+      "test_num": 144,
+      "timestamp": "2026-03-09T22:03:28+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_prompt_memory_sort_uses_score_when_priority_missing",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_prompt_memory_sort_uses_score_when_priority_missing",
+      "status": "error",
+      "duration_ms": 247.673,
+      "detail": "Traceback (most recent call last):\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\tests\\test_memory_quality_plan.py\", line 124, in test_prompt_memory_sort_uses_score_when_priority_missing\n    pack = CharacterRuntime.build(\n        state={\"history\": []},\n    ...<6 lines>...\n        policies=policies,\n    )\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\core\\character_runtime.py\", line 2515, in build\n    return runtime.build_prompt(\n           ~~~~~~~~~~~~~~~~~~~~^\n        user_msg=user_msg,\n        ^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        policies=policies,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\core\\character_runtime.py\", line 2540, in build_prompt\n    memories_block, selected_memories, dropped_memories = self._build_memories_block(\n                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        retrieved_memories,\n        ^^^^^^^^^^^^^^^^^^^\n        budgets,\n        ^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\core\\character_runtime.py\", line 2849, in _build_memories_block\n    from llm.tokenizer import estimate_tokens\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\llm\\__init__.py\", line 7, in <module>\n    from llm.ollama_provider import OllamaProvider\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\llm\\ollama_provider.py\", line 7, in <module>\n    import ollama\nModuleNotFoundError: No module named 'ollama'"
+    },
+    {
+      "test_num": 145,
+      "timestamp": "2026-03-09T22:03:28+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_token_pressure_keeps_memory_before_recent_chat",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_token_pressure_keeps_memory_before_recent_chat",
+      "status": "passed",
+      "duration_ms": 0.856
+    },
+    {
+      "test_num": 146,
+      "timestamp": "2026-03-09T22:03:28+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_user_only_scope_ignores_assistant_facts",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_user_only_scope_ignores_assistant_facts",
+      "status": "passed",
+      "duration_ms": 5.758
+    },
+    {
+      "test_num": 147,
+      "timestamp": "2026-03-09T22:03:28+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_memory_quality_plan.MemoryQualityPlanTests.test_yes_with_context_confirms_only_expected_candidate",
+      "module": "tests.test_memory_quality_plan",
+      "class": "MemoryQualityPlanTests",
+      "test_name": "test_yes_with_context_confirms_only_expected_candidate",
+      "status": "passed",
+      "duration_ms": 19.994
+    },
+    {
+      "test_num": 148,
+      "timestamp": "2026-03-09T22:03:28+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_short_memory_v2.ShortMemoryV2Tests.test_persona_snapshot_event_is_not_saved",
+      "module": "tests.test_short_memory_v2",
+      "class": "ShortMemoryV2Tests",
+      "test_name": "test_persona_snapshot_event_is_not_saved",
+      "status": "passed",
+      "duration_ms": 1.391
+    },
+    {
+      "test_num": 149,
+      "timestamp": "2026-03-09T22:03:28+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_short_memory_v2.ShortMemoryV2Tests.test_summary_is_meta_aware_for_technical_context",
+      "module": "tests.test_short_memory_v2",
+      "class": "ShortMemoryV2Tests",
+      "test_name": "test_summary_is_meta_aware_for_technical_context",
+      "status": "passed",
+      "duration_ms": 1.986
+    },
+    {
+      "test_num": 150,
+      "timestamp": "2026-03-09T22:03:28+02:00",
+      "pid": 9844,
+      "test_id": "tests.test_prompt_budget.PromptBudgetTests.test_prompt_builder_respects_total_budget",
+      "module": "tests.test_prompt_budget",
+      "class": "PromptBudgetTests",
+      "test_name": "test_prompt_builder_respects_total_budget",
+      "status": "error",
+      "duration_ms": 100.75,
+      "detail": "Traceback (most recent call last):\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\tests\\test_prompt_budget.py\", line 45, in test_prompt_builder_respects_total_budget\n    pack = CharacterRuntime.build(\n        state=state,\n    ...<3 lines>...\n        policies=policies,\n    )\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\core\\character_runtime.py\", line 2515, in build\n    return runtime.build_prompt(\n           ~~~~~~~~~~~~~~~~~~~~^\n        user_msg=user_msg,\n        ^^^^^^^^^^^^^^^^^^\n    ...<2 lines>...\n        policies=policies,\n        ^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\core\\character_runtime.py\", line 2540, in build_prompt\n    memories_block, selected_memories, dropped_memories = self._build_memories_block(\n                                                          ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        retrieved_memories,\n        ^^^^^^^^^^^^^^^^^^^\n        budgets,\n        ^^^^^^^^\n    )\n    ^\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\core\\character_runtime.py\", line 2849, in _build_memories_block\n    from llm.tokenizer import estimate_tokens\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\llm\\__init__.py\", line 7, in <module>\n    from llm.ollama_provider import OllamaProvider\n  File \"C:\\Users\\hrychenko.NSBC\\Desktop\\MMis\\MMis\\llm\\ollama_provider.py\", line 7, in <module>\n    import ollama\nModuleNotFoundError: No module named 'ollama'"
     }
   ]
 }

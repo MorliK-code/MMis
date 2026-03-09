@@ -13,14 +13,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from config.settings import load_config
-from memory.event_store import EventStore
-from memory.fact_extractor import FactExtractor, MODE_BALANCED
-from memory.long_memory import LongMemory
 from memory.memory_manager import MemoryManager
-from memory.profile_store import AssistantProfileStore, UserProfileStore
-from memory.short_memory import ShortMemory
+from memory.memory_models import MemoryEvent, MemoryScope, MemoryType
 from memory.text_sanitizer import sanitize_assistant_memory_text
-from memory.vector_store import VectorStore, embed_text
+from memory.vector_store import embed_text
 from utils.datetime_local import parse_time_to_epoch
 
 
@@ -308,17 +304,7 @@ def _rebuild_facts(
     _write_json_atomic(user_profile_path, _empty_profile_payload())
     _write_json_atomic(assistant_profile_path, _empty_profile_payload())
 
-    vector_dim = _detect_vector_dim(vector_kept)
-    manager = MemoryManager(
-        short_memory=ShortMemory(path=memory_dir / "short_memory.json", autosave=False),
-        long_memory=LongMemory(path=long_path),
-        vector_store=VectorStore(path=vector_path, dim=vector_dim),
-        fact_extractor=FactExtractor(),
-        user_profile_store=UserProfileStore(path=user_profile_path),
-        assistant_profile_store=AssistantProfileStore(path=assistant_profile_path),
-        event_store=EventStore(path=memory_dir / "events.jsonl"),
-    )
-    manager.event_store.append = lambda event: dict(event or {})  # type: ignore[method-assign]
+    manager = MemoryManager(root_dir=memory_dir)
 
     facts_extracted = 0
     for idx, row in enumerate(_iter_message_events(events_rows)):
@@ -331,19 +317,20 @@ def _rebuild_facts(
             continue
         meta = _coerce_dict(payload.get("metadata"))
         ids = _coerce_dict(payload.get("ids"))
-        profile = str(ids.get("quality_profile") or meta.get("quality_profile") or MODE_BALANCED).upper()
-        profile_id = str(ids.get("profile_id") or meta.get("user_id") or "default")
         event_id = str(row.get("event_id") or f"rebuild:{idx}")
-        facts = manager.fact_extractor.extract(
-            text=text,
-            metadata={"event_id": event_id, **meta},
-            speaker=role,
-            mode=profile,
+        ingest = manager.ingest_event(
+            MemoryEvent(
+                role=role,
+                text=text,
+                namespace=str(meta.get("conversation_id") or "default"),
+                scope=MemoryScope.CONVERSATION,
+                memory_type=MemoryType.MESSAGE,
+                metadata={**meta, **ids, "event_id": event_id},
+            )
         )
-        if not facts:
-            continue
-        manager.write_facts(facts, profile_id=profile_id)
-        facts_extracted += len(facts)
+        facts_extracted += len(list(ingest.extracted_facts or []))
+
+    manager.close()
 
     user_keys = _profile_key_count(user_profile_path)
     assistant_keys = _profile_key_count(assistant_profile_path)

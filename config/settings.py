@@ -321,6 +321,27 @@ class AppSettings:
     memory_confirmation_ttl_sec: int = 300
     memory_migration_auto_on_start: bool = True
     memory_migration_schema_version: int = 2
+    memory_version: str = "v2"
+    memory_backend: str = "chroma_hybrid"
+    memory_embedding_backend: str = "sentence_transformers"
+    memory_embedding_model: str = "all-MiniLM-L6-v2"
+    memory_embedding_dim: int = 384
+    memory_retrieval_top_k: int = 8
+    memory_rerank_top_k: int = 8
+    memory_chunk_size: int = 1200
+    memory_chunk_overlap: int = 160
+    memory_summary_trigger: int = 60
+    memory_summary_target_tokens: int = 220
+    memory_context_budget_total: int = 2200
+    memory_context_budget_memory: int = 700
+    memory_context_budget_docs: int = 600
+    memory_context_budget_tools: int = 220
+    memory_context_budget_response_reserve: int = 260
+    memory_stale_after_days: int = 30
+    memory_archive_after_days: int = 90
+    memory_temporary_ttl_sec: int = 3600
+    memory_private_runtime_ttl_sec: int = 900
+    memory_working_limit: int = 120
     model_fallbacks: list[str] = field(default_factory=list)
 
     # Hardware
@@ -640,6 +661,39 @@ def _default_config_tree() -> dict[str, Any]:
             "cache_dir": _path_to_config_string(cache_dir),
             "log_dir": _path_to_config_string(log_dir),
             "db_path": _path_to_config_string(memory_dir / "memory.db"),
+            "version": "v2",
+            "backend": "chroma_hybrid",
+            "embedding": {
+                "backend": "sentence_transformers",
+                "model": "all-MiniLM-L6-v2",
+                "dim": 384,
+            },
+            "retrieval": {
+                "top_k": 8,
+                "rerank_top_k": 8,
+            },
+            "documents": {
+                "chunk_size": 1200,
+                "chunk_overlap": 160,
+            },
+            "summary": {
+                "trigger": 60,
+                "target_tokens": 220,
+            },
+            "context_budget": {
+                "total": 2200,
+                "memory": 700,
+                "docs": 600,
+                "tools": 220,
+                "response_reserve": 260,
+            },
+            "lifecycle": {
+                "stale_after_days": 30,
+                "archive_after_days": 90,
+                "temporary_ttl_sec": 3600,
+                "private_runtime_ttl_sec": 900,
+                "working_limit": 120,
+            },
             "short_memory_limit": 10,
             "chat_recall_results": 3,
             "chat_events_limit": 10,
@@ -827,6 +881,71 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         memory_migration_schema_version=max(
             1,
             _to_int(_pick_value(_get_dotted(row, "memory.migration.schema_version"), 2), default=2),
+        ),
+        memory_version=_norm_lower(_pick_value(_get_dotted(row, "memory.version"), "v2")),
+        memory_backend=_norm_lower(_pick_value(_get_dotted(row, "memory.backend"), "chroma_hybrid")),
+        memory_embedding_backend=_norm_lower(
+            _pick_value(_get_dotted(row, "memory.embedding.backend"), "sentence_transformers")
+        ),
+        memory_embedding_model=_norm_str(_pick_value(_get_dotted(row, "memory.embedding.model"), "all-MiniLM-L6-v2")),
+        memory_embedding_dim=max(32, _to_int(_pick_value(_get_dotted(row, "memory.embedding.dim"), 384), default=384)),
+        memory_retrieval_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.top_k"), 8), default=8)),
+        memory_rerank_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.rerank_top_k"), 8), default=8)),
+        memory_chunk_size=max(200, _to_int(_pick_value(_get_dotted(row, "memory.documents.chunk_size"), 1200), default=1200)),
+        memory_chunk_overlap=max(
+            0,
+            _to_int(_pick_value(_get_dotted(row, "memory.documents.chunk_overlap"), 160), default=160),
+        ),
+        memory_summary_trigger=max(1, _to_int(_pick_value(_get_dotted(row, "memory.summary.trigger"), 60), default=60)),
+        memory_summary_target_tokens=max(
+            32,
+            _to_int(_pick_value(_get_dotted(row, "memory.summary.target_tokens"), 220), default=220),
+        ),
+        memory_context_budget_total=max(
+            256,
+            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.total"), 2200), default=2200),
+        ),
+        memory_context_budget_memory=max(
+            64,
+            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.memory"), 700), default=700),
+        ),
+        memory_context_budget_docs=max(
+            64,
+            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.docs"), 600), default=600),
+        ),
+        memory_context_budget_tools=max(
+            32,
+            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.tools"), 220), default=220),
+        ),
+        memory_context_budget_response_reserve=max(
+            64,
+            _to_int(
+                _pick_value(_get_dotted(row, "memory.context_budget.response_reserve"), 260),
+                default=260,
+            ),
+        ),
+        memory_stale_after_days=max(
+            1,
+            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.stale_after_days"), 30), default=30),
+        ),
+        memory_archive_after_days=max(
+            1,
+            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.archive_after_days"), 90), default=90),
+        ),
+        memory_temporary_ttl_sec=max(
+            30,
+            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.temporary_ttl_sec"), 3600), default=3600),
+        ),
+        memory_private_runtime_ttl_sec=max(
+            30,
+            _to_int(
+                _pick_value(_get_dotted(row, "memory.lifecycle.private_runtime_ttl_sec"), 900),
+                default=900,
+            ),
+        ),
+        memory_working_limit=max(
+            20,
+            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.working_limit"), 120), default=120),
         ),
         model_fallbacks=_to_csv_list(_get_dotted(row, "llm.model_fallbacks")),
         gpu_vram_gb=_to_int_or_none(_get_dotted(row, "hardware.gpu_vram_gb")),
@@ -1237,6 +1356,22 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append("memory.confirmation_ttl_sec must be >= 1")
     if int(settings.memory_migration_schema_version) < 1:
         errors.append("memory.migration.schema_version must be >= 1")
+    if str(settings.memory_version or "").strip().lower() not in {"v2"}:
+        errors.append(f"memory.version must be 'v2', got: {settings.memory_version}")
+    if str(settings.memory_backend or "").strip().lower() not in {"chroma_hybrid", "chroma", "local"}:
+        errors.append(f"memory.backend must be one of ['chroma_hybrid', 'chroma', 'local'], got: {settings.memory_backend}")
+    if int(settings.memory_retrieval_top_k) < 1:
+        errors.append("memory.retrieval.top_k must be >= 1")
+    if int(settings.memory_rerank_top_k) < 1:
+        errors.append("memory.retrieval.rerank_top_k must be >= 1")
+    if int(settings.memory_chunk_size) < 200:
+        errors.append("memory.documents.chunk_size must be >= 200")
+    if int(settings.memory_chunk_overlap) < 0:
+        errors.append("memory.documents.chunk_overlap must be >= 0")
+    if int(settings.memory_temporary_ttl_sec) < 30:
+        errors.append("memory.lifecycle.temporary_ttl_sec must be >= 30")
+    if int(settings.memory_private_runtime_ttl_sec) < 30:
+        errors.append("memory.lifecycle.private_runtime_ttl_sec must be >= 30")
     if errors:
         raise ValueError("Invalid application settings:\n- " + "\n- ".join(errors))
 

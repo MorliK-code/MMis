@@ -25,6 +25,7 @@ from core.character_runtime import PromptPack
 from core.mode_selector import ModeSelector, list_runtime_modes, normalize_mode_name
 from llm.provider_base import LLMProviderBase, LLMRequest, Message, ToolCall, ToolSpec
 from llm.tokenizer import estimate_tokens
+from memory.memory_models import ContextBuildRequest, MemoryScope
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
 from modules.studio.studio_generator import StudioGenerator
@@ -425,7 +426,7 @@ class MemoryRetrieveStage(PipelineStage):
             return ctx
 
         manager = ctx.meta.get("memory_manager") or self.memory_manager
-        if manager is None or not hasattr(manager, "build_context_pack"):
+        if manager is None or not hasattr(manager, "build_context"):
             ctx.logs.append("stage=memory_retrieve skipped(no_manager)")
             return ctx
 
@@ -433,15 +434,46 @@ class MemoryRetrieveStage(PipelineStage):
             k = max(1, int(_pick_value(ctx.meta.get("memory_k"), ctx.policies.get("memory_k"), 8) or 8))
         except Exception:
             k = 8
-        try:
-            tail_n = max(1, int(_pick_value(ctx.meta.get("memory_tail_n"), ctx.policies.get("memory_tail_n"), 10) or 10))
-        except Exception:
-            tail_n = 10
-        filters = _pick_value(ctx.meta.get("memory_filters"), ctx.policies.get("memory_filters"), None)
-        filters = dict(filters) if isinstance(filters, dict) else None
 
         try:
-            pack = manager.build_context_pack(query=query, k=k, filters=filters, tail_n=tail_n)
+            scope_names = list(_as_list(_pick_value(ctx.meta.get("memory_scopes"), ctx.policies.get("memory_scopes"), [])))
+            scopes = [_scope_from_name(x) for x in scope_names]
+            scopes = [x for x in scopes if x is not None]
+            if not scopes:
+                scopes = [
+                    MemoryScope.CONVERSATION,
+                    MemoryScope.SESSION,
+                    MemoryScope.PROJECT,
+                    MemoryScope.GLOBAL_USER,
+                    MemoryScope.CHARACTER,
+                    MemoryScope.TEMPORARY,
+                ]
+            context_request = ContextBuildRequest(
+                system_prompt=str(_pick_value(ctx.state.get("system_prompt"), "")),
+                user_message=query,
+                namespace=str(
+                    _pick_value(
+                        ctx.meta.get("memory_namespace"),
+                        ctx.meta.get("conversation_id"),
+                        ctx.state.get("conversation_id"),
+                        "default",
+                    )
+                ),
+                scopes=list(scopes),
+                top_k=max(1, int(k)),
+                session_summary=str(_pick_value(ctx.state.get("dialog_summary"), "")),
+                tool_state=_as_dict(ctx.state.get("last_tool_result")),
+                unresolved_items=[str(x) for x in list(_as_list(ctx.state.get("open_questions"))) if str(x).strip()],
+                context_budget_total=int(_pick_value(ctx.meta.get("context_budget_total"), 2200) or 2200),
+                context_budget_memory=int(_pick_value(ctx.meta.get("context_budget_memory"), 700) or 700),
+                context_budget_docs=int(_pick_value(ctx.meta.get("context_budget_docs"), 600) or 600),
+                context_budget_tools=int(_pick_value(ctx.meta.get("context_budget_tools"), 220) or 220),
+                context_budget_response_reserve=int(
+                    _pick_value(ctx.meta.get("context_budget_response_reserve"), 260) or 260
+                ),
+            )
+            result = manager.build_context(context_request)
+            pack = result.to_dict() if hasattr(result, "to_dict") else dict(result or {})
         except Exception as exc:
             ctx.logs.append(f"stage=memory_retrieve error={type(exc).__name__}")
             return ctx
@@ -451,29 +483,14 @@ class MemoryRetrieveStage(PipelineStage):
             return ctx
 
         ctx.memory_context = dict(pack)
-        retrieved = list(_as_list(pack.get("retrieved")))
+        retrieved = list(_as_list(pack.get("selected")))
         if retrieved:
             ctx.retrieved_memories = retrieved
 
-        tail = list(_as_list(pack.get("tail")))
-        if tail:
-            history = list(_as_list(ctx.state.get("history")))
-            merged = history if history else tail
-            if history and bool(ctx.meta.get("merge_memory_tail", True)):
-                merged = (history + tail)[-max(len(history), tail_n) :]
-            ctx.state["history"] = merged
-
-        short_summary = str(pack.get("short_summary") or "").strip()
-        if short_summary and not str(ctx.state.get("dialog_summary") or "").strip():
-            ctx.state["dialog_summary"] = short_summary
-
-        short_summary_meta = pack.get("short_summary_meta")
-        if isinstance(short_summary_meta, dict):
-            ctx.state["short_summary_meta"] = dict(short_summary_meta)
-
-        profile_summary = pack.get("profile_summary")
-        if isinstance(profile_summary, dict):
-            ctx.state["profile_summary"] = dict(profile_summary)
+        blocks = _as_dict(pack.get("blocks"))
+        session_summary = str(blocks.get("session_summary") or "").strip()
+        if session_summary:
+            ctx.state["dialog_summary"] = session_summary
 
         ctx.logs.append(
             f"stage=memory_retrieve retrieved={len(ctx.retrieved_memories)} tail={len(_as_list(ctx.state.get('history')))}"
@@ -499,10 +516,11 @@ class PromptBuildStage(PipelineStage):
             prompt_state["plan"] = ctx.plan
         if ctx.memory_context:
             prompt_state.setdefault("memory_context", dict(ctx.memory_context))
-            prompt_state.setdefault("long_summary", str(ctx.memory_context.get("short_summary") or ""))
-            short_summary_meta = ctx.memory_context.get("short_summary_meta")
-            if isinstance(short_summary_meta, dict):
-                prompt_state.setdefault("short_summary_meta", dict(short_summary_meta))
+            blocks = _as_dict(ctx.memory_context.get("blocks"))
+            prompt_state.setdefault(
+                "long_summary",
+                str(_pick_value(blocks.get("session_summary"), blocks.get("working_memory"), "")),
+            )
         if bool(ctx.meta.get("think", False)):
             rules = ctx.policies.get("rules")
             if not isinstance(rules, list):
@@ -4090,6 +4108,16 @@ def _as_list(value) -> list[Any]:
     if isinstance(value, tuple):
         return list(value)
     return [value]
+
+
+def _scope_from_name(value) -> MemoryScope | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    for scope in MemoryScope:
+        if raw == scope.value:
+            return scope
+    return None
 
 
 def _pick(*values) -> str:
