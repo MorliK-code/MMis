@@ -1,10 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
 
+from config.settings import load_config
 from metadata.entity_extractor import extract_entities, flatten_entity_tags, infer_topics_from_entities
 from memory.event_store import EventStore
 from memory.fact_extractor import Fact, FactExtractor, MODE_BALANCED
@@ -13,7 +14,7 @@ from memory.profile_store import AssistantProfileStore, UserProfileStore
 from memory.short_memory import ShortMemory
 from memory.vector_store import VectorStore
 from prompt_engine.prompt_registry import PromptRegistry
-from utils.datetime_local import now_local_ts, to_local_iso
+from utils.datetime_local import now_local_ts, parse_time_to_epoch, to_local_iso
 from utils.logger import get_logger, log_json
 
 
@@ -28,14 +29,20 @@ class MemoryItem:
     source: str
     tags: list[str]
     metadata: dict[str, Any]
+    confidence: float = 0.0
+    priority: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
+        confidence = self.confidence if float(self.confidence or 0.0) > 0.0 else float(self.score)
+        priority = self.priority if float(self.priority or 0.0) > 0.0 else float(self.score)
         return {
             "id": self.id,
             "text": self.text,
             "score": float(self.score),
             "source": self.source,
             "tags": list(self.tags or []),
+            "confidence": _clamp01(confidence),
+            "priority": _clamp01(priority),
             "metadata": dict(self.metadata or {}),
         }
 
@@ -54,8 +61,13 @@ class MemoryManager:
         assistant_profile_store: AssistantProfileStore | None = None,
         event_store: EventStore | None = None,
         retrieve_score_threshold: float = 0.28,
+        facts_scope: str | None = None,
+        include_pending_facts_in_retrieval: bool | None = None,
+        confirmation_ttl_sec: int | None = None,
+        confirmation_max_turn_distance: int = 3,
         prompt_registry: PromptRegistry | None = None,
     ):
+        cfg = load_config()
         self.short_memory = short_memory if short_memory is not None else ShortMemory(limit=80, summary_trigger=60)
         self.long_memory = long_memory if long_memory is not None else LongMemory()
         self.vector_store = vector_store if vector_store is not None else VectorStore(dim=128)
@@ -67,6 +79,24 @@ class MemoryManager:
         self.event_store = event_store if event_store is not None else EventStore()
         self.retrieve_score_threshold = max(0.0, min(1.0, float(retrieve_score_threshold)))
         self._prompt_registry = prompt_registry or PromptRegistry()
+        self.facts_scope = _normalize_facts_scope(
+            facts_scope if facts_scope is not None else getattr(cfg, "memory_facts_scope", "user_only")
+        )
+        include_pending_default = bool(getattr(cfg, "memory_include_pending_facts_in_retrieval", False))
+        self.include_pending_facts_in_retrieval = (
+            bool(include_pending_facts_in_retrieval)
+            if include_pending_facts_in_retrieval is not None
+            else include_pending_default
+        )
+        self.confirmation_ttl_sec = max(
+            1,
+            int(
+                confirmation_ttl_sec
+                if confirmation_ttl_sec is not None
+                else int(getattr(cfg, "memory_confirmation_ttl_sec", 300))
+            ),
+        )
+        self.confirmation_max_turn_distance = max(1, int(confirmation_max_turn_distance))
 
     def ingest_message(
         self,
@@ -232,23 +262,31 @@ class MemoryManager:
                 },
             )
 
-        facts = self.fact_extractor.extract(
-            text=content,
-            metadata={"event_id": event_id, **meta},
-            speaker=role_norm,
-            mode=profile,
-        )
+        allow_fact_extract = (role_norm == "user") or (self.facts_scope != "user_only")
+        facts: list[Fact] = []
+        if allow_fact_extract:
+            facts = self.fact_extractor.extract(
+                text=content,
+                metadata={"event_id": event_id, **meta},
+                speaker=role_norm,
+                mode=profile,
+            )
         if facts:
             self.write_facts(facts, profile_id=profile_id)
         elif role_norm == "user" and _looks_like_confirmation_message(content):
-            confirmed_rows = self.user_profile_store.confirm_pending(profile_id=profile_id, limit=4)
-            if confirmed_rows:
-                self._persist_confirmed_pending(
-                    rows=confirmed_rows,
-                    subject="user",
-                    profile_id=profile_id,
-                    event_id=event_id,
-                )
+            self._confirm_pending_with_context(
+                profile_id=profile_id,
+                event_id=event_id,
+                confirmation_text=content,
+            )
+
+        if role_norm == "assistant":
+            self._refresh_confirmation_context_from_assistant(
+                profile_id=profile_id,
+                assistant_text=content,
+                assistant_event_id=event_id,
+                turn_id=ids.get("turn_id"),
+            )
 
     def retrieve(self, query: str, k: int = 8, filters: dict | None = None) -> list[MemoryItem]:
         text = str(query or "").strip()
@@ -257,6 +295,12 @@ class MemoryManager:
         limit = max(1, int(k))
         filt = dict(filters or {})
         threshold = float(filt.get("score_threshold", self.retrieve_score_threshold))
+        include_pending = bool(
+            filt.get(
+                "include_pending_facts",
+                filt.get("include_pending_facts_in_retrieval", self.include_pending_facts_in_retrieval),
+            )
+        )
 
         short_tail_n = int(filt.get("short_n", max(20, limit * 3)))
         short_items = self.short_memory.tail(short_tail_n)
@@ -277,7 +321,14 @@ class MemoryManager:
                     score=score,
                     source="short",
                     tags=[str(x) for x in list(row.get("tags") or []) if str(x).strip()],
-                    metadata=dict(row.get("meta") or {}),
+                    metadata={
+                        **dict(row.get("meta") or {}),
+                        "type": str(row.get("type") or "message"),
+                        "role": str(row.get("role") or ""),
+                        "ts": str(row.get("ts") or ""),
+                    },
+                    confidence=score,
+                    priority=score,
                 )
             )
 
@@ -290,9 +341,13 @@ class MemoryManager:
         for _id, score, meta in vector_hits:
             if float(score) < threshold:
                 continue
+            if not include_pending and _is_unconfirmed_fact_metadata(meta):
+                continue
             src_text = str(meta.get("text") or "")
             if not src_text:
                 continue
+            confidence = _clamp01(float(meta.get("confidence") or score))
+            priority = _clamp01(float(meta.get("priority") or score))
             long_ranked.append(
                 MemoryItem(
                     id=str(_id),
@@ -301,6 +356,8 @@ class MemoryManager:
                     source=str(meta.get("type") or "long"),
                     tags=[str(x) for x in list(meta.get("tags") or []) if str(x).strip()],
                     metadata=dict(meta or {}),
+                    confidence=confidence,
+                    priority=priority,
                 )
             )
 
@@ -314,6 +371,7 @@ class MemoryManager:
             query_chars=len(text),
             requested_k=limit,
             threshold=round(float(threshold), 3),
+            include_pending=bool(include_pending),
             short_hits=len(short_ranked),
             vector_hits=len(long_ranked),
             returned=len(out),
@@ -322,58 +380,63 @@ class MemoryManager:
 
     def write_facts(self, facts: list[Fact], *, profile_id: str = "default") -> None:
         wrote = 0
+        indexed = 0
         for fact in list(facts or []):
             if not isinstance(fact, Fact):
+                continue
+            if self.facts_scope == "user_only" and str(fact.subject or "").strip().lower() != "user":
                 continue
             target = self.assistant_profile_store if fact.subject == "assistant" else self.user_profile_store
             target_profile_id = profile_id if fact.subject == "user" else "default"
             profile_result = target.update_fact(fact, profile_id=target_profile_id)
             status = str(profile_result.get("status") or "")
             needs_confirmation = bool(profile_result.get("needs_confirmation", False))
-
-            # Persist fact as doc + vector (versioned, not silent overwrite).
-            fact_text = f"{fact.subject}.{fact.key}={fact.value}"
             tags = ["fact", f"fact_{fact.op}", f"subject_{fact.subject}", f"key_{fact.key}"]
             if status:
                 tags.append(f"status_{status}")
             if status in {"pending", "conflict_pending"}:
                 tags.append("pending_fact")
-            if status == "confirmed":
+            if status in {"confirmed", "confirmed_by_user"}:
                 tags.append("confirmed_fact")
             if needs_confirmation:
                 tags.append("needs_confirmation")
             tags = _dedupe_tags(tags)
-
-            doc = self.long_memory.add_doc(
-                text=fact_text,
-                meta={
-                    "fact": fact.to_dict(),
-                    "status": status,
-                    "needs_confirmation": needs_confirmation,
-                    "profile_id": target_profile_id,
-                },
-                source="fact",
-                tags=tags,
-                importance=0.86 if fact.op in {"update", "remove"} else 0.72,
-                confidence=_clamp01(float(fact.confidence)),
-            )
-            self.vector_store.upsert(
-                id=f"fact:{doc.id}",
-                text=fact_text,
-                embedding=None,
-                metadata={
-                    "type": "fact",
-                    "topic": "profile",
-                    "lang": "",
-                    "user_id": target_profile_id,
-                    "doc_id": doc.id,
-                    "source": "fact",
-                    "ts": now_local_ts(),
-                    "tags": tags,
-                    "status": status,
-                    "needs_confirmation": needs_confirmation,
-                },
-            )
+            should_index_retrieval = status in {"confirmed", "confirmed_by_user"}
+            if should_index_retrieval:
+                fact_text = f"{fact.subject}.{fact.key}={fact.value}"
+                doc = self.long_memory.add_doc(
+                    text=fact_text,
+                    meta={
+                        "fact": fact.to_dict(),
+                        "status": status,
+                        "needs_confirmation": needs_confirmation,
+                        "profile_id": target_profile_id,
+                    },
+                    source="fact",
+                    tags=tags,
+                    importance=0.86 if fact.op in {"update", "remove"} else 0.72,
+                    confidence=_clamp01(float(fact.confidence)),
+                )
+                self.vector_store.upsert(
+                    id=f"fact:{doc.id}",
+                    text=fact_text,
+                    embedding=None,
+                    metadata={
+                        "type": "fact",
+                        "topic": "profile",
+                        "lang": "",
+                        "user_id": target_profile_id,
+                        "doc_id": doc.id,
+                        "source": "fact",
+                        "ts": now_local_ts(),
+                        "tags": tags,
+                        "status": status,
+                        "needs_confirmation": needs_confirmation,
+                        "confidence": _clamp01(float(fact.confidence)),
+                        "priority": _clamp01(float(fact.confidence)),
+                    },
+                )
+                indexed += 1
             self.event_store.append(
                 {
                     "type": "system",
@@ -382,7 +445,7 @@ class MemoryManager:
                         "fact": fact.to_dict(),
                         "status": status,
                         "needs_confirmation": needs_confirmation,
-                        "doc_id": doc.id,
+                        "indexed": bool(should_index_retrieval),
                         "profile_id": target_profile_id,
                     },
                     "tags": tags,
@@ -390,7 +453,7 @@ class MemoryManager:
             )
             wrote += 1
         if wrote:
-            log_json(LOGGER, "memory_write_facts", facts=wrote)
+            log_json(LOGGER, "memory_write_facts", facts=wrote, indexed=indexed)
 
     def _persist_confirmed_pending(
         self,
@@ -450,6 +513,8 @@ class MemoryManager:
                     "tags": tags,
                     "status": "confirmed_by_user",
                     "needs_confirmation": False,
+                    "confidence": confidence,
+                    "priority": confidence,
                 },
             )
             self.event_store.append(
@@ -467,6 +532,154 @@ class MemoryManager:
                 }
             )
 
+    def _confirm_pending_with_context(self, *, profile_id: str, event_id: str, confirmation_text: str) -> None:
+        context = dict(self.user_profile_store.get_confirmation_context(profile_id=profile_id) or {})
+        if not context:
+            log_json(
+                LOGGER,
+                "confirm_skipped_no_context",
+                profile_id=profile_id,
+                event_id=event_id,
+                reason="missing_context",
+            )
+            return
+
+        context_age_sec = max(0.0, time.time() - float(context.get("created_at") or 0.0))
+        ttl_sec = max(1, int(context.get("ttl_sec") or self.confirmation_ttl_sec))
+        assistant_event_id = str(context.get("assistant_event_id") or "").strip()
+        turn_distance = self._distance_from_event(assistant_event_id)
+        max_turn_distance = max(1, int(context.get("max_turn_distance") or self.confirmation_max_turn_distance))
+        key_list = [str(x).strip().lower() for x in list(context.get("keys") or []) if str(x).strip()]
+        expected_values = {
+            str(k).strip().lower(): v
+            for k, v in dict(context.get("expected_values") or {}).items()
+            if str(k).strip()
+        }
+
+        reason = ""
+        if context_age_sec > float(ttl_sec):
+            reason = "expired"
+        elif not assistant_event_id:
+            reason = "missing_assistant_event"
+        elif turn_distance is None or int(turn_distance) > int(max_turn_distance):
+            reason = "turn_distance"
+        elif not key_list:
+            reason = "missing_keys"
+
+        if reason:
+            self.user_profile_store.clear_confirmation_context(profile_id=profile_id)
+            log_json(
+                LOGGER,
+                "confirm_skipped_no_context",
+                profile_id=profile_id,
+                event_id=event_id,
+                reason=reason,
+                age_sec=round(context_age_sec, 3),
+                ttl_sec=ttl_sec,
+                turn_distance=turn_distance,
+            )
+            return
+
+        confirmed_rows = self.user_profile_store.confirm_pending(
+            profile_id=profile_id,
+            limit=max(1, len(key_list)),
+            keys=key_list,
+            expected_values=expected_values,
+        )
+        self.user_profile_store.clear_confirmation_context(profile_id=profile_id)
+        if not confirmed_rows:
+            log_json(
+                LOGGER,
+                "confirm_skipped_no_context",
+                profile_id=profile_id,
+                event_id=event_id,
+                reason="candidate_mismatch",
+                keys=key_list,
+            )
+            return
+        self._persist_confirmed_pending(
+            rows=confirmed_rows,
+            subject="user",
+            profile_id=profile_id,
+            event_id=event_id,
+        )
+        log_json(
+            LOGGER,
+            "confirm_pending_applied",
+            profile_id=profile_id,
+            event_id=event_id,
+            confirmed=len(confirmed_rows),
+            text_chars=len(str(confirmation_text or "")),
+        )
+
+    def _refresh_confirmation_context_from_assistant(
+        self,
+        *,
+        profile_id: str,
+        assistant_text: str,
+        assistant_event_id: str,
+        turn_id: Any,
+    ) -> None:
+        pending = dict(self.user_profile_store.get_pending_facts(profile_id=profile_id) or {})
+        if not pending:
+            self.user_profile_store.clear_confirmation_context(profile_id=profile_id)
+            return
+        if not _looks_like_confirmation_prompt(assistant_text):
+            return
+
+        candidates = _pending_candidates_from_map(pending)
+        if not candidates:
+            return
+        key_hints = _extract_fact_key_hints(assistant_text)
+        if key_hints:
+            keys = [key for key in candidates.keys() if key in key_hints]
+        elif len(candidates) == 1:
+            keys = list(candidates.keys())
+        else:
+            # If key is ambiguous, skip setting context to avoid accidental confirms.
+            return
+        if not keys:
+            return
+
+        expected_values = {key: candidates.get(key) for key in keys}
+        explicit_values = _extract_expected_values_from_prompt(assistant_text, keys=set(keys))
+        for key, value in explicit_values.items():
+            expected_values[key] = value
+        context = {
+            "assistant_event_id": assistant_event_id,
+            "created_at": float(time.time()),
+            "ttl_sec": int(self.confirmation_ttl_sec),
+            "max_turn_distance": int(self.confirmation_max_turn_distance),
+            "keys": list(keys),
+            "expected_values": dict(expected_values),
+            "turn_id": _safe_int(turn_id, 0),
+        }
+        self.user_profile_store.set_confirmation_context(profile_id=profile_id, context=context)
+        log_json(
+            LOGGER,
+            "confirm_context_set",
+            profile_id=profile_id,
+            assistant_event_id=assistant_event_id,
+            keys=keys,
+        )
+
+    def _distance_from_event(self, event_id: str) -> int | None:
+        key = str(event_id or "").strip()
+        if not key:
+            return None
+        scan = max(20, int(getattr(self.short_memory, "limit", 80)))
+        rows = self.short_memory.tail(scan)
+        if not rows:
+            return None
+        idx = -1
+        for i in range(len(rows) - 1, -1, -1):
+            if str(rows[i].get("id") or "").strip() == key:
+                idx = i
+                break
+        if idx < 0:
+            return None
+        return max(0, len(rows) - 1 - idx)
+
     def build_context_pack(
         self,
         query: str,
@@ -478,7 +691,9 @@ class MemoryManager:
         tail = self.short_memory.tail(max(1, int(tail_n)))
         retrieved = self.retrieve(query=query, k=k, filters=filters)
         user_summary = self._profile_summary(self.user_profile_store, "default")
-        assistant_summary = self._profile_summary(self.assistant_profile_store, "default")
+        assistant_summary = ""
+        if self.facts_scope != "user_only":
+            assistant_summary = self._profile_summary(self.assistant_profile_store, "default")
         return {
             "tail": tail,
             "retrieved": [x.to_dict() for x in retrieved],
@@ -508,16 +723,36 @@ class MemoryManager:
 
     @staticmethod
     def _profile_summary(store, profile_id: str) -> str:
-        # store.history/get is key-based; collect current profile map directly.
+        confirmed_rows: dict[str, Any] = {}
+        try:
+            confirmed_rows = dict(store.get_confirmed_facts(profile_id=profile_id))
+        except Exception:
+            confirmed_rows = {}
+        parts = []
+        for key, value in dict(confirmed_rows or {}).items():
+            if not isinstance(value, dict):
+                continue
+            status = str(value.get("status") or "confirmed").strip().lower()
+            if status not in {"confirmed", "confirmed_by_user"}:
+                continue
+            short = str(value.get("value"))
+            parts.append(f"{key}={short}")
+            if len(parts) >= 12:
+                break
+        if parts:
+            return "; ".join(parts)
+
+        # Legacy fallback if confirmed bucket is not populated yet.
         try:
             rows = store._data.get("profiles", {}).get(profile_id, {})  # noqa: SLF001
         except Exception:
             rows = {}
-        parts = []
         for key, value in dict(rows or {}).items():
             if not isinstance(value, dict):
                 continue
             if value.get("value") is None:
+                continue
+            if bool(value.get("needs_confirmation", False)):
                 continue
             short = str(value.get("value"))
             parts.append(f"{key}={short}")
@@ -709,6 +944,126 @@ def _looks_like_confirmation_message(text: str) -> bool:
     return False
 
 
+def _looks_like_confirmation_prompt(text: str) -> bool:
+    src = str(text or "").strip().lower()
+    if not src or len(src) > 400:
+        return False
+    if "?" not in src:
+        return False
+    markers = (
+        "correct",
+        "right",
+        "is that",
+        "am i right",
+        "confirm",
+        "yes or no",
+        "\u0432\u0435\u0440\u043d\u043e",
+        "\u043f\u0440\u0430\u0432\u0438\u043b\u044c\u043d\u043e",
+        "\u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438",
+        "\u044d\u0442\u043e \u0442\u0430\u043a",
+        "\u0434\u0430 \u0438\u043b\u0438 \u043d\u0435\u0442",
+    )
+    return any(marker in src for marker in markers)
+
+
+def _extract_fact_key_hints(text: str) -> set[str]:
+    src = str(text or "").lower()
+    hints: set[str] = set()
+    patterns = {
+        "name": (r"\bname\b", r"\bcalled\b", r"\b\u0438\u043c\u044f\b", r"\b\u0437\u043e\u0432\u0443\u0442\b"),
+        "age": (r"\bage\b", r"\byears old\b", r"\b\u0432\u043e\u0437\u0440\u0430\u0441\u0442\b", r"\b\u043b\u0435\u0442\b"),
+        "birth_year": (
+            r"\bbirth year\b",
+            r"\bborn in\b",
+            r"\bborn\b",
+            r"\b\u0433\u043e\u0434 \u0440\u043e\u0436\u0434\u0435\u043d\u0438\u044f\b",
+            r"\b\u0440\u043e\u0434\u0438\u043b",
+        ),
+        "location": (r"\blocation\b", r"\bfrom\b", r"\blive\b", r"\b\u0433\u043e\u0440\u043e\u0434\b", r"\b\u0436\u0438\u0432\u0443\b"),
+        "likes": (r"\blike\b", r"\blikes\b", r"\b\u043b\u044e\u0431\u043b", r"\b\u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f\b"),
+        "dislikes": (r"\bdislike\b", r"\bhate\b", r"\b\u043d\u0435 \u043b\u044e\u0431\u043b", r"\b\u043d\u0435\u043d\u0430\u0432\u0438\u0436\u0443\b"),
+        "device": (r"\bdevice\b", r"\biphone\b", r"\bandroid\b", r"\bwindows\b", r"\blinux\b", r"\bmac\b"),
+    }
+    for key, rows in patterns.items():
+        for pattern in rows:
+            if re.search(pattern, src):
+                hints.add(key)
+                break
+    return hints
+
+
+def _extract_expected_values_from_prompt(text: str, *, keys: set[str]) -> dict[str, Any]:
+    src = str(text or "").strip()
+    out: dict[str, Any] = {}
+    if not src:
+        return out
+    if "birth_year" in keys:
+        m = re.search(r"\b(19\d{2}|20\d{2})\b", src)
+        if m:
+            out["birth_year"] = str(m.group(1))
+    if "age" in keys:
+        m = re.search(r"\b(\d{1,3})\s*(?:years?\s*old|\u043b\u0435\u0442)?\b", src, re.I)
+        if m:
+            out["age"] = str(m.group(1))
+    if "name" in keys:
+        m = re.search(r"\b(?:name is|called|zovut|\u0437\u043e\u0432\u0443\u0442)\s+([A-Za-z\u0400-\u04ff' -]{2,32})", src, re.I)
+        if m:
+            out["name"] = str(m.group(1)).strip()
+    if "device" in keys:
+        m = re.search(r"\b(iphone|android|windows|linux|mac(?:book|os)?)\b", src, re.I)
+        if m:
+            out["device"] = str(m.group(1)).strip().lower()
+    return out
+
+
+def _pending_candidates_from_map(payload: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for raw_key, raw_items in dict(payload or {}).items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        items = [dict(x) for x in list(raw_items or []) if isinstance(x, dict)]
+        if not items:
+            continue
+        items.sort(
+            key=lambda x: (
+                int(x.get("count") or 0),
+                float(x.get("confidence") or 0.0),
+                parse_time_to_epoch(x.get("updated_at"), 0.0),
+            ),
+            reverse=True,
+        )
+        candidate = dict(items[0] or {})
+        if "value" not in candidate:
+            continue
+        out[key] = candidate.get("value")
+    return out
+
+
+def _is_unconfirmed_fact_metadata(metadata: dict[str, Any]) -> bool:
+    meta = dict(metadata or {})
+    if str(meta.get("type") or "").strip().lower() != "fact":
+        return False
+    status = str(meta.get("status") or "").strip().lower()
+    if not status:
+        return True
+    return status not in {"confirmed", "confirmed_by_user"}
+
+
+def _normalize_facts_scope(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "user_only":
+        return "user_only"
+    return "all"
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
 def _text_similarity(a: str, b: str) -> float:
     ta = _tokens(a)
     tb = _tokens(b)
@@ -726,4 +1081,5 @@ def _text_similarity(a: str, b: str) -> float:
 def _tokens(value: str) -> set[str]:
     import re
 
-    return {x.lower() for x in re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", str(value or "")) if x}
+    return {x.lower() for x in re.findall(r"[A-Za-z\u0400-\u04ff0-9_]+", str(value or "")) if x}
+

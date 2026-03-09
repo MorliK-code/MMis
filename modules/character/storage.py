@@ -239,16 +239,67 @@ class CharacterStorage:
     def load_character(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
         self.ensure_character_structure(cid)
-        path = self.character_dir(cid) / "character.json"
-        payload = _read_json(path)
+        payload = self._sync_runtime_character_from_specs(cid)
         if not isinstance(payload, dict):
             payload = {}
-        payload.setdefault("id", cid)
+        payload["id"] = _safe_id(payload.get("id") or payload.get("character_id") or cid)
+        payload["character_id"] = str(payload.get("character_id") or payload.get("id") or cid)
         payload.setdefault("name", _character_name(cid))
         payload.setdefault("version", "1.0.0")
         payload.setdefault("default_mood", "thoughtful")
-        payload.setdefault("llm_profile", "BALANCED")
+        llm_profile = str(payload.get("llm_profile") or payload.get("model_profile") or "BALANCED").strip().upper() or "BALANCED"
+        payload["llm_profile"] = llm_profile
+        payload["model_profile"] = str(payload.get("model_profile") or llm_profile).strip().upper() or llm_profile
         return payload
+
+    def _sync_runtime_character_from_specs(self, character_id: str) -> dict[str, Any]:
+        cid = _safe_id(character_id)
+        runtime_path = self.character_dir(cid) / "character.json"
+        spec_path = self.character_spec_dir(cid) / "character.json"
+        runtime_payload = _read_json(runtime_path)
+        if not isinstance(runtime_payload, dict):
+            runtime_payload = {}
+        spec_payload = _read_json(spec_path)
+        if not isinstance(spec_payload, dict):
+            spec_payload = {}
+        spec_normalized = self._normalize_character_payload(spec_payload, fallback_id=cid)
+
+        merged = dict(runtime_payload)
+        if spec_normalized:
+            # specs/characters is source-of-truth for character settings.
+            merged.update(spec_normalized)
+        merged = self._normalize_character_payload(merged, fallback_id=cid)
+
+        if not runtime_payload or merged != runtime_payload:
+            _write_json(runtime_path, merged)
+        return merged
+
+    @staticmethod
+    def _normalize_character_payload(payload: dict[str, Any], *, fallback_id: str) -> dict[str, Any]:
+        row = dict(payload or {})
+        cid = _safe_id(row.get("id") or row.get("character_id") or fallback_id)
+        name = str(row.get("name") or row.get("display_name") or _character_name(cid)).strip() or _character_name(cid)
+        version = str(row.get("version") or "1.0.0").strip() or "1.0.0"
+        default_mood = str(row.get("default_mood") or "thoughtful").strip() or "thoughtful"
+        llm_profile = str(row.get("llm_profile") or row.get("model_profile") or "BALANCED").strip().upper() or "BALANCED"
+
+        out = dict(row)
+        out["id"] = cid
+        out["character_id"] = str(row.get("character_id") or cid)
+        out["name"] = name
+        out["version"] = version
+        out["default_mood"] = default_mood
+        out["llm_profile"] = llm_profile
+        out["model_profile"] = str(row.get("model_profile") or llm_profile).strip().upper() or llm_profile
+
+        if "default_mode" in row:
+            mode = str(row.get("default_mode") or "").strip().lower()
+            if mode:
+                out["default_mode"] = mode
+        locks = row.get("locks")
+        if isinstance(locks, dict):
+            out["locks"] = dict(locks)
+        return out
 
     def load_state(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)

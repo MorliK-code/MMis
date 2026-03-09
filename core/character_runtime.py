@@ -326,7 +326,9 @@ class CharacterRuntime:
 
         # Caches
         self._meta_cache: dict[str, CharacterMeta] = {}
+        self._meta_cache_revision: dict[str, str] = {}
         self._profiles_cache: dict[str, PersonalityProfile] = {}
+        self._profiles_cache_revision: dict[str, str] = {}
         cfg = load_config()
         default_path = cfg.memory_dir / "brain_state.json"
         self.state_path = Path(state_path).expanduser() if state_path is not None else default_path
@@ -780,6 +782,10 @@ class CharacterRuntime:
             )
             merged["active_personality_id"] = str(merged.get("active_personality_id") or "default").strip().lower() or "default"
             merged["active_character_id"] = str(merged.get("active_character_id") or "asya").strip().lower() or "asya"
+            merged["quality_profile"] = self._resolve_quality_profile_from_character(
+                character_id=merged.get("active_character_id"),
+                fallback=merged.get("quality_profile"),
+            )
             merged["character_locked"] = bool(merged.get("character_locked", False))
             merged["character_last_switch_ts"] = to_local_iso(merged.get("character_last_switch_ts"), default="")
             merged["personality_blend"] = self._coerce_personality_blend(merged.get("personality_blend"))
@@ -1136,6 +1142,10 @@ class CharacterRuntime:
         before_state = self._debug_state_snapshot()
         cid = str(character_id or "asya").strip().lower() or "asya"
         self._state["active_character_id"] = cid
+        self._state["quality_profile"] = self._resolve_quality_profile_from_character(
+            character_id=cid,
+            fallback=self._state.get("quality_profile"),
+        )
         if locked is not None:
             self._state["character_locked"] = bool(locked)
         if switch_ts is not None:
@@ -1312,6 +1322,11 @@ class CharacterRuntime:
             merged = dict(self._state)
             if isinstance(state, dict):
                 merged.update(dict(state))
+            active_character_id = str(merged.get("active_character_id") or "asya").strip().lower() or "asya"
+            effective_quality_profile = self._resolve_quality_profile_from_character(
+                character_id=active_character_id,
+                fallback=merged.get("quality_profile"),
+            )
             actions = self._coerce_last_actions(merged.get("last_actions"))
             tail_actions = actions[-max(1, int(max_actions)) :]
             feedback: list[str] = []
@@ -1325,20 +1340,54 @@ class CharacterRuntime:
                     break
             active_tasks = [dict(x) for x in self._coerce_dict_list(merged.get("active_tasks"))][:8]
             return {
-                "active_character_id": str(merged.get("active_character_id") or "asya").strip().lower() or "asya",
+                "active_character_id": active_character_id,
                 "active_mode": self._normalize_active_mode(merged.get("active_mode") or merged.get("mode") or "chatting"),
                 "mode_lock": self._coerce_bool(merged.get("mode_lock"), default=False),
                 "web_mode": self._coerce_web_mode(merged.get("web_mode")),
                 "web_auto_profile": self._coerce_web_auto_profile(merged.get("web_auto_profile")),
                 "thinking_enabled": self._coerce_bool(merged.get("thinking_enabled"), default=False),
                 "output_format": self._coerce_output_format(merged.get("output_format")),
-                "quality_profile": self._normalize_profile(merged.get("quality_profile")),
+                "quality_profile": effective_quality_profile,
                 "active_goal": str(merged.get("active_goal") or "").strip(),
                 "active_tasks": active_tasks,
                 "last_signals": dict(merged.get("last_signals") or {}),
                 "feedback": feedback,
                 "last_actions": tail_actions,
             }
+
+    @staticmethod
+    def _character_cache_revision(payload: dict[str, Any] | None) -> str:
+        row = dict(payload or {})
+        marker = {
+            "id": str(row.get("id") or row.get("character_id") or "").strip().lower(),
+            "name": str(row.get("name") or "").strip(),
+            "version": str(row.get("version") or "").strip(),
+            "default_mood": str(row.get("default_mood") or "").strip(),
+            "default_mode": str(row.get("default_mode") or "").strip(),
+            "llm_profile": str(row.get("llm_profile") or "").strip().upper(),
+            "model_profile": str(row.get("model_profile") or "").strip().upper(),
+            "system_prompt": str(row.get("system_prompt") or "").strip(),
+            "style_prompt": str(row.get("style_prompt") or "").strip(),
+            "rules_prompt": str(row.get("rules_prompt") or "").strip(),
+            "voice_style": str(row.get("voice_style") or "").strip(),
+            "locks": dict(row.get("locks") or {}),
+        }
+        try:
+            raw = json.dumps(marker, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            raw = str(marker)
+        return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
+
+    def _resolve_quality_profile_from_character(self, *, character_id: Any, fallback: Any = "BALANCED") -> str:
+        cid = str(character_id or "").strip().lower()
+        if not cid:
+            return self._normalize_profile(fallback)
+        try:
+            payload = self.storage.load_character(cid)
+            value = payload.get("llm_profile") or payload.get("model_profile") or fallback
+        except Exception:
+            value = fallback
+        return self._normalize_profile(value)
 
     def _tail_character_events(self, character_id: str, *, limit: int = 8) -> list[dict[str, Any]]:
         cid = self._validate_character(character_id)
@@ -1616,7 +1665,13 @@ class CharacterRuntime:
         if previous and previous != target:
             self.storage.append_event(previous, {"type": "switch_out", "source": "manual", "to": target})
         self.storage.append_event(target, {"type": "switch", "source": "manual", "target": target})
-        self._meta_cache.pop(target, None)
+        for cid in {previous, target}:
+            if not cid:
+                continue
+            self._meta_cache.pop(cid, None)
+            self._meta_cache_revision.pop(cid, None)
+            self._profiles_cache.pop(cid, None)
+            self._profiles_cache_revision.pop(cid, None)
         with self._lock:
             self._set_active_character_state(target, locked=locked, switch_ts=switch_ts)
             self._state["active_personality_id"] = target
@@ -1626,11 +1681,12 @@ class CharacterRuntime:
     def get_meta(self, character_id: str | None = None) -> CharacterMeta:
         """Получить метаданные персонажа."""
         cid = self._validate_character(character_id)
-        if cid in self._meta_cache:
-            return self._meta_cache[cid]
-
         character = self.storage.load_character(cid)
-        profile = self._load_profile(cid)
+        revision = self._character_cache_revision(character)
+        cached_meta = self._meta_cache.get(cid)
+        if cached_meta is not None and self._meta_cache_revision.get(cid) == revision:
+            return cached_meta
+        profile = self._load_profile(cid, character=character, revision=revision)
 
         meta = CharacterMeta(
             id=cid,
@@ -1647,28 +1703,37 @@ class CharacterRuntime:
             triggers=dict(profile.triggers) if profile else {},
         )
         self._meta_cache[cid] = meta
+        self._meta_cache_revision[cid] = revision
         return meta
 
-    def _load_profile(self, character_id: str) -> PersonalityProfile | None:
+    def _load_profile(
+        self,
+        character_id: str,
+        *,
+        character: dict[str, Any] | None = None,
+        revision: str | None = None,
+    ) -> PersonalityProfile | None:
         """Загрузить профиль личности."""
         cid = self._validate_character(character_id)
-        if cid in self._profiles_cache:
-            return self._profiles_cache[cid]
-
-        character = self.storage.load_character(cid)
+        payload = dict(character or {}) if isinstance(character, dict) else self.storage.load_character(cid)
+        cache_revision = str(revision or self._character_cache_revision(payload))
+        cached_profile = self._profiles_cache.get(cid)
+        if cached_profile is not None and self._profiles_cache_revision.get(cid) == cache_revision:
+            return cached_profile
         profile = PersonalityProfile(
             id=cid,
-            name=str(character.get("name") or cid).strip() or cid,
-            version=str(character.get("version") or "1.0.0").strip() or "1.0.0",
-            system_prompt=str(character.get("system_prompt") or "").strip(),
-            style_prompt=str(character.get("style_prompt") or "").strip(),
-            rules_prompt=str(character.get("rules_prompt") or "").strip(),
-            voice_style=str(character.get("voice_style") or "neutral").strip(),
-            llm_profile=str(character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED",
+            name=str(payload.get("name") or cid).strip() or cid,
+            version=str(payload.get("version") or "1.0.0").strip() or "1.0.0",
+            system_prompt=str(payload.get("system_prompt") or "").strip(),
+            style_prompt=str(payload.get("style_prompt") or "").strip(),
+            rules_prompt=str(payload.get("rules_prompt") or "").strip(),
+            voice_style=str(payload.get("voice_style") or "neutral").strip(),
+            llm_profile=str(payload.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED",
             traits={},
             triggers={},
         )
         self._profiles_cache[cid] = profile
+        self._profiles_cache_revision[cid] = cache_revision
         return profile
 
     # -------------------------------------------------------------------------
@@ -1678,8 +1743,6 @@ class CharacterRuntime:
     def get_profile(self, profile_id: str) -> PersonalityProfile:
         """Получить профиль личности."""
         key = str(profile_id or "").strip().lower()
-        if key in self._profiles_cache:
-            return self._profiles_cache[key]
         return self._load_profile(key) or self._load_profile("default")
 
     def decide_personality(
@@ -2793,7 +2856,7 @@ class CharacterRuntime:
             raw_items.append(row)
 
         raw_items.sort(
-            key=lambda x: (x["priority"], x["confidence"], len(x["text"])),
+            key=lambda x: (x["priority"], x["confidence"], x["score"], x["recency_ts"], len(x["text"])),
             reverse=True,
         )
 
@@ -2940,7 +3003,7 @@ class CharacterRuntime:
         out = dict(blocks)
         while self._full_token_count(out) > budgets.total_tokens:
             changed = False
-            for key in ("retrieved_memories", "conversation_tail", "long_summary", "state_summary", "persona", "context_tags"):
+            for key in ("conversation_tail", "long_summary", "state_summary", "persona", "context_tags", "retrieved_memories"):
                 current = out.get(key, "")
                 if not current or current == "- none":
                     continue
@@ -3396,7 +3459,7 @@ class CharacterRuntime:
     def _normalize_profile(value: Any) -> str:
         """Нормализовать профиль."""
         text = str(value or "BALANCED").strip().upper()
-        valid = {"FAST", "BALANCED", "QUALITY", "ECONOM", "AUTONOMOUS"}
+        valid = {"FAST", "BALANCED", "QUALITY", "ECONOM", "AUTONOMOUS", "ASYA"}
         return text if text in valid else "BALANCED"
 
     @staticmethod
@@ -3637,20 +3700,50 @@ def _coerce_policies(policies) -> dict[str, Any]:
 def _coerce_memory(item) -> dict[str, Any]:
     """Привести memory item."""
     if isinstance(item, dict):
+        metadata = _as_dict(item.get("metadata"))
+        score_raw = item.get("score") if item.get("score") is not None else metadata.get("score")
+        if score_raw is None:
+            score_raw = 0.0
+        score = CharacterRuntime._clamp01(CharacterRuntime._to_float(score_raw, 0.0))
+        confidence_raw = item.get("confidence") if item.get("confidence") is not None else metadata.get("confidence")
+        priority_raw = item.get("priority") if item.get("priority") is not None else metadata.get("priority")
+        confidence = CharacterRuntime._to_float(confidence_raw, -1.0)
+        priority = CharacterRuntime._to_float(priority_raw, -1.0)
+        if confidence < 0.0:
+            confidence = score
+        if priority < 0.0:
+            priority = score
+        ts_value = (
+            item.get("ts")
+            if item.get("ts") is not None
+            else item.get("updated_at")
+            if item.get("updated_at") is not None
+            else metadata.get("ts")
+            if metadata.get("ts") is not None
+            else metadata.get("updated_at")
+        )
+        recency_ts = parse_time_to_epoch(
+            ts_value,
+            0.0,
+        )
         return {
             "text": _normalize_text(item.get("text") or item.get("content") or ""),
             "source": _normalize_text(item.get("source") or ""),
             "topic": _normalize_text(item.get("topic") or ""),
-            "confidence": float(item.get("confidence") or 0.0),
-            "priority": float(item.get("priority") or 0.0),
+            "score": score,
+            "confidence": CharacterRuntime._clamp01(confidence),
+            "priority": CharacterRuntime._clamp01(priority),
+            "recency_ts": float(recency_ts),
             "relevant": bool(item.get("relevant", True)),
         }
     return {
         "text": _normalize_text(item),
         "source": "",
         "topic": "",
+        "score": 0.5,
         "confidence": 0.5,
         "priority": 0.5,
+        "recency_ts": 0.0,
         "relevant": True,
     }
 
@@ -3706,7 +3799,11 @@ def _shrink_block(text: str, block_type: str) -> str:
 
     lines = text.split("\n")
     if len(lines) <= 2:
-        return "- none" if block_type in ("retrieved_memories", "conversation_tail") else text
+        if block_type == "conversation_tail":
+            return "- none"
+        if block_type == "retrieved_memories":
+            return str(lines[0]).strip() if lines else "- none"
+        return text
 
     # Remove every other line
     keep = [lines[0]]
@@ -3715,6 +3812,8 @@ def _shrink_block(text: str, block_type: str) -> str:
             keep.append(line)
 
     if len(keep) <= 2:
+        if block_type == "retrieved_memories":
+            return str(keep[0]).strip() if keep else "- none"
         return "- none"
     return "\n".join(keep)
 

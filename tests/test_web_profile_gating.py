@@ -61,6 +61,15 @@ class WebProfileGatingTests(unittest.TestCase):
             stages = pipeline._resolve_stage_names(stage_profile, {}, {})  # type: ignore[attr-defined]
             self.assertNotIn("web_retrieve", stages, msg=f"profile={profile} should not include web_retrieve")
 
+    def test_personality_profile_has_priority_over_meta_quality_profile(self) -> None:
+        pipeline = self._build_pipeline()
+        resolved = pipeline._resolve_profile(  # type: ignore[attr-defined]
+            meta={"quality_profile": "FAST", "personality_llm_profile": "QUALITY"},
+            state={"quality_profile": "FAST"},
+            policies={},
+        )
+        self.assertEqual(str(resolved), "QUALITY")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-03-06T14:14:41+02:00",
-  "updated_at": "2026-03-08T17:16:25+02:00",
+  "updated_at": "2026-03-09T16:40:29+02:00",
   "cases": [
     {
       "test_num": 1,
@@ -1311,6 +1311,160 @@
       "test_name": "test_persona_switch_targets_character",
       "status": "passed",
       "duration_ms": 76.063
+    },
+    {
+      "test_num": 120,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_character_profile_sync.CharacterProfileSyncTests.test_runtime_meta_refreshes_after_specs_change",
+      "module": "test_character_profile_sync",
+      "class": "CharacterProfileSyncTests",
+      "test_name": "test_runtime_meta_refreshes_after_specs_change",
+      "status": "passed",
+      "duration_ms": 109.021
+    },
+    {
+      "test_num": 121,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_character_profile_sync.CharacterProfileSyncTests.test_storage_syncs_runtime_character_from_specs",
+      "module": "test_character_profile_sync",
+      "class": "CharacterProfileSyncTests",
+      "test_name": "test_storage_syncs_runtime_character_from_specs",
+      "status": "passed",
+      "duration_ms": 70.319
+    },
+    {
+      "test_num": 122,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_main_profile_precedence.MainProfilePrecedenceTests.test_brain_meta_preserves_asya_profile_name",
+      "module": "test_main_profile_precedence",
+      "class": "MainProfilePrecedenceTests",
+      "test_name": "test_brain_meta_preserves_asya_profile_name",
+      "status": "passed",
+      "duration_ms": 0.933
+    },
+    {
+      "test_num": 123,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_main_profile_precedence.MainProfilePrecedenceTests.test_brain_meta_uses_character_profile_over_config",
+      "module": "test_main_profile_precedence",
+      "class": "MainProfilePrecedenceTests",
+      "test_name": "test_brain_meta_uses_character_profile_over_config",
+      "status": "passed",
+      "duration_ms": 0.732
+    },
+    {
+      "test_num": 124,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_web_profile_gating.WebProfileGatingTests.test_personality_profile_has_priority_over_meta_quality_profile",
+      "module": "test_web_profile_gating",
+      "class": "WebProfileGatingTests",
+      "test_name": "test_personality_profile_has_priority_over_meta_quality_profile",
+      "status": "passed",
+      "duration_ms": 29.034
+    },
+    {
+      "test_num": 125,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_web_profile_gating.WebProfileGatingTests.test_web_stage_disabled_for_fast_econom_autonomous",
+      "module": "test_web_profile_gating",
+      "class": "WebProfileGatingTests",
+      "test_name": "test_web_stage_disabled_for_fast_econom_autonomous",
+      "status": "passed",
+      "duration_ms": 39.302
+    },
+    {
+      "test_num": 126,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_web_profile_gating.WebProfileGatingTests.test_web_stage_enabled_for_balanced_quality_asya",
+      "module": "test_web_profile_gating",
+      "class": "WebProfileGatingTests",
+      "test_name": "test_web_stage_enabled_for_balanced_quality_asya",
+      "status": "passed",
+      "duration_ms": 30.026
+    },
+    {
+      "test_num": 127,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_chat_meta_contains_profile_generation_params",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_chat_meta_contains_profile_generation_params",
+      "status": "passed",
+      "duration_ms": 11.923
+    },
+    {
+      "test_num": 128,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_chat_meta_uses_get_profile_source_of_truth",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_chat_meta_uses_get_profile_source_of_truth",
+      "status": "passed",
+      "duration_ms": 5.12
+    },
+    {
+      "test_num": 129,
+      "timestamp": "2026-03-09T16:40:21+02:00",
+      "pid": 41304,
+      "test_id": "test_api_profile_meta.ApiProfileMetaTests.test_stream_meta_contains_profile_generation_params",
+      "module": "test_api_profile_meta",
+      "class": "ApiProfileMetaTests",
+      "test_name": "test_stream_meta_contains_profile_generation_params",
+      "status": "passed",
+      "duration_ms": 12.03
+    },
+    {
+      "test_num": 130,
+      "timestamp": "2026-03-09T16:40:29+02:00",
+      "pid": 25164,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_append_event_writes_to_logs_folder",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_append_event_writes_to_logs_folder",
+      "status": "passed",
+      "duration_ms": 51.973
+    },
+    {
+      "test_num": 131,
+      "timestamp": "2026-03-09T16:40:29+02:00",
+      "pid": 25164,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_default_root_is_not_data_characters",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_default_root_is_not_data_characters",
+      "status": "passed",
+      "duration_ms": 1.874
+    },
+    {
+      "test_num": 132,
+      "timestamp": "2026-03-09T16:40:29+02:00",
+      "pid": 25164,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_explicit_legacy_root_is_redirected_to_characters_runtime",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_explicit_legacy_root_is_redirected_to_characters_runtime",
+      "status": "passed",
+      "duration_ms": 2.093
+    },
+    {
+      "test_num": 133,
+      "timestamp": "2026-03-09T16:40:29+02:00",
+      "pid": 25164,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_runtime_reads_character_events_from_logs_folder",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_runtime_reads_character_events_from_logs_folder",
+      "status": "passed",
+      "duration_ms": 70.652
     }
   ]
 }

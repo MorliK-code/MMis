@@ -2718,12 +2718,19 @@ class ResponsePipeline:
         studio_gen = _as_dict(_as_dict(state).get(StudioGenerator.KEY))
         if bool(studio_gen.get("active", False)):
             return PROFILE_AUTONOMOUS
+        meta_map = _as_dict(meta)
+        state_map = _as_dict(state)
+        policies_map = _as_dict(policies)
         preferred = _pick(
-            _as_dict(meta).get("profile"),
-            _as_dict(meta).get("quality_profile"),
-            _as_dict(state).get("quality_profile"),
-            _as_dict(policies).get("profile"),
-            _as_dict(policies).get("quality_profile"),
+            meta_map.get("profile"),
+            meta_map.get("personality_llm_profile"),
+            meta_map.get("llm_profile"),
+            state_map.get("personality_llm_profile"),
+            state_map.get("llm_profile"),
+            meta_map.get("quality_profile"),
+            state_map.get("quality_profile"),
+            policies_map.get("profile"),
+            policies_map.get("quality_profile"),
             PROFILE_BALANCED,
         )
         norm = str(preferred or PROFILE_BALANCED).strip().upper()

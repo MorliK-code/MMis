@@ -163,6 +163,10 @@ class Brain:
         state_map.setdefault("web_auto_profile", state_snapshot.web_auto_profile)
         state_map.setdefault("thinking_enabled", state_snapshot.thinking_enabled)
         state_map.setdefault("output_format", state_snapshot.output_format)
+        character_quality_profile = self._character_quality_profile(state_snapshot=state_snapshot, state_map=state_map)
+        if character_quality_profile:
+            state_map["quality_profile"] = character_quality_profile
+            state_map["personality_llm_profile"] = character_quality_profile
 
         retrieved_memories = meta_map.get("retrieved_memories", state_snapshot.retrieved_memories)
         traits = meta_map.get("traits", state_snapshot.traits)
@@ -172,7 +176,9 @@ class Brain:
         meta_for_pipeline.setdefault("memory_manager", self.memory_manager)
         meta_for_pipeline.setdefault("conversation_id", state_snapshot.conversation_id)
         meta_for_pipeline.setdefault("turn_id", state_snapshot.turn_id)
-        meta_for_pipeline.setdefault("quality_profile", state_snapshot.quality_profile)
+        if character_quality_profile:
+            meta_for_pipeline.setdefault("personality_llm_profile", character_quality_profile)
+        meta_for_pipeline.setdefault("quality_profile", character_quality_profile or state_snapshot.quality_profile)
         meta_for_pipeline.setdefault("active_mode", state_snapshot.active_mode)
         meta_for_pipeline.setdefault("mode_lock", state_snapshot.mode_lock)
         meta_for_pipeline.setdefault("output_format", state_snapshot.output_format)
@@ -592,6 +598,29 @@ class Brain:
         except Exception:
             out["confidence"] = 0.0
         return out
+
+    def _character_quality_profile(self, *, state_snapshot, state_map: dict[str, Any]) -> str:
+        candidate_ids = [
+            state_map.get("active_character_id"),
+            state_map.get("active_personality_id"),
+            getattr(state_snapshot, "active_character_id", ""),
+            getattr(state_snapshot, "active_personality_id", ""),
+        ]
+        cid = next((str(x or "").strip() for x in candidate_ids if str(x or "").strip()), "")
+        if not cid:
+            return ""
+        try:
+            meta = self.state_manager.get_meta(cid)
+            raw = str(getattr(meta, "llm_profile", "") or "").strip().upper()
+        except Exception:
+            raw = ""
+        if not raw:
+            return ""
+        if raw == "ECONOM":
+            return "FAST"
+        if raw in {"FAST", "BALANCED", "QUALITY", "ASYA", "AUTONOMOUS"}:
+            return raw
+        return ""
 
     @staticmethod
     def _merge_turn_meta(

@@ -27,6 +27,7 @@ class _BaseProfileStore:
             "versions": {},
             "pending_facts": {},
             "confirmed_facts": {},
+            "confirmation_context": {},
         }
         self.load()
 
@@ -261,9 +262,43 @@ class _BaseProfileStore:
             row = dict(self._data.get("confirmed_facts", {}).get(pid, {}))
             return _deepcopy(row)
 
-    def confirm_pending(self, profile_id: str = "default", *, limit: int = 4) -> list[dict[str, Any]]:
+    def set_confirmation_context(self, profile_id: str = "default", context: dict[str, Any] | None = None) -> None:
+        pid = _profile_id(profile_id)
+        row = dict(context or {})
+        with self._lock:
+            root = self._data.setdefault("confirmation_context", {})
+            if row:
+                root[pid] = row
+            else:
+                root.pop(pid, None)
+            self.save()
+
+    def get_confirmation_context(self, profile_id: str = "default") -> dict[str, Any]:
+        pid = _profile_id(profile_id)
+        with self._lock:
+            root = dict(self._data.get("confirmation_context", {}))
+            return _deepcopy(dict(root.get(pid) or {}))
+
+    def clear_confirmation_context(self, profile_id: str = "default") -> None:
+        self.set_confirmation_context(profile_id=profile_id, context={})
+
+    def confirm_pending(
+        self,
+        profile_id: str = "default",
+        *,
+        limit: int = 4,
+        keys: list[str] | None = None,
+        expected_values: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         pid = _profile_id(profile_id)
         max_items = max(1, int(limit))
+        key_filter = {_key(x) for x in list(keys or []) if _key(x)}
+        expected_map: dict[str, Any] = {}
+        for raw_key, raw_value in dict(expected_values or {}).items():
+            key_norm = _key(raw_key)
+            if not key_norm:
+                continue
+            expected_map[key_norm] = raw_value
         with self._lock:
             pending_root = self._data.setdefault("pending_facts", {})
             confirmed_root = self._data.setdefault("confirmed_facts", {})
@@ -277,7 +312,15 @@ class _BaseProfileStore:
 
             candidates: list[tuple[str, dict[str, Any]]] = []
             for key, items in pending_profile.items():
-                picked = self._pick_pending_candidate(list(items or []))
+                if key_filter and str(key) not in key_filter:
+                    continue
+                item_rows = [dict(x) for x in list(items or []) if isinstance(x, dict)]
+                expected_value = expected_map.get(str(key)) if expected_map else None
+                if expected_map and str(key) in expected_map:
+                    matched = [dict(x) for x in item_rows if _value_equals(x.get("value"), expected_value)]
+                    picked = self._pick_pending_candidate(matched)
+                else:
+                    picked = self._pick_pending_candidate(item_rows)
                 if not picked:
                     continue
                 candidates.append((str(key), dict(picked)))
@@ -431,6 +474,7 @@ class _BaseProfileStore:
                 "versions": dict(payload.get("versions") or {}),
                 "pending_facts": dict(payload.get("pending_facts") or {}),
                 "confirmed_facts": dict(payload.get("confirmed_facts") or {}),
+                "confirmation_context": dict(payload.get("confirmation_context") or {}),
             }
 
     def save(self) -> None:

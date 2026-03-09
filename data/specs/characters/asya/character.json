@@ -1,12 +1,9 @@
 {
   "schema_version": 1,
   "character_id": "asya",
-  "name": "Ася",
+  "name": "Asya",
   "default_mood": "neutral",
   "default_mode": "chatting",
   "model_profile": "ASYA",
-  "locks": {
-    "feminine": true,
-    "informal_you": true
-  }
+  "custom_from_spec": "enabled"
 }

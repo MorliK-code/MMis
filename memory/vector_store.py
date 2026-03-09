@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -8,9 +9,12 @@ from threading import RLock
 from typing import Any
 
 from config.settings import load_config
+from utils.logger import get_logger, log_json
 
 
-_TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9_]+")
+_TOKEN_RE = re.compile(r"[A-Za-z\u0400-\u04ff0-9_]+")
+EMBED_VERSION = "blake2b64_v1"
+LOGGER = get_logger(__name__)
 
 
 class VectorStore:
@@ -23,6 +27,7 @@ class VectorStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
         self.dim = max(32, int(dim))
+        self.embed_version = EMBED_VERSION
         self._lock = RLock()
         self._records: dict[str, dict[str, Any]] = {}
         self.load()
@@ -47,9 +52,18 @@ class VectorStore:
             "embedding": vector,
             "metadata": dict(metadata or {}),
         }
+        row["metadata"].setdefault("embed_version", self.embed_version)
         with self._lock:
             self._records[key] = row
             self.save()
+        log_json(
+            LOGGER,
+            "vector_upsert",
+            id=key,
+            embed_version=self.embed_version,
+            dim=self.dim,
+            text_chars=len(str(text or "")),
+        )
 
     def query(self, query_embedding: list[float], k: int = 5, filters: dict[str, Any] | None = None) -> list[tuple[str, float, dict[str, Any]]]:
         q = _normalize_vector(list(query_embedding or []), dim=self.dim)
@@ -72,9 +86,20 @@ class VectorStore:
             payload = dict(metadata)
             payload.setdefault("text", str(row.get("text") or ""))
             payload.setdefault("distance", 1.0 - score)
+            payload.setdefault("embed_version", self.embed_version)
             scored.append((str(row.get("id") or ""), float(score), payload))
         scored.sort(key=lambda x: x[1], reverse=True)
-        return scored[:count]
+        out = scored[:count]
+        log_json(
+            LOGGER,
+            "vector_query",
+            k=count,
+            returned=len(out),
+            filters=sorted([str(x) for x in filt.keys()]),
+            embed_version=self.embed_version,
+            dim=self.dim,
+        )
+        return out
 
     def query_text(self, query_text: str, k: int = 5, filters: dict[str, Any] | None = None) -> list[tuple[str, float, dict[str, Any]]]:
         vector = embed_text(str(query_text or ""), dim=self.dim)
@@ -103,6 +128,10 @@ class VectorStore:
             payload = json.loads(self.path.read_text(encoding="utf-8-sig"))
         except Exception:
             return
+        if isinstance(payload, dict):
+            loaded_embed_version = str(payload.get("embed_version") or "").strip()
+            if loaded_embed_version:
+                self.embed_version = loaded_embed_version
         rows = payload.get("records") if isinstance(payload, dict) else payload
         if not isinstance(rows, list):
             return
@@ -114,17 +143,19 @@ class VectorStore:
                 key = str(row.get("id") or "").strip()
                 if not key:
                     continue
-                self._records[key] = {
+                record = {
                     "id": key,
                     "text": str(row.get("text") or ""),
                     "embedding": _normalize_vector(list(row.get("embedding") or []), dim=self.dim),
                     "metadata": dict(row.get("metadata") or {}),
                 }
+                record["metadata"].setdefault("embed_version", self.embed_version)
+                self._records[key] = record
 
     def save(self) -> None:
         with self._lock:
             rows = list(self._records.values())
-        payload = {"records": rows}
+        payload = {"embed_version": self.embed_version, "records": rows}
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -135,7 +166,8 @@ def embed_text(text: str, *, dim: int = 128) -> list[float]:
     if not tokens:
         return vec
     for token in tokens:
-        idx = hash(token) % n
+        digest = hashlib.blake2b(str(token).encode("utf-8"), digest_size=8).digest()
+        idx = int.from_bytes(digest, byteorder="little", signed=False) % n
         vec[idx] += 1.0
     return _normalize_vector(vec, dim=n)
 

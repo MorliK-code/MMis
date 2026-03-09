@@ -15,6 +15,7 @@ from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
 from llm.tokenizer import ApproxTokenizer, Tokenizer
+from memory.auto_migration import run_auto_migration
 from memory.event_store import EventStore
 from memory.fact_extractor import FactExtractor
 from memory.long_memory import LongMemory
@@ -66,13 +67,23 @@ class AppContainer:
 def build_container(settings: AppSettings) -> AppContainer:
     validate_no_txt_paths(settings)
     ensure_dirs(memory_dir=settings.memory_dir)
+    migration_result = run_auto_migration(
+        memory_dir=settings.memory_dir,
+        target_schema_version=int(settings.memory_migration_schema_version),
+        auto_on_start=bool(settings.memory_migration_auto_on_start),
+        facts_scope=str(settings.memory_facts_scope or "user_only"),
+    )
+    if not bool(migration_result.get("success", True)):
+        LOGGER.warning("Memory auto-migration failed: %s", str(migration_result.get("error") or "unknown_error"))
     profile = get_profile(settings.active_profile)
     provider_name = _resolve_provider_name(settings.llm_default_provider)
     provider = build_provider(provider_name, default_model=settings.model_name)
     tokenizer: Tokenizer = ApproxTokenizer()
 
     character_runtime = CharacterRuntime()
-    character_runtime.set_quality_profile(_state_profile_name(settings.active_profile))
+    character_runtime.set_quality_profile(
+        _character_quality_profile(character_runtime=character_runtime, fallback_profile=settings.active_profile)
+    )
     metadata_extractor = MetadataExtractor(cache_size=280)
 
     short_memory = ShortMemory(limit=80, summary_trigger=60)
@@ -91,6 +102,9 @@ def build_container(settings: AppSettings) -> AppContainer:
         assistant_profile_store=assistant_profile_store,
         event_store=event_store,
         retrieve_score_threshold=0.28,
+        facts_scope=str(settings.memory_facts_scope or "user_only"),
+        include_pending_facts_in_retrieval=bool(settings.memory_include_pending_facts_in_retrieval),
+        confirmation_ttl_sec=int(settings.memory_confirmation_ttl_sec),
     )
 
     response_pipeline = ResponsePipeline(
@@ -248,12 +262,17 @@ def _process_turn(container: AppContainer, text: str, *, source: str) -> tuple[s
 
 def _brain_meta(container: AppContainer, *, source: str) -> dict[str, Any]:
     settings = container.settings
-    profile = container.profile
+    quality_profile = _character_quality_profile(
+        character_runtime=container.character_runtime,
+        fallback_profile=settings.active_profile,
+    )
+    profile = get_profile(quality_profile)
     meta: dict[str, Any] = {
         "source": source,
         "model": settings.model_name,
         "think": bool(settings.thinking_enabled),
-        "quality_profile": _state_profile_name(settings.active_profile),
+        "quality_profile": quality_profile,
+        "personality_llm_profile": quality_profile,
         "temperature": float(profile.generation.temperature),
         "top_p": float(profile.generation.top_p),
         "repeat_penalty": float(profile.generation.repeat_penalty),
@@ -301,11 +320,26 @@ def _build_automation(settings: AppSettings, event_store: EventStore) -> TaskExe
     return TaskExecutor(browser=browser, os_actions=os_actions, event_store=event_store)
 
 
+def _character_quality_profile(*, character_runtime: CharacterRuntime, fallback_profile: str) -> str:
+    fallback = _state_profile_name(fallback_profile)
+    try:
+        active_character = str(character_runtime.get_active_character_id() or "").strip()
+        if not active_character:
+            return fallback
+        meta = character_runtime.get_meta(active_character)
+        raw = str(getattr(meta, "llm_profile", "") or "").strip()
+        if not raw:
+            return fallback
+        return _state_profile_name(raw)
+    except Exception:
+        return fallback
+
+
 def _state_profile_name(name: str) -> str:
     key = str(name or "BALANCED").strip().upper()
     if key == "ECONOM":
         return "FAST"
-    if key in {"FAST", "BALANCED", "QUALITY"}:
+    if key in {"FAST", "BALANCED", "QUALITY", "ASYA", "AUTONOMOUS"}:
         return key
     return "BALANCED"
 

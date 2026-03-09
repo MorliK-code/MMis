@@ -83,7 +83,14 @@ class TokenBudgetManager:
         """Backward-compatible path for old call sites."""
         mapped = [
             ContextBlock(id="system", content=str(blocks.get("system") or ""), bucket="system", priority=95, required=True),
-            ContextBlock(id="memory", content=str(blocks.get("memory") or ""), bucket="memory", priority=68, shrink_strategy="drop"),
+            ContextBlock(
+                id="memory",
+                content=str(blocks.get("memory") or ""),
+                bucket="memory",
+                priority=72,
+                shrink_strategy="summarize",
+                min_tokens=max(24, int(self.budget.memory_retrieval * 0.25)),
+            ),
             ContextBlock(id="history", content=str(blocks.get("history") or ""), bucket="history", priority=62, shrink_strategy="summarize"),
             ContextBlock(id="output", content=str(blocks.get("output") or ""), bucket="rules", priority=85),
             ContextBlock(id="user", content=str(blocks.get("user") or ""), bucket="user", priority=100, required=True),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from memory.auto_migration import run_auto_migration
 from memory.event_store import Event, EventStore
 from memory.fact_extractor import Fact, FactExtractor
 from memory.long_memory import LongMemory, MemoryDoc
@@ -23,5 +24,5 @@ __all__ = [
     "UserProfileStore",
     "AssistantProfileStore",
     "ProfileStore",
+    "run_auto_migration",
 ]
-

@@ -130,6 +130,7 @@ class PromptEngine:
         tools_state_block = self._build_tools_state_block(state_map)
         verbosity_level = _resolve_verbosity_level(state_map=state_map, blocks=blocks)
         verbosity_limits = self.budget_manager.apply_verbosity(verbosity_level)
+        memory_floor_tokens = max(48, int(self.budget_manager.budget.memory_retrieval * 0.28))
 
         context_blocks = [
             ContextBlock(
@@ -183,15 +184,16 @@ class PromptEngine:
                 id="memory_retrieval",
                 content=str(blocks.get("retrieved_memories") or ""),
                 bucket="memory",
-                priority=68,
-                shrink_strategy="drop",
+                priority=78,
+                shrink_strategy="summarize",
                 max_tokens=self.budget_manager.budget.memory_retrieval,
+                min_tokens=memory_floor_tokens,
             ),
             ContextBlock(
                 id="recent_chat",
                 content=str(blocks.get("conversation_tail") or ""),
                 bucket="history",
-                priority=72,
+                priority=66,
                 shrink_strategy="summarize",
                 max_tokens=int(verbosity_limits.get("history", self.budget_manager.budget.recent_chat)),
             ),

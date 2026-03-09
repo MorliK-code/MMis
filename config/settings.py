@@ -316,6 +316,11 @@ class AppSettings:
     chat_events_limit: int = 10
     chat_proofread: bool = False
     chat_proofread_strict: bool = False
+    memory_facts_scope: str = "user_only"
+    memory_include_pending_facts_in_retrieval: bool = False
+    memory_confirmation_ttl_sec: int = 300
+    memory_migration_auto_on_start: bool = True
+    memory_migration_schema_version: int = 2
     model_fallbacks: list[str] = field(default_factory=list)
 
     # Hardware
@@ -640,6 +645,13 @@ def _default_config_tree() -> dict[str, Any]:
             "chat_events_limit": 10,
             "chat_proofread": False,
             "chat_proofread_strict": False,
+            "facts_scope": "user_only",
+            "include_pending_facts_in_retrieval": False,
+            "confirmation_ttl_sec": 300,
+            "migration": {
+                "auto_on_start": True,
+                "schema_version": 2,
+            },
         },
         "dialog": {
             "new_session_after_min": 360,
@@ -804,6 +816,18 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         chat_events_limit=max(1, _to_int(_get_dotted(row, "memory.chat_events_limit"), default=10)),
         chat_proofread=_to_bool(_get_dotted(row, "memory.chat_proofread")),
         chat_proofread_strict=_to_bool(_get_dotted(row, "memory.chat_proofread_strict")),
+        memory_facts_scope=_norm_lower(_pick_value(_get_dotted(row, "memory.facts_scope"), "user_only")),
+        memory_include_pending_facts_in_retrieval=_to_bool(
+            _pick_value(_get_dotted(row, "memory.include_pending_facts_in_retrieval"), False)
+        ),
+        memory_confirmation_ttl_sec=max(1, _to_int(_pick_value(_get_dotted(row, "memory.confirmation_ttl_sec"), 300), default=300)),
+        memory_migration_auto_on_start=_to_bool(
+            _pick_value(_get_dotted(row, "memory.migration.auto_on_start"), True)
+        ),
+        memory_migration_schema_version=max(
+            1,
+            _to_int(_pick_value(_get_dotted(row, "memory.migration.schema_version"), 2), default=2),
+        ),
         model_fallbacks=_to_csv_list(_get_dotted(row, "llm.model_fallbacks")),
         gpu_vram_gb=_to_int_or_none(_get_dotted(row, "hardware.gpu_vram_gb")),
         console_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.timeout_sec"), 2.5)),
@@ -1205,6 +1229,14 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append(
             f"internet.web_auto_profile must be one of ['aggressive', 'balanced'], got: {settings.web_auto_profile}"
         )
+    if str(settings.memory_facts_scope or "").strip().lower() not in {"user_only", "all"}:
+        errors.append(
+            f"memory.facts_scope must be one of ['all', 'user_only'], got: {settings.memory_facts_scope}"
+        )
+    if int(settings.memory_confirmation_ttl_sec) < 1:
+        errors.append("memory.confirmation_ttl_sec must be >= 1")
+    if int(settings.memory_migration_schema_version) < 1:
+        errors.append("memory.migration.schema_version must be >= 1")
     if errors:
         raise ValueError("Invalid application settings:\n- " + "\n- ".join(errors))
 
