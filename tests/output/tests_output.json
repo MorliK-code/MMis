@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created_at": "2026-03-06T14:14:41+02:00",
-  "updated_at": "2026-03-10T00:23:51+02:00",
+  "updated_at": "2026-03-10T00:38:09+02:00",
   "cases": [
     {
       "test_num": 1,
@@ -8177,6 +8177,171 @@
       "test_name": "test_web_trace_envelope_and_correlation",
       "status": "passed",
       "duration_ms": 219.465
+    },
+    {
+      "test_num": 744,
+      "timestamp": "2026-03-10T00:37:46+02:00",
+      "pid": 33180,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_append_event_writes_to_logs_folder",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_append_event_writes_to_logs_folder",
+      "status": "passed",
+      "duration_ms": 62.537
+    },
+    {
+      "test_num": 745,
+      "timestamp": "2026-03-10T00:37:46+02:00",
+      "pid": 33180,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_default_root_is_not_data_characters",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_default_root_is_not_data_characters",
+      "status": "passed",
+      "duration_ms": 2.015
+    },
+    {
+      "test_num": 746,
+      "timestamp": "2026-03-10T00:37:46+02:00",
+      "pid": 33180,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_explicit_legacy_root_is_redirected_to_characters_runtime",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_explicit_legacy_root_is_redirected_to_characters_runtime",
+      "status": "passed",
+      "duration_ms": 2.014
+    },
+    {
+      "test_num": 747,
+      "timestamp": "2026-03-10T00:37:46+02:00",
+      "pid": 33180,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_persona_state_baseline_is_synced_from_traits",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_persona_state_baseline_is_synced_from_traits",
+      "status": "passed",
+      "duration_ms": 67.816
+    },
+    {
+      "test_num": 748,
+      "timestamp": "2026-03-10T00:37:46+02:00",
+      "pid": 33180,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_runtime_reads_character_events_from_logs_folder",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_runtime_reads_character_events_from_logs_folder",
+      "status": "passed",
+      "duration_ms": 146.28
+    },
+    {
+      "test_num": 749,
+      "timestamp": "2026-03-10T00:38:02+02:00",
+      "pid": 28744,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_append_event_writes_to_logs_folder",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_append_event_writes_to_logs_folder",
+      "status": "passed",
+      "duration_ms": 55.936
+    },
+    {
+      "test_num": 750,
+      "timestamp": "2026-03-10T00:38:02+02:00",
+      "pid": 28744,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_default_root_is_not_data_characters",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_default_root_is_not_data_characters",
+      "status": "passed",
+      "duration_ms": 1.738
+    },
+    {
+      "test_num": 751,
+      "timestamp": "2026-03-10T00:38:02+02:00",
+      "pid": 28744,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_explicit_legacy_root_is_redirected_to_characters_runtime",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_explicit_legacy_root_is_redirected_to_characters_runtime",
+      "status": "passed",
+      "duration_ms": 2.052
+    },
+    {
+      "test_num": 752,
+      "timestamp": "2026-03-10T00:38:02+02:00",
+      "pid": 28744,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_persona_state_baseline_is_synced_from_traits",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_persona_state_baseline_is_synced_from_traits",
+      "status": "passed",
+      "duration_ms": 50.465
+    },
+    {
+      "test_num": 753,
+      "timestamp": "2026-03-10T00:38:02+02:00",
+      "pid": 28744,
+      "test_id": "test_character_storage_logs.CharacterStorageLogsTests.test_runtime_reads_character_events_from_logs_folder",
+      "module": "test_character_storage_logs",
+      "class": "CharacterStorageLogsTests",
+      "test_name": "test_runtime_reads_character_events_from_logs_folder",
+      "status": "passed",
+      "duration_ms": 86.756
+    },
+    {
+      "test_num": 754,
+      "timestamp": "2026-03-10T00:38:09+02:00",
+      "pid": 15020,
+      "test_id": "test_learner.LearnerTests.test_auto_adds_new_traits_to_baseline",
+      "module": "test_learner",
+      "class": "LearnerTests",
+      "test_name": "test_auto_adds_new_traits_to_baseline",
+      "status": "passed",
+      "duration_ms": 0.119
+    },
+    {
+      "test_num": 755,
+      "timestamp": "2026-03-10T00:38:09+02:00",
+      "pid": 15020,
+      "test_id": "test_learner.LearnerTests.test_feedback_less_compliments_lowers_social_tone_traits",
+      "module": "test_learner",
+      "class": "LearnerTests",
+      "test_name": "test_feedback_less_compliments_lowers_social_tone_traits",
+      "status": "passed",
+      "duration_ms": 0.159
+    },
+    {
+      "test_num": 756,
+      "timestamp": "2026-03-10T00:38:09+02:00",
+      "pid": 15020,
+      "test_id": "test_learner.LearnerTests.test_initializes_baseline_from_current_traits_when_missing",
+      "module": "test_learner",
+      "class": "LearnerTests",
+      "test_name": "test_initializes_baseline_from_current_traits_when_missing",
+      "status": "passed",
+      "duration_ms": 0.093
+    },
+    {
+      "test_num": 757,
+      "timestamp": "2026-03-10T00:38:09+02:00",
+      "pid": 15020,
+      "test_id": "test_learner.LearnerTests.test_mode_affects_implicit_dynamic_traits",
+      "module": "test_learner",
+      "class": "LearnerTests",
+      "test_name": "test_mode_affects_implicit_dynamic_traits",
+      "status": "passed",
+      "duration_ms": 0.221
+    },
+    {
+      "test_num": 758,
+      "timestamp": "2026-03-10T00:38:09+02:00",
+      "pid": 15020,
+      "test_id": "test_learner.LearnerTests.test_updates_traits_from_signals_and_feedback",
+      "module": "test_learner",
+      "class": "LearnerTests",
+      "test_name": "test_updates_traits_from_signals_and_feedback",
+      "status": "passed",
+      "duration_ms": 0.229
     }
   ]
 }

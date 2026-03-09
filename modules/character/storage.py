@@ -356,26 +356,14 @@ class CharacterStorage:
         cid = _safe_id(character_id)
         self.ensure_character_specs(cid)
         payload = _read_json(self.character_spec_dir(cid) / "persona_state.json")
-        if not isinstance(payload, dict):
-            payload = {}
-        out = dict(_default_persona_state())
-        out.update(dict(payload))
-        out["traits"] = dict(out.get("traits") or {})
-        out["locks"] = dict(out.get("locks") or {"feminine": True, "informal_you": True})
-        out["bans"] = [str(x).strip() for x in list(out.get("bans") or []) if str(x).strip()]
-        learned = dict(out.get("learned") or {})
-        learned.setdefault("preferences_confirmed", [])
-        learned.setdefault("preferences_pending", [])
-        learned.setdefault("style_bias", {})
-        out["learned"] = learned
-        return out
+        return _normalize_persona_state_payload(payload if isinstance(payload, dict) else {})
 
     def save_persona_state(self, character_id: str, payload: dict[str, Any]) -> None:
         cid = _safe_id(character_id)
         self.ensure_character_specs(cid)
         row = self.load_persona_state(cid)
         row.update(dict(payload or {}))
-        _write_json(self.character_spec_dir(cid) / "persona_state.json", row)
+        _write_json(self.character_spec_dir(cid) / "persona_state.json", _normalize_persona_state_payload(row))
 
     def load_persona_spec(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
@@ -549,16 +537,18 @@ def _default_evolution_rules() -> dict[str, Any]:
 
 
 def _default_persona_state() -> dict[str, Any]:
+    traits = {
+        "warmth": 0.68,
+        "sarcasm": 0.32,
+        "teasing": 0.46,
+        "strictness": 0.52,
+        "verbosity": 0.55,
+        "empathy": 0.72,
+    }
+    baselines = {str(k): float(v) for k, v in traits.items()}
     return {
         "schema_version": 1,
-        "traits": {
-            "warmth": 0.68,
-            "sarcasm": 0.32,
-            "teasing": 0.46,
-            "strictness": 0.52,
-            "verbosity": 0.55,
-            "empathy": 0.72,
-        },
+        "traits": dict(traits),
         "mood": "thoughtful",
         "locks": {
             "feminine": True,
@@ -569,7 +559,9 @@ def _default_persona_state() -> dict[str, Any]:
             "preferences_confirmed": [],
             "preferences_pending": [],
             "style_bias": {},
+            "baseline_traits": dict(baselines),
         },
+        "baseline_traits": dict(baselines),
     }
 
 
@@ -665,3 +657,64 @@ def _character_name(cid: str) -> str:
     if not parts:
         return DEFAULT_CHARACTER_NAME
     return " ".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _coerce_baseline_map(value: Any) -> dict[str, float]:
+    out: dict[str, float] = {}
+    if not isinstance(value, dict):
+        return out
+    for key, raw in value.items():
+        name = str(key or "").strip().lower()
+        if not name:
+            continue
+        try:
+            out[name] = float(_clamp01(float(raw)))
+        except Exception:
+            continue
+    return out
+
+
+def _normalize_persona_state_payload(value: dict[str, Any] | None) -> dict[str, Any]:
+    input_row = dict(value or {}) if isinstance(value, dict) else {}
+    input_learned = dict(input_row.get("learned") or {})
+    has_root_baseline = isinstance(input_row.get("baseline_traits"), dict)
+    has_learned_baseline = isinstance(input_learned.get("baseline_traits"), dict)
+
+    payload = dict(_default_persona_state())
+    payload.update(input_row)
+
+    payload["traits"] = dict(payload.get("traits") or {})
+    payload["locks"] = dict(payload.get("locks") or {"feminine": True, "informal_you": True})
+    payload["bans"] = [str(x).strip() for x in list(payload.get("bans") or []) if str(x).strip()]
+
+    learned = dict(payload.get("learned") or {})
+    learned.setdefault("preferences_confirmed", [])
+    learned.setdefault("preferences_pending", [])
+    learned.setdefault("style_bias", {})
+
+    root_baseline = _coerce_baseline_map(payload.get("baseline_traits")) if has_root_baseline else {}
+    learned_baseline = _coerce_baseline_map(learned.get("baseline_traits")) if has_learned_baseline else {}
+    trait_seed = _coerce_baseline_map(payload.get("traits"))
+    baselines = dict(root_baseline or learned_baseline or trait_seed)
+    if not baselines:
+        baselines = _coerce_baseline_map(_default_persona_state().get("baseline_traits"))
+
+    # Anchor any newly seen numeric trait to baseline on first sight.
+    for key, raw in dict(payload.get("traits") or {}).items():
+        name = str(key or "").strip().lower()
+        if not name or name in baselines:
+            continue
+        try:
+            baselines[name] = float(_clamp01(float(raw)))
+        except Exception:
+            continue
+
+    learned["baseline_traits"] = dict(baselines)
+    payload["learned"] = learned
+    # Keep legacy mirror for backward compatibility with readers that still use root key.
+    payload["baseline_traits"] = dict(baselines)
+    return payload

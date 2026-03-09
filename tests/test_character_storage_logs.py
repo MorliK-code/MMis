@@ -66,6 +66,31 @@ class CharacterStorageLogsTests(unittest.TestCase):
             feedback = [str(x).strip() for x in list(payload.get("feedback") or []) if str(x).strip()]
             self.assertIn("no_teasing", feedback)
 
+    def test_persona_state_baseline_is_synced_from_traits(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mmis_char_persona_baseline_") as tmp:
+            root = Path(tmp) / "characters"
+            logs = Path(tmp) / "logs"
+            storage = CharacterStorage(root=root, logs_root=logs)
+            storage.ensure_defaults()
+
+            spec_dir = storage.character_spec_dir("asya")
+            path = spec_dir / "persona_state.json"
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            payload["traits"] = {"warmth": 0.41, "sarcasm": 0.19}
+            payload.pop("baseline_traits", None)
+            learned = dict(payload.get("learned") or {})
+            learned.pop("baseline_traits", None)
+            payload["learned"] = learned
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            loaded = storage.load_persona_state("asya")
+            root_baseline = dict(loaded.get("baseline_traits") or {})
+            learned_baseline = dict((dict(loaded.get("learned") or {})).get("baseline_traits") or {})
+            self.assertAlmostEqual(float(root_baseline.get("warmth", 0.0)), 0.41, places=6)
+            self.assertAlmostEqual(float(learned_baseline.get("warmth", 0.0)), 0.41, places=6)
+            self.assertAlmostEqual(float(root_baseline.get("sarcasm", 0.0)), 0.19, places=6)
+            self.assertAlmostEqual(float(learned_baseline.get("sarcasm", 0.0)), 0.19, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

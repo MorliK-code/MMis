@@ -1,22 +1,8 @@
 {
   "schema_version": 1,
   "traits": {
-    "warmth": 0.6907414976874799,
-    "sarcasm": 0.007052032301934782,
-    "teasing": 0.016214916335233625,
-    "verbosity": 0.006880299396624689,
-    "strictness": 0.9925752197217512,
-    "empathy": 0.5052286597358524,
-    "romance": 0.24,
-    "playfulness": 0.8259940372530179,
-    "thoughtfulness": 0.72,
-    "directness": 0.9884409787819295,
-    "humor": 1.0,
-    "emoji_rate": 1.0,
-    "energy": 0.9931292756753309,
-    "patience": 0.04,
-    "professionalism": 0.9925797670833285,
-    "curiosity": 0.52
+    "warmth": 0.41,
+    "sarcasm": 0.19
   },
   "mood": "playful",
   "locks": {
@@ -50,42 +36,6 @@
       "patience": 0.0,
       "professionalism": 0.909399667261898,
       "curiosity": 0.0
-    },
-    "baseline_traits": {
-      "warmth": 0.6853449966964,
-      "sarcasm": 0.29340439117578393,
-      "teasing": 0.07433378952999987,
-      "verbosity": 0.43100000000000005,
-      "strictness": 0.4485,
-      "empathy": 0.5052286597358524,
-      "romance": 0.24,
-      "playfulness": 0.451,
-      "thoughtfulness": 0.72,
-      "patience": 0.04,
-      "emoji_rate": 0.0,
-      "professionalism": 0.08,
-      "directness": 0.02,
-      "energy": 0.55,
-      "humor": 0.34,
-      "curiosity": 0.52
     }
-  },
-  "baseline_traits": {
-    "warmth": 0.6853449966964,
-    "sarcasm": 0.29340439117578393,
-    "teasing": 0.07433378952999987,
-    "verbosity": 0.43100000000000005,
-    "strictness": 0.4485,
-    "empathy": 0.5052286597358524,
-    "romance": 0.24,
-    "playfulness": 0.451,
-    "thoughtfulness": 0.72,
-    "patience": 0.04,
-    "emoji_rate": 0.0,
-    "professionalism": 0.08,
-    "directness": 0.02,
-    "energy": 0.55,
-    "humor": 0.34,
-    "curiosity": 0.52
   }
 }
