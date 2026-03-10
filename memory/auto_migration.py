@@ -25,7 +25,6 @@ LEGACY_DIRS = (
     "metadata",
     "profiles",
     "summaries",
-    "tts_cache",
     "chroma_db",
 )
 

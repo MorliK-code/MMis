@@ -52,7 +52,6 @@ LEGACY_KEY_MAP: dict[str, str] = {
     "db_path": "memory.db_path",
     "data_dir": "paths.data_dir",
     "models_dir": "paths.models_dir",
-    "short_memory_limit": "memory.short_memory_limit",
     "chat_recall_results": "memory.chat_recall_results",
     "chat_events_limit": "memory.chat_events_limit",
     "chat_proofread": "memory.chat_proofread",

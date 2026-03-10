@@ -6,6 +6,7 @@ enable_unittest_json_output()
 
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
 
 from memory.memory_manager import MemoryManager
@@ -14,7 +15,8 @@ from memory.memory_models import ContextBuildRequest, MemoryEvent, MemoryScope, 
 
 class MemoryEntityTests(unittest.TestCase):
     def test_hybrid_retrieval_returns_relevant_candidate_with_score_breakdown(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = tempfile.mkdtemp(prefix="mmis_memory_entities_")
+        try:
             manager = MemoryManager(root_dir=Path(tmpdir))
             try:
                 manager.ingest_event(
@@ -54,9 +56,12 @@ class MemoryEntityTests(unittest.TestCase):
                 )
             finally:
                 manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def test_private_runtime_is_excluded_from_retrieval_but_available_in_context_tool_block(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = tempfile.mkdtemp(prefix="mmis_memory_entities_")
+        try:
             manager = MemoryManager(root_dir=Path(tmpdir))
             try:
                 manager.ingest_event(
@@ -107,6 +112,8 @@ class MemoryEntityTests(unittest.TestCase):
                 self.assertIn("private_runtime_state", str(context.blocks.get("active_tool_state") or ""))
             finally:
                 manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

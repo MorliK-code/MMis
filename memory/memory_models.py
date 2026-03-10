@@ -1,3 +1,5 @@
+"""Typed foundation models and contracts for Memory V2."""
+
 from __future__ import annotations
 
 import time
@@ -137,6 +139,17 @@ class FactRecordV2:
     status: MemoryStatus = MemoryStatus.ACTIVE
     canonical_key: str = ""
     relation: str = ""
+    id: str = ""
+    text: str = ""
+    memory_type: MemoryType = MemoryType.FACT
+    level: MemoryLevel = MemoryLevel.L3_SEMANTIC
+    namespace: str = "default"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=lambda: float(time.time()))
+    updated_at: float = field(default_factory=lambda: float(time.time()))
+    parent_id: str | None = None
+    chunk_index: int | None = None
+    version: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -153,6 +166,17 @@ class FactRecordV2:
             "status": str(self.status.value),
             "canonical_key": self.canonical_key,
             "relation": self.relation,
+            "id": str(self.id or ""),
+            "text": str(self.text or ""),
+            "memory_type": str(self.memory_type.value),
+            "level": str(self.level.value),
+            "namespace": str(self.namespace or "default"),
+            "metadata": dict(self.metadata or {}),
+            "created_at": float(self.created_at),
+            "updated_at": float(self.updated_at),
+            "parent_id": self.parent_id,
+            "chunk_index": self.chunk_index,
+            "version": max(1, int(self.version)),
         }
 
 
@@ -165,8 +189,37 @@ class DocumentRecord:
     scope: MemoryScope
     namespace: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    memory_type: MemoryType = MemoryType.DOCUMENT
+    level: MemoryLevel = MemoryLevel.L4_DOCUMENT
+    importance: float = 0.72
+    confidence: float = 0.86
     created_at: float = field(default_factory=lambda: float(time.time()))
     updated_at: float = field(default_factory=lambda: float(time.time()))
+    status: MemoryStatus = MemoryStatus.ACTIVE
+    version: int = 1
+    parent_id: str | None = None
+    chunk_index: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id or ""),
+            "source": str(self.source or ""),
+            "text": str(self.text or ""),
+            "summary": str(self.summary or ""),
+            "scope": str(self.scope.value),
+            "namespace": str(self.namespace or "default"),
+            "metadata": dict(self.metadata or {}),
+            "memory_type": str(self.memory_type.value),
+            "level": str(self.level.value),
+            "importance": float(self.importance),
+            "confidence": float(self.confidence),
+            "created_at": float(self.created_at),
+            "updated_at": float(self.updated_at),
+            "status": str(self.status.value),
+            "version": max(1, int(self.version)),
+            "parent_id": self.parent_id,
+            "chunk_index": self.chunk_index,
+        }
 
 
 @dataclass(frozen=True)
@@ -178,6 +231,35 @@ class ChunkRecord:
     scope: MemoryScope
     namespace: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    memory_type: MemoryType = MemoryType.DOCUMENT_CHUNK
+    level: MemoryLevel = MemoryLevel.L4_DOCUMENT
+    importance: float = 0.66
+    confidence: float = 0.84
+    created_at: float = field(default_factory=lambda: float(time.time()))
+    updated_at: float = field(default_factory=lambda: float(time.time()))
+    status: MemoryStatus = MemoryStatus.ACTIVE
+    version: int = 1
+    parent_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": str(self.id or ""),
+            "document_id": str(self.document_id or ""),
+            "chunk_index": int(self.chunk_index),
+            "text": str(self.text or ""),
+            "scope": str(self.scope.value),
+            "namespace": str(self.namespace or "default"),
+            "metadata": dict(self.metadata or {}),
+            "memory_type": str(self.memory_type.value),
+            "level": str(self.level.value),
+            "importance": float(self.importance),
+            "confidence": float(self.confidence),
+            "created_at": float(self.created_at),
+            "updated_at": float(self.updated_at),
+            "status": str(self.status.value),
+            "version": max(1, int(self.version)),
+            "parent_id": self.parent_id,
+        }
 
 
 @dataclass(frozen=True)
@@ -296,6 +378,9 @@ class LifecycleDecision:
     mark_status: MemoryStatus | None = None
     archive: bool = False
     reason: str = ""
+    route: str = ""
+    next_version: int | None = None
+    chain_parent_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -304,6 +389,10 @@ class ConflictDecision:
     superseded_record_id: str | None
     reason: str
     status: MemoryStatus
+    action: str = "supersede"
+    archive_record_id: str | None = None
+    parallel_with_record_id: str | None = None
+    score_delta: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -332,6 +421,7 @@ class DocumentIngestRequest:
     source: str
     namespace: str = "default"
     scope: MemoryScope = MemoryScope.PROJECT
+    title: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -443,6 +533,11 @@ class LexicalIndexBackend(ABC):
 
 class Reranker(Protocol):
     def rerank(self, query: RetrievalQuery, candidates: list[RetrievalCandidate], top_k: int) -> list[RetrievalCandidate]:
+        ...
+
+
+class ContextCompressor(Protocol):
+    def compress(self, request: ContextBuildRequest, result: ContextBuildResult) -> ContextBuildResult:
         ...
 
 

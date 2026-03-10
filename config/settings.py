@@ -202,7 +202,7 @@ _LOG_CHANNEL_PREFIXES_DEFAULT: dict[str, list[str]] = {
     "memory": ["memory", "metadata"],
     "tools": ["modules", "tools"],
     "ui": ["ui", "api", "ui_console", "ui_pyside6"],
-    "web": ["web", "core.web_rag_stage", "modules.internet.web", "tools.modules.internet"],
+    "web": ["web", "modules.internet.web", "tools.modules.internet"],
 }
 _LOG_WEB_TRACE_LOGGER_DEFAULT = "web.trace"
 _LOG_SETUP_DONE = False
@@ -307,7 +307,6 @@ class AppSettings:
     voice_output_dir: Path | None = None
 
     # Chat & Memory
-    short_memory_limit: int = 10
     chat_recall_results: int = 3
     chat_events_limit: int = 10
     chat_proofread: bool = False
@@ -319,11 +318,19 @@ class AppSettings:
     memory_migration_schema_version: int = 2
     memory_version: str = "v2"
     memory_backend: str = "chroma"
-    memory_embedding_backend: str = "ollama"
-    memory_embedding_model: str = "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M"
-    memory_embedding_dim: int = 768
+    memory_embedding_backend: str = "sentence_transformers"
+    memory_embedding_model: str = "all-MiniLM-L6-v2"
+    memory_embedding_dim: int = 384
     memory_retrieval_top_k: int = 8
     memory_rerank_top_k: int = 8
+    memory_retrieval_weight_semantic_similarity: float = 0.34
+    memory_retrieval_weight_lexical_score: float = 0.25
+    memory_retrieval_weight_recency_score: float = 0.10
+    memory_retrieval_weight_importance_score: float = 0.09
+    memory_retrieval_weight_confidence_score: float = 0.08
+    memory_retrieval_weight_entity_overlap_score: float = 0.07
+    memory_retrieval_weight_exact_match_boost: float = 0.04
+    memory_retrieval_weight_scope_match_score: float = 0.03
     memory_chunk_size: int = 1200
     memory_chunk_overlap: int = 160
     memory_summary_trigger: int = 60
@@ -335,6 +342,17 @@ class AppSettings:
     memory_context_budget_response_reserve: int = 260
     memory_stale_after_days: int = 30
     memory_archive_after_days: int = 90
+    memory_promotion_message_importance_threshold: float = 0.72
+    memory_importance_weight_base: float = 0.42
+    memory_importance_weight_decision: float = 0.24
+    memory_importance_weight_remember: float = 0.18
+    memory_importance_weight_project: float = 0.10
+    memory_salience_weight_novelty: float = 0.22
+    memory_salience_weight_permanence: float = 0.20
+    memory_salience_weight_repetition: float = 0.14
+    memory_salience_weight_project_relevance: float = 0.16
+    memory_salience_weight_task_relevance: float = 0.16
+    memory_salience_weight_explicit_save_signal: float = 0.12
     memory_temporary_ttl_sec: int = 3600
     memory_private_runtime_ttl_sec: int = 900
     memory_working_limit: int = 120
@@ -632,7 +650,6 @@ def _default_config_tree() -> dict[str, Any]:
             "web_auto_profile": "balanced",
             "web_v2": {
                 "enabled": True,
-                "default_mode": "auto",
                 "thresholds": {
                     "no_search_max": 0.26,
                     "verify_max": 0.46,
@@ -656,15 +673,21 @@ def _default_config_tree() -> dict[str, Any]:
                     "category_penalty_default": 0.36,
                 },
                 "budgets": {
-                    "no_search": {"max_queries": 0, "max_sources": 0, "max_pages": 0},
-                    "verify_only": {"max_queries": 1, "max_sources": 2, "max_pages": 1},
-                    "soft_search": {"max_queries": 2, "max_sources": 3, "max_pages": 2},
-                    "targeted_search": {"max_queries": 3, "max_sources": 5, "max_pages": 3},
-                    "deep_search": {"max_queries": 5, "max_sources": 8, "max_pages": 5},
+                    "no_search": {"max_queries": 0, "max_sources": 0, "max_pages": 0, "max_fetches": 0},
+                    "verify_only": {"max_queries": 1, "max_sources": 2, "max_pages": 1, "max_fetches": 1},
+                    "soft_search": {"max_queries": 2, "max_sources": 3, "max_pages": 2, "max_fetches": 2},
+                    "targeted_search": {"max_queries": 3, "max_sources": 5, "max_pages": 3, "max_fetches": 3},
+                    "deep_search": {"max_queries": 5, "max_sources": 8, "max_pages": 5, "max_fetches": 5},
                 },
-                "max_sources": 8,
-                "max_pages": 5,
                 "cooldown_seconds": 45,
+                "retry_policy": {
+                    "default_attempts": 1,
+                    "verify_only": 1,
+                    "soft_search": 1,
+                    "targeted_search": 2,
+                    "deep_search": 2,
+                    "backoff_ms": 250,
+                },
                 "force_search_keywords": [
                     "сейчас",
                     "актуально",
@@ -732,13 +755,23 @@ def _default_config_tree() -> dict[str, Any]:
             "version": "v2",
             "backend": "chroma",
             "embedding": {
-                "backend": "ollama",
-                "model": "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M",
-                "dim": 768,
+                "backend": "sentence_transformers",
+                "model": "all-MiniLM-L6-v2",
+                "dim": 384,
             },
             "retrieval": {
                 "top_k": 8,
                 "rerank_top_k": 8,
+                "fusion_weights": {
+                    "semantic_similarity": 0.34,
+                    "lexical_score": 0.25,
+                    "recency_score": 0.10,
+                    "importance_score": 0.09,
+                    "confidence_score": 0.08,
+                    "entity_overlap_score": 0.07,
+                    "exact_match_boost": 0.04,
+                    "scope_match_score": 0.03,
+                },
             },
             "documents": {
                 "chunk_size": 1200,
@@ -758,11 +791,29 @@ def _default_config_tree() -> dict[str, Any]:
             "lifecycle": {
                 "stale_after_days": 30,
                 "archive_after_days": 90,
+                "promotion_thresholds": {
+                    "message_importance": 0.72,
+                },
                 "temporary_ttl_sec": 3600,
                 "private_runtime_ttl_sec": 900,
                 "working_limit": 120,
             },
-            "short_memory_limit": 10,
+            "scoring": {
+                "importance_weights": {
+                    "base": 0.42,
+                    "decision": 0.24,
+                    "remember": 0.18,
+                    "project": 0.10,
+                },
+                "salience_weights": {
+                    "novelty": 0.22,
+                    "permanence": 0.20,
+                    "repetition": 0.14,
+                    "project_relevance": 0.16,
+                    "task_relevance": 0.16,
+                    "explicit_save_signal": 0.12,
+                },
+            },
             "chat_recall_results": 3,
             "chat_events_limit": 10,
             "chat_proofread": False,
@@ -934,7 +985,6 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         voice_tts_volume=_norm_str(_get_dotted(row, "voice.tts.volume") or "+0%"),
         voice_input_dir=voice_input,
         voice_output_dir=voice_output,
-        short_memory_limit=max(1, _to_int(_get_dotted(row, "memory.short_memory_limit"), default=10)),
         chat_recall_results=max(1, _to_int(_get_dotted(row, "memory.chat_recall_results"), default=3)),
         chat_events_limit=max(1, _to_int(_get_dotted(row, "memory.chat_events_limit"), default=10)),
         chat_proofread=_to_bool(_get_dotted(row, "memory.chat_proofread")),
@@ -954,14 +1004,94 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         memory_version=_norm_lower(_pick_value(_get_dotted(row, "memory.version"), "v2")),
         memory_backend=_norm_lower(_pick_value(_get_dotted(row, "memory.backend"), "chroma")),
         memory_embedding_backend=_norm_lower(
-            _pick_value(_get_dotted(row, "memory.embedding.backend"), "ollama")
+            _pick_value(_get_dotted(row, "memory.embedding.backend"), "sentence_transformers")
         ),
         memory_embedding_model=_norm_str(
-            _pick_value(_get_dotted(row, "memory.embedding.model"), "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M")
+            _pick_value(_get_dotted(row, "memory.embedding.model"), "all-MiniLM-L6-v2")
         ),
-        memory_embedding_dim=max(32, _to_int(_pick_value(_get_dotted(row, "memory.embedding.dim"), 768), default=768)),
+        memory_embedding_dim=max(32, _to_int(_pick_value(_get_dotted(row, "memory.embedding.dim"), 384), default=384)),
         memory_retrieval_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.top_k"), 8), default=8)),
         memory_rerank_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.rerank_top_k"), 8), default=8)),
+        memory_retrieval_weight_semantic_similarity=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.semantic_similarity"), 0.34),
+                    default=0.34,
+                ),
+            ),
+        ),
+        memory_retrieval_weight_lexical_score=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.lexical_score"), 0.25),
+                    default=0.25,
+                ),
+            ),
+        ),
+        memory_retrieval_weight_recency_score=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.recency_score"), 0.10),
+                    default=0.10,
+                ),
+            ),
+        ),
+        memory_retrieval_weight_importance_score=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.importance_score"), 0.09),
+                    default=0.09,
+                ),
+            ),
+        ),
+        memory_retrieval_weight_confidence_score=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.confidence_score"), 0.08),
+                    default=0.08,
+                ),
+            ),
+        ),
+        memory_retrieval_weight_entity_overlap_score=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.entity_overlap_score"), 0.07),
+                    default=0.07,
+                ),
+            ),
+        ),
+        memory_retrieval_weight_exact_match_boost=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.exact_match_boost"), 0.04),
+                    default=0.04,
+                ),
+            ),
+        ),
+        memory_retrieval_weight_scope_match_score=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.scope_match_score"), 0.03),
+                    default=0.03,
+                ),
+            ),
+        ),
         memory_chunk_size=max(200, _to_int(_pick_value(_get_dotted(row, "memory.documents.chunk_size"), 1200), default=1200)),
         memory_chunk_overlap=max(
             0,
@@ -1002,6 +1132,107 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         memory_archive_after_days=max(
             1,
             _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.archive_after_days"), 90), default=90),
+        ),
+        memory_promotion_message_importance_threshold=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_thresholds.message_importance"), 0.72),
+                    default=0.72,
+                ),
+            ),
+        ),
+        memory_importance_weight_base=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(_pick_value(_get_dotted(row, "memory.scoring.importance_weights.base"), 0.42), default=0.42),
+            ),
+        ),
+        memory_importance_weight_decision=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.scoring.importance_weights.decision"), 0.24),
+                    default=0.24,
+                ),
+            ),
+        ),
+        memory_importance_weight_remember=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.scoring.importance_weights.remember"), 0.18),
+                    default=0.18,
+                ),
+            ),
+        ),
+        memory_importance_weight_project=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(_pick_value(_get_dotted(row, "memory.scoring.importance_weights.project"), 0.10), default=0.10),
+            ),
+        ),
+        memory_salience_weight_novelty=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(_pick_value(_get_dotted(row, "memory.scoring.salience_weights.novelty"), 0.22), default=0.22),
+            ),
+        ),
+        memory_salience_weight_permanence=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.permanence"), 0.20),
+                    default=0.20,
+                ),
+            ),
+        ),
+        memory_salience_weight_repetition=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.repetition"), 0.14),
+                    default=0.14,
+                ),
+            ),
+        ),
+        memory_salience_weight_project_relevance=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.project_relevance"), 0.16),
+                    default=0.16,
+                ),
+            ),
+        ),
+        memory_salience_weight_task_relevance=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.task_relevance"), 0.16),
+                    default=0.16,
+                ),
+            ),
+        ),
+        memory_salience_weight_explicit_save_signal=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.explicit_save_signal"), 0.12),
+                    default=0.12,
+                ),
+            ),
         ),
         memory_temporary_ttl_sec=max(
             30,
@@ -1419,6 +1650,9 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append(
             f"internet.web_auto_profile must be one of ['aggressive', 'balanced'], got: {settings.web_auto_profile}"
         )
+    if str(settings.web_mode or "").strip().lower() not in {"on", "off", "auto"}:
+        errors.append(f"internet.web_mode must be one of ['auto', 'off', 'on'], got: {settings.web_mode}")
+    errors.extend(_validate_web_v2_settings(settings.web_v2))
     if str(settings.memory_facts_scope or "").strip().lower() not in {"user_only", "all"}:
         errors.append(
             f"memory.facts_scope must be one of ['all', 'user_only'], got: {settings.memory_facts_scope}"
@@ -1438,16 +1672,161 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append("memory.retrieval.top_k must be >= 1")
     if int(settings.memory_rerank_top_k) < 1:
         errors.append("memory.retrieval.rerank_top_k must be >= 1")
+    if not (0.0 <= float(settings.memory_retrieval_weight_semantic_similarity) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.semantic_similarity must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_retrieval_weight_lexical_score) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.lexical_score must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_retrieval_weight_recency_score) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.recency_score must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_retrieval_weight_importance_score) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.importance_score must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_retrieval_weight_confidence_score) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.confidence_score must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_retrieval_weight_entity_overlap_score) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.entity_overlap_score must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_retrieval_weight_exact_match_boost) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.exact_match_boost must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_retrieval_weight_scope_match_score) <= 1.0):
+        errors.append("memory.retrieval.fusion_weights.scope_match_score must be in [0, 1]")
     if int(settings.memory_chunk_size) < 200:
         errors.append("memory.documents.chunk_size must be >= 200")
     if int(settings.memory_chunk_overlap) < 0:
         errors.append("memory.documents.chunk_overlap must be >= 0")
+    if not (0.0 <= float(settings.memory_promotion_message_importance_threshold) <= 1.0):
+        errors.append("memory.lifecycle.promotion_thresholds.message_importance must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_importance_weight_base) <= 1.0):
+        errors.append("memory.scoring.importance_weights.base must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_importance_weight_decision) <= 1.0):
+        errors.append("memory.scoring.importance_weights.decision must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_importance_weight_remember) <= 1.0):
+        errors.append("memory.scoring.importance_weights.remember must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_importance_weight_project) <= 1.0):
+        errors.append("memory.scoring.importance_weights.project must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_salience_weight_novelty) <= 1.0):
+        errors.append("memory.scoring.salience_weights.novelty must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_salience_weight_permanence) <= 1.0):
+        errors.append("memory.scoring.salience_weights.permanence must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_salience_weight_repetition) <= 1.0):
+        errors.append("memory.scoring.salience_weights.repetition must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_salience_weight_project_relevance) <= 1.0):
+        errors.append("memory.scoring.salience_weights.project_relevance must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_salience_weight_task_relevance) <= 1.0):
+        errors.append("memory.scoring.salience_weights.task_relevance must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_salience_weight_explicit_save_signal) <= 1.0):
+        errors.append("memory.scoring.salience_weights.explicit_save_signal must be in [0, 1]")
     if int(settings.memory_temporary_ttl_sec) < 30:
         errors.append("memory.lifecycle.temporary_ttl_sec must be >= 30")
     if int(settings.memory_private_runtime_ttl_sec) < 30:
         errors.append("memory.lifecycle.private_runtime_ttl_sec must be >= 30")
     if errors:
         raise ValueError("Invalid application settings:\n- " + "\n- ".join(errors))
+
+
+def _validate_web_v2_settings(payload: dict[str, Any] | None) -> list[str]:
+    errors: list[str] = []
+    cfg = _as_dict(payload)
+    if not cfg:
+        return errors
+
+    enabled = cfg.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        errors.append("internet.web_v2.enabled must be a boolean")
+
+    thresholds = _as_dict(cfg.get("thresholds"))
+    threshold_keys = ("no_search_max", "verify_max", "soft_max", "targeted_max")
+    parsed_thresholds: dict[str, float] = {}
+    for key in threshold_keys:
+        if key not in thresholds:
+            continue
+        try:
+            value = float(thresholds.get(key))
+        except Exception:
+            errors.append(f"internet.web_v2.thresholds.{key} must be a number in [0, 1]")
+            continue
+        if not (0.0 <= value <= 1.0):
+            errors.append(f"internet.web_v2.thresholds.{key} must be in [0, 1]")
+            continue
+        parsed_thresholds[key] = value
+    if all(key in parsed_thresholds for key in threshold_keys):
+        if not (
+            parsed_thresholds["no_search_max"]
+            <= parsed_thresholds["verify_max"]
+            <= parsed_thresholds["soft_max"]
+            <= parsed_thresholds["targeted_max"]
+        ):
+            errors.append(
+                "internet.web_v2.thresholds must be non-decreasing: "
+                "no_search_max <= verify_max <= soft_max <= targeted_max"
+            )
+
+    budgets = _as_dict(cfg.get("budgets"))
+    for mode_key, row in budgets.items():
+        item = _as_dict(row)
+        if not item:
+            continue
+        for field in ("max_queries", "max_sources", "max_pages", "max_fetches"):
+            if field not in item:
+                continue
+            try:
+                value = int(item.get(field))
+            except Exception:
+                errors.append(f"internet.web_v2.budgets.{mode_key}.{field} must be an integer >= 0")
+                continue
+            if value < 0:
+                errors.append(f"internet.web_v2.budgets.{mode_key}.{field} must be >= 0")
+
+    cooldown = cfg.get("cooldown_seconds")
+    if cooldown is not None:
+        try:
+            cooldown_val = int(cooldown)
+        except Exception:
+            errors.append("internet.web_v2.cooldown_seconds must be an integer >= 0")
+        else:
+            if cooldown_val < 0:
+                errors.append("internet.web_v2.cooldown_seconds must be >= 0")
+
+    retry_policy = _as_dict(cfg.get("retry_policy"))
+    for field in ("default_attempts", "verify_only", "soft_search", "targeted_search", "deep_search"):
+        if field not in retry_policy:
+            continue
+        try:
+            attempts = int(retry_policy.get(field))
+        except Exception:
+            errors.append(f"internet.web_v2.retry_policy.{field} must be an integer >= 1")
+            continue
+        if attempts < 1:
+            errors.append(f"internet.web_v2.retry_policy.{field} must be >= 1")
+    if "backoff_ms" in retry_policy:
+        try:
+            backoff_ms = int(retry_policy.get("backoff_ms"))
+        except Exception:
+            errors.append("internet.web_v2.retry_policy.backoff_ms must be an integer >= 0")
+        else:
+            if backoff_ms < 0:
+                errors.append("internet.web_v2.retry_policy.backoff_ms must be >= 0")
+
+    for key in ("force_search_keywords", "preferred_domains", "blocked_domains"):
+        value = cfg.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            errors.append(f"internet.web_v2.{key} must be a list of strings")
+            continue
+        for idx, item in enumerate(value):
+            if not str(item or "").strip():
+                errors.append(f"internet.web_v2.{key}[{idx}] must be a non-empty string")
+
+    ttl = _as_dict(cfg.get("ttl_days") or cfg.get("ttl"))
+    for key, value in ttl.items():
+        try:
+            days = int(value)
+        except Exception:
+            errors.append(f"internet.web_v2.ttl_days.{key} must be an integer >= 1")
+            continue
+        if days < 1:
+            errors.append(f"internet.web_v2.ttl_days.{key} must be >= 1")
+
+    return errors
 
 
 def _env_pick(key: str, *, dotenv_cfg: dict[str, str]) -> str | None:
@@ -1504,6 +1883,13 @@ def _to_int(value, *, default: int) -> int:
         return int(str(value).strip())
     except Exception:
         return int(default)
+
+
+def _to_float(value, *, default: float) -> float:
+    try:
+        return float(str(value).strip())
+    except Exception:
+        return float(default)
 
 
 def _to_int_or_none(value) -> int | None:

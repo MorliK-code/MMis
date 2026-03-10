@@ -18,11 +18,13 @@ def assess_freshness(
     query: str,
     classification: QueryClassification,
     web_items: list[Any] | None = None,
+    web_cache_items: list[Any] | None = None,
     ttl_days: dict[str, int] | None = None,
     now_utc: dt.datetime | None = None,
 ) -> FreshnessAssessment:
     src = str(query or "").strip().lower()
     now = now_utc or dt.datetime.now(dt.timezone.utc)
+    items = list(web_items or web_cache_items or [])
 
     category = _detect_freshness_category(src)
     ttl_cfg = _normalized_ttl_days(ttl_days)
@@ -41,12 +43,14 @@ def assess_freshness(
         temporal_risk += float(value)
     temporal_risk = max(0.0, min(1.0, temporal_risk))
 
-    latest_age_days = _latest_age_days(web_items=web_items, now=now)
+    latest_age_days = _latest_age_days(web_items=items, now=now)
     stale_detected = False
+    explicit_stale_signal = _explicit_stale_signal(items)
     if latest_age_days is not None:
         stale_detected = bool(latest_age_days > float(ttl_for_category))
     elif classification.requires_freshness:
         stale_detected = True
+    stale_detected = bool(stale_detected or explicit_stale_signal)
 
     needs_refresh = bool(classification.requires_freshness or temporal_risk >= 0.55 or stale_detected)
 
@@ -71,6 +75,8 @@ def assess_freshness(
         reasons.append(f"latest_web_age_days:{latest_age_days:.2f}")
     if stale_detected:
         reasons.append("stale_web_fact_detected")
+    if explicit_stale_signal:
+        reasons.append("explicit_stale_signal")
 
     return FreshnessAssessment(
         temporal_risk=temporal_risk,
@@ -174,3 +180,20 @@ def _parse_date(value: str) -> dt.datetime | None:
             return None
     return None
 
+
+def _explicit_stale_signal(items: list[Any]) -> bool:
+    for row in list(items or []):
+        item = dict(row) if isinstance(row, dict) else {}
+        if bool(item.get("stale")):
+            return True
+        status = str(item.get("status") or "").strip().lower()
+        if status in {"stale", "expired"}:
+            return True
+        ttl = item.get("ttl_sec")
+        age = item.get("age_sec")
+        try:
+            if ttl is not None and age is not None and float(age) > float(ttl):
+                return True
+        except Exception:
+            continue
+    return False

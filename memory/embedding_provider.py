@@ -1,3 +1,5 @@
+"""Embedding provider adapters for Memory V2 foundation."""
+
 from __future__ import annotations
 
 import hashlib
@@ -9,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from memory.memory_models import EmbeddingProvider
 
 def _tokenize(text: str) -> list[str]:
     out: list[str] = []
@@ -34,7 +37,7 @@ def _normalize_vector(values: list[float]) -> list[float]:
     return [float(x) / norm for x in values]
 
 
-class BaseEmbeddingProvider:
+class BaseEmbeddingProvider(EmbeddingProvider):
     model_name: str = ""
     embedding_version: str = "v2"
 

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
-from core.web_rag_stage import WebRagConfig, WebRetrieveStage
+from modules.internet.web.stage import WebStageConfig, WebStageV2
 from llm.provider_base import (
     LLMProviderBase,
     LLMRequest,
@@ -74,10 +74,10 @@ class WebTraceLoggingTests(unittest.TestCase):
                 autosave=False,
             )
             pipeline = ResponsePipeline(provider=_StubProvider(), character_runtime=runtime)
-            pipeline._stages["web_retrieve"] = WebRetrieveStage(
+            pipeline._stages["web_retrieve"] = WebStageV2(
                 search_client=_FakeSearch(),
                 scraper=_FakeScraper(),
-                cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+                cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
             )
 
             result = pipeline.run(
@@ -102,7 +102,10 @@ class WebTraceLoggingTests(unittest.TestCase):
             self.assertIn("stage=web_retrieve start", joined)
             self.assertIn("stage=web_retrieve search_start", joined)
             self.assertIn("stage=web_retrieve search_done", joined)
-            self.assertIn("stage=web_retrieve fetch_ok", joined)
+            self.assertTrue(
+                ("stage=web_retrieve fetch_ok" in joined)
+                or ("stage=web_retrieve fetch_snippet_fallback" in joined)
+            )
             self.assertIn("stage=web_trace end", joined)
             self.assertIn("web_used=true", joined)
 

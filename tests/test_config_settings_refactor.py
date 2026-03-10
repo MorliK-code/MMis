@@ -149,6 +149,52 @@ class ConfigSettingsRefactorTests(unittest.TestCase):
         self.assertIn("memory.backend must be one of ['chroma', 'chromadb']", message)
         self.assertIn("Switch memory.backend to 'chroma' or 'chromadb'", message)
 
+    def test_memory_v2_thresholds_and_importance_weights_are_loaded(self) -> None:
+        load_config(force_reload=True)
+        update_config_values(
+            {
+                "memory.lifecycle.promotion_thresholds.message_importance": 0.93,
+                "memory.scoring.importance_weights.base": 0.11,
+                "memory.scoring.importance_weights.decision": 0.22,
+                "memory.scoring.importance_weights.remember": 0.33,
+                "memory.scoring.importance_weights.project": 0.44,
+            }
+        )
+        settings = load_config(force_reload=True)
+        self.assertAlmostEqual(float(settings.memory_promotion_message_importance_threshold), 0.93, places=6)
+        self.assertAlmostEqual(float(settings.memory_importance_weight_base), 0.11, places=6)
+        self.assertAlmostEqual(float(settings.memory_importance_weight_decision), 0.22, places=6)
+        self.assertAlmostEqual(float(settings.memory_importance_weight_remember), 0.33, places=6)
+        self.assertAlmostEqual(float(settings.memory_importance_weight_project), 0.44, places=6)
+
+    def test_memory_v2_retrieval_fusion_weights_are_loaded(self) -> None:
+        load_config(force_reload=True)
+        update_config_values(
+            {
+                "memory.retrieval.fusion_weights.semantic_similarity": 0.51,
+                "memory.retrieval.fusion_weights.lexical_score": 0.41,
+                "memory.retrieval.fusion_weights.scope_match_score": 0.19,
+            }
+        )
+        settings = load_config(force_reload=True)
+        self.assertAlmostEqual(float(settings.memory_retrieval_weight_semantic_similarity), 0.51, places=6)
+        self.assertAlmostEqual(float(settings.memory_retrieval_weight_lexical_score), 0.41, places=6)
+        self.assertAlmostEqual(float(settings.memory_retrieval_weight_scope_match_score), 0.19, places=6)
+
+    def test_memory_v2_salience_weights_are_loaded(self) -> None:
+        load_config(force_reload=True)
+        update_config_values(
+            {
+                "memory.scoring.salience_weights.novelty": 0.31,
+                "memory.scoring.salience_weights.permanence": 0.27,
+                "memory.scoring.salience_weights.explicit_save_signal": 0.91,
+            }
+        )
+        settings = load_config(force_reload=True)
+        self.assertAlmostEqual(float(settings.memory_salience_weight_novelty), 0.31, places=6)
+        self.assertAlmostEqual(float(settings.memory_salience_weight_permanence), 0.27, places=6)
+        self.assertAlmostEqual(float(settings.memory_salience_weight_explicit_save_signal), 0.91, places=6)
+
     def test_logging_and_paths_sections_are_present(self) -> None:
         load_config(force_reload=True)
         cfg = self._read_cfg()

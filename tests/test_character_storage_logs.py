@@ -84,12 +84,10 @@ class CharacterStorageLogsTests(unittest.TestCase):
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
             loaded = storage.load_persona_state("asya")
-            root_baseline = dict(loaded.get("baseline_traits") or {})
             learned_baseline = dict((dict(loaded.get("learned") or {})).get("baseline_traits") or {})
-            self.assertAlmostEqual(float(root_baseline.get("warmth", 0.0)), 0.41, places=6)
             self.assertAlmostEqual(float(learned_baseline.get("warmth", 0.0)), 0.41, places=6)
-            self.assertAlmostEqual(float(root_baseline.get("sarcasm", 0.0)), 0.19, places=6)
             self.assertAlmostEqual(float(learned_baseline.get("sarcasm", 0.0)), 0.19, places=6)
+            self.assertNotIn("baseline_traits", loaded)
 
 
 if __name__ == "__main__":

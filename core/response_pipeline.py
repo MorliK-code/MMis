@@ -7,7 +7,7 @@ import time
 import unicodedata
 import datetime as dt
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -34,7 +34,7 @@ from modules.internet.web.result_processor import format_postprocess_citation_su
 from prompt_engine import PromptEngine
 from utils.datetime_local import now_local_ts, parse_time_to_epoch
 from utils.logger import get_logger, log_json
-from modules.internet.web.stage import WebRetrieveStage
+from modules.internet.web.stage import WebStageV2
 
 
 PROFILE_FAST = "FAST"
@@ -417,6 +417,7 @@ class MemoryRetrieveStage(PipelineStage):
 
     def __init__(self, memory_manager=None):
         self.memory_manager = memory_manager
+        self._cfg = load_config()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         if ctx.route not in {"chat", "command"}:
@@ -432,10 +433,31 @@ class MemoryRetrieveStage(PipelineStage):
             ctx.logs.append("stage=memory_retrieve skipped(no_manager)")
             return ctx
 
+        def _cfg_int(name: str, *, minimum: int) -> int:
+            try:
+                value = int(getattr(self._cfg, name))
+            except Exception:
+                value = minimum
+            return max(minimum, value)
+
+        def _pick_int(*values: Any, default: int, minimum: int) -> int:
+            chosen = _pick_value(*values, default)
+            try:
+                value = int(chosen)
+            except Exception:
+                value = default
+            return max(minimum, value)
+
+        default_k = _cfg_int("memory_retrieval_top_k", minimum=1)
+        default_budget_total = _cfg_int("memory_context_budget_total", minimum=256)
+        default_budget_memory = _cfg_int("memory_context_budget_memory", minimum=64)
+        default_budget_docs = _cfg_int("memory_context_budget_docs", minimum=64)
+        default_budget_tools = _cfg_int("memory_context_budget_tools", minimum=32)
+        default_budget_response_reserve = _cfg_int("memory_context_budget_response_reserve", minimum=64)
         try:
-            k = max(1, int(_pick_value(ctx.meta.get("memory_k"), ctx.policies.get("memory_k"), 8) or 8))
+            k = max(1, int(_pick_value(ctx.meta.get("memory_k"), ctx.policies.get("memory_k"), default_k) or default_k))
         except Exception:
-            k = 8
+            k = default_k
 
         try:
             scope_names = list(_as_list(_pick_value(ctx.meta.get("memory_scopes"), ctx.policies.get("memory_scopes"), [])))
@@ -466,12 +488,35 @@ class MemoryRetrieveStage(PipelineStage):
                 session_summary=str(_pick_value(ctx.state.get("dialog_summary"), "")),
                 tool_state=_as_dict(ctx.state.get("last_tool_result")),
                 unresolved_items=[str(x) for x in list(_as_list(ctx.state.get("open_questions"))) if str(x).strip()],
-                context_budget_total=int(_pick_value(ctx.meta.get("context_budget_total"), 2200) or 2200),
-                context_budget_memory=int(_pick_value(ctx.meta.get("context_budget_memory"), 700) or 700),
-                context_budget_docs=int(_pick_value(ctx.meta.get("context_budget_docs"), 600) or 600),
-                context_budget_tools=int(_pick_value(ctx.meta.get("context_budget_tools"), 220) or 220),
-                context_budget_response_reserve=int(
-                    _pick_value(ctx.meta.get("context_budget_response_reserve"), 260) or 260
+                context_budget_total=_pick_int(
+                    ctx.meta.get("context_budget_total"),
+                    ctx.policies.get("context_budget_total"),
+                    default=default_budget_total,
+                    minimum=256,
+                ),
+                context_budget_memory=_pick_int(
+                    ctx.meta.get("context_budget_memory"),
+                    ctx.policies.get("context_budget_memory"),
+                    default=default_budget_memory,
+                    minimum=64,
+                ),
+                context_budget_docs=_pick_int(
+                    ctx.meta.get("context_budget_docs"),
+                    ctx.policies.get("context_budget_docs"),
+                    default=default_budget_docs,
+                    minimum=64,
+                ),
+                context_budget_tools=_pick_int(
+                    ctx.meta.get("context_budget_tools"),
+                    ctx.policies.get("context_budget_tools"),
+                    default=default_budget_tools,
+                    minimum=32,
+                ),
+                context_budget_response_reserve=_pick_int(
+                    ctx.meta.get("context_budget_response_reserve"),
+                    ctx.policies.get("context_budget_response_reserve"),
+                    default=default_budget_response_reserve,
+                    minimum=64,
                 ),
             )
             result = manager.build_context(context_request)
@@ -485,6 +530,7 @@ class MemoryRetrieveStage(PipelineStage):
             return ctx
 
         ctx.memory_context = dict(pack)
+        ctx.state["memory_context"] = dict(pack)
         retrieved = list(_as_list(pack.get("selected")))
         if retrieved:
             ctx.retrieved_memories = retrieved
@@ -494,8 +540,14 @@ class MemoryRetrieveStage(PipelineStage):
         if session_summary:
             ctx.state["dialog_summary"] = session_summary
 
+        truncation_log = list(_as_list(pack.get("truncation_log")))
+        dropped = list(_as_list(pack.get("dropped")))
         ctx.logs.append(
-            f"stage=memory_retrieve retrieved={len(ctx.retrieved_memories)} tail={len(_as_list(ctx.state.get('history')))}"
+            "stage=memory_retrieve "
+            f"retrieved={len(ctx.retrieved_memories)} "
+            f"dropped={len(dropped)} "
+            f"compress={len(truncation_log)} "
+            f"tail={len(_as_list(ctx.state.get('history')))}"
         )
         return ctx
 
@@ -516,13 +568,21 @@ class PromptBuildStage(PipelineStage):
         prompt_state["context_tags"] = merged_tags
         if ctx.plan:
             prompt_state["plan"] = ctx.plan
+        memory_blocks = {}
         if ctx.memory_context:
-            prompt_state.setdefault("memory_context", dict(ctx.memory_context))
-            blocks = _as_dict(ctx.memory_context.get("blocks"))
-            prompt_state.setdefault(
-                "long_summary",
-                str(_pick_value(blocks.get("session_summary"), blocks.get("working_memory"), "")),
-            )
+            prompt_state["memory_context"] = dict(ctx.memory_context)
+            memory_blocks = _as_dict(ctx.memory_context.get("blocks"))
+            summary_hint = str(_pick_value(memory_blocks.get("session_summary"), memory_blocks.get("working_memory"), ""))
+            if summary_hint:
+                prompt_state["long_summary"] = summary_hint
+                prompt_state["dialog_summary"] = summary_hint
+            tool_hint = str(memory_blocks.get("active_tool_state") or "").strip()
+            if tool_hint:
+                prompt_state["last_tool_result"] = tool_hint
+        if ctx.memory_context:
+            selected = list(_as_list(ctx.memory_context.get("selected")))
+            if selected:
+                ctx.retrieved_memories = selected
         if bool(ctx.meta.get("think", False)):
             rules = ctx.policies.get("rules")
             if not isinstance(rules, list):
@@ -537,6 +597,15 @@ class PromptBuildStage(PipelineStage):
         web_used = str(ctx.tags.get("web_used") or "").strip().lower() == "true"
         web_fresh_missing = str(ctx.tags.get("web_fresh_missing") or "").strip().lower() == "true"
         web_response_style = str(ctx.tags.get("web_response_style") or "").strip().lower()
+        web_evidence_context = _as_dict(
+            _pick_value(
+                ctx.meta.get("web_evidence_context"),
+                ctx.state.get("web_evidence_context"),
+                {},
+            )
+        )
+        if web_used and web_evidence_context:
+            prompt_state["web_evidence_context"] = dict(web_evidence_context)
         retrieved_for_prompt = list(_as_list(ctx.retrieved_memories))
 
         if web_used and web_intent in {"fx_rate", "weather", "news_release"}:
@@ -590,27 +659,28 @@ class PromptBuildStage(PipelineStage):
             traits=ctx.traits,
             policies=ctx.policies,
         )
+        if ctx.memory_context:
+            ctx.prompt_pack = _apply_memory_context_to_prompt_pack(
+                ctx.prompt_pack,
+                memory_context=ctx.memory_context,
+                selected_memories=retrieved_for_prompt,
+            )
+        ctx.prompt_pack = _apply_web_evidence_to_prompt_pack(
+            ctx.prompt_pack,
+            web_evidence_context=(web_evidence_context if web_used else {}),
+        )
         emitter = ctx.meta.get("emit_web_trace_event")
         if callable(emitter):
-            web_rows = [x for x in list(retrieved_for_prompt) if _is_web_memory_item(x)]
-            domains = sorted(
-                {
-                    _web_memory_domain(x)
-                    for x in list(web_rows)
-                    if _web_memory_domain(x)
-                }
-            )
+            web_sources = [x for x in list(_as_list(web_evidence_context.get("sources"))) if isinstance(x, dict)]
+            domains = sorted({str(_as_dict(x).get("domain") or "").strip().lower() for x in list(web_sources) if str(_as_dict(x).get("domain") or "").strip()})
             emitter(
                 "web_context_injected",
                 {
                     "retrieved_total": len(list(retrieved_for_prompt)),
-                    "web_context_count": len(list(web_rows)),
+                    "web_context_count": len(list(web_sources)),
                     "domains": domains,
-                    "truncated_candidates": sum(
-                        1
-                        for x in list(web_rows)
-                        if str(_pick_value(_as_dict(x).get("text"), _as_dict(x).get("content"), "")).rstrip().endswith("...")
-                    ),
+                    "citations": len(list(_as_list(web_evidence_context.get("compact_citations")))),
+                    "conflicting_sources": bool(web_evidence_context.get("conflicting_sources")),
                 },
             )
         ctx.logs.append("stage=prompt_build")
@@ -1901,12 +1971,45 @@ class GenerateStage(PipelineStage):
                 prompt_state["context_tags"] = merged_tags
                 if ctx.plan:
                     prompt_state["plan"] = ctx.plan
+                if ctx.memory_context:
+                    prompt_state["memory_context"] = dict(ctx.memory_context)
+                    context_blocks = _as_dict(ctx.memory_context.get("blocks"))
+                    summary_hint = str(_pick_value(context_blocks.get("session_summary"), context_blocks.get("working_memory"), ""))
+                    if summary_hint:
+                        prompt_state["long_summary"] = summary_hint
+                        prompt_state["dialog_summary"] = summary_hint
+                web_evidence_context = _as_dict(
+                    _pick_value(
+                        ctx.meta.get("web_evidence_context"),
+                        ctx.state.get("web_evidence_context"),
+                        {},
+                    )
+                )
+                if web_evidence_context and _to_bool(
+                    _pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False),
+                    default=False,
+                ):
+                    prompt_state["web_evidence_context"] = dict(web_evidence_context)
                 ctx.prompt_pack = self.character_runtime.build(
                     state=prompt_state,
                     user_msg=ctx.clean_user_msg,
                     retrieved_memories=ctx.retrieved_memories,
                     traits=ctx.traits,
                     policies=ctx.policies,
+                )
+                if ctx.memory_context:
+                    ctx.prompt_pack = _apply_memory_context_to_prompt_pack(
+                        ctx.prompt_pack,
+                        memory_context=ctx.memory_context,
+                        selected_memories=list(_as_list(ctx.retrieved_memories)),
+                    )
+                ctx.prompt_pack = _apply_web_evidence_to_prompt_pack(
+                    ctx.prompt_pack,
+                    web_evidence_context=(
+                        web_evidence_context
+                        if _to_bool(_pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False), default=False)
+                        else {}
+                    ),
                 )
                 messages = _messages_from_prompt_pack(ctx.prompt_pack)
         else:
@@ -2450,7 +2553,7 @@ class ResponsePipeline:
                 character_runtime=self.character_engine,
             ),
             "memory_retrieve": MemoryRetrieveStage(memory_manager=memory_manager),
-            "web_retrieve": WebRetrieveStage(),
+            "web_retrieve": WebStageV2(),
             "prompt_build": PromptBuildStage(character_runtime=self.character_runtime),
             "prompt_engine": PromptEngineStage(prompt_engine=self.prompt_engine),
             "generate": GenerateStage(
@@ -2804,6 +2907,168 @@ def _messages_from_prompt_pack(pack: PromptPack) -> list[Message]:
             )
         )
     return out
+
+
+def _apply_memory_context_to_prompt_pack(
+    pack: PromptPack,
+    *,
+    memory_context: dict[str, Any],
+    selected_memories: list[Any] | None = None,
+) -> PromptPack:
+    row = _as_dict(memory_context)
+    blocks = _as_dict(row.get("blocks"))
+    if not blocks:
+        return pack
+
+    merged = dict(pack.blocks or {})
+    merged["retrieved_memories"] = _render_memory_context_for_prompt(blocks)
+    merged["conversation_tail"] = ""
+
+    summary = str(blocks.get("session_summary") or "").strip()
+    if summary:
+        merged["long_summary"] = summary
+    user_msg = str(blocks.get("user_message") or "").strip()
+    if user_msg:
+        merged["user_message"] = user_msg
+    system_core = str(blocks.get("system_core") or "").strip()
+    if system_core:
+        merged["system_role"] = system_core
+
+    token_usage = dict(pack.token_usage or {})
+    for key in ("system_role", "user_message", "retrieved_memories", "long_summary", "conversation_tail"):
+        token_usage[key] = int(estimate_tokens(str(merged.get(key) or "")))
+    token_usage["full_prompt"] = int(estimate_tokens(_render_prompt_preview_from_blocks(merged)))
+
+    cut_info = dict(pack.cut_info or {})
+    truncation_log = [dict(x) for x in list(_as_list(row.get("truncation_log"))) if isinstance(x, dict)]
+    cut_info["memory_context_selected"] = len(list(_as_list(row.get("selected"))))
+    cut_info["memory_context_dropped"] = len(list(_as_list(row.get("dropped"))))
+    cut_info["memory_context_compression_steps"] = len(truncation_log)
+    if truncation_log:
+        cut_info["memory_context_truncation_log"] = truncation_log[:24]
+
+    selected_rows = [dict(x) for x in list(_as_list(selected_memories)) if isinstance(x, dict)]
+    return replace(
+        pack,
+        blocks=merged,
+        token_usage=token_usage,
+        cut_info=cut_info,
+        selected_memories=(selected_rows if selected_rows else list(pack.selected_memories or [])),
+    )
+
+
+def _apply_web_evidence_to_prompt_pack(
+    pack: PromptPack,
+    *,
+    web_evidence_context: dict[str, Any] | None,
+) -> PromptPack:
+    context = _as_dict(web_evidence_context)
+    if not context:
+        return pack
+    web_block = _render_web_evidence_for_prompt(context)
+    if not web_block:
+        return pack
+
+    merged = dict(pack.blocks or {})
+    merged["web_evidence"] = web_block
+
+    token_usage = dict(pack.token_usage or {})
+    token_usage["web_evidence"] = int(estimate_tokens(str(web_block or "")))
+    token_usage["full_prompt"] = int(estimate_tokens(_render_prompt_preview_from_blocks(merged)))
+
+    cut_info = dict(pack.cut_info or {})
+    cut_info["web_evidence_injected"] = True
+    cut_info["web_evidence_sources"] = len(list(_as_list(context.get("sources"))))
+    cut_info["web_evidence_conflicting_sources"] = bool(context.get("conflicting_sources"))
+    cut_info["web_evidence_citations"] = len(list(_as_list(context.get("compact_citations"))))
+
+    return replace(
+        pack,
+        blocks=merged,
+        token_usage=token_usage,
+        cut_info=cut_info,
+    )
+
+
+def _render_web_evidence_for_prompt(context: dict[str, Any]) -> str:
+    direct = str(context.get("prompt_block") or "").strip()
+    if direct:
+        return direct
+
+    summary = str(context.get("summary") or "").strip()
+    freshness = str(context.get("freshness_summary") or "").strip()
+    key_facts = [str(x).strip() for x in _as_list(context.get("key_facts")) if str(x).strip()]
+    citations = [str(x).strip() for x in _as_list(context.get("compact_citations")) if str(x).strip()]
+    conflict_notes = [str(x).strip() for x in _as_list(context.get("conflict_notes")) if str(x).strip()]
+    sources = [x for x in _as_list(context.get("sources")) if isinstance(x, dict)]
+    conflicting_sources = bool(context.get("conflicting_sources"))
+
+    lines: list[str] = []
+    if summary:
+        lines.append(f"- summary: {summary}")
+    if freshness:
+        lines.append(f"- freshness: {freshness}")
+    if key_facts:
+        lines.append("- key_facts:")
+        for fact in list(key_facts)[:8]:
+            lines.append(f"  - {fact}")
+    if citations:
+        lines.append("- citations:")
+        for citation in list(citations)[:4]:
+            lines.append(f"  - {citation}")
+    lines.append(f"- source_conflicts: {'yes' if conflicting_sources else 'no'}")
+    if conflicting_sources and conflict_notes:
+        lines.append("- conflict_notes:")
+        for note in list(conflict_notes)[:4]:
+            lines.append(f"  - {note}")
+    if sources:
+        lines.append("- sources:")
+        for row in list(sources)[:5]:
+            item = _as_dict(row)
+            domain = str(item.get("domain") or "").strip() or "unknown"
+            url = str(item.get("url") or "").strip()
+            published = str(item.get("published_at") or "").strip() or "-"
+            fetched = str(item.get("fetched_at") or "").strip() or "-"
+            lines.append(f"  - {domain} | published={published} | fetched={fetched} | {url}")
+
+    if not lines:
+        return ""
+    return "[WEB_EVIDENCE]\n" + "\n".join(lines).strip()
+
+
+def _render_memory_context_for_prompt(blocks: dict[str, Any]) -> str:
+    order = [
+        ("WORKING_MEMORY", "working_memory"),
+        ("SESSION_SUMMARY", "session_summary"),
+        ("SEMANTIC_FACTS", "retrieved_semantic"),
+        ("EPISODIC_MEMORIES", "retrieved_episodic"),
+        ("DOCUMENT_EVIDENCE", "retrieved_docs"),
+        ("TASK_TOOL_STATE", "active_tool_state"),
+        ("UNRESOLVED_ITEMS", "unresolved_items"),
+    ]
+    chunks: list[str] = []
+    for title, key in order:
+        value = str(blocks.get(key) or "").strip()
+        if not value:
+            continue
+        chunks.append(f"[{title}]\n{value}")
+    return "\n\n".join(chunks).strip()
+
+
+def _render_prompt_preview_from_blocks(blocks: dict[str, Any]) -> str:
+    parts = [
+        ("SYSTEM", str(blocks.get("system_role") or "").strip()),
+        ("MEMORY", str(blocks.get("retrieved_memories") or "").strip()),
+        ("WEB_EVIDENCE", str(blocks.get("web_evidence") or "").strip()),
+        ("SUMMARY", str(blocks.get("long_summary") or "").strip()),
+        ("USER", str(blocks.get("user_message") or "").strip()),
+    ]
+    out: list[str] = []
+    for name, text in parts:
+        if not text:
+            continue
+        out.append(f"[{name}]\n{text}")
+    return "\n\n".join(out).strip()
 
 
 def _parse_tools(value) -> list[ToolSpec]:

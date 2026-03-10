@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from modules.internet.search import SearchResult
 from modules.internet.web.freshness import assess_freshness
 from modules.internet.web.query_classifier import classify_query
-from modules.internet.web.stage import WebRagConfig, WebRetrieveStage
+from modules.internet.web.stage import WebStageConfig, WebStageV2
 from modules.internet.web.web_models import ConfidenceAssessment, WebSearchMode
 from modules.internet.web.web_policy import WebPolicyEngine, config_from_dict
 
@@ -117,7 +117,7 @@ class WebStageV2IntegrationTests(unittest.TestCase):
                 return []
 
         search = _SpySearch()
-        stage = WebRetrieveStage(search_client=search, scraper=SimpleNamespace(scrape=lambda _url: None), cfg=WebRagConfig())
+        stage = WebStageV2(search_client=search, scraper=SimpleNamespace(scrape=lambda _url: None), cfg=WebStageConfig())
         ctx = SimpleNamespace(
             clean_user_msg="объясни архитектуру нашего пайплайна памяти",
             user_msg="объясни архитектуру нашего пайплайна памяти",
@@ -161,7 +161,7 @@ class WebStageV2IntegrationTests(unittest.TestCase):
                 )
 
         search = _SpySearch()
-        stage = WebRetrieveStage(search_client=search, scraper=_StubScraper(), cfg=WebRagConfig())
+        stage = WebStageV2(search_client=search, scraper=_StubScraper(), cfg=WebStageConfig())
         ctx = SimpleNamespace(
             clean_user_msg="какие сейчас лучшие практики архитектуры RAG в 2026",
             user_msg="какие сейчас лучшие практики архитектуры RAG в 2026",
@@ -180,4 +180,3 @@ class WebStageV2IntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

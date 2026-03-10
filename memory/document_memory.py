@@ -1,3 +1,5 @@
+"""Document ingestion/chunking layer for Memory V2."""
+
 from __future__ import annotations
 
 import re
@@ -48,16 +50,26 @@ class DocumentMemory:
 
         now_ts = float(time.time())
         doc_id = f"doc:{uuid.uuid4().hex[:18]}"
-        summary = self._summarize(text)
+        source = str(request.source or "document").strip() or "document"
+        title = str(request.title or dict(request.metadata or {}).get("title") or "").strip() or self._derive_title(text)
+        language = self._detect_language(metadata=dict(request.metadata or {}), text=text)
+        summary = self._summarize(text, title=title)
 
         document = DocumentRecord(
             id=doc_id,
-            source=str(request.source or "document"),
+            source=source,
             text=text,
             summary=summary,
             scope=request.scope,
             namespace=str(request.namespace or "default"),
-            metadata=dict(request.metadata or {}),
+            metadata={
+                "doc_id": doc_id,
+                "source": source,
+                "title": title,
+                "summary": summary,
+                "language": language,
+                **dict(request.metadata or {}),
+            },
             created_at=now_ts,
             updated_at=now_ts,
         )
@@ -70,19 +82,28 @@ class DocumentMemory:
             namespace=str(request.namespace or "default"),
             scope=request.scope,
             document_id=doc_id,
+            source=source,
+            title=title,
+            summary=summary,
+            language=language,
         )
 
         records: list[MemoryRecord] = [
             MemoryRecord(
                 id=doc_id,
-                text=summary,
+                text=f"{title}\n{summary}".strip() if title else summary,
                 memory_type=MemoryType.DOCUMENT,
                 level=MemoryLevel.L4_DOCUMENT,
                 scope=request.scope,
                 namespace=str(request.namespace or "default"),
                 metadata={
+                    "doc_id": doc_id,
                     "document_source": document.source,
+                    "source": source,
+                    "title": title,
                     "summary": summary,
+                    "language": language,
+                    "chunk_count": len(chunk_rows),
                     **dict(request.metadata or {}),
                 },
                 importance=0.72,
@@ -103,6 +124,8 @@ class DocumentMemory:
                     namespace=chunk.namespace,
                     metadata={
                         "document_id": chunk.document_id,
+                        "doc_id": chunk.document_id,
+                        "chunk_id": chunk.id,
                         "chunk_index": chunk.chunk_index,
                         **dict(chunk.metadata or {}),
                     },
@@ -128,17 +151,23 @@ class DocumentMemory:
         namespace: str,
         scope,
         document_id: str,
+        source: str = "",
+        title: str = "",
+        summary: str = "",
+        language: str = "",
     ) -> list[ChunkRecord]:
         src = str(text or "")
-        language = self._detect_language(metadata=metadata, text=src)
-        chunks: list[str]
-        if language:
-            chunks = self._chunk_code(src, language=language, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        lang = str(language or "").strip().lower() or self._detect_language(metadata=metadata, text=src)
+        chunks: list[tuple[str, int, int]]
+        if lang:
+            raw = self._chunk_code(src, language=lang, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            chunks = self._approximate_spans(src, raw)
         else:
-            chunks = self._chunk_plain(src, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            chunks = self._chunk_plain_spans(src, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
         out: list[ChunkRecord] = []
-        for idx, chunk_text in enumerate(chunks):
+        for idx, payload in enumerate(chunks):
+            chunk_text, start_char, end_char = payload
             piece = str(chunk_text or "").strip()
             if not piece:
                 continue
@@ -150,33 +179,66 @@ class DocumentMemory:
                     text=piece,
                     scope=scope,
                     namespace=namespace,
-                    metadata={"language": language},
+                    metadata={
+                        "doc_id": document_id,
+                        "chunk_id": f"chunk:{document_id}:{idx}",
+                        "chunk_index": idx,
+                        "source": source,
+                        "title": title,
+                        "summary": summary,
+                        "language": lang,
+                        "char_start": int(start_char),
+                        "char_end": int(end_char),
+                        "char_len": len(piece),
+                    },
                 )
             )
         return out
 
     @staticmethod
-    def _summarize(text: str, max_chars: int = 360) -> str:
+    def _derive_title(text: str, max_chars: int = 96) -> str:
+        src = str(text or "").strip()
+        if not src:
+            return ""
+        for line in src.splitlines():
+            item = str(line or "").strip()
+            if not item:
+                continue
+            if item.startswith("#"):
+                item = item.lstrip("#").strip()
+            if item:
+                return item[:max_chars].strip()
+        return src[:max_chars].strip()
+
+    @staticmethod
+    def _summarize(text: str, *, title: str = "", max_chars: int = 360) -> str:
         src = str(text or "").strip()
         if not src:
             return ""
         lines = [x.strip() for x in src.splitlines() if x.strip()]
         if not lines:
-            return src[:max_chars]
+            body = src[:max_chars]
+            return f"{title}: {body}" if title else body
         head = " ".join(lines[:3]).strip()
+        if title:
+            head = f"{title}. {head}".strip()
         if len(head) <= max_chars:
             return head
         return head[: max_chars - 3].rstrip() + "..."
 
     @staticmethod
     def _chunk_plain(text: str, *, chunk_size: int, chunk_overlap: int) -> list[str]:
+        return [row[0] for row in DocumentMemory._chunk_plain_spans(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)]
+
+    @staticmethod
+    def _chunk_plain_spans(text: str, *, chunk_size: int, chunk_overlap: int) -> list[tuple[str, int, int]]:
         src = str(text or "")
         n = max(256, int(chunk_size))
         overlap = max(0, min(n // 2, int(chunk_overlap)))
         if len(src) <= n:
-            return [src]
+            return [(src, 0, len(src))]
 
-        out: list[str] = []
+        out: list[tuple[str, int, int]] = []
         i = 0
         while i < len(src):
             end = min(len(src), i + n)
@@ -186,11 +248,11 @@ class DocumentMemory:
                 if split > 120:
                     piece = piece[:split]
                     end = i + split
-            out.append(piece.strip())
+            out.append((piece.strip(), i, end))
             if end >= len(src):
                 break
             i = max(0, end - overlap)
-        return [x for x in out if x]
+        return [x for x in out if str(x[0]).strip()]
 
     def _chunk_code(self, text: str, *, language: str, chunk_size: int, chunk_overlap: int) -> list[str]:
         sections = self._sections_from_tree_sitter(text=text, language=language)
@@ -223,6 +285,23 @@ class DocumentMemory:
         if cur:
             chunks.append(cur)
         return [x for x in chunks if x]
+
+    @staticmethod
+    def _approximate_spans(text: str, chunks: list[str]) -> list[tuple[str, int, int]]:
+        src = str(text or "")
+        out: list[tuple[str, int, int]] = []
+        cursor = 0
+        for piece in list(chunks or []):
+            part = str(piece or "")
+            if not part:
+                continue
+            idx = src.find(part, cursor)
+            if idx < 0:
+                idx = max(0, cursor)
+            end = min(len(src), idx + len(part))
+            out.append((part, idx, end))
+            cursor = max(cursor, end)
+        return out
 
     def _sections_from_tree_sitter(self, *, text: str, language: str) -> list[str]:
         # Optional path: if tree-sitter grammars are installed we can improve sectioning.
@@ -308,3 +387,69 @@ class DocumentMemory:
         if "namespace " in src and "class " in src:
             return "csharp"
         return ""
+
+    def retrieve_document_context(
+        self,
+        *,
+        query_text: str,
+        namespace: str,
+        top_k: int = 8,
+        scope=None,
+        document_id: str | None = None,
+        include_document: bool = True,
+        include_chunks: bool = True,
+    ) -> list[dict[str, Any]]:
+        scopes = [scope] if scope is not None else []
+        memory_types: list[str] = []
+        if include_document:
+            memory_types.append(MemoryType.DOCUMENT.value)
+        if include_chunks:
+            memory_types.append(MemoryType.DOCUMENT_CHUNK.value)
+        filters: dict[str, Any] = {"memory_type": memory_types or [MemoryType.DOCUMENT_CHUNK.value]}
+        key = str(document_id or "").strip()
+        if key and include_chunks:
+            filters["parent_id"] = key
+        rows = self.store.search(
+            query_text=str(query_text or ""),
+            top_k=max(1, int(top_k)),
+            namespace=str(namespace or "default"),
+            scopes=scopes,
+            include_stale=False,
+            metadata_filters=filters,
+        )
+        if key and include_document:
+            for row in self.store.iter_records(namespace=str(namespace or "default")):
+                if row.id != key or row.memory_type != MemoryType.DOCUMENT:
+                    continue
+                rows.insert(
+                    0,
+                    {
+                        "record": row,
+                        "semantic_score": 0.0,
+                        "lexical_score": 1.0 if key.lower() in str(row.text or "").lower() else 0.45,
+                    },
+                )
+                break
+        return rows[: max(1, int(top_k))]
+
+    def document_tree(self, *, document_id: str, namespace: str) -> dict[str, Any]:
+        key = str(document_id or "").strip()
+        rows = self.store.iter_records(namespace=str(namespace or "default"))
+        document = None
+        for row in rows:
+            if row.id != key:
+                continue
+            if row.memory_type != MemoryType.DOCUMENT:
+                continue
+            document = row.to_dict()
+            break
+        chunks = [
+            row.to_dict()
+            for row in self.store.children_of(parent_id=key, namespace=str(namespace or "default"), include_stale=True)
+            if row.memory_type == MemoryType.DOCUMENT_CHUNK
+        ]
+        return {
+            "document": document,
+            "chunks": chunks,
+            "chunk_count": len(chunks),
+        }

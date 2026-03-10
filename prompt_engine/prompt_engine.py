@@ -45,6 +45,8 @@ class PromptEngine:
         traits_map = dict(traits or {})
         policies_map = dict(policies or {})
         blocks = dict(getattr(prompt_pack, "blocks", {}) or {})
+        memory_context = _as_dict(state_map.get("memory_context"))
+        memory_blocks = _as_dict(memory_context.get("blocks"))
         self._system_spec = load_spec("system", required=False)
         prompt_toggles = _as_dict(self._system_spec.get("prompt_toggles"))
         state_toggles = _as_dict(state_map.get("prompt_toggles"))
@@ -127,10 +129,32 @@ class PromptEngine:
 
         user_profile_block = self._build_user_profile_block(state_map)
         metadata_block = self._build_metadata_block(state_map=state_map, blocks=blocks)
-        tools_state_block = self._build_tools_state_block(state_map)
+        tools_state_block = self._build_tools_state_block(state_map, memory_blocks=memory_blocks)
+        memory_retrieval_block = self._build_memory_retrieval_block(blocks=blocks, memory_blocks=memory_blocks)
+        web_evidence_block = self._build_web_evidence_block(
+            blocks=blocks,
+            memory_blocks=memory_blocks,
+            state_map=state_map,
+        )
+        recent_chat_block = "" if memory_blocks else str(blocks.get("conversation_tail") or "")
+        long_summary_block = str(
+            _pick_first(
+                memory_blocks.get("session_summary"),
+                blocks.get("long_summary"),
+                state_map.get("dialog_summary"),
+                "",
+            )
+            or ""
+        )
+        user_block = str(_pick_first(memory_blocks.get("user_message"), blocks.get("user_message"), "") or "")
         verbosity_level = _resolve_verbosity_level(state_map=state_map, blocks=blocks)
         verbosity_limits = self.budget_manager.apply_verbosity(verbosity_level)
         memory_floor_tokens = max(48, int(self.budget_manager.budget.memory_retrieval * 0.28))
+        web_v2_cfg = _as_dict(getattr(self._settings, "web_v2", {}))
+        try:
+            web_evidence_max_tokens = max(80, int(web_v2_cfg.get("evidence_budget_tokens") or 220))
+        except Exception:
+            web_evidence_max_tokens = 220
 
         context_blocks = [
             ContextBlock(
@@ -182,7 +206,7 @@ class PromptEngine:
             ),
             ContextBlock(
                 id="memory_retrieval",
-                content=str(blocks.get("retrieved_memories") or ""),
+                content=memory_retrieval_block,
                 bucket="memory",
                 priority=78,
                 shrink_strategy="summarize",
@@ -190,8 +214,16 @@ class PromptEngine:
                 min_tokens=memory_floor_tokens,
             ),
             ContextBlock(
+                id="web_evidence",
+                content=web_evidence_block,
+                bucket="memory",
+                priority=79,
+                shrink_strategy="summarize",
+                max_tokens=web_evidence_max_tokens,
+            ),
+            ContextBlock(
                 id="recent_chat",
-                content=str(blocks.get("conversation_tail") or ""),
+                content=recent_chat_block,
                 bucket="history",
                 priority=66,
                 shrink_strategy="summarize",
@@ -199,7 +231,7 @@ class PromptEngine:
             ),
             ContextBlock(
                 id="long_summary",
-                content=str(blocks.get("long_summary") or state_map.get("dialog_summary") or ""),
+                content=long_summary_block,
                 bucket="long_summary",
                 priority=70,
                 shrink_strategy="summarize",
@@ -214,7 +246,7 @@ class PromptEngine:
             ),
             ContextBlock(
                 id="user",
-                content=str(blocks.get("user_message") or ""),
+                content=user_block,
                 bucket="user",
                 priority=100,
                 required=True,
@@ -233,6 +265,7 @@ class PromptEngine:
                 ("METADATA", fitted.get("metadata", "")),
                 ("TOOLS_STATE", fitted.get("tools_state", "")),
                 ("MEMORY", fitted.get("memory_retrieval", "")),
+                ("WEB_EVIDENCE", fitted.get("web_evidence", "")),
                 ("RECENT_CHAT", fitted.get("recent_chat", "")),
                 ("LONG_SUMMARY", fitted.get("long_summary", "")),
                 ("OUTPUT_SCHEMA", fitted.get("output_schema", "")),
@@ -270,6 +303,7 @@ class PromptEngine:
         sections["budget_dropped"] = ",".join([str(x) for x in list(budget_stats.get("dropped") or [])])
         sections["budget_trimmed"] = ",".join([str(x) for x in list(budget_stats.get("trimmed") or [])])
         sections["dialog_verbosity_level"] = f"{verbosity_level:.3f}"
+        sections["web_evidence_included"] = "1" if str(fitted.get("web_evidence") or "").strip() else "0"
 
         return PromptEngineResult(messages=messages, sections=sections)
 
@@ -372,7 +406,10 @@ class PromptEngine:
         return "\n".join(lines).strip()
 
     @staticmethod
-    def _build_tools_state_block(state_map: dict[str, Any]) -> str:
+    def _build_tools_state_block(state_map: dict[str, Any], *, memory_blocks: dict[str, Any] | None = None) -> str:
+        context_tool = str(_as_dict(memory_blocks).get("active_tool_state") or "").strip()
+        if context_tool:
+            return context_tool
         value = state_map.get("last_tool_result")
         if value is None:
             return ""
@@ -384,6 +421,75 @@ class PromptEngine:
             return json.dumps(value, ensure_ascii=False)
         except Exception:
             return str(value)
+
+    @staticmethod
+    def _build_memory_retrieval_block(*, blocks: dict[str, str], memory_blocks: dict[str, Any]) -> str:
+        if not memory_blocks:
+            return str(blocks.get("retrieved_memories") or "")
+        order = [
+            ("WORKING_MEMORY", "working_memory"),
+            ("SESSION_SUMMARY", "session_summary"),
+            ("SEMANTIC_FACTS", "retrieved_semantic"),
+            ("EPISODIC_MEMORIES", "retrieved_episodic"),
+            ("DOCUMENT_EVIDENCE", "retrieved_docs"),
+            ("TASK_TOOL_STATE", "active_tool_state"),
+            ("UNRESOLVED_ITEMS", "unresolved_items"),
+        ]
+        parts: list[str] = []
+        for title, key in order:
+            text = str(memory_blocks.get(key) or "").strip()
+            if not text:
+                continue
+            parts.append(f"[{title}]\n{text}")
+        return "\n\n".join(parts).strip()
+
+    @staticmethod
+    def _build_web_evidence_block(
+        *,
+        blocks: dict[str, str],
+        memory_blocks: dict[str, Any],
+        state_map: dict[str, Any],
+    ) -> str:
+        direct_candidates = [
+            str(memory_blocks.get("web_evidence") or "").strip(),
+            str(blocks.get("web_evidence") or "").strip(),
+            str(_as_dict(state_map.get("web_evidence_context")).get("prompt_block") or "").strip(),
+        ]
+        for item in direct_candidates:
+            if item:
+                return item
+
+        context = _as_dict(state_map.get("web_evidence_context"))
+        if not context:
+            return ""
+        summary = str(context.get("summary") or "").strip()
+        freshness = str(context.get("freshness_summary") or "").strip()
+        key_facts = [str(x).strip() for x in list(context.get("key_facts") or []) if str(x).strip()]
+        citations = [str(x).strip() for x in list(context.get("compact_citations") or []) if str(x).strip()]
+        conflict_notes = [str(x).strip() for x in list(context.get("conflict_notes") or []) if str(x).strip()]
+        conflicts = bool(context.get("conflicting_sources"))
+
+        lines: list[str] = []
+        if summary:
+            lines.append(f"- summary: {summary}")
+        if freshness:
+            lines.append(f"- freshness: {freshness}")
+        if key_facts:
+            lines.append("- key_facts:")
+            for fact in list(key_facts)[:8]:
+                lines.append(f"  - {fact}")
+        if citations:
+            lines.append("- citations:")
+            for citation in list(citations)[:4]:
+                lines.append(f"  - {citation}")
+        lines.append(f"- source_conflicts: {'yes' if conflicts else 'no'}")
+        if conflicts and conflict_notes:
+            lines.append("- conflict_notes:")
+            for note in list(conflict_notes)[:4]:
+                lines.append(f"  - {note}")
+        if not lines:
+            return ""
+        return "[WEB_EVIDENCE]\n" + "\n".join(lines).strip()
 
     @staticmethod
     def _build_dynamic_rules_block(*, state_map: dict[str, Any], policies_map: dict[str, Any]) -> str:

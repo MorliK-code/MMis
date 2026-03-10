@@ -7,7 +7,7 @@ enable_unittest_json_output()
 import unittest
 from types import SimpleNamespace
 
-from core.web_rag_stage import WebRagConfig, WebRetrieveStage
+from modules.internet.web.stage import WebStageConfig, WebStageV2
 from modules.internet.search import SearchResult
 
 
@@ -48,10 +48,10 @@ class _FakeScraper:
 class WebRetrieveMemoryPayloadTests(unittest.TestCase):
     def test_web_retrieve_writes_source_markers_to_memory(self) -> None:
         fake_search = _FakeSearch()
-        stage = WebRetrieveStage(
+        stage = WebStageV2(
             search_client=fake_search,
             scraper=_FakeScraper(),
-            cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+            cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
         )
         ctx = SimpleNamespace(
             clean_user_msg="/web курс доллара",
@@ -63,17 +63,20 @@ class WebRetrieveMemoryPayloadTests(unittest.TestCase):
             retrieved_memories=[],
         )
         out = stage.run(ctx)
-        self.assertTrue(out.retrieved_memories)
-        row = dict(out.retrieved_memories[0] or {})
-        self.assertEqual(str(row.get("source_url") or ""), "https://example.com/rates")
-        self.assertEqual(str(row.get("source_domain") or ""), "example.com")
+        self.assertEqual(list(out.retrieved_memories or []), [])
+        evidence_ctx = dict(out.meta.get("web_evidence_context") or {})
+        self.assertTrue(evidence_ctx)
+        sources = list(evidence_ctx.get("sources") or [])
+        self.assertTrue(sources)
+        row = dict(sources[0] or {})
+        self.assertEqual(str(row.get("url") or ""), "https://example.com/rates")
+        self.assertEqual(str(row.get("domain") or ""), "example.com")
         self.assertEqual(str(row.get("clean_method") or ""), "bs4")
-        self.assertEqual(str(row.get("published_date") or ""), "2026-03-04")
+        self.assertEqual(str(row.get("published_at") or ""), "2026-03-04")
         self.assertTrue(str(row.get("fetched_at") or ""))
-        self.assertGreaterEqual(float(row.get("priority") or 0.0), 0.85)
-        self.assertGreaterEqual(float(row.get("confidence") or 0.0), 0.80)
-        self.assertIn("source_url: https://example.com/rates", str(row.get("text") or ""))
-        self.assertIn("source_published: 2026-03-04", str(row.get("text") or ""))
+        prompt_block = str(evidence_ctx.get("prompt_block") or "")
+        self.assertIn("[WEB_EVIDENCE]", prompt_block)
+        self.assertIn("example.com", prompt_block)
         self.assertEqual(str(out.tags.get("web_query_intent") or ""), "fx_rate")
         self.assertEqual(str(out.tags.get("web_fresh_required") or ""), "true")
         self.assertEqual(str(out.tags.get("web_fresh_missing") or ""), "false")
@@ -83,10 +86,10 @@ class WebRetrieveMemoryPayloadTests(unittest.TestCase):
 
     def test_weather_query_in_auto_mode_uses_web_even_with_chat_intent(self) -> None:
         fake_search = _FakeSearch()
-        stage = WebRetrieveStage(
+        stage = WebStageV2(
             search_client=fake_search,
             scraper=_FakeScraper(),
-            cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+            cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
         )
         ctx = SimpleNamespace(
             clean_user_msg="какая погода в Киеве?",
@@ -106,10 +109,10 @@ class WebRetrieveMemoryPayloadTests(unittest.TestCase):
 
     def test_recipe_lookup_in_auto_mode_uses_web_for_generic_query(self) -> None:
         fake_search = _FakeSearch()
-        stage = WebRetrieveStage(
+        stage = WebStageV2(
             search_client=fake_search,
             scraper=_FakeScraper(),
-            cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+            cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
         )
         ctx = SimpleNamespace(
             clean_user_msg="найди мне точный рецепт безе",
@@ -127,10 +130,10 @@ class WebRetrieveMemoryPayloadTests(unittest.TestCase):
 
     def test_smalltalk_in_auto_aggressive_does_not_use_web(self) -> None:
         fake_search = _FakeSearch()
-        stage = WebRetrieveStage(
+        stage = WebStageV2(
             search_client=fake_search,
             scraper=_FakeScraper(),
-            cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+            cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
         )
         ctx = SimpleNamespace(
             clean_user_msg="how are you?",
@@ -165,10 +168,10 @@ class WebRetrieveMemoryPayloadTests(unittest.TestCase):
                 ]
 
         retry_search = _RetrySearch()
-        stage = WebRetrieveStage(
+        stage = WebStageV2(
             search_client=retry_search,
             scraper=_FakeScraper(),
-            cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+            cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
         )
         ctx = SimpleNamespace(
             clean_user_msg="посмотри актуальный курс доллара в Украине",

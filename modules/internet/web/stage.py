@@ -74,6 +74,7 @@ class WebStageV2:
             search_client=self._search,
             scraper=self._scraper,
             cooldown_seconds=_to_int(web_v2_cfg.get("cooldown_seconds"), 45),
+            retry_policy=_as_dict(web_v2_cfg.get("retry_policy")),
         )
 
         self._preferred_domains = [
@@ -118,6 +119,11 @@ class WebStageV2:
             _emit_trace_event(ctx, "web_retrieve_skip", {"reason": "empty_text"})
             return ctx
 
+        user_override = _resolve_user_override(
+            text=text,
+            meta=_as_dict(getattr(ctx, "meta", {})),
+            state=_as_dict(getattr(ctx, "state", {})),
+        )
         query = _strip_web_prefix(text)
         if not query:
             _set_web_flags(
@@ -175,15 +181,19 @@ class WebStageV2:
             web_mode=mode,
             web_auto_profile=auto_profile,
             internet_enabled=bool(self._app.internet_enabled),
+            user_override=user_override,
+            policy_context=_as_dict(getattr(ctx, "meta", {})),
         )
         decision_payload = decision.to_dict()
         decision_payload["classification"] = classification.to_dict()
         decision_payload["confidence"] = confidence.to_dict()
         decision_payload["freshness"] = freshness.to_dict()
+        decision_payload["user_override"] = str(user_override or "")
         _emit_trace_event(ctx, "web_policy_decision", decision_payload)
 
         if isinstance(getattr(ctx, "meta", None), dict):
             ctx.meta["web_query"] = str(query)
+            ctx.meta["web_user_override"] = str(user_override or "")
             ctx.meta["web_decision_breakdown"] = dict(decision.decision_breakdown or {})
             ctx.meta["web_query_classification"] = classification.to_dict()
             ctx.meta["web_confidence_assessment"] = confidence.to_dict()
@@ -271,7 +281,7 @@ class WebStageV2:
         ctx.logs.append(
             "stage=web_retrieve search_start "
             f"trace={trace} mode={decision.mode.value} max_queries={decision.budget.max_queries} "
-            f"max_sources={decision.budget.max_sources} max_pages={decision.budget.max_pages}"
+            f"max_sources={decision.budget.max_sources} max_fetches={_budget_fetches(decision)}"
         )
         _emit_trace_event(
             ctx,
@@ -280,9 +290,10 @@ class WebStageV2:
                 "query": str(query),
                 "mode": str(decision.mode.value),
                 "queries": plan.all_queries(),
+                "query_roles": dict(plan.query_roles or {}),
                 "max_queries": int(decision.budget.max_queries),
                 "max_sources": int(decision.budget.max_sources),
-                "max_pages": int(decision.budget.max_pages),
+                "max_fetches": int(_budget_fetches(decision)),
             },
         )
 
@@ -333,6 +344,10 @@ class WebStageV2:
                 "query": str(query),
                 "mode": str(decision.mode.value),
                 "queries_used": list(executed.queries_used),
+                "scout_queries_used": list(getattr(executed, "scout_queries_used", []) or []),
+                "focused_queries_used": list(getattr(executed, "focused_queries_used", []) or []),
+                "retries_used": int(getattr(executed, "retries_used", 0) or 0),
+                "cooldown_applied": bool(getattr(executed, "cooldown_applied", False)),
                 "result_count": len(ranked),
                 "domains": list(domains),
                 "top_results": [
@@ -352,6 +367,32 @@ class WebStageV2:
                 ],
             },
         )
+        _emit_trace_event(
+            ctx,
+            "web_budget_update",
+            {
+                "mode": str(decision.mode.value),
+                "budget": (
+                    decision.budget.to_dict()
+                    if hasattr(decision.budget, "to_dict")
+                    else {
+                        "max_queries": int(getattr(decision.budget, "max_queries", 0) or 0),
+                        "max_sources": int(getattr(decision.budget, "max_sources", 0) or 0),
+                        "max_pages": int(getattr(decision.budget, "max_pages", 0) or 0),
+                        "max_fetches": int(_budget_fetches(decision)),
+                    }
+                ),
+                "used": {
+                    "queries": int(len(list(executed.queries_used or []))),
+                    "sources": int(len(ranked)),
+                    "fetches": int(len(list(executed.fetched_pages or {}))),
+                    "scout_queries": int(len(list(getattr(executed, "scout_queries_used", []) or []))),
+                    "focused_queries": int(len(list(getattr(executed, "focused_queries_used", []) or []))),
+                },
+                "cooldown_applied": bool(getattr(executed, "cooldown_applied", False)),
+                "retries_used": int(getattr(executed, "retries_used", 0) or 0),
+            },
+        )
 
         evidence = build_evidence_pack(
             ranked_results=ranked,
@@ -364,8 +405,27 @@ class WebStageV2:
             decision=decision,
             classification=classification,
         )
+        prompt_items = list(bridge.prompt_items or [])
+        web_evidence_context = _build_web_evidence_context(
+            evidence=evidence,
+            prompt_items=prompt_items,
+            mode=str(decision.mode.value),
+            query=str(query),
+        )
+        _emit_trace_event(
+            ctx,
+            "web_evidence_pack",
+            {
+                "items": int(len(list(evidence.items or []))),
+                "citations": int(len(list(evidence.compact_citations or []))),
+                "key_facts": int(len(list(evidence.key_facts or []))),
+                "conflicting_sources": bool(evidence.conflicting_sources),
+                "conflict_notes": list(evidence.conflict_notes or []),
+            },
+        )
+
         fetched = 0
-        for item in list(bridge.prompt_items):
+        for item in list(prompt_items):
             row = dict(item or {})
             text_payload = str(row.get("text") or "")
             if not text_payload:
@@ -394,7 +454,6 @@ class WebStageV2:
                 },
             )
             fetched += 1
-            ctx.retrieved_memories.append(row)
 
         web_used = bool(fetched > 0)
         fresh_required = bool(freshness.needs_refresh or classification.requires_freshness)
@@ -408,15 +467,70 @@ class WebStageV2:
             web_used=web_used,
         )
 
+        planned_memory_writes = list(bridge.memory_writes or [])
+        stored_memory_writes = False
+        if bool(_as_dict(getattr(ctx, "meta", {})).get("store_turn", True)):
+            if isinstance(getattr(ctx, "memory_ops", None), list) and planned_memory_writes:
+                namespace = str(
+                    _pick(
+                        _as_dict(getattr(ctx, "meta", {})).get("conversation_id"),
+                        _as_dict(getattr(ctx, "state", {})).get("conversation_id"),
+                        "default",
+                    )
+                ).strip() or "default"
+                ctx.memory_ops.append(
+                    {
+                        "op": "web_memory_write",
+                        "namespace": namespace,
+                        "items": planned_memory_writes,
+                    }
+                )
+                stored_memory_writes = True
+        _emit_trace_event(
+            ctx,
+            "web_memory_write",
+            {
+                "planned": int(len(planned_memory_writes)),
+                "stable": int(sum(1 for x in planned_memory_writes if str(_as_dict(x).get("write_type") or "") == "stable")),
+                "temporary": int(sum(1 for x in planned_memory_writes if str(_as_dict(x).get("write_type") or "") == "temporary")),
+                "queued": bool(stored_memory_writes),
+            },
+        )
+        ctx.logs.append(
+            "stage=web_retrieve memory_write "
+            f"planned={len(planned_memory_writes)} queued={int(bool(stored_memory_writes))}"
+        )
+
         if isinstance(getattr(ctx, "meta", None), dict):
             ctx.meta["web_fetched"] = int(fetched)
             ctx.meta["web_used"] = bool(web_used)
             ctx.meta["web_citations"] = list(_adaptive_citations(evidence.compact_citations, classification, max_fact=self._citation_max_fact, max_compare=self._citation_max_compare))
             ctx.meta["web_evidence_pack"] = evidence.to_dict()
+            ctx.meta["web_evidence_context"] = dict(web_evidence_context)
+            ctx.meta["web_prompt_items"] = list(prompt_items)
+            ctx.meta["web_key_facts"] = list(evidence.key_facts or [])
+            ctx.meta["web_trust_hints"] = list(evidence.trust_hints or [])
+            ctx.meta["web_freshness_summary"] = str(evidence.freshness_summary or "")
             ctx.meta["web_memory_candidates"] = list(bridge.memory_candidates)
+            ctx.meta["web_memory_write_plan"] = list(planned_memory_writes)
+            ctx.meta["web_search_execution"] = {
+                "queries_used": list(executed.queries_used),
+                "scout_queries_used": list(getattr(executed, "scout_queries_used", []) or []),
+                "focused_queries_used": list(getattr(executed, "focused_queries_used", []) or []),
+                "retries_used": int(getattr(executed, "retries_used", 0) or 0),
+                "cooldown_applied": bool(getattr(executed, "cooldown_applied", False)),
+                "max_queries": int(decision.budget.max_queries),
+                "max_sources": int(decision.budget.max_sources),
+                "max_fetches": int(_budget_fetches(decision)),
+            }
             ctx.meta["web_guardrail_local_reply"] = bool(
                 fresh_missing and compat_intent in {"fx_rate", "weather"}
             )
+        if isinstance(getattr(ctx, "state", None), dict):
+            ctx.state["web_last_mode"] = str(decision.mode.value)
+            ctx.state["web_last_query"] = str(query)
+            ctx.state["web_last_used"] = bool(web_used)
+            ctx.state["web_evidence_context"] = dict(web_evidence_context)
 
         ctx.logs.append(
             "stage=web_retrieve done "
@@ -435,11 +549,6 @@ class WebStageV2:
             },
         )
         return ctx
-
-
-# Backward-compatible names used by existing tests/internals.
-WebRagConfig = WebStageConfig
-WebRetrieveStage = WebStageV2
 
 
 def _adaptive_citations(
@@ -480,6 +589,29 @@ def _strip_web_prefix(text: str) -> str:
     return src
 
 
+def _resolve_user_override(*, text: str, meta: dict[str, Any], state: dict[str, Any]) -> str:
+    from_context = _normalize_override_token(_pick(meta.get("web_override"), state.get("web_override"), ""))
+    if from_context:
+        return from_context
+    low = str(text or "").strip().lower()
+    if low == "/web" or low.startswith("/web "):
+        return "web"
+    if low == "/no-web" or low.startswith("/no-web "):
+        return "no-web"
+    return ""
+
+
+def _normalize_override_token(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw in {"web", "/web", "on", "force_web", "force-web"}:
+        return "web"
+    if raw in {"no-web", "/no-web", "off", "no_web", "disable_web", "disable-web"}:
+        return "no-web"
+    return ""
+
+
 def _compat_query_intent(query: str) -> str:
     low = str(query or "").strip().lower()
     if any(token in low for token in ("usd", "uah", "eur", "forex", "курс", "exchange rate")):
@@ -489,6 +621,135 @@ def _compat_query_intent(query: str) -> str:
     if any(token in low for token in ("latest", "release", "version", "news", "релиз", "версия", "новост")):
         return "news_release"
     return "generic"
+
+
+def _budget_fetches(decision) -> int:
+    budget = getattr(decision, "budget", None)
+    if budget is None:
+        return 0
+    if hasattr(budget, "effective_max_fetches"):
+        try:
+            return max(0, int(budget.effective_max_fetches()))
+        except Exception:
+            pass
+    try:
+        return max(0, int(getattr(budget, "max_fetches")))
+    except Exception:
+        pass
+    try:
+        return max(0, int(getattr(budget, "max_pages")))
+    except Exception:
+        return 0
+
+
+def _build_web_evidence_context(
+    *,
+    evidence,
+    prompt_items: list[dict[str, Any]],
+    mode: str,
+    query: str,
+) -> dict[str, Any]:
+    compact_citations = [str(x or "").strip() for x in list(getattr(evidence, "compact_citations", []) or []) if str(x or "").strip()]
+    key_facts = [str(x or "").strip() for x in list(getattr(evidence, "key_facts", []) or []) if str(x or "").strip()]
+    trust_hints = [str(x or "").strip() for x in list(getattr(evidence, "trust_hints", []) or []) if str(x or "").strip()]
+    conflict_notes = [str(x or "").strip() for x in list(getattr(evidence, "conflict_notes", []) or []) if str(x or "").strip()]
+    summary = str(getattr(evidence, "summary", "") or "").strip()
+    freshness_summary = str(getattr(evidence, "freshness_summary", "") or "").strip()
+    conflicting_sources = bool(getattr(evidence, "conflicting_sources", False))
+
+    source_rows: list[dict[str, Any]] = []
+    for row in list(prompt_items or []):
+        item = _as_dict(row)
+        source_rows.append(
+            {
+                "title": str(item.get("title") or "").strip(),
+                "url": str(item.get("source_url") or "").strip(),
+                "domain": str(item.get("source_domain") or "").strip().lower(),
+                "published_at": str(item.get("published_date") or "").strip(),
+                "fetched_at": str(item.get("fetched_at") or "").strip(),
+                "trust_tier": str(item.get("trust_tier") or "").strip(),
+                "clean_method": str(item.get("clean_method") or "").strip(),
+            }
+        )
+
+    return {
+        "mode": str(mode or "").strip(),
+        "query": str(query or "").strip(),
+        "summary": summary,
+        "freshness_summary": freshness_summary,
+        "key_facts": key_facts,
+        "compact_citations": compact_citations,
+        "trust_hints": trust_hints,
+        "conflicting_sources": conflicting_sources,
+        "conflict_notes": conflict_notes,
+        "sources": source_rows,
+        "prompt_block": _render_web_evidence_block(
+            mode=str(mode or "").strip(),
+            summary=summary,
+            freshness_summary=freshness_summary,
+            key_facts=key_facts,
+            compact_citations=compact_citations,
+            trust_hints=trust_hints,
+            conflicting_sources=conflicting_sources,
+            conflict_notes=conflict_notes,
+            sources=source_rows,
+        ),
+    }
+
+
+def _render_web_evidence_block(
+    *,
+    mode: str,
+    summary: str,
+    freshness_summary: str,
+    key_facts: list[str],
+    compact_citations: list[str],
+    trust_hints: list[str],
+    conflicting_sources: bool,
+    conflict_notes: list[str],
+    sources: list[dict[str, Any]],
+) -> str:
+    lines: list[str] = []
+    if mode:
+        lines.append(f"- mode: {mode}")
+    if summary:
+        lines.append(f"- summary: {summary}")
+    if freshness_summary:
+        lines.append(f"- freshness: {freshness_summary}")
+
+    if key_facts:
+        lines.append("- key_facts:")
+        for fact in list(key_facts)[:8]:
+            lines.append(f"  - {fact}")
+
+    if compact_citations:
+        lines.append("- citations:")
+        for citation in list(compact_citations)[:4]:
+            lines.append(f"  - {citation}")
+
+    if trust_hints:
+        lines.append("- trust_hints:")
+        for hint in list(trust_hints)[:4]:
+            lines.append(f"  - {hint}")
+
+    lines.append(f"- source_conflicts: {'yes' if conflicting_sources else 'no'}")
+    if conflicting_sources and conflict_notes:
+        lines.append("- conflict_notes:")
+        for note in list(conflict_notes)[:4]:
+            lines.append(f"  - {note}")
+
+    if sources:
+        lines.append("- sources:")
+        for row in list(sources)[:5]:
+            domain = str(_as_dict(row).get("domain") or "").strip() or "unknown"
+            url = str(_as_dict(row).get("url") or "").strip()
+            published = str(_as_dict(row).get("published_at") or "").strip() or "-"
+            fetched = str(_as_dict(row).get("fetched_at") or "").strip() or "-"
+            lines.append(f"  - {domain} | published={published} | fetched={fetched} | {url}")
+
+    if not lines:
+        return ""
+    return "[WEB_EVIDENCE]\n" + "\n".join(lines).strip()
 
 
 def _set_web_flags(

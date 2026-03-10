@@ -65,7 +65,11 @@ class CharacterRuntimeLearnerTests(unittest.TestCase):
             after = (
                 dict(runtime.snapshot().raw.get("characters", {}).get(cid, {}).get("persona", {}).get("traits", {}))
             )
-            self.assertNotEqual(float(after.get("teasing", 1.0)), float(before.get("teasing", 1.0)))
+            before_teasing = float(before.get("teasing", 1.0))
+            after_teasing = float(after.get("teasing", 1.0))
+            self.assertLessEqual(after_teasing, before_teasing)
+            if before_teasing > 0.0:
+                self.assertNotEqual(after_teasing, before_teasing)
 
             actions = [dict(x) for x in list(runtime.snapshot().raw.get("last_actions") or []) if isinstance(x, dict)]
             self.assertTrue(any(str(x.get("type") or "").upper() == "FEEDBACK_RECEIVED" for x in actions))

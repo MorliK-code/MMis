@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
-from core.web_rag_stage import WebRagConfig, WebRetrieveStage
+from modules.internet.web.stage import WebStageConfig, WebStageV2
 from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, ModelInfo, ProviderHealth, Timings, Usage
 
 
@@ -61,10 +61,10 @@ class WebRetrieveResilienceTests(unittest.TestCase):
             )
             provider = _StubProvider()
             pipeline = ResponsePipeline(provider=provider, character_runtime=runtime)
-            pipeline._stages["web_retrieve"] = WebRetrieveStage(
+            pipeline._stages["web_retrieve"] = WebStageV2(
                 search_client=_FailSearch(),
                 scraper=_DummyScraper(),
-                cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+                cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
             )
 
             result = pipeline.run(
@@ -117,10 +117,10 @@ class WebRetrieveResilienceTests(unittest.TestCase):
                         )
                     ]
 
-            pipeline._stages["web_retrieve"] = WebRetrieveStage(
+            pipeline._stages["web_retrieve"] = WebStageV2(
                 search_client=_OkSearch(),
                 scraper=_DummyScraper(),
-                cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+                cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
             )
 
             result = pipeline.run(
@@ -178,10 +178,10 @@ class WebRetrieveResilienceTests(unittest.TestCase):
                         metadata={"clean_method": "bs4", "removed_blocks": 1},
                     )
 
-            pipeline._stages["web_retrieve"] = WebRetrieveStage(
+            pipeline._stages["web_retrieve"] = WebStageV2(
                 search_client=_OkSearch(),
                 scraper=_OkScraper(),
-                cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+                cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
             )
 
             _ = pipeline.run(
@@ -210,6 +210,8 @@ class WebRetrieveResilienceTests(unittest.TestCase):
                 ("source domain and fetch/publish time" in system_text)
                 or ("source domain and timestamp" in system_text)
             )
+            self.assertIn("<<<WEB_EVIDENCE>>>", system_text)
+            self.assertIn("[WEB_EVIDENCE]", system_text)
 
 
 if __name__ == "__main__":

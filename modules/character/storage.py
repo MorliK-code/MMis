@@ -589,7 +589,6 @@ def _default_persona_state() -> dict[str, Any]:
             "style_bias": {},
             "baseline_traits": dict(baselines),
         },
-        "baseline_traits": dict(baselines),
     }
 
 
@@ -724,12 +723,13 @@ def _normalize_persona_state_payload(value: dict[str, Any] | None) -> dict[str, 
     learned.setdefault("preferences_pending", [])
     learned.setdefault("style_bias", {})
 
+    # Backward-compatible read: old payloads may still keep baseline at root.
     root_baseline = _coerce_baseline_map(payload.get("baseline_traits")) if has_root_baseline else {}
     learned_baseline = _coerce_baseline_map(learned.get("baseline_traits")) if has_learned_baseline else {}
     trait_seed = _coerce_baseline_map(payload.get("traits"))
-    baselines = dict(root_baseline or learned_baseline or trait_seed)
+    baselines = dict(learned_baseline or root_baseline or trait_seed)
     if not baselines:
-        baselines = _coerce_baseline_map(_default_persona_state().get("baseline_traits"))
+        baselines = _coerce_baseline_map(dict(_default_persona_state().get("learned") or {}).get("baseline_traits"))
 
     # Anchor any newly seen numeric trait to baseline on first sight.
     for key, raw in dict(payload.get("traits") or {}).items():
@@ -743,6 +743,6 @@ def _normalize_persona_state_payload(value: dict[str, Any] | None) -> dict[str, 
 
     learned["baseline_traits"] = dict(baselines)
     payload["learned"] = learned
-    # Keep legacy mirror for backward compatibility with readers that still use root key.
-    payload["baseline_traits"] = dict(baselines)
+    # Canonical storage keeps baseline only under learned.baseline_traits.
+    payload.pop("baseline_traits", None)
     return payload

@@ -176,7 +176,6 @@
     "web_auto_profile": "aggressive",
     "web_v2": {
       "enabled": true,
-      "default_mode": "auto",
       "thresholds": {
         "no_search_max": 0.26,
         "verify_max": 0.46,
@@ -203,32 +202,43 @@
         "no_search": {
           "max_queries": 0,
           "max_sources": 0,
-          "max_pages": 0
+          "max_pages": 0,
+          "max_fetches": 0
         },
         "verify_only": {
           "max_queries": 1,
           "max_sources": 2,
-          "max_pages": 1
+          "max_pages": 1,
+          "max_fetches": 1
         },
         "soft_search": {
           "max_queries": 2,
           "max_sources": 3,
-          "max_pages": 2
+          "max_pages": 2,
+          "max_fetches": 2
         },
         "targeted_search": {
           "max_queries": 3,
           "max_sources": 5,
-          "max_pages": 3
+          "max_pages": 3,
+          "max_fetches": 3
         },
         "deep_search": {
           "max_queries": 5,
           "max_sources": 8,
-          "max_pages": 5
+          "max_pages": 5,
+          "max_fetches": 5
         }
       },
-      "max_sources": 8,
-      "max_pages": 5,
       "cooldown_seconds": 45,
+      "retry_policy": {
+        "default_attempts": 1,
+        "verify_only": 1,
+        "soft_search": 1,
+        "targeted_search": 2,
+        "deep_search": 2,
+        "backoff_ms": 250
+      },
       "force_search_keywords": [
         "сейчас",
         "актуально",
@@ -238,7 +248,8 @@
         "цена",
         "сколько стоит",
         "новости",
-        "2026"
+        "2026",
+        "в этом году"
       ],
       "never_search_categories": [
         "reasoning",
@@ -300,13 +311,23 @@
     "version": "v2",
     "backend": "chroma",
     "embedding": {
-      "backend": "ollama",
-      "model": "qwen3-embedding:4b",
-      "dim": 768
+      "backend": "sentence_transformers",
+      "model": "all-MiniLM-L6-v2",
+      "dim": 384
     },
     "retrieval": {
       "top_k": 8,
-      "rerank_top_k": 8
+      "rerank_top_k": 8,
+      "fusion_weights": {
+        "semantic_similarity": 0.34,
+        "lexical_score": 0.25,
+        "recency_score": 0.1,
+        "importance_score": 0.09,
+        "confidence_score": 0.08,
+        "entity_overlap_score": 0.07,
+        "exact_match_boost": 0.04,
+        "scope_match_score": 0.03
+      }
     },
     "documents": {
       "chunk_size": 1200,
@@ -326,11 +347,29 @@
     "lifecycle": {
       "stale_after_days": 30,
       "archive_after_days": 90,
+      "promotion_thresholds": {
+        "message_importance": 0.72
+      },
       "temporary_ttl_sec": 3600,
       "private_runtime_ttl_sec": 900,
       "working_limit": 120
     },
-    "short_memory_limit": 10,
+    "scoring": {
+      "importance_weights": {
+        "base": 0.42,
+        "decision": 0.24,
+        "remember": 0.18,
+        "project": 0.1
+      },
+      "salience_weights": {
+        "novelty": 0.22,
+        "permanence": 0.2,
+        "repetition": 0.14,
+        "project_relevance": 0.16,
+        "task_relevance": 0.16,
+        "explicit_save_signal": 0.12
+      }
+    },
     "chat_recall_results": 3,
     "chat_events_limit": 10,
     "chat_proofread": false,
@@ -389,7 +428,7 @@
       ],
       "web": [
         "web",
-        "core.web_rag_stage",
+        "modules.internet.web",
         "tools.modules.internet"
       ]
     },

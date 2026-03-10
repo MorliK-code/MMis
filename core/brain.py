@@ -367,6 +367,68 @@ class Brain:
                         )
                     except Exception:
                         pass
+            elif key == "web_memory_write":
+                if self.memory_manager is None:
+                    continue
+                default_namespace = str(
+                    op.get("namespace")
+                    or self.state_manager.get("conversation_id")
+                    or "default"
+                ).strip() or "default"
+                items = [x for x in list(op.get("items") or []) if isinstance(x, dict)]
+                written = 0
+                for row in list(items):
+                    text = str(row.get("text") or "").strip()
+                    if not text:
+                        continue
+                    scope = _memory_scope_from_name(row.get("scope"), default=MemoryScope.PROJECT)
+                    memory_type = _memory_type_from_name(row.get("memory_type"), default=MemoryType.SEMANTIC)
+                    namespace = str(row.get("namespace") or default_namespace).strip() or default_namespace
+                    metadata = dict(_as_dict(row.get("metadata")) or {})
+                    if not str(metadata.get("source") or "").strip():
+                        metadata["source"] = "web_v2"
+                    write_type = str(row.get("write_type") or "").strip().lower()
+                    if write_type:
+                        metadata.setdefault("web_v2_write_type", write_type)
+                    confidence = row.get("confidence")
+                    importance = row.get("importance")
+                    ttl_sec = row.get("ttl_sec")
+                    if confidence is not None:
+                        try:
+                            metadata["confidence"] = max(0.0, min(1.0, float(confidence)))
+                        except Exception:
+                            pass
+                    if importance is not None:
+                        try:
+                            metadata["importance"] = max(0.0, min(1.0, float(importance)))
+                        except Exception:
+                            pass
+                    if ttl_sec is not None:
+                        try:
+                            metadata["ttl_sec"] = max(30, int(ttl_sec))
+                        except Exception:
+                            pass
+                    try:
+                        self.memory_manager.ingest_event(
+                            MemoryEvent(
+                                role="system",
+                                text=text,
+                                namespace=namespace,
+                                scope=scope,
+                                memory_type=memory_type,
+                                metadata=metadata,
+                            )
+                        )
+                        written += 1
+                    except Exception:
+                        continue
+                if written > 0:
+                    log_json(
+                        LOGGER,
+                        "web_memory_write_applied",
+                        namespace=default_namespace,
+                        written=written,
+                    )
             elif key == "state_address_terms":
                 value = op.get("value")
                 if isinstance(value, dict):
@@ -847,3 +909,34 @@ def _normalize_command_candidate(value: str) -> str:
     # Tolerate accidental console prompt prefixes copied into input.
     text = re.sub(r"^\s*(?:you|user|assistant)\s*>\s*", "", text, flags=re.IGNORECASE)
     return text
+
+
+def _memory_scope_from_name(value: Any, *, default: MemoryScope) -> MemoryScope:
+    raw = str(value or "").strip().lower()
+    mapping = {
+        "global_user": MemoryScope.GLOBAL_USER,
+        "conversation": MemoryScope.CONVERSATION,
+        "session": MemoryScope.SESSION,
+        "project": MemoryScope.PROJECT,
+        "character": MemoryScope.CHARACTER,
+        "temporary": MemoryScope.TEMPORARY,
+        "private_runtime": MemoryScope.PRIVATE_RUNTIME,
+    }
+    return mapping.get(raw, default)
+
+
+def _memory_type_from_name(value: Any, *, default: MemoryType) -> MemoryType:
+    raw = str(value or "").strip().lower()
+    mapping = {
+        "message": MemoryType.MESSAGE,
+        "summary": MemoryType.SUMMARY,
+        "fact": MemoryType.FACT,
+        "episode": MemoryType.EPISODE,
+        "semantic": MemoryType.SEMANTIC,
+        "document": MemoryType.DOCUMENT,
+        "document_chunk": MemoryType.DOCUMENT_CHUNK,
+        "task_state": MemoryType.TASK_STATE,
+        "tool_result": MemoryType.TOOL_RESULT,
+        "runtime_state": MemoryType.RUNTIME_STATE,
+    }
+    return mapping.get(raw, default)

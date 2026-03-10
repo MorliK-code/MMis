@@ -18,12 +18,21 @@ class SearchBudget:
     max_queries: int = 0
     max_sources: int = 0
     max_pages: int = 0
+    # Phase-2 alias: explicit fetch budget, falls back to max_pages when zero.
+    max_fetches: int = 0
+
+    def effective_max_fetches(self) -> int:
+        explicit = int(self.max_fetches)
+        if explicit > 0:
+            return explicit
+        return int(self.max_pages)
 
     def to_dict(self) -> dict[str, int]:
         return {
             "max_queries": int(self.max_queries),
             "max_sources": int(self.max_sources),
             "max_pages": int(self.max_pages),
+            "max_fetches": int(self.max_fetches),
         }
 
 
@@ -128,6 +137,8 @@ class WebQueryPlan:
     focused_queries: list[str] = field(default_factory=list)
     fallback_queries: list[str] = field(default_factory=list)
     preferred_domains: list[str] = field(default_factory=list)
+    # Query roles produced by planner: primary / validation / release_notes / etc.
+    query_roles: dict[str, list[str]] = field(default_factory=dict)
 
     def all_queries(self) -> list[str]:
         out: list[str] = []
@@ -144,11 +155,37 @@ class WebQueryPlan:
             "focused_queries": list(self.focused_queries),
             "fallback_queries": list(self.fallback_queries),
             "preferred_domains": list(self.preferred_domains),
+            "query_roles": {
+                str(k): [str(x or "").strip() for x in list(v or []) if str(x or "").strip()]
+                for k, v in dict(self.query_roles or {}).items()
+            },
         }
 
 
 @dataclass(frozen=True)
-class WebEvidenceItem:
+class WebSearchRequest:
+    query: str
+    mode: WebSearchMode
+    budget: SearchBudget = field(default_factory=SearchBudget)
+    plan: WebQueryPlan | None = None
+    preferred_domains: list[str] = field(default_factory=list)
+    blocked_domains: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query": str(self.query or ""),
+            "mode": str(self.mode.value),
+            "budget": self.budget.to_dict(),
+            "plan": (self.plan.to_dict() if self.plan is not None else None),
+            "preferred_domains": [str(x or "").strip().lower() for x in list(self.preferred_domains or []) if str(x or "").strip()],
+            "blocked_domains": [str(x or "").strip().lower() for x in list(self.blocked_domains or []) if str(x or "").strip()],
+            "metadata": dict(self.metadata or {}),
+        }
+
+
+@dataclass(frozen=True)
+class WebEvidence:
     title: str
     url: str
     domain: str
@@ -160,6 +197,11 @@ class WebEvidenceItem:
     trust_tier: str = "unknown"
     source_type: str = "search"
     clean_method: str = ""
+    quality_score: float = 0.0
+    confidence_hint: str = "low"
+    freshness_tag: str = "unknown"
+    key_facts: list[str] = field(default_factory=list)
+    conflict_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -174,15 +216,24 @@ class WebEvidenceItem:
             "trust_tier": str(self.trust_tier),
             "source_type": str(self.source_type),
             "clean_method": str(self.clean_method),
+            "quality_score": float(self.quality_score),
+            "confidence_hint": str(self.confidence_hint),
+            "freshness_tag": str(self.freshness_tag),
+            "key_facts": [str(x or "").strip() for x in list(self.key_facts or []) if str(x or "").strip()],
+            "conflict_flags": [str(x or "").strip() for x in list(self.conflict_flags or []) if str(x or "").strip()],
         }
 
 
 @dataclass(frozen=True)
 class WebEvidencePack:
-    items: list[WebEvidenceItem] = field(default_factory=list)
+    items: list[WebEvidence] = field(default_factory=list)
     compact_citations: list[str] = field(default_factory=list)
     conflicting_sources: bool = False
     summary: str = ""
+    key_facts: list[str] = field(default_factory=list)
+    trust_hints: list[str] = field(default_factory=list)
+    freshness_summary: str = ""
+    conflict_notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -190,4 +241,32 @@ class WebEvidencePack:
             "compact_citations": list(self.compact_citations),
             "conflicting_sources": bool(self.conflicting_sources),
             "summary": str(self.summary),
+            "key_facts": [str(x or "").strip() for x in list(self.key_facts or []) if str(x or "").strip()],
+            "trust_hints": [str(x or "").strip() for x in list(self.trust_hints or []) if str(x or "").strip()],
+            "freshness_summary": str(self.freshness_summary),
+            "conflict_notes": [str(x or "").strip() for x in list(self.conflict_notes or []) if str(x or "").strip()],
+        }
+
+
+@dataclass(frozen=True)
+class WebSearchResult:
+    request: WebSearchRequest
+    evidence: list[WebEvidence] = field(default_factory=list)
+    queries_used: list[str] = field(default_factory=list)
+    fetched_pages: dict[str, dict[str, Any]] = field(default_factory=dict)
+    success: bool = True
+    errors: list[str] = field(default_factory=list)
+    from_cache: bool = False
+    latency_ms: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "request": self.request.to_dict(),
+            "evidence": [x.to_dict() for x in list(self.evidence or [])],
+            "queries_used": [str(x or "").strip() for x in list(self.queries_used or []) if str(x or "").strip()],
+            "fetched_pages": {str(k): dict(v or {}) for k, v in dict(self.fetched_pages or {}).items()},
+            "success": bool(self.success),
+            "errors": [str(x or "") for x in list(self.errors or [])],
+            "from_cache": bool(self.from_cache),
+            "latency_ms": float(self.latency_ms),
         }

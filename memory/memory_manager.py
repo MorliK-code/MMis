@@ -13,27 +13,34 @@ from memory.document_memory import ChunkingConfig, DocumentMemory
 from memory.embedding_provider import build_embedding_provider
 from memory.event_store import EventStore
 from memory.fact_extractor import FactExtractor
+from memory.long_memory import LongMemoryV2
 from memory.memory_debug import BasicMemoryDebugger
 from memory.memory_lifecycle import MemoryLifecycleManager
 from memory.memory_models import (
+    ContextCompressor,
     ContextBuildRequest,
     ContextBuildResult,
     DebugRequest,
     DocumentIngestRequest,
     DocumentIngestResult,
+    EmbeddingProvider,
     FactRecordV2,
     IngestResult,
+    MemoryDebugger,
     MemoryEvent,
+    MemoryLifecycle,
     MemoryLevel,
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
     MemoryType,
+    Reranker,
     RetrievalQuery,
     RetrievalResult,
 )
 from memory.retrieval import HybridRetriever
 from memory.reranker import HeuristicReranker
+from memory.memory_scoring import SalienceWeights, ScoreWeights, build_salience_score
 from memory.vector_store import VectorStore
 from memory.context_builder import ContextBuilderV2
 from utils.logger import get_logger, log_json
@@ -69,16 +76,17 @@ class MemoryManager:
                 f"{memory_backend!r}. Use 'chroma' or 'chromadb'."
             )
 
-        embedding_backend = str(getattr(self._cfg, "memory_embedding_backend", "ollama") or "ollama")
-        embedding_model = str(
-            getattr(self._cfg, "memory_embedding_model", "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M")
-            or "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M"
-        )
-        self._embedding_provider = build_embedding_provider(
+        embedding_backend = str(getattr(self._cfg, "memory_embedding_backend", "") or "").strip()
+        if not embedding_backend:
+            embedding_backend = "sentence_transformers"
+        embedding_model = str(getattr(self._cfg, "memory_embedding_model", "") or "").strip()
+        if not embedding_model:
+            embedding_model = "all-MiniLM-L6-v2"
+        self._embedding_provider: EmbeddingProvider = build_embedding_provider(
             backend=embedding_backend,
             model_name=embedding_model,
             cache_path=self._root / "embedding_cache.sqlite3",
-            dim=int(getattr(self._cfg, "memory_embedding_dim", 768) or 768),
+            dim=int(getattr(self._cfg, "memory_embedding_dim", 384) or 384),
             ollama_host=str(getattr(self._cfg, "ollama_base_url", "") or ""),
             ollama_timeout_sec=float(getattr(self._cfg, "ollama_timeout_sec", 120.0) or 120.0),
         )
@@ -100,15 +108,40 @@ class MemoryManager:
 
         self._event_store = EventStore(path=self._root / "events_v2.jsonl")
         self._fact_extractor = FactExtractor()
-        self._lifecycle = MemoryLifecycleManager(
+        self._lifecycle: MemoryLifecycle = MemoryLifecycleManager(
             stale_after_days=int(getattr(self._cfg, "memory_stale_after_days", 30) or 30),
             archive_after_days=int(getattr(self._cfg, "memory_archive_after_days", 90) or 90),
+            promote_message_importance_threshold=float(
+                getattr(self._cfg, "memory_promotion_message_importance_threshold", 0.72) or 0.72
+            ),
         )
         self._retriever = HybridRetriever(
             store=self._store,
             stale_after_days=int(getattr(self._cfg, "memory_stale_after_days", 30) or 30),
+            weights=ScoreWeights(
+                semantic_similarity=float(
+                    getattr(self._cfg, "memory_retrieval_weight_semantic_similarity", 0.34) or 0.34
+                ),
+                lexical_score=float(getattr(self._cfg, "memory_retrieval_weight_lexical_score", 0.25) or 0.25),
+                recency_score=float(getattr(self._cfg, "memory_retrieval_weight_recency_score", 0.10) or 0.10),
+                importance_score=float(
+                    getattr(self._cfg, "memory_retrieval_weight_importance_score", 0.09) or 0.09
+                ),
+                confidence_score=float(
+                    getattr(self._cfg, "memory_retrieval_weight_confidence_score", 0.08) or 0.08
+                ),
+                entity_overlap_score=float(
+                    getattr(self._cfg, "memory_retrieval_weight_entity_overlap_score", 0.07) or 0.07
+                ),
+                exact_match_boost=float(
+                    getattr(self._cfg, "memory_retrieval_weight_exact_match_boost", 0.04) or 0.04
+                ),
+                scope_match_score=float(
+                    getattr(self._cfg, "memory_retrieval_weight_scope_match_score", 0.03) or 0.03
+                ),
+            ),
         )
-        self._reranker = HeuristicReranker()
+        self._reranker: Reranker = HeuristicReranker()
         self._context_builder = ContextBuilderV2(tokenizer=create_tokenizer())
         self._document_memory = DocumentMemory(
             store=self._store,
@@ -117,7 +150,10 @@ class MemoryManager:
                 chunk_overlap=int(getattr(self._cfg, "memory_chunk_overlap", 160) or 160),
             ),
         )
-        self._debugger = BasicMemoryDebugger(store=self._store)
+        self._long_memory = LongMemoryV2(store=self._store, document_memory=self._document_memory)
+        self._debugger: MemoryDebugger = BasicMemoryDebugger(store=self._store)
+        # Phase 1 extension point: real compressor can be injected in next phases.
+        self._context_compressor: ContextCompressor | None = None
 
         self._working_records: list[MemoryRecord] = []
         self._session_summary: str = ""
@@ -131,6 +167,24 @@ class MemoryManager:
         self._working_limit = int(getattr(self._cfg, "memory_working_limit", 120) or 120)
         self._retrieval_top_k = int(getattr(self._cfg, "memory_retrieval_top_k", 8) or 8)
         self._rerank_top_k = int(getattr(self._cfg, "memory_rerank_top_k", 8) or 8)
+        self._importance_weights = {
+            "base": float(getattr(self._cfg, "memory_importance_weight_base", 0.42) or 0.42),
+            "decision": float(getattr(self._cfg, "memory_importance_weight_decision", 0.24) or 0.24),
+            "remember": float(getattr(self._cfg, "memory_importance_weight_remember", 0.18) or 0.18),
+            "project": float(getattr(self._cfg, "memory_importance_weight_project", 0.10) or 0.10),
+        }
+        self._salience_weights = SalienceWeights(
+            novelty=float(getattr(self._cfg, "memory_salience_weight_novelty", 0.22) or 0.22),
+            permanence=float(getattr(self._cfg, "memory_salience_weight_permanence", 0.20) or 0.20),
+            repetition=float(getattr(self._cfg, "memory_salience_weight_repetition", 0.14) or 0.14),
+            project_relevance=float(
+                getattr(self._cfg, "memory_salience_weight_project_relevance", 0.16) or 0.16
+            ),
+            task_relevance=float(getattr(self._cfg, "memory_salience_weight_task_relevance", 0.16) or 0.16),
+            explicit_save_signal=float(
+                getattr(self._cfg, "memory_salience_weight_explicit_save_signal", 0.12) or 0.12
+            ),
+        )
 
         self._load_state()
         self._cleanup_expired()
@@ -150,8 +204,64 @@ class MemoryManager:
             scope = event.scope
             memory_type = event.memory_type
 
+            if memory_type == MemoryType.DOCUMENT and scope != MemoryScope.PRIVATE_RUNTIME:
+                source = str(metadata.get("source") or metadata.get("path") or f"event:{event_id}").strip()
+                title = str(metadata.get("title") or "").strip()
+                doc_request = DocumentIngestRequest(
+                    text=text,
+                    source=source,
+                    namespace=namespace,
+                    scope=(scope if scope != MemoryScope.CONVERSATION else MemoryScope.PROJECT),
+                    title=title,
+                    metadata={**metadata, "event_id": event_id, "namespace": namespace},
+                )
+                doc_result = self._long_memory.ingest_document(doc_request)
+                stored_ids = [doc_result.document.id] + [row.id for row in list(doc_result.chunks or [])]
+                working_doc = MemoryRecord(
+                    id=doc_result.document.id,
+                    text=doc_result.document.summary,
+                    memory_type=MemoryType.DOCUMENT,
+                    level=MemoryLevel.L4_DOCUMENT,
+                    scope=doc_result.document.scope,
+                    namespace=namespace,
+                    metadata=dict(doc_result.document.metadata or {}),
+                    importance=float(doc_result.document.importance),
+                    confidence=float(doc_result.document.confidence),
+                    created_at=doc_result.document.created_at,
+                    updated_at=doc_result.document.updated_at,
+                    status=doc_result.document.status,
+                    version=int(doc_result.document.version),
+                )
+                self._upsert_working_record(working_doc)
+                self._event_store.append(
+                    {
+                        "event_id": event_id,
+                        "ts": now_ts,
+                        "type": "memory_document_ingest_v2",
+                        "payload": {
+                            "role": str(event.role or ""),
+                            "scope": scope.value,
+                            "memory_type": memory_type.value,
+                            "record_id": doc_result.document.id,
+                            "namespace": namespace,
+                            "chunk_count": len(doc_result.chunks),
+                        },
+                        "tags": [scope.value, memory_type.value, "document"],
+                    }
+                )
+                self._save_state()
+                log_json(
+                    LOGGER,
+                    "memory_v2_ingest_document",
+                    namespace=namespace,
+                    scope=scope.value,
+                    source=source,
+                    stored=len(stored_ids),
+                )
+                return IngestResult(stored_ids=stored_ids)
+
             level = self._initial_level(memory_type)
-            importance = self._importance_score(text=text, metadata=metadata)
+            importance = self._importance_score(text=text, metadata=metadata, namespace=namespace)
             confidence = self._confidence_score(metadata=metadata)
             expires_at = self._expires_at(scope=scope, metadata=metadata, now_ts=now_ts)
 
@@ -193,6 +303,14 @@ class MemoryManager:
             self._upsert_working_record(record)
 
             lifecycle_decision = self._lifecycle.decide(record, now_ts=now_ts)
+            if lifecycle_decision.mark_status is not None and lifecycle_decision.mark_status != record.status:
+                status_row = self._status_transition(
+                    record,
+                    target=lifecycle_decision.mark_status,
+                    now_ts=now_ts,
+                    reason=str(lifecycle_decision.reason or "lifecycle"),
+                )
+                self._store.upsert(status_row)
             if lifecycle_decision.promote_to is not None and lifecycle_decision.promote_to != record.level:
                 promoted = self._promote_record(record, target=lifecycle_decision.promote_to, now_ts=now_ts)
                 self._store.upsert(promoted)
@@ -274,14 +392,46 @@ class MemoryManager:
             )
 
     def build_context(self, request: ContextBuildRequest) -> ContextBuildResult:
-        budget_total = int(request.context_budget_total or getattr(self._cfg, "memory_context_budget_total", 2200) or 2200)
-        budget_memory = int(request.context_budget_memory or getattr(self._cfg, "memory_context_budget_memory", 700) or 700)
-        budget_docs = int(request.context_budget_docs or getattr(self._cfg, "memory_context_budget_docs", 600) or 600)
-        budget_tools = int(request.context_budget_tools or getattr(self._cfg, "memory_context_budget_tools", 220) or 220)
-        budget_reserve = int(
-            request.context_budget_response_reserve
-            or getattr(self._cfg, "memory_context_budget_response_reserve", 260)
-            or 260
+        def _cfg_budget(name: str, *, minimum: int) -> int:
+            try:
+                value = int(getattr(self._cfg, name))
+            except Exception:
+                value = minimum
+            return max(minimum, value)
+
+        def _pick_budget(value: Any, *, default: int, minimum: int) -> int:
+            try:
+                parsed = int(value)
+            except Exception:
+                parsed = 0
+            if parsed <= 0:
+                parsed = default
+            return max(minimum, parsed)
+
+        budget_total = _pick_budget(
+            request.context_budget_total,
+            default=_cfg_budget("memory_context_budget_total", minimum=256),
+            minimum=256,
+        )
+        budget_memory = _pick_budget(
+            request.context_budget_memory,
+            default=_cfg_budget("memory_context_budget_memory", minimum=64),
+            minimum=64,
+        )
+        budget_docs = _pick_budget(
+            request.context_budget_docs,
+            default=_cfg_budget("memory_context_budget_docs", minimum=64),
+            minimum=64,
+        )
+        budget_tools = _pick_budget(
+            request.context_budget_tools,
+            default=_cfg_budget("memory_context_budget_tools", minimum=32),
+            minimum=32,
+        )
+        budget_reserve = _pick_budget(
+            request.context_budget_response_reserve,
+            default=_cfg_budget("memory_context_budget_response_reserve", minimum=64),
+            minimum=64,
         )
 
         retrieval_query = RetrievalQuery(
@@ -307,11 +457,11 @@ class MemoryManager:
             working_memory=working,
             tool_state=dict(request.tool_state or {}),
             unresolved_items=list(request.unresolved_items or self._open_questions),
-            context_budget_total=max(256, budget_total),
-            context_budget_memory=max(64, budget_memory),
-            context_budget_docs=max(64, budget_docs),
-            context_budget_tools=max(32, budget_tools),
-            context_budget_response_reserve=max(64, budget_reserve),
+            context_budget_total=budget_total,
+            context_budget_memory=budget_memory,
+            context_budget_docs=budget_docs,
+            context_budget_tools=budget_tools,
+            context_budget_response_reserve=budget_reserve,
         )
 
         result = self._context_builder.build(
@@ -323,11 +473,34 @@ class MemoryManager:
             query=req.user_message,
             selected=list(result.selected or []),
             dropped=list(result.dropped or []),
+            score_breakdowns=list(result.score_breakdowns or []),
+            truncation_log=list(result.truncation_log or []),
+            context_blocks=dict(result.blocks or {}),
         )
         return result
 
     def ingest_document(self, request: DocumentIngestRequest) -> DocumentIngestResult:
-        return self._document_memory.ingest_document(request)
+        with self._lock:
+            result = self._long_memory.ingest_document(request)
+            self._upsert_working_record(
+                MemoryRecord(
+                    id=result.document.id,
+                    text=result.document.summary,
+                    memory_type=MemoryType.DOCUMENT,
+                    level=MemoryLevel.L4_DOCUMENT,
+                    scope=result.document.scope,
+                    namespace=result.document.namespace,
+                    metadata=dict(result.document.metadata or {}),
+                    importance=result.document.importance,
+                    confidence=result.document.confidence,
+                    created_at=result.document.created_at,
+                    updated_at=result.document.updated_at,
+                    status=result.document.status,
+                    version=result.document.version,
+                )
+            )
+            self._save_state()
+            return result
 
     def debug_snapshot(self, request: DebugRequest) -> dict[str, Any]:
         self._cleanup_expired()
@@ -342,6 +515,11 @@ class MemoryManager:
             self._private_runtime = {}
             self._save_state()
             self._store.close()
+            if hasattr(self._embedding_provider, "close"):
+                try:
+                    self._embedding_provider.close()
+                except Exception:
+                    pass
 
     def set_private_runtime_state(
         self,
@@ -397,32 +575,66 @@ class MemoryManager:
 
             if existing is not None and str(existing.text) != str(record.text):
                 decision = self._lifecycle.resolve_conflict(old=existing, new=record)
-                if decision.superseded_record_id:
-                    superseded = MemoryRecord(
-                        id=existing.id,
-                        text=existing.text,
-                        memory_type=existing.memory_type,
-                        level=existing.level,
-                        scope=existing.scope,
-                        namespace=existing.namespace,
-                        metadata=dict(existing.metadata or {}),
-                        embedding=list(existing.embedding or []) if isinstance(existing.embedding, list) else None,
-                        importance=existing.importance,
-                        confidence=existing.confidence,
-                        created_at=existing.created_at,
-                        updated_at=now_ts,
-                        expires_at=existing.expires_at,
-                        status=MemoryStatus.SUPERSEDED,
-                        version=existing.version + 1,
-                        parent_id=existing.parent_id,
-                        chunk_index=existing.chunk_index,
-                        source_event_id=existing.source_event_id,
-                        embedding_model=existing.embedding_model,
-                        embedding_fingerprint=existing.embedding_fingerprint,
-                        embedding_version=existing.embedding_version,
+                action = str(decision.action or "").strip().lower()
+                force_supersede_existing = bool(
+                    action == "parallel" and self._is_singleton_fact_canonical(canonical)
+                )
+
+                if force_supersede_existing or (
+                    decision.superseded_record_id and str(decision.superseded_record_id) == str(existing.id)
+                ):
+                    superseded = self._status_transition(
+                        existing,
+                        target=MemoryStatus.SUPERSEDED,
+                        now_ts=now_ts,
+                        reason=(
+                            "singleton_fact_override"
+                            if force_supersede_existing
+                            else str(decision.reason or "conflict_supersede")
+                        ),
                     )
                     self._store.upsert(superseded)
-                if decision.keep_record_id != record.id:
+                if decision.archive_record_id and str(decision.archive_record_id) == str(existing.id):
+                    archived = self._status_transition(
+                        existing,
+                        target=MemoryStatus.ARCHIVED,
+                        now_ts=now_ts,
+                        reason=str(decision.reason or "conflict_archive"),
+                    )
+                    self._store.upsert(archived)
+                if action == "parallel" and not force_supersede_existing:
+                    record = MemoryRecord(
+                        id=record.id,
+                        text=record.text,
+                        memory_type=record.memory_type,
+                        level=record.level,
+                        scope=record.scope,
+                        namespace=record.namespace,
+                        metadata={
+                            **dict(record.metadata or {}),
+                            "conflict_resolution": {
+                                "action": "parallel",
+                                "parallel_with": decision.parallel_with_record_id,
+                                "reason": decision.reason,
+                                "score_delta": float(decision.score_delta),
+                            },
+                        },
+                        embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
+                        importance=record.importance,
+                        confidence=record.confidence,
+                        created_at=record.created_at,
+                        updated_at=record.updated_at,
+                        expires_at=record.expires_at,
+                        status=MemoryStatus.ACTIVE,
+                        version=record.version,
+                        parent_id=(record.parent_id or existing.id),
+                        chunk_index=record.chunk_index,
+                        source_event_id=record.source_event_id,
+                        embedding_model=record.embedding_model,
+                        embedding_fingerprint=record.embedding_fingerprint,
+                        embedding_version=record.embedding_version,
+                    )
+                if not force_supersede_existing and decision.keep_record_id != record.id:
                     continue
 
             self._store.upsert(record)
@@ -444,6 +656,14 @@ class MemoryManager:
                 return row
         return None
 
+    @staticmethod
+    def _is_singleton_fact_canonical(canonical_key: str) -> bool:
+        key = str(canonical_key or "").strip().lower()
+        if not key:
+            return False
+        predicate = key.split(".", 1)[1] if "." in key else key
+        return predicate in {"preference", "identity_name", "environment", "issue_status"}
+
     def _promote_record(self, record: MemoryRecord, *, target: MemoryLevel, now_ts: float) -> MemoryRecord:
         return MemoryRecord(
             id=f"{record.id}:p:{target.value}",
@@ -462,6 +682,36 @@ class MemoryManager:
             status=record.status,
             version=record.version + 1,
             parent_id=record.id,
+            chunk_index=record.chunk_index,
+            source_event_id=record.source_event_id,
+            embedding_model=record.embedding_model,
+            embedding_fingerprint=record.embedding_fingerprint,
+            embedding_version=record.embedding_version,
+        )
+
+    @staticmethod
+    def _status_transition(record: MemoryRecord, *, target: MemoryStatus, now_ts: float, reason: str) -> MemoryRecord:
+        return MemoryRecord(
+            id=record.id,
+            text=record.text,
+            memory_type=record.memory_type,
+            level=record.level,
+            scope=record.scope,
+            namespace=record.namespace,
+            metadata={
+                **dict(record.metadata or {}),
+                "previous_status": str(record.status.value),
+                "lifecycle_reason": str(reason or ""),
+            },
+            embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
+            importance=record.importance,
+            confidence=record.confidence,
+            created_at=record.created_at,
+            updated_at=now_ts,
+            expires_at=record.expires_at,
+            status=target,
+            version=int(record.version) + 1,
+            parent_id=(record.parent_id or record.id),
             chunk_index=record.chunk_index,
             source_event_id=record.source_event_id,
             embedding_model=record.embedding_model,
@@ -508,40 +758,32 @@ class MemoryManager:
             if float(v.get("expires_at") or 0.0) > now_ts
         }
 
-        # Mark expired records from store as deleted.
+        rows = self._store.iter_records()
+        decayed = self._lifecycle.apply_decay(rows, now_ts=now_ts)
+
+        # Mark expired records as deleted and apply stale/archive decay transitions.
         changed: list[MemoryRecord] = []
-        for row in self._store.iter_records():
+        for idx, row in enumerate(rows):
             if row.expires_at is None:
-                continue
-            if float(row.expires_at) > now_ts:
-                continue
-            if row.status == MemoryStatus.DELETED:
-                continue
-            changed.append(
-                MemoryRecord(
-                    id=row.id,
-                    text=row.text,
-                    memory_type=row.memory_type,
-                    level=row.level,
-                    scope=row.scope,
-                    namespace=row.namespace,
-                    metadata=dict(row.metadata or {}),
-                    embedding=list(row.embedding or []) if isinstance(row.embedding, list) else None,
-                    importance=row.importance,
-                    confidence=row.confidence,
-                    created_at=row.created_at,
-                    updated_at=now_ts,
-                    expires_at=row.expires_at,
-                    status=MemoryStatus.DELETED,
-                    version=row.version + 1,
-                    parent_id=row.parent_id,
-                    chunk_index=row.chunk_index,
-                    source_event_id=row.source_event_id,
-                    embedding_model=row.embedding_model,
-                    embedding_fingerprint=row.embedding_fingerprint,
-                    embedding_version=row.embedding_version,
+                pass
+            elif float(row.expires_at) <= now_ts and row.status != MemoryStatus.DELETED:
+                changed.append(
+                    self._status_transition(
+                        row,
+                        target=MemoryStatus.DELETED,
+                        now_ts=now_ts,
+                        reason="ttl_expired",
+                    )
                 )
-            )
+                continue
+
+            next_row = decayed[idx] if idx < len(decayed) else row
+            if (
+                next_row.status != row.status
+                or int(next_row.version) != int(row.version)
+                or float(next_row.updated_at) != float(row.updated_at)
+            ):
+                changed.append(next_row)
         if changed:
             self._store.batch_upsert(changed)
 
@@ -581,8 +823,7 @@ class MemoryManager:
             value = 0.65
         return max(0.0, min(1.0, value))
 
-    @staticmethod
-    def _importance_score(*, text: str, metadata: dict[str, Any]) -> float:
+    def _importance_score(self, *, text: str, metadata: dict[str, Any], namespace: str) -> float:
         explicit = metadata.get("importance")
         if explicit is not None:
             try:
@@ -592,14 +833,27 @@ class MemoryManager:
                 pass
 
         src = str(text or "").lower()
-        score = 0.42
+        score = float(self._importance_weights.get("base", 0.42))
         if any(token in src for token in ("decide", "decision", "решили", "фикс", "issue", "error", "bug")):
-            score += 0.24
+            score += float(self._importance_weights.get("decision", 0.24))
         if any(token in src for token in ("remember", "важно", "save", "запомни")):
-            score += 0.18
+            score += float(self._importance_weights.get("remember", 0.18))
         if any(token in src for token in ("project", "архитект", "design", "release")):
-            score += 0.10
-        return max(0.0, min(1.0, score))
+            score += float(self._importance_weights.get("project", 0.10))
+        legacy_score = max(0.0, min(1.0, score))
+        recent = [
+            str(row.text or "")
+            for row in list(self._working_records or [])
+            if str(row.namespace or "default") == str(namespace or "default")
+        ][:80]
+        salience = build_salience_score(
+            text=str(text or ""),
+            metadata=dict(metadata or {}),
+            recent_texts=recent,
+            weights=self._salience_weights,
+        )
+        blended = (0.58 * legacy_score) + (0.42 * float(salience))
+        return max(0.0, min(1.0, blended))
 
     def _update_session_state_from_event(self, record: MemoryRecord) -> None:
         text = str(record.text or "").strip()

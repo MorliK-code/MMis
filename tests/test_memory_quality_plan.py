@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -52,10 +53,20 @@ class MemoryQualityPlanTests(unittest.TestCase):
 
     def test_fact_extractor_name_pattern_is_reasonable(self) -> None:
         extractor = FactExtractor()
-        noisy = extractor.extract(text="hello there", metadata={}, speaker="user")
-        clean = extractor.extract(text="my name is Alex", metadata={}, speaker="user")
-        noisy_names = [x for x in noisy if str(x.key) == "identity_name"]
-        clean_names = [x for x in clean if str(x.key) == "identity_name"]
+        noisy = extractor.extract_v2(
+            text="hello there",
+            metadata={},
+            speaker="user",
+            scope=MemoryScope.CONVERSATION,
+        )
+        clean = extractor.extract_v2(
+            text="my name is Alex",
+            metadata={},
+            speaker="user",
+            scope=MemoryScope.CONVERSATION,
+        )
+        noisy_names = [x for x in noisy if str(x.predicate) == "identity_name"]
+        clean_names = [x for x in clean if str(x.predicate) == "identity_name"]
         self.assertFalse(noisy_names)
         self.assertTrue(clean_names)
 
@@ -166,6 +177,134 @@ class MemoryQualityPlanTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError) as ctx:
                         MemoryManager(root_dir=Path(tmpdir))
         self.assertIn("chromadb is required", str(ctx.exception).lower())
+
+    def test_memory_manager_uses_configurable_promotion_threshold_and_importance_weights(self) -> None:
+        base_cfg = load_config(force_reload=True)
+        low_score_cfg = replace(
+            base_cfg,
+            memory_backend="chroma",
+            memory_promotion_message_importance_threshold=0.90,
+            memory_importance_weight_base=0.05,
+            memory_importance_weight_decision=0.05,
+            memory_importance_weight_remember=0.05,
+            memory_importance_weight_project=0.05,
+        )
+        tmpdir = tempfile.mkdtemp(prefix="mmis_mm_cfg_weights_low_")
+        try:
+            with patch("memory.memory_manager.load_config", return_value=low_score_cfg):
+                manager = MemoryManager(root_dir=Path(tmpdir))
+            try:
+                result = manager.ingest_event(
+                    MemoryEvent(
+                        role="user",
+                        text="We need a decision, remember this for the project release",
+                        namespace="n1",
+                        scope=MemoryScope.CONVERSATION,
+                        memory_type=MemoryType.MESSAGE,
+                    )
+                )
+                self.assertFalse(result.promoted_ids)
+            finally:
+                manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+        high_score_cfg = replace(low_score_cfg, memory_promotion_message_importance_threshold=0.15)
+        tmpdir = tempfile.mkdtemp(prefix="mmis_mm_cfg_weights_high_")
+        try:
+            with patch("memory.memory_manager.load_config", return_value=high_score_cfg):
+                manager = MemoryManager(root_dir=Path(tmpdir))
+            try:
+                result = manager.ingest_event(
+                    MemoryEvent(
+                        role="user",
+                        text="We need a decision, remember this for the project release",
+                        namespace="n1",
+                        scope=MemoryScope.CONVERSATION,
+                        memory_type=MemoryType.MESSAGE,
+                    )
+                )
+                self.assertTrue(result.promoted_ids)
+            finally:
+                manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_memory_manager_uses_configurable_retrieval_fusion_weights(self) -> None:
+        cfg = replace(
+            load_config(force_reload=True),
+            memory_backend="chroma",
+            memory_retrieval_weight_semantic_similarity=0.91,
+            memory_retrieval_weight_lexical_score=0.17,
+            memory_retrieval_weight_scope_match_score=0.29,
+        )
+        tmpdir = tempfile.mkdtemp(prefix="mmis_mm_retrieval_weights_")
+        try:
+            with patch("memory.memory_manager.load_config", return_value=cfg):
+                manager = MemoryManager(root_dir=Path(tmpdir))
+            try:
+                self.assertAlmostEqual(float(manager._retriever.weights.semantic_similarity), 0.91, places=6)
+                self.assertAlmostEqual(float(manager._retriever.weights.lexical_score), 0.17, places=6)
+                self.assertAlmostEqual(float(manager._retriever.weights.scope_match_score), 0.29, places=6)
+            finally:
+                manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_retrieval_respects_parent_id_metadata_filter(self) -> None:
+        cfg = replace(load_config(force_reload=True), memory_backend="chroma")
+        tmpdir = tempfile.mkdtemp(prefix="mmis_parent_filter_")
+        root = Path(tmpdir)
+        try:
+            with patch("memory.memory_manager.load_config", return_value=cfg):
+                manager = MemoryManager(root_dir=root)
+            try:
+                now_ts = float(time.time())
+                manager._store.batch_upsert(
+                    [
+                        MemoryRecord(
+                            id="msg:child_a",
+                            text="deploy checklist for release branch",
+                            memory_type=MemoryType.MESSAGE,
+                            level=MemoryLevel.L0_WORKING,
+                            scope=MemoryScope.CONVERSATION,
+                            namespace="n1",
+                            metadata={},
+                            parent_id="doc:alpha",
+                            version=1,
+                            created_at=now_ts,
+                            updated_at=now_ts,
+                        ),
+                        MemoryRecord(
+                            id="msg:child_b",
+                            text="deploy checklist for release branch",
+                            memory_type=MemoryType.MESSAGE,
+                            level=MemoryLevel.L0_WORKING,
+                            scope=MemoryScope.CONVERSATION,
+                            namespace="n1",
+                            metadata={},
+                            parent_id="doc:beta",
+                            version=1,
+                            created_at=now_ts,
+                            updated_at=now_ts,
+                        ),
+                    ]
+                )
+                out = manager.retrieve(
+                    RetrievalQuery(
+                        query_text="deploy checklist release",
+                        namespace="n1",
+                        scopes=[MemoryScope.CONVERSATION],
+                        top_k=5,
+                        metadata_filters={"parent_id": "doc:alpha"},
+                    )
+                )
+                self.assertTrue(out.candidates)
+                self.assertTrue(all(str(x.record.parent_id or "") == "doc:alpha" for x in out.candidates))
+            finally:
+                manager.close()
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
 
     def test_no_startup_backfill_from_records_but_manual_reindex_populates_vectors(self) -> None:
         cfg = replace(load_config(force_reload=True), memory_backend="chroma")

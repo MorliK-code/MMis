@@ -1,8 +1,8 @@
 ﻿from __future__ import annotations
 
+import hashlib
 import re
 import time
-from dataclasses import dataclass
 from typing import Any
 
 from memory.memory_models import FactRecordV2, MemoryScope, MemoryStatus
@@ -11,36 +11,6 @@ from memory.memory_models import FactRecordV2, MemoryScope, MemoryStatus
 MODE_FAST = "FAST"
 MODE_BALANCED = "BALANCED"
 MODE_QUALITY = "QUALITY"
-
-
-@dataclass(frozen=True)
-class Fact:
-    """Legacy fact bridge kept for modules that still import Fact directly."""
-
-    subject: str
-    key: str
-    value: Any
-    op: str = "add"
-    confidence: float = 0.5
-    evidence: str = ""
-    source_event_id: str = ""
-    valid_from: float | None = None
-    valid_to: float | None = None
-    replaces_value: Any = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "subject": self.subject,
-            "key": self.key,
-            "value": self.value,
-            "op": self.op,
-            "confidence": float(self.confidence),
-            "evidence": self.evidence,
-            "source_event_id": self.source_event_id,
-            "valid_from": self.valid_from,
-            "valid_to": self.valid_to,
-            "replaces_value": self.replaces_value,
-        }
 
 
 class FactExtractor:
@@ -58,22 +28,23 @@ class FactExtractor:
             return []
         meta = dict(metadata or {})
         event_id = str(meta.get("event_id") or "")
+        namespace = str(meta.get("namespace") or "default")
         subject = self._subject_for_speaker(speaker)
         profile = str(mode or MODE_BALANCED).strip().upper()
         if profile not in {MODE_FAST, MODE_BALANCED, MODE_QUALITY}:
             profile = MODE_BALANCED
 
         rows: list[FactRecordV2] = []
-        rows.extend(self._identity_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._project_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._environment_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._preference_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._task_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._decision_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._issue_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._relationship_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._temporary_facts(src, subject=subject, scope=scope, event_id=event_id))
-        rows.extend(self._resolution_facts(src, subject=subject, scope=scope, event_id=event_id))
+        rows.extend(self._identity_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._project_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._environment_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._preference_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._task_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._decision_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._issue_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._relationship_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._temporary_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._resolution_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
 
         if profile == MODE_FAST:
             allowed = {"identity", "preference", "task", "issue", "decision"}
@@ -94,46 +65,22 @@ class FactExtractor:
                     status=row.status,
                     canonical_key=row.canonical_key,
                     relation=row.relation,
+                    id=row.id,
+                    text=row.text,
+                    memory_type=row.memory_type,
+                    level=row.level,
+                    namespace=row.namespace,
+                    metadata=dict(row.metadata or {}),
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                    parent_id=row.parent_id,
+                    chunk_index=row.chunk_index,
+                    version=row.version,
                 )
                 for row in rows
             ]
 
         return self._dedupe_v2(rows)
-
-    def extract(
-        self,
-        text: str,
-        metadata: dict | None,
-        speaker: str,
-        mode: str = MODE_BALANCED,
-    ) -> list[Fact]:
-        """Legacy bridge: converts a subset of v2 facts to old Fact shape."""
-        v2_rows = self.extract_v2(
-            text=text,
-            metadata=metadata,
-            speaker=speaker,
-            scope=MemoryScope.CONVERSATION,
-            mode=mode,
-        )
-        out: list[Fact] = []
-        for row in v2_rows:
-            key = str(row.predicate or "").strip().lower()
-            if not key:
-                continue
-            out.append(
-                Fact(
-                    subject=str(row.subject or ""),
-                    key=key,
-                    value=row.value,
-                    op="add",
-                    confidence=float(row.confidence),
-                    evidence=row.evidence,
-                    source_event_id=row.source_event_id,
-                    valid_from=row.valid_from,
-                    valid_to=row.valid_to,
-                )
-            )
-        return self._dedupe_legacy(out)
 
     @staticmethod
     def _subject_for_speaker(speaker: str) -> str:
@@ -157,9 +104,12 @@ class FactExtractor:
         event_id: str,
         relation: str,
         valid_to: float | None = None,
+        namespace: str = "default",
     ) -> FactRecordV2:
         pred = str(predicate or "").strip().lower().replace(" ", "_")
         canonical_key = f"{subject}.{pred}" if subject and pred else pred
+        fact_text = f"{subject}.{pred}={value}"
+        digest = hashlib.blake2b(fact_text.encode("utf-8"), digest_size=6).hexdigest()
         return FactRecordV2(
             subject=subject,
             predicate=pred,
@@ -174,9 +124,15 @@ class FactExtractor:
             status=MemoryStatus.ACTIVE,
             canonical_key=canonical_key,
             relation=str(relation or ""),
+            id=f"factv2:{event_id}:{pred}:{digest}",
+            text=fact_text,
+            namespace=namespace,
+            metadata={"relation": str(relation or ""), "key": pred},
         )
 
-    def _identity_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _identity_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         patterns = [
             r"\b(?:my name is|i am)\s+([A-Za-z\u0400-\u04ff][A-Za-z\u0400-\u04ff' -]{1,40})",
@@ -200,11 +156,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="identity",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _project_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _project_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         m = re.search(r"\bproject\s+([A-Za-z0-9_\-]{2,40})", text, re.I)
         if m:
@@ -219,11 +178,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="project",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _environment_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _environment_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         env_tokens = {
             "windows": "windows",
@@ -247,11 +209,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="environment",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _preference_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _preference_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         pref_patterns = [
             r"\b(?:i prefer|prefer)\s+([^.,;!?]{2,120})",
@@ -276,11 +241,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="preference",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _task_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _task_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         patterns = [
             r"\b(?:need to|please|todo|task)\s+([^\n]{3,180})",
@@ -304,11 +272,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="task",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _decision_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _decision_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         patterns = [
             r"\b(?:we decided|decided to|let's use)\s+([^.,;!?]{2,160})",
@@ -332,11 +303,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="decision",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _issue_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _issue_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         low = str(text or "").lower()
         markers = ["error", "failed", "exception", "traceback", "bug", "ошибка", "не работает"]
@@ -352,11 +326,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="issue",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _relationship_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _relationship_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         patterns = [
             r"\bmy\s+(team|manager|colleague|client)\b",
@@ -380,11 +357,14 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="relationship",
+                    namespace=namespace,
                 )
             )
         return out
 
-    def _temporary_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _temporary_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         low = str(text or "").lower()
         if not any(token in low for token in ("for now", "temporarily", "временно", "пока")):
             return []
@@ -400,27 +380,16 @@ class FactExtractor:
                 event_id=event_id,
                 relation="temporary",
                 valid_to=float(time.time() + (4 * 3600)),
+                namespace=namespace,
             )
         ]
 
-    def _resolution_facts(self, text: str, *, subject: str, scope: MemoryScope, event_id: str) -> list[FactRecordV2]:
+    def _resolution_facts(
+        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
         low = str(text or "").lower()
         out: list[FactRecordV2] = []
-        if any(token in low for token in ("resolved", "fixed", "починил", "решено")):
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="issue_status",
-                    value="resolved",
-                    scope=scope,
-                    confidence=0.73,
-                    importance=0.70,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="resolved",
-                )
-            )
-        elif any(token in low for token in ("still", "unresolved", "не решено", "все еще")):
+        if any(token in low for token in ("still", "unresolved", "не решено", "все еще")):
             out.append(
                 self._mk(
                     subject=subject,
@@ -432,6 +401,22 @@ class FactExtractor:
                     evidence=text,
                     event_id=event_id,
                     relation="unresolved",
+                    namespace=namespace,
+                )
+            )
+        elif any(token in low for token in ("resolved", "fixed", "починил", "решено")):
+            out.append(
+                self._mk(
+                    subject=subject,
+                    predicate="issue_status",
+                    value="resolved",
+                    scope=scope,
+                    confidence=0.73,
+                    importance=0.70,
+                    evidence=text,
+                    event_id=event_id,
+                    relation="resolved",
+                    namespace=namespace,
                 )
             )
         return out
@@ -447,23 +432,6 @@ class FactExtractor:
             seen.add(key)
             out.append(row)
         return out
-
-    @staticmethod
-    def _dedupe_legacy(rows: list[Fact]) -> list[Fact]:
-        out: list[Fact] = []
-        seen: set[tuple[str, str, str]] = set()
-        for row in list(rows or []):
-            key = (str(row.subject), str(row.key), str(row.value))
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(row)
-        return out
-
-
-def extract(text: str, metadata: dict | None, speaker: str, mode: str = MODE_BALANCED) -> list[Fact]:
-    return FactExtractor().extract(text=text, metadata=metadata, speaker=speaker, mode=mode)
-
 
 def extract_facts(text: str) -> dict[str, Any]:
     rows = FactExtractor().extract_v2(text=text, metadata={}, speaker="user", scope=MemoryScope.CONVERSATION)

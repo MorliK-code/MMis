@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import gc
 import json
 import math
+import re
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,25 +37,74 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return float(dot / (norm_a * norm_b))
 
 
+def _enum_value(value: Any) -> Any:
+    if hasattr(value, "value"):
+        try:
+            return value.value
+        except Exception:
+            return value
+    return value
+
+
+def _coerce_for_compare(value: Any) -> Any:
+    raw = _enum_value(value)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    if isinstance(raw, str):
+        return raw.strip().lower()
+    return raw
+
+
+def _nested_lookup(payload: dict[str, Any], dotted: str) -> Any:
+    cur: Any = payload
+    parts = [x for x in str(dotted or "").split(".") if x]
+    for part in parts:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
 def _matches_filters(record: MemoryRecord, filters: dict[str, Any]) -> bool:
     if not filters:
         return True
     meta = dict(record.metadata or {})
+    record_fields = {
+        "id",
+        "namespace",
+        "scope",
+        "memory_type",
+        "status",
+        "level",
+        "importance",
+        "confidence",
+        "created_at",
+        "updated_at",
+        "expires_at",
+        "parent_id",
+        "chunk_index",
+        "version",
+        "source_event_id",
+        "embedding_model",
+        "embedding_fingerprint",
+        "embedding_version",
+    }
     for key, value in dict(filters or {}).items():
         if value is None:
             continue
-        if key in {"scope", "namespace", "memory_type", "status"}:
+        if str(key).startswith("metadata."):
+            current = _nested_lookup(meta, str(key)[9:])
+        elif key in record_fields:
             current = getattr(record, key, None)
-            if hasattr(current, "value"):
-                current = getattr(current, "value")
         else:
             current = meta.get(key)
+        current_cmp = _coerce_for_compare(current)
         if isinstance(value, (list, tuple, set)):
-            allowed = set(value)
-            if current not in allowed:
+            allowed = {_coerce_for_compare(x) for x in value}
+            if current_cmp not in allowed:
                 return False
             continue
-        if current != value:
+        if current_cmp != _coerce_for_compare(value):
             return False
     return True
 
@@ -258,7 +310,7 @@ class ChromaVectorBackend(VectorIndexBackend):
         try:
             out = self._collection.query(
                 query_embeddings=[list(embedding or [])],
-                n_results=max(1, int(top_k * 4)),
+                n_results=max(1, int(top_k * (8 if metadata_filters else 4))),
                 include=["metadatas", "distances"],
             )
         except Exception as exc:
@@ -316,7 +368,23 @@ class ChromaVectorBackend(VectorIndexBackend):
             raise RuntimeError("ChromaDB reset failed.") from exc
 
     def close(self) -> None:
-        return
+        try:
+            close = getattr(self._client, "close", None)
+            if callable(close):
+                close()
+            system = getattr(self._client, "_system", None)
+            stop = getattr(system, "stop", None)
+            if callable(stop):
+                stop()
+            clear_cache = getattr(self._client, "clear_system_cache", None)
+            if callable(clear_cache):
+                clear_cache()
+        except Exception:
+            pass
+        self._collection = None
+        self._client = None
+        gc.collect()
+        time.sleep(0.02)
 
 
 class SQLiteFTSBackend(LexicalIndexBackend):
@@ -457,24 +525,31 @@ class SQLiteFTSBackend(LexicalIndexBackend):
             return int(cur.rowcount or 0) > 0
 
     def _search_like(self, query: str, limit: int) -> list[tuple[MemoryRecord, float]]:
-        pattern = f"%{query.strip()}%"
+        tokens = [x.strip() for x in re.split(r"\s+", str(query or "").strip()) if x.strip()]
+        if not tokens:
+            return []
+        where = " OR ".join(["text LIKE ?"] * len(tokens))
+        params = tuple([f"%{x}%" for x in tokens] + [max(1, int(limit))])
         with self._lock:
             rows = self._conn.execute(
-                """
+                f"""
                 SELECT id, text, namespace, scope, status, memory_type, metadata_json,
                        importance, confidence, created_at, updated_at, expires_at,
                        parent_id, chunk_index, version, embedding_model,
                        embedding_fingerprint, embedding_version
                 FROM lexical_records
-                WHERE text LIKE ?
+                WHERE {where}
                 LIMIT ?
                 """,
-                (pattern, max(1, int(limit))),
+                params,
             ).fetchall()
         out: list[tuple[MemoryRecord, float]] = []
         for row in rows:
             record = self._to_record(row)
-            out.append((record, 0.3))
+            text_low = str(record.text or "").lower()
+            overlap = sum(1 for token in tokens if token.lower() in text_low)
+            score = min(1.0, 0.2 + (0.8 * (float(overlap) / float(max(1, len(tokens))))))
+            out.append((record, score))
         return out
 
     def search(
@@ -492,9 +567,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
             return []
         limit = max(1, int(top_k * 4))
         try:
-            with self._lock:
-                rows = self._conn.execute(
-                    """
+            sql = """
                     SELECT r.id, r.text, r.namespace, r.scope, r.status, r.memory_type, r.metadata_json,
                            r.importance, r.confidence, r.created_at, r.updated_at, r.expires_at,
                            r.parent_id, r.chunk_index, r.version, r.embedding_model,
@@ -504,9 +577,15 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                     JOIN lexical_records r ON r.id = lexical_fts.id
                     WHERE lexical_fts MATCH ?
                     LIMIT ?
-                    """,
-                    (q, limit),
-                ).fetchall()
+                    """
+            with self._lock:
+                rows = self._conn.execute(sql, (q, limit)).fetchall()
+            if not rows:
+                tokens = [x.strip() for x in re.split(r"\s+", q) if x.strip()]
+                if tokens:
+                    relaxed = " OR ".join(tokens[:12])
+                    with self._lock:
+                        rows = self._conn.execute(sql, (relaxed, limit)).fetchall()
             scored: list[tuple[MemoryRecord, float]] = []
             for row in rows:
                 record = self._to_record(row[:18])
@@ -524,6 +603,8 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                 lexical_score = 1.0 / (1.0 + max(0.0, rank))
                 scored.append((record, lexical_score))
         except Exception:
+            scored = self._search_like(q, limit)
+        if not scored:
             scored = self._search_like(q, limit)
 
         scored.sort(key=lambda x: float(x[1]), reverse=True)
@@ -743,6 +824,53 @@ class VectorStore:
         self.vector_backend.delete(key)
         return deleted
 
+    def semantic_search(
+        self,
+        *,
+        query_text: str,
+        top_k: int,
+        namespace: str,
+        scopes: list[MemoryScope],
+        include_stale: bool = False,
+        metadata_filters: dict[str, Any] | None = None,
+    ) -> list[tuple[MemoryRecord, float]]:
+        query = str(query_text or "").strip()
+        if not query:
+            return []
+        if self.reindex_required:
+            return []
+        query_embedding = list(self.embedding_provider.embed(query))
+        return self.vector_backend.search(
+            embedding=query_embedding,
+            top_k=max(1, int(top_k)),
+            namespace=namespace,
+            scopes=scopes,
+            include_stale=include_stale,
+            metadata_filters=dict(metadata_filters or {}),
+        )
+
+    def lexical_search(
+        self,
+        *,
+        query_text: str,
+        top_k: int,
+        namespace: str,
+        scopes: list[MemoryScope],
+        include_stale: bool = False,
+        metadata_filters: dict[str, Any] | None = None,
+    ) -> list[tuple[MemoryRecord, float]]:
+        query = str(query_text or "").strip()
+        if not query:
+            return []
+        return self.lexical_backend.search(
+            query=query,
+            top_k=max(1, int(top_k)),
+            namespace=namespace,
+            scopes=scopes,
+            include_stale=include_stale,
+            metadata_filters=dict(metadata_filters or {}),
+        )
+
     def search(
         self,
         *,
@@ -758,8 +886,8 @@ class VectorStore:
             return []
         filt = dict(metadata_filters or {})
 
-        lexical_hits = self.lexical_backend.search(
-            query=query,
+        lexical_hits = self.lexical_search(
+            query_text=query,
             top_k=max(1, int(top_k * 3)),
             namespace=namespace,
             scopes=scopes,
@@ -767,17 +895,14 @@ class VectorStore:
             metadata_filters=filt,
         )
 
-        vector_hits: list[tuple[MemoryRecord, float]] = []
-        if not self.reindex_required:
-            query_embedding = list(self.embedding_provider.embed(query))
-            vector_hits = self.vector_backend.search(
-                embedding=query_embedding,
-                top_k=max(1, int(top_k * 3)),
-                namespace=namespace,
-                scopes=scopes,
-                include_stale=include_stale,
-                metadata_filters=filt,
-            )
+        vector_hits = self.semantic_search(
+            query_text=query,
+            top_k=max(1, int(top_k * 3)),
+            namespace=namespace,
+            scopes=scopes,
+            include_stale=include_stale,
+            metadata_filters=filt,
+        )
 
         merged: dict[str, dict[str, Any]] = {}
         for record, score in lexical_hits:
@@ -809,6 +934,27 @@ class VectorStore:
             )
         out.sort(key=lambda x: max(float(x["semantic_score"]), float(x["lexical_score"])), reverse=True)
         return out[: max(1, int(top_k * 3))]
+
+    def children_of(
+        self,
+        *,
+        parent_id: str,
+        namespace: str | None = None,
+        include_stale: bool = False,
+    ) -> list[MemoryRecord]:
+        key = str(parent_id or "").strip()
+        if not key:
+            return []
+        rows = self.iter_records(namespace=namespace)
+        out: list[MemoryRecord] = []
+        for row in rows:
+            if str(row.parent_id or "") != key:
+                continue
+            if not include_stale and row.status in {MemoryStatus.STALE, MemoryStatus.ARCHIVED, MemoryStatus.DELETED}:
+                continue
+            out.append(row)
+        out.sort(key=lambda x: (float(x.updated_at), int(x.version)), reverse=True)
+        return out
 
     def iter_records(self, *, namespace: str | None = None) -> list[MemoryRecord]:
         with self._lock:

@@ -73,11 +73,11 @@ def default_policy_config() -> WebPolicyConfig:
             "2026",
         ],
         budget_by_mode={
-            WebSearchMode.NO_SEARCH: SearchBudget(max_queries=0, max_sources=0, max_pages=0),
-            WebSearchMode.VERIFY_ONLY: SearchBudget(max_queries=1, max_sources=2, max_pages=1),
-            WebSearchMode.SOFT_SEARCH: SearchBudget(max_queries=2, max_sources=3, max_pages=2),
-            WebSearchMode.TARGETED_SEARCH: SearchBudget(max_queries=3, max_sources=5, max_pages=3),
-            WebSearchMode.DEEP_SEARCH: SearchBudget(max_queries=5, max_sources=8, max_pages=5),
+            WebSearchMode.NO_SEARCH: SearchBudget(max_queries=0, max_sources=0, max_pages=0, max_fetches=0),
+            WebSearchMode.VERIFY_ONLY: SearchBudget(max_queries=1, max_sources=2, max_pages=1, max_fetches=1),
+            WebSearchMode.SOFT_SEARCH: SearchBudget(max_queries=2, max_sources=3, max_pages=2, max_fetches=2),
+            WebSearchMode.TARGETED_SEARCH: SearchBudget(max_queries=3, max_sources=5, max_pages=3, max_fetches=3),
+            WebSearchMode.DEEP_SEARCH: SearchBudget(max_queries=5, max_sources=8, max_pages=5, max_fetches=5),
         },
     )
 
@@ -96,20 +96,32 @@ class WebPolicyEngine:
         web_mode: str,
         web_auto_profile: str,
         internet_enabled: bool,
+        user_override: str | None = None,
+        policy_context: dict[str, Any] | None = None,
     ) -> WebPolicyDecision:
         mode_raw = str(web_mode or "auto").strip().lower()
         auto_profile = str(web_auto_profile or "balanced").strip().lower()
         source = str(query or "").strip().lower()
+        context_override = ""
+        if isinstance(policy_context, dict):
+            context_override = str(policy_context.get("web_override") or "").strip()
+        override = _normalize_user_override(user_override or context_override)
         weights = self._cfg.weights
         thresholds = _profile_adjusted_thresholds(self._cfg.thresholds, auto_profile=auto_profile)
 
         if not bool(internet_enabled):
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="internet_disabled")
+        if override == "no-web":
+            return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="user_override_no_web")
         if mode_raw == "off":
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="web_mode_off")
 
         force_keyword = _has_any(source, self._cfg.force_search_keywords)
-        if mode_raw != "on" and str(classification.primary_category or "").strip().lower() == "chitchat":
+        if (
+            mode_raw != "on"
+            and override != "web"
+            and str(classification.primary_category or "").strip().lower() == "chitchat"
+        ):
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="chitchat_hard_skip")
         category_penalty = self._category_penalty_for(classification.primary_category)
 
@@ -163,7 +175,11 @@ class WebPolicyEngine:
             mode = WebSearchMode.VERIFY_ONLY
 
         reason = "score_routing"
-        if mode_raw == "on":
+        if override == "web":
+            if mode == WebSearchMode.NO_SEARCH:
+                mode = WebSearchMode.VERIFY_ONLY
+            reason = "user_override_web"
+        elif mode_raw == "on":
             reason = "forced_web_mode_on"
         elif force_keyword:
             reason = "force_keyword_boost"
@@ -173,6 +189,8 @@ class WebPolicyEngine:
             reason = "local_scope_cap"
 
         budget = self._cfg.budget_by_mode.get(mode) or SearchBudget()
+        if override == "web":
+            breakdown["user_override_web"] = 1.0
         return WebPolicyDecision(
             mode=mode,
             should_search=bool(mode != WebSearchMode.NO_SEARCH),
@@ -257,6 +275,17 @@ def config_from_dict(payload: dict[str, Any] | None) -> WebPolicyConfig:
             max_queries=max(0, int(_num(row.get("max_queries"), budget_by_mode[mode].max_queries))),
             max_sources=max(0, int(_num(row.get("max_sources"), budget_by_mode[mode].max_sources))),
             max_pages=max(0, int(_num(row.get("max_pages"), budget_by_mode[mode].max_pages))),
+            max_fetches=max(
+                0,
+                int(
+                    _num(
+                        row.get("max_fetches"),
+                        budget_by_mode[mode].effective_max_fetches()
+                        if hasattr(budget_by_mode[mode], "effective_max_fetches")
+                        else budget_by_mode[mode].max_pages,
+                    )
+                ),
+            ),
         )
 
     never_categories = [
@@ -322,3 +351,14 @@ def _num(value: Any, default: float) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _normalize_user_override(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw in {"web", "/web", "on", "force_web", "force-web"}:
+        return "web"
+    if raw in {"no-web", "/no-web", "off", "no_web", "disable_web", "disable-web"}:
+        return "no-web"
+    return ""

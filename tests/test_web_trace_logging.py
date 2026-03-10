@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
-from core.web_rag_stage import WebRagConfig, WebRetrieveStage
+from modules.internet.web.stage import WebStageConfig, WebStageV2
 from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, ModelInfo, ProviderHealth, Timings, Usage
 from modules.internet.search import SearchResult
 
@@ -75,10 +75,10 @@ class WebTraceEnvelopeTests(unittest.TestCase):
                 autosave=False,
             )
             pipeline = ResponsePipeline(provider=_StubProvider(), character_runtime=runtime)
-            pipeline._stages["web_retrieve"] = WebRetrieveStage(
+            pipeline._stages["web_retrieve"] = WebStageV2(
                 search_client=_FakeSearch(),
                 scraper=_FakeScraper(),
-                cfg=WebRagConfig(k_search=3, k_fetch=1, max_text_chars=240),
+                cfg=WebStageConfig(k_search=3, k_fetch=1, max_text_chars=240),
             )
 
             captured: list[dict] = []
@@ -114,6 +114,9 @@ class WebTraceEnvelopeTests(unittest.TestCase):
         self.assertIn("web_retrieve_decision", events)
         self.assertIn("web_search_request", events)
         self.assertIn("web_search_results", events)
+        self.assertIn("web_budget_update", events)
+        self.assertIn("web_evidence_pack", events)
+        self.assertIn("web_memory_write", events)
         self.assertIn("web_fetch_item", events)
         self.assertIn("web_context_injected", events)
         self.assertIn("web_trace_end", events)
