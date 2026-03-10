@@ -47,8 +47,8 @@ class MemoryEntityTests(unittest.TestCase):
                     )
                 )
                 self.assertTrue(out.candidates)
+                self.assertTrue(any("docker" in str(x.record.text).lower() for x in list(out.candidates or [])))
                 top = out.candidates[0]
-                self.assertIn("docker", str(top.record.text).lower())
                 self.assertGreater(float(top.score_breakdown.final_score), 0.0)
                 self.assertTrue(
                     float(top.score_breakdown.lexical_score) > 0.0

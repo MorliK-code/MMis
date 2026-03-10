@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "prompts": {
+    "memory.fact_extraction": {
+      "id": "memory_fact_extraction",
+      "version": "2.0.0",
+      "role": "system",
+      "tags": [
+        "memory",
+        "facts"
+      ],
+      "min_ctx": 64,
+      "text": "Выдели стабильные факты о пользователе/настройках/предпочтениях, которые будут полезны в будущем.\nНЕ сохраняй временные детали.\nВерни строгий JSON-массив объектов: [{\"subject\":\"user|assistant|project\",\"key\":\"...\",\"value\":\"...\",\"op\":\"set|add|remove\",\"confidence\":0..1,\"evidence\":\"короткая цитата\"}]"
+    },
+    "memory.cleanup": {
+      "id": "memory_cleanup",
+      "version": "2.0.0",
+      "role": "system",
+      "tags": [
+        "memory",
+        "cleanup"
+      ],
+      "min_ctx": 64,
+      "text": "Очисти кандидаты памяти: убери дубли и шум, оставь полезные долгоживущие факты и предпочтения. Верни JSON-массив."
+    },
+    "memory.merge": {
+      "id": "memory_merge",
+      "version": "2.0.0",
+      "role": "system",
+      "tags": [
+        "memory",
+        "merge"
+      ],
+      "min_ctx": 64,
+      "text": "Слей обновления памяти аккуратно: новый факт важнее старого при высокой confidence. Конфликты помечай needs_confirmation=true. Верни JSON."
+    }
+  },
+  "cleanup": {
+    "remove_duplicates": true,
+    "drop_low_confidence": true,
+    "low_confidence_threshold": 0.28
+  },
+  "facts": {
+    "pending_requires_confirmation": true,
+    "max_facts_per_turn": 12
+  }
+}

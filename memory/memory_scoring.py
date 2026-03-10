@@ -57,12 +57,49 @@ class SalienceBreakdown:
         }
 
 
+@dataclass(frozen=True)
+class MessageSignalBreakdown:
+    project_relevance: float = 0.0
+    task_intent: float = 0.0
+    architecture_signal: float = 0.0
+    preference_signal: float = 0.0
+    stable_fact_signal: float = 0.0
+    decision_signal: float = 0.0
+    issue_signal: float = 0.0
+    technical_relevance: float = 0.0
+    repeated_theme: float = 0.0
+    smalltalk: float = 0.0
+    meaningful_signal: float = 0.0
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "project_relevance": float(self.project_relevance),
+            "task_intent": float(self.task_intent),
+            "architecture_signal": float(self.architecture_signal),
+            "preference_signal": float(self.preference_signal),
+            "stable_fact_signal": float(self.stable_fact_signal),
+            "decision_signal": float(self.decision_signal),
+            "issue_signal": float(self.issue_signal),
+            "technical_relevance": float(self.technical_relevance),
+            "repeated_theme": float(self.repeated_theme),
+            "smalltalk": float(self.smalltalk),
+            "meaningful_signal": float(self.meaningful_signal),
+        }
+
+
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
 def _tokens(text: str) -> set[str]:
     return {x.lower() for x in _TOKEN_RE.findall(str(text or "")) if x}
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    src = str(text or "").lower()
+    if not src:
+        return False
+    return any(token in src for token in markers)
 
 
 def novelty_score(text: str, recent_texts: list[str]) -> float:
@@ -144,6 +181,94 @@ def explicit_save_signal_score(text: str, metadata: dict[str, object] | None = N
         return 1.0
     markers = ("remember", "save this", "important", "запомни", "важно", "сохрани")
     return 0.92 if any(token in src for token in markers) else 0.0
+
+
+def build_message_signal_breakdown(
+    *,
+    text: str,
+    metadata: dict[str, object] | None = None,
+    recent_texts: list[str] | None = None,
+) -> MessageSignalBreakdown:
+    src = str(text or "").strip().lower()
+    meta = dict(metadata or {})
+    recent = [str(x or "").strip().lower() for x in list(recent_texts or []) if str(x or "").strip()]
+
+    project_markers = ("project", "release", "roadmap", "milestone", "repo", "repository", "module")
+    task_markers = ("todo", "task", "need to", "please", "implement", "fix", "update", "ship")
+    architecture_markers = ("architecture", "design", "refactor", "pipeline", "service", "api", "schema")
+    preference_markers = ("i prefer", "prefer ", "i like", "my preference")
+    stable_fact_markers = ("my name is", "i am ", "i use ", "for now", "always", "default")
+    decision_markers = ("we decided", "decision", "let's use", "lets use", "choose", "go with")
+    issue_markers = ("error", "failed", "exception", "traceback", "bug", "problem", "incident")
+    technical_markers = (
+        "python",
+        "typescript",
+        "javascript",
+        "sql",
+        "docker",
+        "kubernetes",
+        "api",
+        "backend",
+        "frontend",
+        "stack trace",
+    )
+    smalltalk_markers = (
+        "hi",
+        "hello",
+        "how are you",
+        "good morning",
+        "good evening",
+        "thanks",
+        "thank you",
+        "nice to meet",
+        "lol",
+    )
+
+    project = 1.0 if (str(meta.get("project_id") or "").strip() or _contains_any(src, project_markers)) else 0.0
+    task = 1.0 if (bool(meta.get("is_task")) or str(meta.get("task_id") or "").strip() or _contains_any(src, task_markers)) else 0.0
+    architecture = 1.0 if _contains_any(src, architecture_markers) else 0.0
+    preference = 1.0 if _contains_any(src, preference_markers) else 0.0
+    stable_fact = 1.0 if _contains_any(src, stable_fact_markers) else 0.0
+    decision = 1.0 if _contains_any(src, decision_markers) else 0.0
+    issue = 1.0 if _contains_any(src, issue_markers) else 0.0
+    technical = 1.0 if _contains_any(src, technical_markers) else 0.0
+    smalltalk = 1.0 if _contains_any(src, smalltalk_markers) else 0.0
+
+    repeated = 0.0
+    src_terms = [x for x in list(_tokens(src)) if len(x) >= 4][:6]
+    if src_terms and recent:
+        hits = 0
+        for row in recent[-8:]:
+            if any(term in row for term in src_terms):
+                hits += 1
+        repeated = _clamp01(float(hits) / 3.0)
+
+    meaningful = _clamp01(
+        (0.19 * project)
+        + (0.15 * task)
+        + (0.13 * architecture)
+        + (0.09 * preference)
+        + (0.10 * stable_fact)
+        + (0.14 * decision)
+        + (0.12 * issue)
+        + (0.08 * technical)
+        + (0.10 * repeated)
+        - (0.24 * smalltalk)
+    )
+
+    return MessageSignalBreakdown(
+        project_relevance=project,
+        task_intent=task,
+        architecture_signal=architecture,
+        preference_signal=preference,
+        stable_fact_signal=stable_fact,
+        decision_signal=decision,
+        issue_signal=issue,
+        technical_relevance=technical,
+        repeated_theme=repeated,
+        smalltalk=smalltalk,
+        meaningful_signal=meaningful,
+    )
 
 
 def build_salience_breakdown(

@@ -19,7 +19,7 @@ from config.settings import load_config
 from memory.auto_migration import MIGRATION_STATE_FILE, run_auto_migration
 from memory.fact_extractor import FactExtractor
 from memory.memory_manager import MemoryManager
-from memory.memory_models import MemoryEvent, MemoryLevel, MemoryRecord, MemoryScope, MemoryType, RetrievalQuery
+from memory.memory_models import DebugRequest, MemoryEvent, MemoryLevel, MemoryRecord, MemoryScope, MemoryType, RetrievalQuery
 from memory.vector_store import embed_text
 
 
@@ -246,6 +246,107 @@ class MemoryQualityPlanTests(unittest.TestCase):
                 self.assertAlmostEqual(float(manager._retriever.weights.semantic_similarity), 0.91, places=6)
                 self.assertAlmostEqual(float(manager._retriever.weights.lexical_score), 0.17, places=6)
                 self.assertAlmostEqual(float(manager._retriever.weights.scope_match_score), 0.29, places=6)
+            finally:
+                manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_promotion_prefers_meaningful_messages_over_smalltalk(self) -> None:
+        cfg = replace(load_config(force_reload=True), memory_backend="chroma")
+        tmpdir = tempfile.mkdtemp(prefix="mmis_mm_promotion_rules_")
+        try:
+            with patch("memory.memory_manager.load_config", return_value=cfg):
+                manager = MemoryManager(root_dir=Path(tmpdir))
+            try:
+                smalltalk = manager.ingest_event(
+                    MemoryEvent(
+                        role="user",
+                        text="hello, how are you today?",
+                        namespace="n1",
+                        scope=MemoryScope.CONVERSATION,
+                        memory_type=MemoryType.MESSAGE,
+                    )
+                )
+                meaningful = manager.ingest_event(
+                    MemoryEvent(
+                        role="user",
+                        text="We decided to refactor the project pipeline and fix backend API errors.",
+                        namespace="n1",
+                        scope=MemoryScope.CONVERSATION,
+                        memory_type=MemoryType.MESSAGE,
+                    )
+                )
+                self.assertFalse(smalltalk.promoted_ids)
+                self.assertTrue(meaningful.promoted_ids)
+            finally:
+                manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_fact_extraction_feeds_semantic_records_and_promotion_debug(self) -> None:
+        cfg = replace(load_config(force_reload=True), memory_backend="chroma")
+        tmpdir = tempfile.mkdtemp(prefix="mmis_mm_fact_link_")
+        try:
+            with patch("memory.memory_manager.load_config", return_value=cfg):
+                manager = MemoryManager(root_dir=Path(tmpdir))
+            try:
+                result = manager.ingest_event(
+                    MemoryEvent(
+                        role="user",
+                        text="I prefer Vim and we decided to use it for this project.",
+                        namespace="n1",
+                        scope=MemoryScope.CONVERSATION,
+                        memory_type=MemoryType.MESSAGE,
+                    )
+                )
+                self.assertTrue(result.stored_ids)
+                snapshot = manager.debug_snapshot(DebugRequest(namespace="n1", limit=300))
+                rows = [dict(x) for x in list(snapshot.get("items") or []) if isinstance(x, dict)]
+                facts = [x for x in rows if str(x.get("memory_type") or "") == "fact"]
+                self.assertTrue(facts)
+                self.assertTrue(any("user.preference" in str(x.get("text") or "").lower() for x in facts))
+
+                msg_id = str(result.stored_ids[0])
+                message_rows = [x for x in rows if str(x.get("id") or "") == msg_id]
+                self.assertTrue(message_rows)
+                meta = dict(message_rows[0].get("metadata") or {})
+                lifecycle = dict(meta.get("lifecycle_decision") or {})
+                self.assertTrue(lifecycle)
+                self.assertIn("reason", lifecycle)
+                self.assertIn("route", lifecycle)
+                self.assertIn("promotion_debug", lifecycle)
+                self.assertGreaterEqual(int(meta.get("extracted_facts_count") or 0), 1)
+                decisions = list(snapshot.get("promotion_decisions") or [])
+                self.assertTrue(any(str(x.get("id") or "") == msg_id for x in decisions if isinstance(x, dict)))
+            finally:
+                manager.close()
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_summary_event_uses_l1_session_even_if_scope_is_conversation(self) -> None:
+        cfg = replace(load_config(force_reload=True), memory_backend="chroma")
+        tmpdir = tempfile.mkdtemp(prefix="mmis_mm_summary_l1_")
+        try:
+            with patch("memory.memory_manager.load_config", return_value=cfg):
+                manager = MemoryManager(root_dir=Path(tmpdir))
+            try:
+                result = manager.ingest_event(
+                    MemoryEvent(
+                        role="assistant",
+                        text="Session summary: decided to keep Chroma backend and update retrieval.",
+                        namespace="n1",
+                        scope=MemoryScope.CONVERSATION,
+                        memory_type=MemoryType.SUMMARY,
+                    )
+                )
+                self.assertTrue(result.stored_ids)
+                snapshot = manager.debug_snapshot(DebugRequest(namespace="n1", limit=100))
+                rows = [dict(x) for x in list(snapshot.get("items") or []) if isinstance(x, dict)]
+                summary_rows = [x for x in rows if str(x.get("id") or "") == str(result.stored_ids[0])]
+                self.assertTrue(summary_rows)
+                row = summary_rows[0]
+                self.assertEqual(str(row.get("level") or ""), "l1_session")
+                self.assertEqual(str(row.get("scope") or ""), "session")
             finally:
                 manager.close()
         finally:

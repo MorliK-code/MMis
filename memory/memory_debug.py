@@ -31,12 +31,38 @@ class BasicMemoryDebugger:
             status_counts[key] = int(status_counts.get(key, 0)) + 1
         stale_rows = [x.to_dict() for x in filtered if x.status == MemoryStatus.STALE][:20]
         superseded_rows = [x.to_dict() for x in filtered if x.status == MemoryStatus.SUPERSEDED][:20]
+        promotion_rows: list[dict[str, Any]] = []
+        for row in out:
+            meta = dict(row.metadata or {})
+            lifecycle = dict(meta.get("lifecycle_decision") or {})
+            if not lifecycle:
+                continue
+            promotion_debug = dict(lifecycle.get("promotion_debug") or {})
+            promotion_rows.append(
+                {
+                    "id": str(row.id),
+                    "memory_type": str(row.memory_type.value),
+                    "level": str(row.level.value),
+                    "scope": str(row.scope.value),
+                    "reason": str(lifecycle.get("reason") or ""),
+                    "route": str(lifecycle.get("route") or ""),
+                    "promote_to": lifecycle.get("promote_to"),
+                    "mark_status": lifecycle.get("mark_status"),
+                    "importance": float(lifecycle.get("importance") or row.importance),
+                    "confidence": float(lifecycle.get("confidence") or row.confidence),
+                    "extracted_facts_count": int(lifecycle.get("extracted_facts_count") or 0),
+                    "composite_score": float(promotion_debug.get("composite_score") or 0.0),
+                    "composite_threshold": float(promotion_debug.get("composite_threshold") or 0.0),
+                    "importance_threshold": float(promotion_debug.get("importance_threshold") or 0.0),
+                }
+            )
         return {
             "count": len(out),
             "items": [x.to_dict() for x in out],
             "reindex_required": bool(self.store.reindex_required),
             "last_retrieval_trace": dict(self._last_retrieval_trace or {}),
             "status_counts": status_counts,
+            "promotion_decisions": promotion_rows,
             "inspection": {
                 "stale": stale_rows,
                 "superseded": superseded_rows,

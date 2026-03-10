@@ -348,7 +348,14 @@
       "stale_after_days": 30,
       "archive_after_days": 90,
       "promotion_thresholds": {
-        "message_importance": 0.72
+        "message_importance": 0.55,
+        "message_confidence": 0.5
+      },
+      "promotion_signal_boosts": {
+        "project": 0.12,
+        "fact": 0.16,
+        "decision": 0.12,
+        "smalltalk_penalty": 0.2
       },
       "temporary_ttl_sec": 3600,
       "private_runtime_ttl_sec": 900,

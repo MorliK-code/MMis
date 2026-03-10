@@ -381,6 +381,7 @@ class LifecycleDecision:
     route: str = ""
     next_version: int | None = None
     chain_parent_id: str | None = None
+    decision_debug: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

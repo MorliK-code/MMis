@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from memory.memory_models import (
     ConflictDecision,
@@ -19,7 +20,12 @@ from memory.memory_models import (
 class MemoryLifecycleManager:
     stale_after_days: int = 30
     archive_after_days: int = 90
-    promote_message_importance_threshold: float = 0.72
+    promote_message_importance_threshold: float = 0.55
+    promote_message_confidence_threshold: float = 0.50
+    promote_project_signal_boost: float = 0.12
+    promote_fact_signal_boost: float = 0.16
+    promote_decision_signal_boost: float = 0.12
+    promote_smalltalk_penalty: float = 0.20
     parallel_margin: float = 0.08
 
     def decide(self, record: MemoryRecord, *, now_ts: float | None = None) -> LifecycleDecision:
@@ -56,14 +62,7 @@ class MemoryLifecycleManager:
             )
 
         if record.memory_type in {MemoryType.MESSAGE, MemoryType.TOOL_RESULT, MemoryType.TASK_STATE}:
-            if float(record.importance) >= float(self.promote_message_importance_threshold) and float(record.confidence) >= 0.50:
-                return LifecycleDecision(
-                    promote_to=MemoryLevel.L2_EPISODIC,
-                    reason="high_importance_recent",
-                    route="episodic",
-                    chain_parent_id=record.id,
-                )
-            return LifecycleDecision(reason="keep_working", route="working")
+            return self._decide_message_like(record)
 
         if record.memory_type == MemoryType.FACT:
             return LifecycleDecision(promote_to=MemoryLevel.L3_SEMANTIC, reason="fact_to_semantic", route="semantic")
@@ -72,6 +71,160 @@ class MemoryLifecycleManager:
             return LifecycleDecision(promote_to=MemoryLevel.L4_DOCUMENT, reason="document_level", route="document")
 
         return LifecycleDecision(reason="no_change", route="working")
+
+    def _decide_message_like(self, record: MemoryRecord) -> LifecycleDecision:
+        meta = dict(record.metadata or {})
+        importance = self._clamp01(record.importance)
+        confidence = self._clamp01(record.confidence)
+
+        project_signal = self._signal(
+            meta.get("promotion_project_signal"),
+            fallback=self._contains_any(record.text, ("project", "release", "repo", "roadmap", "milestone")),
+        )
+        task_signal = self._signal(
+            meta.get("promotion_task_signal"),
+            fallback=self._contains_any(record.text, ("todo", "task", "need to", "implement", "fix", "ship")),
+        )
+        decision_signal = self._signal(
+            meta.get("promotion_decision_signal"),
+            fallback=self._contains_any(record.text, ("decision", "decided", "let's use", "lets use", "go with")),
+        )
+        preference_signal = self._signal(
+            meta.get("promotion_preference_signal"),
+            fallback=self._contains_any(record.text, ("i prefer", "prefer ", "my preference", "i like")),
+        )
+        issue_signal = self._signal(
+            meta.get("promotion_issue_signal"),
+            fallback=self._contains_any(record.text, ("error", "failed", "exception", "traceback", "bug", "problem")),
+        )
+        technical_signal = self._signal(
+            meta.get("promotion_technical_signal"),
+            fallback=self._contains_any(record.text, ("python", "sql", "api", "backend", "frontend", "docker")),
+        )
+        repeated_signal = self._signal(meta.get("promotion_repeated_topic_signal"), fallback=False)
+        smalltalk_signal = self._signal(
+            meta.get("promotion_smalltalk_signal"),
+            fallback=self._contains_any(
+                record.text,
+                ("hi", "hello", "how are you", "good morning", "good evening", "thanks", "thank you", "lol"),
+            ),
+        )
+
+        facts_count = self._to_int(meta.get("extracted_facts_count"), 0)
+        fact_signal = self._signal(meta.get("promotion_fact_signal"), fallback=(facts_count > 0))
+
+        if record.memory_type in {MemoryType.TASK_STATE, MemoryType.TOOL_RESULT}:
+            task_signal = max(task_signal, 0.85)
+            technical_signal = max(technical_signal, 0.75)
+
+        base_score = (0.62 * importance) + (0.22 * confidence)
+        composite = (
+            base_score
+            + (self._clamp01(self.promote_project_signal_boost) * project_signal)
+            + (0.09 * task_signal)
+            + (self._clamp01(self.promote_decision_signal_boost) * decision_signal)
+            + (0.08 * preference_signal)
+            + (0.08 * issue_signal)
+            + (0.06 * technical_signal)
+            + (0.05 * repeated_signal)
+            + (self._clamp01(self.promote_fact_signal_boost) * fact_signal)
+            - (self._clamp01(self.promote_smalltalk_penalty) * smalltalk_signal)
+        )
+        composite = self._clamp01(composite)
+
+        importance_threshold = self._clamp01(self.promote_message_importance_threshold)
+        confidence_threshold = self._clamp01(self.promote_message_confidence_threshold)
+        composite_threshold = self._clamp01(max(0.38, float(importance_threshold) - 0.08))
+        confidence_soft_gate = self._clamp01(max(0.30, float(confidence_threshold) - 0.10))
+        strong_signal = max(
+            project_signal,
+            task_signal,
+            decision_signal,
+            preference_signal,
+            issue_signal,
+            technical_signal,
+            fact_signal,
+            repeated_signal,
+        )
+        is_smalltalk_only = smalltalk_signal >= 0.75 and strong_signal < 0.45 and facts_count <= 0
+
+        debug_payload = {
+            "importance": float(importance),
+            "confidence": float(confidence),
+            "importance_threshold": float(importance_threshold),
+            "confidence_threshold": float(confidence_threshold),
+            "composite_score": float(composite),
+            "composite_threshold": float(composite_threshold),
+            "confidence_soft_gate": float(confidence_soft_gate),
+            "signals": {
+                "project": float(project_signal),
+                "task": float(task_signal),
+                "decision": float(decision_signal),
+                "preference": float(preference_signal),
+                "issue": float(issue_signal),
+                "technical": float(technical_signal),
+                "repeated": float(repeated_signal),
+                "fact": float(fact_signal),
+                "smalltalk": float(smalltalk_signal),
+                "facts_count": int(facts_count),
+            },
+        }
+
+        if is_smalltalk_only:
+            return LifecycleDecision(
+                reason="smalltalk_keep_working",
+                route="working",
+                decision_debug=debug_payload,
+            )
+
+        hard_threshold = importance >= importance_threshold and confidence >= confidence_threshold
+        composite_threshold_pass = (
+            composite >= composite_threshold
+            and confidence >= confidence_soft_gate
+            and strong_signal >= 0.25
+        )
+        if hard_threshold or composite_threshold_pass:
+            reason = "message_promoted_hard_threshold" if hard_threshold else "message_promoted_composite"
+            return LifecycleDecision(
+                promote_to=MemoryLevel.L2_EPISODIC,
+                reason=reason,
+                route="episodic",
+                chain_parent_id=record.id,
+                decision_debug=debug_payload,
+            )
+
+        return LifecycleDecision(
+            reason="message_keep_working",
+            route="working",
+            decision_debug=debug_payload,
+        )
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    @staticmethod
+    def _to_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
+
+    def _signal(self, value: Any, *, fallback: bool) -> float:
+        if value is None:
+            return 1.0 if fallback else 0.0
+        try:
+            parsed = float(value)
+        except Exception:
+            return 1.0 if fallback else 0.0
+        return self._clamp01(parsed)
+
+    @staticmethod
+    def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+        src = str(text or "").lower()
+        if not src:
+            return False
+        return any(token in src for token in markers)
 
     def apply_decay(self, records: list[MemoryRecord], *, now_ts: float | None = None) -> list[MemoryRecord]:
         now = float(now_ts or time.time())

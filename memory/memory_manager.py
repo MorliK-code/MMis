@@ -30,6 +30,7 @@ from memory.memory_models import (
     MemoryEvent,
     MemoryLifecycle,
     MemoryLevel,
+    LifecycleDecision,
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
@@ -40,7 +41,12 @@ from memory.memory_models import (
 )
 from memory.retrieval import HybridRetriever
 from memory.reranker import HeuristicReranker
-from memory.memory_scoring import SalienceWeights, ScoreWeights, build_salience_score
+from memory.memory_scoring import (
+    SalienceWeights,
+    ScoreWeights,
+    build_message_signal_breakdown,
+    build_salience_score,
+)
 from memory.vector_store import VectorStore
 from memory.context_builder import ContextBuilderV2
 from utils.logger import get_logger, log_json
@@ -112,7 +118,22 @@ class MemoryManager:
             stale_after_days=int(getattr(self._cfg, "memory_stale_after_days", 30) or 30),
             archive_after_days=int(getattr(self._cfg, "memory_archive_after_days", 90) or 90),
             promote_message_importance_threshold=float(
-                getattr(self._cfg, "memory_promotion_message_importance_threshold", 0.72) or 0.72
+                getattr(self._cfg, "memory_promotion_message_importance_threshold", 0.55) or 0.55
+            ),
+            promote_message_confidence_threshold=float(
+                getattr(self._cfg, "memory_promotion_message_confidence_threshold", 0.50) or 0.50
+            ),
+            promote_project_signal_boost=float(
+                getattr(self._cfg, "memory_promotion_project_signal_boost", 0.12) or 0.12
+            ),
+            promote_fact_signal_boost=float(
+                getattr(self._cfg, "memory_promotion_fact_signal_boost", 0.16) or 0.16
+            ),
+            promote_decision_signal_boost=float(
+                getattr(self._cfg, "memory_promotion_decision_signal_boost", 0.12) or 0.12
+            ),
+            promote_smalltalk_penalty=float(
+                getattr(self._cfg, "memory_promotion_smalltalk_penalty", 0.20) or 0.20
             ),
         )
         self._retriever = HybridRetriever(
@@ -203,6 +224,8 @@ class MemoryManager:
             namespace = str(event.namespace or "default")
             scope = event.scope
             memory_type = event.memory_type
+            if memory_type == MemoryType.SUMMARY and scope == MemoryScope.CONVERSATION:
+                scope = MemoryScope.SESSION
 
             if memory_type == MemoryType.DOCUMENT and scope != MemoryScope.PRIVATE_RUNTIME:
                 source = str(metadata.get("source") or metadata.get("path") or f"event:{event_id}").strip()
@@ -260,6 +283,22 @@ class MemoryManager:
                 )
                 return IngestResult(stored_ids=stored_ids)
 
+            preview_facts: list[FactRecordV2] = []
+            if memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY} and scope != MemoryScope.PRIVATE_RUNTIME:
+                preview_facts = self._fact_extractor.extract_v2(
+                    text=text,
+                    metadata={"event_id": event_id, "namespace": namespace, **metadata},
+                    speaker=str(event.role or "user"),
+                    scope=scope,
+                    mode=str(metadata.get("quality_profile") or "BALANCED"),
+                )
+                metadata = self._augment_message_metadata(
+                    text=text,
+                    metadata=metadata,
+                    namespace=namespace,
+                    preview_facts=preview_facts,
+                )
+
             level = self._initial_level(memory_type)
             importance = self._importance_score(text=text, metadata=metadata, namespace=namespace)
             confidence = self._confidence_score(metadata=metadata)
@@ -285,6 +324,12 @@ class MemoryManager:
             stored_ids: list[str] = []
             promoted_ids: list[str] = []
             extracted_facts: list[FactRecordV2] = []
+            lifecycle_decision = self._lifecycle.decide(record, now_ts=now_ts)
+            record = self._attach_lifecycle_debug(
+                record,
+                lifecycle_decision=lifecycle_decision,
+                extracted_facts_count=len(preview_facts),
+            )
 
             if scope == MemoryScope.PRIVATE_RUNTIME:
                 key = str(metadata.get("runtime_key") or record.id)
@@ -302,8 +347,11 @@ class MemoryManager:
 
             self._upsert_working_record(record)
 
-            lifecycle_decision = self._lifecycle.decide(record, now_ts=now_ts)
-            if lifecycle_decision.mark_status is not None and lifecycle_decision.mark_status != record.status:
+            if (
+                scope != MemoryScope.PRIVATE_RUNTIME
+                and lifecycle_decision.mark_status is not None
+                and lifecycle_decision.mark_status != record.status
+            ):
                 status_row = self._status_transition(
                     record,
                     target=lifecycle_decision.mark_status,
@@ -311,21 +359,18 @@ class MemoryManager:
                     reason=str(lifecycle_decision.reason or "lifecycle"),
                 )
                 self._store.upsert(status_row)
-            if lifecycle_decision.promote_to is not None and lifecycle_decision.promote_to != record.level:
+            if (
+                scope != MemoryScope.PRIVATE_RUNTIME
+                and lifecycle_decision.promote_to is not None
+                and lifecycle_decision.promote_to != record.level
+            ):
                 promoted = self._promote_record(record, target=lifecycle_decision.promote_to, now_ts=now_ts)
                 self._store.upsert(promoted)
                 promoted_ids.append(promoted.id)
 
-            if memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY} and scope != MemoryScope.PRIVATE_RUNTIME:
-                facts = self._fact_extractor.extract_v2(
-                    text=text,
-                    metadata={"event_id": event_id, **metadata},
-                    speaker=str(event.role or "user"),
-                    scope=scope,
-                    mode=str(metadata.get("quality_profile") or "BALANCED"),
-                )
+            if scope != MemoryScope.PRIVATE_RUNTIME and preview_facts:
                 extracted_facts = self._write_fact_records(
-                    facts=facts,
+                    facts=preview_facts,
                     namespace=namespace,
                     now_ts=now_ts,
                     event_id=event_id,
@@ -342,10 +387,18 @@ class MemoryManager:
                         "memory_type": memory_type.value,
                         "record_id": record.id,
                         "namespace": namespace,
+                        "lifecycle_reason": str(lifecycle_decision.reason or ""),
+                        "lifecycle_route": str(lifecycle_decision.route or ""),
+                        "promote_to": (
+                            str(lifecycle_decision.promote_to.value)
+                            if lifecycle_decision.promote_to is not None
+                            else ""
+                        ),
+                        "preview_facts_count": int(len(preview_facts)),
                     },
                     "tags": [scope.value, memory_type.value],
                 }
-            )
+                )
             self._save_state()
 
         log_json(
@@ -357,6 +410,14 @@ class MemoryManager:
             stored=len(stored_ids),
             promoted=len(promoted_ids),
             facts=len(extracted_facts),
+            promotion_reason=str(lifecycle_decision.reason or ""),
+            promotion_route=str(lifecycle_decision.route or ""),
+            promotion_score=float(
+                dict(lifecycle_decision.decision_debug or {}).get("composite_score") or 0.0
+            ),
+            promotion_threshold=float(
+                dict(lifecycle_decision.decision_debug or {}).get("composite_threshold") or 0.0
+            ),
         )
         return IngestResult(
             stored_ids=stored_ids,
@@ -823,6 +884,136 @@ class MemoryManager:
             value = 0.65
         return max(0.0, min(1.0, value))
 
+    def _augment_message_metadata(
+        self,
+        *,
+        text: str,
+        metadata: dict[str, Any],
+        namespace: str,
+        preview_facts: list[FactRecordV2],
+    ) -> dict[str, Any]:
+        out = dict(metadata or {})
+        recent = [
+            str(row.text or "")
+            for row in list(self._working_records or [])
+            if str(row.namespace or "default") == str(namespace or "default")
+        ][:80]
+        signal = build_message_signal_breakdown(
+            text=str(text or ""),
+            metadata=out,
+            recent_texts=recent,
+        )
+        fact_relations = sorted(
+            {
+                str(x.relation or "").strip().lower()
+                for x in list(preview_facts or [])
+                if str(x.relation or "").strip()
+            }
+        )
+        facts_count = len(list(preview_facts or []))
+        fact_signal = self._clamp01(float(facts_count) / 2.0)
+
+        out["promotion_project_signal"] = self._meta_float(out, "promotion_project_signal", signal.project_relevance)
+        out["promotion_task_signal"] = self._meta_float(out, "promotion_task_signal", signal.task_intent)
+        out["promotion_decision_signal"] = self._meta_float(out, "promotion_decision_signal", signal.decision_signal)
+        out["promotion_preference_signal"] = self._meta_float(
+            out, "promotion_preference_signal", signal.preference_signal
+        )
+        out["promotion_issue_signal"] = self._meta_float(out, "promotion_issue_signal", signal.issue_signal)
+        out["promotion_technical_signal"] = self._meta_float(
+            out, "promotion_technical_signal", signal.technical_relevance
+        )
+        out["promotion_repeated_topic_signal"] = self._meta_float(
+            out, "promotion_repeated_topic_signal", signal.repeated_theme
+        )
+        out["promotion_smalltalk_signal"] = self._meta_float(out, "promotion_smalltalk_signal", signal.smalltalk)
+        out["promotion_signal_score"] = self._meta_float(out, "promotion_signal_score", signal.meaningful_signal)
+        out["promotion_stable_fact_signal"] = self._meta_float(
+            out, "promotion_stable_fact_signal", signal.stable_fact_signal
+        )
+        out["promotion_fact_signal"] = self._meta_float(out, "promotion_fact_signal", fact_signal)
+        out["extracted_facts_count"] = int(max(0, self._to_int(out.get("extracted_facts_count"), facts_count)))
+        out["extracted_fact_relations"] = list(fact_relations)[:16]
+        return out
+
+    def _attach_lifecycle_debug(
+        self,
+        record: MemoryRecord,
+        *,
+        lifecycle_decision: LifecycleDecision,
+        extracted_facts_count: int,
+    ) -> MemoryRecord:
+        meta = dict(record.metadata or {})
+        debug_payload = dict(lifecycle_decision.decision_debug or {})
+        lifecycle_payload = {
+            "reason": str(lifecycle_decision.reason or ""),
+            "route": str(lifecycle_decision.route or ""),
+            "promote_to": (
+                str(lifecycle_decision.promote_to.value) if lifecycle_decision.promote_to is not None else None
+            ),
+            "mark_status": (
+                str(lifecycle_decision.mark_status.value) if lifecycle_decision.mark_status is not None else None
+            ),
+            "importance": float(record.importance),
+            "confidence": float(record.confidence),
+            "extracted_facts_count": int(max(0, extracted_facts_count)),
+            "promotion_debug": dict(debug_payload or {}),
+        }
+        updated_meta = {
+            **meta,
+            "extracted_facts_count": int(
+                max(0, self._to_int(meta.get("extracted_facts_count"), extracted_facts_count))
+            ),
+            "lifecycle_decision": lifecycle_payload,
+            "promotion_debug": dict(debug_payload or {}),
+        }
+        return self._clone_record_with_metadata(record, metadata=updated_meta)
+
+    @staticmethod
+    def _clone_record_with_metadata(record: MemoryRecord, *, metadata: dict[str, Any]) -> MemoryRecord:
+        return MemoryRecord(
+            id=record.id,
+            text=record.text,
+            memory_type=record.memory_type,
+            level=record.level,
+            scope=record.scope,
+            namespace=record.namespace,
+            metadata=dict(metadata or {}),
+            embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
+            importance=record.importance,
+            confidence=record.confidence,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            expires_at=record.expires_at,
+            status=record.status,
+            version=record.version,
+            parent_id=record.parent_id,
+            chunk_index=record.chunk_index,
+            source_event_id=record.source_event_id,
+            embedding_model=record.embedding_model,
+            embedding_fingerprint=record.embedding_fingerprint,
+            embedding_version=record.embedding_version,
+        )
+
+    @staticmethod
+    def _to_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    def _meta_float(self, row: dict[str, Any], key: str, fallback: float) -> float:
+        try:
+            if key in row:
+                return self._clamp01(float(row.get(key)))
+        except Exception:
+            pass
+        return self._clamp01(fallback)
+
     def _importance_score(self, *, text: str, metadata: dict[str, Any], namespace: str) -> float:
         explicit = metadata.get("importance")
         if explicit is not None:
@@ -852,7 +1043,18 @@ class MemoryManager:
             recent_texts=recent,
             weights=self._salience_weights,
         )
-        blended = (0.58 * legacy_score) + (0.42 * float(salience))
+        signal_score = self._meta_float(metadata, "promotion_signal_score", 0.0)
+        stable_fact_signal = self._meta_float(metadata, "promotion_stable_fact_signal", 0.0)
+        fact_signal = self._meta_float(metadata, "promotion_fact_signal", 0.0)
+        smalltalk_signal = self._meta_float(metadata, "promotion_smalltalk_signal", 0.0)
+        blended = (
+            (0.56 * legacy_score)
+            + (0.44 * float(salience))
+            + (0.20 * signal_score)
+            + (0.08 * stable_fact_signal)
+            + (0.07 * fact_signal)
+            - (0.16 * smalltalk_signal)
+        )
         return max(0.0, min(1.0, blended))
 
     def _update_session_state_from_event(self, record: MemoryRecord) -> None:

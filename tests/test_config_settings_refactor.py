@@ -154,6 +154,11 @@ class ConfigSettingsRefactorTests(unittest.TestCase):
         update_config_values(
             {
                 "memory.lifecycle.promotion_thresholds.message_importance": 0.93,
+                "memory.lifecycle.promotion_thresholds.message_confidence": 0.61,
+                "memory.lifecycle.promotion_signal_boosts.project": 0.27,
+                "memory.lifecycle.promotion_signal_boosts.fact": 0.31,
+                "memory.lifecycle.promotion_signal_boosts.decision": 0.29,
+                "memory.lifecycle.promotion_signal_boosts.smalltalk_penalty": 0.35,
                 "memory.scoring.importance_weights.base": 0.11,
                 "memory.scoring.importance_weights.decision": 0.22,
                 "memory.scoring.importance_weights.remember": 0.33,
@@ -162,6 +167,11 @@ class ConfigSettingsRefactorTests(unittest.TestCase):
         )
         settings = load_config(force_reload=True)
         self.assertAlmostEqual(float(settings.memory_promotion_message_importance_threshold), 0.93, places=6)
+        self.assertAlmostEqual(float(settings.memory_promotion_message_confidence_threshold), 0.61, places=6)
+        self.assertAlmostEqual(float(settings.memory_promotion_project_signal_boost), 0.27, places=6)
+        self.assertAlmostEqual(float(settings.memory_promotion_fact_signal_boost), 0.31, places=6)
+        self.assertAlmostEqual(float(settings.memory_promotion_decision_signal_boost), 0.29, places=6)
+        self.assertAlmostEqual(float(settings.memory_promotion_smalltalk_penalty), 0.35, places=6)
         self.assertAlmostEqual(float(settings.memory_importance_weight_base), 0.11, places=6)
         self.assertAlmostEqual(float(settings.memory_importance_weight_decision), 0.22, places=6)
         self.assertAlmostEqual(float(settings.memory_importance_weight_remember), 0.33, places=6)

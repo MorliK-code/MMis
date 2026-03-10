@@ -342,7 +342,12 @@ class AppSettings:
     memory_context_budget_response_reserve: int = 260
     memory_stale_after_days: int = 30
     memory_archive_after_days: int = 90
-    memory_promotion_message_importance_threshold: float = 0.72
+    memory_promotion_message_importance_threshold: float = 0.55
+    memory_promotion_message_confidence_threshold: float = 0.50
+    memory_promotion_project_signal_boost: float = 0.12
+    memory_promotion_fact_signal_boost: float = 0.16
+    memory_promotion_decision_signal_boost: float = 0.12
+    memory_promotion_smalltalk_penalty: float = 0.20
     memory_importance_weight_base: float = 0.42
     memory_importance_weight_decision: float = 0.24
     memory_importance_weight_remember: float = 0.18
@@ -792,7 +797,14 @@ def _default_config_tree() -> dict[str, Any]:
                 "stale_after_days": 30,
                 "archive_after_days": 90,
                 "promotion_thresholds": {
-                    "message_importance": 0.72,
+                    "message_importance": 0.55,
+                    "message_confidence": 0.50,
+                },
+                "promotion_signal_boosts": {
+                    "project": 0.12,
+                    "fact": 0.16,
+                    "decision": 0.12,
+                    "smalltalk_penalty": 0.20,
                 },
                 "temporary_ttl_sec": 3600,
                 "private_runtime_ttl_sec": 900,
@@ -1138,8 +1150,58 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
             min(
                 1.0,
                 _to_float(
-                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_thresholds.message_importance"), 0.72),
-                    default=0.72,
+                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_thresholds.message_importance"), 0.55),
+                    default=0.55,
+                ),
+            ),
+        ),
+        memory_promotion_message_confidence_threshold=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_thresholds.message_confidence"), 0.50),
+                    default=0.50,
+                ),
+            ),
+        ),
+        memory_promotion_project_signal_boost=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.project"), 0.12),
+                    default=0.12,
+                ),
+            ),
+        ),
+        memory_promotion_fact_signal_boost=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.fact"), 0.16),
+                    default=0.16,
+                ),
+            ),
+        ),
+        memory_promotion_decision_signal_boost=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.decision"), 0.12),
+                    default=0.12,
+                ),
+            ),
+        ),
+        memory_promotion_smalltalk_penalty=max(
+            0.0,
+            min(
+                1.0,
+                _to_float(
+                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.smalltalk_penalty"), 0.20),
+                    default=0.20,
                 ),
             ),
         ),
@@ -1694,6 +1756,16 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append("memory.documents.chunk_overlap must be >= 0")
     if not (0.0 <= float(settings.memory_promotion_message_importance_threshold) <= 1.0):
         errors.append("memory.lifecycle.promotion_thresholds.message_importance must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_promotion_message_confidence_threshold) <= 1.0):
+        errors.append("memory.lifecycle.promotion_thresholds.message_confidence must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_promotion_project_signal_boost) <= 1.0):
+        errors.append("memory.lifecycle.promotion_signal_boosts.project must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_promotion_fact_signal_boost) <= 1.0):
+        errors.append("memory.lifecycle.promotion_signal_boosts.fact must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_promotion_decision_signal_boost) <= 1.0):
+        errors.append("memory.lifecycle.promotion_signal_boosts.decision must be in [0, 1]")
+    if not (0.0 <= float(settings.memory_promotion_smalltalk_penalty) <= 1.0):
+        errors.append("memory.lifecycle.promotion_signal_boosts.smalltalk_penalty must be in [0, 1]")
     if not (0.0 <= float(settings.memory_importance_weight_base) <= 1.0):
         errors.append("memory.scoring.importance_weights.base must be in [0, 1]")
     if not (0.0 <= float(settings.memory_importance_weight_decision) <= 1.0):

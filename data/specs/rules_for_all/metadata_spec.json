@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "tagging": {
+    "enabled": true,
+    "soft_filter": true,
+    "allowed_tags": [
+      "has_code",
+      "has_traceback",
+      "has_logs",
+      "has_command",
+      "has_config",
+      "has_json",
+      "has_link",
+      "has_stacktrace",
+      "is_question",
+      "is_task",
+      "is_followup",
+      "needs_steps",
+      "needs_short_answer",
+      "tone_soft",
+      "tone_strict",
+      "tone_teasing",
+      "tone_neutral",
+      "topic_python",
+      "topic_git",
+      "topic_docker",
+      "topic_windows",
+      "topic_linux",
+      "topic_vscode",
+      "topic_llm",
+      "topic_rag",
+      "topic_ui",
+      "topic_qt",
+      "topic_db",
+      "topic_network",
+      "topic_ollama",
+      "topic_chromadb"
+    ]
+  },
+  "allowed_intents": [
+    "chat",
+    "question",
+    "task",
+    "bug_report",
+    "code_review",
+    "planning",
+    "clarification"
+  ],
+  "allowed_emotions": [
+    "neutral",
+    "frustrated",
+    "happy",
+    "anxious",
+    "angry",
+    "sad",
+    "excited",
+    "tired"
+  ],
+  "heuristics": {
+    "topics": [
+      {
+        "if_contains": [
+          "docker compose",
+          "container",
+          "dockerfile",
+          "image"
+        ],
+        "add": [
+          "topic_docker",
+          "has_command"
+        ]
+      },
+      {
+        "if_contains": [
+          "traceback",
+          "internal server error",
+          "exception"
+        ],
+        "add": [
+          "has_traceback",
+          "topic_python"
+        ]
+      },
+      {
+        "if_contains": [
+          "settings.json",
+          "vscode",
+          "vs code"
+        ],
+        "add": [
+          "topic_vscode",
+          "has_config"
+        ]
+      },
+      {
+        "if_contains": [
+          "c:\\\\users",
+          "windows"
+        ],
+        "add": [
+          "topic_windows"
+        ]
+      }
+    ],
+    "structure": [
+      {
+        "if_regex": "```",
+        "add": [
+          "has_code"
+        ]
+      },
+      {
+        "if_contains": [
+          "pip",
+          "python -m",
+          "py -m"
+        ],
+        "add": [
+          "has_command",
+          "topic_python"
+        ]
+      }
+    ]
+  },
+  "intent_rules": [
+    {
+      "if_tags_any": [
+        "has_traceback"
+      ],
+      "intent": "bug_report"
+    },
+    {
+      "if_tags_any": [
+        "has_code"
+      ],
+      "intent": "task"
+    }
+  ],
+  "emotion_rules": [
+    {
+      "if_contains": [
+        "бесит",
+        "задолбало",
+        "what the hell",
+        "wtf"
+      ],
+      "emotion": "frustrated"
+    }
+  ],
+  "prompts": {
+    "metadata.intent": {
+      "id": "metadata_intent",
+      "version": "3.0.0",
+      "role": "system",
+      "tags": [
+        "metadata",
+        "intent"
+      ],
+      "min_ctx": 64,
+      "text": "Определи интент сообщения пользователя для маршрутизации.\nРазрешённые метки: chat, question, task, bug_report, code_review, planning, clarification.\nВерни строгий JSON: {\"label\":\"...\",\"conf\":0..1,\"alt_labels\":[...]}."
+    },
+    "metadata.emotion": {
+      "id": "metadata_emotion",
+      "version": "3.0.0",
+      "role": "system",
+      "tags": [
+        "metadata",
+        "emotion"
+      ],
+      "min_ctx": 64,
+      "text": "Определи эмоцию пользователя.\nРазрешённые метки: neutral, frustrated, happy, anxious, angry, sad, excited, tired.\nВерни строгий JSON: {\"label\":\"...\",\"intensity\":0..1,\"arousal\":0..1,\"scores\":{...}}."
+    },
+    "metadata.tagging": {
+      "id": "metadata_tagging",
+      "version": "3.0.0",
+      "role": "system",
+      "tags": [
+        "metadata",
+        "tagging"
+      ],
+      "min_ctx": 64,
+      "text": "Собери практичные теги (lowercase) из разрешённого списка. Без мусора.\nВерни строгий JSON-массив уникальных тегов."
+    }
+  }
+}
