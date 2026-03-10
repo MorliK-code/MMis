@@ -202,7 +202,7 @@ _LOG_CHANNEL_PREFIXES_DEFAULT: dict[str, list[str]] = {
     "memory": ["memory", "metadata"],
     "tools": ["modules", "tools"],
     "ui": ["ui", "api", "ui_console", "ui_pyside6"],
-    "web": ["web", "core.web_rag_stage", "tools.modules.internet"],
+    "web": ["web", "core.web_rag_stage", "modules.internet.web", "tools.modules.internet"],
 }
 _LOG_WEB_TRACE_LOGGER_DEFAULT = "web.trace"
 _LOG_SETUP_DONE = False
@@ -238,6 +238,7 @@ class AppSettings:
     thinking_enabled: bool = True
     web_mode: str = "auto"
     web_auto_profile: str = "balanced"
+    web_v2: dict[str, Any] = field(default_factory=dict)
     json_mode_enabled: bool = False
     internet_enabled: bool = True
     automation_enabled: bool = True
@@ -317,10 +318,10 @@ class AppSettings:
     memory_migration_auto_on_start: bool = True
     memory_migration_schema_version: int = 2
     memory_version: str = "v2"
-    memory_backend: str = "local"
-    memory_embedding_backend: str = "sentence_transformers"
-    memory_embedding_model: str = "all-MiniLM-L6-v2"
-    memory_embedding_dim: int = 384
+    memory_backend: str = "chroma"
+    memory_embedding_backend: str = "ollama"
+    memory_embedding_model: str = "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M"
+    memory_embedding_dim: int = 768
     memory_retrieval_top_k: int = 8
     memory_rerank_top_k: int = 8
     memory_chunk_size: int = 1200
@@ -629,6 +630,78 @@ def _default_config_tree() -> dict[str, Any]:
             "enabled": True,
             "web_mode": "auto",
             "web_auto_profile": "balanced",
+            "web_v2": {
+                "enabled": True,
+                "default_mode": "auto",
+                "thresholds": {
+                    "no_search_max": 0.26,
+                    "verify_max": 0.46,
+                    "soft_max": 0.66,
+                    "targeted_max": 0.84,
+                },
+                "weights": {
+                    "base": 0.14,
+                    "external_fact": 0.42,
+                    "mixed_query": 0.24,
+                    "ambiguous_query": 0.22,
+                    "temporal_risk": 0.48,
+                    "confidence_penalty": 0.45,
+                    "freshness_required": 0.24,
+                    "stakes_medium": 0.08,
+                    "stakes_high": 0.22,
+                    "explicit_search_intent": 0.24,
+                    "force_keyword_boost": 0.34,
+                    "local_scope_penalty": 0.50,
+                    "local_scope_depth_cap_threshold": 0.33,
+                    "category_penalty_default": 0.36,
+                },
+                "budgets": {
+                    "no_search": {"max_queries": 0, "max_sources": 0, "max_pages": 0},
+                    "verify_only": {"max_queries": 1, "max_sources": 2, "max_pages": 1},
+                    "soft_search": {"max_queries": 2, "max_sources": 3, "max_pages": 2},
+                    "targeted_search": {"max_queries": 3, "max_sources": 5, "max_pages": 3},
+                    "deep_search": {"max_queries": 5, "max_sources": 8, "max_pages": 5},
+                },
+                "max_sources": 8,
+                "max_pages": 5,
+                "cooldown_seconds": 45,
+                "force_search_keywords": [
+                    "сейчас",
+                    "актуально",
+                    "latest",
+                    "today",
+                    "2026",
+                    "последняя версия",
+                    "цена",
+                    "сколько стоит",
+                    "новости",
+                ],
+                "never_search_categories": ["reasoning", "architecture", "rewrite"],
+                "category_penalties": {
+                    "reasoning": 0.32,
+                    "architecture": 0.30,
+                    "refactor": 0.35,
+                    "local": 0.42,
+                },
+                "ttl_days": {
+                    "default": 7,
+                    "prices": 1,
+                    "versions": 14,
+                    "news": 2,
+                    "docs_summary": 30,
+                    "market_compare": 7,
+                },
+                "preferred_domains": [],
+                "blocked_domains": [],
+                "citations": {
+                    "enabled": True,
+                    "style": "compact",
+                    "max_items_fact": 1,
+                    "max_items_compare": 3,
+                    "max_items_news": 2,
+                    "include_full_urls_on_request": True,
+                },
+            },
             "search": {
                 "api_url": "http://127.0.0.1:8080/search?format=json",
                 "provider": "searxng",
@@ -657,11 +730,11 @@ def _default_config_tree() -> dict[str, Any]:
             "log_dir": _path_to_config_string(log_dir),
             "db_path": _path_to_config_string(memory_dir / "memory.db"),
             "version": "v2",
-            "backend": "local",
+            "backend": "chroma",
             "embedding": {
-                "backend": "sentence_transformers",
-                "model": "all-MiniLM-L6-v2",
-                "dim": 384,
+                "backend": "ollama",
+                "model": "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M",
+                "dim": 768,
             },
             "retrieval": {
                 "top_k": 8,
@@ -804,6 +877,7 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         thinking_enabled=_to_bool(_get_dotted(row, "llm.thinking_enabled")),
         web_mode=_norm_lower(_get_dotted(row, "internet.web_mode") or "auto"),
         web_auto_profile=_norm_lower(_get_dotted(row, "internet.web_auto_profile") or "balanced"),
+        web_v2=_as_dict(_get_dotted(row, "internet.web_v2")),
         json_mode_enabled=_to_bool(_get_dotted(row, "llm.json_mode_enabled")),
         internet_enabled=_to_bool(_get_dotted(row, "internet.enabled")),
         automation_enabled=_to_bool(_get_dotted(row, "modules.automation_enabled")),
@@ -878,12 +952,14 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
             _to_int(_pick_value(_get_dotted(row, "memory.migration.schema_version"), 2), default=2),
         ),
         memory_version=_norm_lower(_pick_value(_get_dotted(row, "memory.version"), "v2")),
-        memory_backend=_norm_lower(_pick_value(_get_dotted(row, "memory.backend"), "local")),
+        memory_backend=_norm_lower(_pick_value(_get_dotted(row, "memory.backend"), "chroma")),
         memory_embedding_backend=_norm_lower(
-            _pick_value(_get_dotted(row, "memory.embedding.backend"), "sentence_transformers")
+            _pick_value(_get_dotted(row, "memory.embedding.backend"), "ollama")
         ),
-        memory_embedding_model=_norm_str(_pick_value(_get_dotted(row, "memory.embedding.model"), "all-MiniLM-L6-v2")),
-        memory_embedding_dim=max(32, _to_int(_pick_value(_get_dotted(row, "memory.embedding.dim"), 384), default=384)),
+        memory_embedding_model=_norm_str(
+            _pick_value(_get_dotted(row, "memory.embedding.model"), "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M")
+        ),
+        memory_embedding_dim=max(32, _to_int(_pick_value(_get_dotted(row, "memory.embedding.dim"), 768), default=768)),
         memory_retrieval_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.top_k"), 8), default=8)),
         memory_rerank_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.rerank_top_k"), 8), default=8)),
         memory_chunk_size=max(200, _to_int(_pick_value(_get_dotted(row, "memory.documents.chunk_size"), 1200), default=1200)),
@@ -1353,8 +1429,11 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append("memory.migration.schema_version must be >= 1")
     if str(settings.memory_version or "").strip().lower() not in {"v2"}:
         errors.append(f"memory.version must be 'v2', got: {settings.memory_version}")
-    if str(settings.memory_backend or "").strip().lower() not in {"chroma_hybrid", "chroma", "local"}:
-        errors.append(f"memory.backend must be one of ['chroma_hybrid', 'chroma', 'local'], got: {settings.memory_backend}")
+    if str(settings.memory_backend or "").strip().lower() not in {"chroma", "chromadb"}:
+        errors.append(
+            "memory.backend must be one of ['chroma', 'chromadb']; "
+            f"got: {settings.memory_backend}. Switch memory.backend to 'chroma' or 'chromadb'."
+        )
     if int(settings.memory_retrieval_top_k) < 1:
         errors.append("memory.retrieval.top_k must be >= 1")
     if int(settings.memory_rerank_top_k) < 1:

@@ -62,23 +62,41 @@ class MemoryManager:
         self._state_path = self._root / "manager_state.json"
 
         self._lock = RLock()
+        memory_backend = str(getattr(self._cfg, "memory_backend", "chroma") or "chroma").strip().lower()
+        if memory_backend not in {"chroma", "chromadb"}:
+            raise ValueError(
+                "Unsupported memory.backend for Memory V2: "
+                f"{memory_backend!r}. Use 'chroma' or 'chromadb'."
+            )
 
-        embedding_backend = str(getattr(self._cfg, "memory_embedding_backend", "sentence_transformers") or "sentence_transformers")
-        embedding_model = str(getattr(self._cfg, "memory_embedding_model", "all-MiniLM-L6-v2") or "all-MiniLM-L6-v2")
+        embedding_backend = str(getattr(self._cfg, "memory_embedding_backend", "ollama") or "ollama")
+        embedding_model = str(
+            getattr(self._cfg, "memory_embedding_model", "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M")
+            or "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M"
+        )
         self._embedding_provider = build_embedding_provider(
             backend=embedding_backend,
             model_name=embedding_model,
             cache_path=self._root / "embedding_cache.sqlite3",
-            dim=int(getattr(self._cfg, "memory_embedding_dim", 384) or 384),
+            dim=int(getattr(self._cfg, "memory_embedding_dim", 768) or 768),
+            ollama_host=str(getattr(self._cfg, "ollama_base_url", "") or ""),
+            ollama_timeout_sec=float(getattr(self._cfg, "ollama_timeout_sec", 120.0) or 120.0),
         )
 
-        memory_backend = str(getattr(self._cfg, "memory_backend", "chroma") or "chroma").strip().lower()
-        self._store = VectorStore(
-            root_dir=self._root,
-            embedding_provider=self._embedding_provider,
-            use_chroma=(memory_backend in {"chroma", "chromadb", "chroma_hybrid"}),
-            collection_name="mmis_memory_v2",
-        )
+        try:
+            self._store = VectorStore(
+                root_dir=self._root,
+                embedding_provider=self._embedding_provider,
+                use_chroma=True,
+                collection_name="mmis_memory_v2",
+            )
+        except Exception:
+            if hasattr(self._embedding_provider, "close"):
+                try:
+                    self._embedding_provider.close()
+                except Exception:
+                    pass
+            raise
 
         self._event_store = EventStore(path=self._root / "events_v2.jsonl")
         self._fact_extractor = FactExtractor()

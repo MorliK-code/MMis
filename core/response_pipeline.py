@@ -9,6 +9,7 @@ import datetime as dt
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from core.spec_registry import invalidate_spec_cache, load_character_spec, load_spec
@@ -29,10 +30,11 @@ from memory.memory_models import ContextBuildRequest, MemoryScope
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
 from modules.studio.studio_generator import StudioGenerator
+from modules.internet.web.result_processor import format_postprocess_citation_suffix
 from prompt_engine import PromptEngine
 from utils.datetime_local import now_local_ts, parse_time_to_epoch
 from utils.logger import get_logger, log_json
-from core.web_rag_stage import WebRetrieveStage
+from modules.internet.web.stage import WebRetrieveStage
 
 
 PROFILE_FAST = "FAST"
@@ -551,6 +553,12 @@ class PromptBuildStage(PipelineStage):
             _append_policy_rule(
                 ctx.policies,
                 "Use fetched web evidence and include source domain and fetch/publish time; if sources disagree, report a range.",
+            )
+
+        if web_used:
+            _append_policy_rule(
+                ctx.policies,
+                "When web evidence is used, include compact citations (domain + date/time) without turning the answer into a verbose report.",
             )
 
         if web_fresh_missing:
@@ -2020,6 +2028,18 @@ class PostprocessStage(PipelineStage):
                 if emoji and not text.endswith(emoji.strip()):
                     text = f"{text}{emoji}"
 
+            # Citations are mandatory for web-backed answers, but remain compact and adaptive.
+            web_used = _to_bool(_pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False), default=False)
+            compact_citations = [str(x) for x in _as_list(_as_dict(ctx.meta).get("web_citations")) if str(x).strip()]
+            if web_used and compact_citations:
+                classification = _as_dict(_as_dict(ctx.meta).get("web_query_classification"))
+                text = format_postprocess_citation_suffix(
+                    text=text,
+                    compact_citations=compact_citations,
+                    classification=SimpleNamespace(query_type=str(classification.get("query_type") or "")),
+                )
+                ctx.logs.append(f"stage=postprocess citations=applied count={len(compact_citations)}")
+
         updated_address_terms = _update_address_terms_after_response(ctx=ctx, text=text)
         if updated_address_terms is not None:
             ctx.state["address_terms"] = updated_address_terms
@@ -2326,81 +2346,6 @@ class OutputFormatStage(PipelineStage):
         return _squeeze_summary(summary)
 
 
-class WebSecondPassStage(PipelineStage):
-    name = "web_second_pass"
-
-    def __init__(self, *, stages: dict[str, PipelineStage] | None = None):
-        self._stages = stages if isinstance(stages, dict) else {}
-
-    def run(self, ctx: PipelineContext) -> PipelineContext:
-        if ctx.route != "chat":
-            ctx.logs.append("stage=web_second_pass skipped(route)")
-            return ctx
-        web_mode = _resolve_web_mode(ctx.meta, ctx.state)
-        web_auto_profile = _resolve_web_auto_profile(ctx.meta, ctx.state)
-        if web_mode != "auto":
-            ctx.logs.append("stage=web_second_pass skipped(mode)")
-            return ctx
-        if web_auto_profile != "aggressive":
-            ctx.logs.append("stage=web_second_pass skipped(profile)")
-            return ctx
-        if bool(ctx.meta.get("web_second_pass_done", False)):
-            ctx.logs.append("stage=web_second_pass skipped(done)")
-            return ctx
-        if str(ctx.tags.get("web_used") or "").strip().lower() == "true":
-            ctx.logs.append("stage=web_second_pass skipped(web_already_used)")
-            return ctx
-        if not _should_trigger_web_second_pass(ctx):
-            ctx.logs.append("stage=web_second_pass skipped(confident)")
-            return ctx
-
-        ctx.meta["web_second_pass_done"] = True
-        web_stage = self._stages.get("web_retrieve")
-        if web_stage is None:
-            ctx.logs.append("stage=web_second_pass skipped(no_web_stage)")
-            return ctx
-
-        prev_use_web = ctx.meta.get("use_web", None)
-        prev_second_pass = ctx.meta.get("web_second_pass", None)
-        ctx.meta["use_web"] = True
-        ctx.meta["web_second_pass"] = True
-        try:
-            ctx = web_stage.run(ctx)
-        except Exception as exc:
-            ctx.errors.append(f"web_second_pass:web_retrieve:{type(exc).__name__}")
-            ctx.logs.append(f"stage=web_second_pass web_retrieve_error={type(exc).__name__}")
-            return ctx
-        finally:
-            if prev_use_web is None:
-                ctx.meta.pop("use_web", None)
-            else:
-                ctx.meta["use_web"] = prev_use_web
-            if prev_second_pass is None:
-                ctx.meta.pop("web_second_pass", None)
-            else:
-                ctx.meta["web_second_pass"] = prev_second_pass
-
-        if str(ctx.tags.get("web_used") or "").strip().lower() != "true":
-            ctx.logs.append("stage=web_second_pass skipped(no_web_after_retry)")
-            return ctx
-
-        rerun = ("prompt_build", "prompt_engine", "generate", "verify", "postprocess", "output_format")
-        for stage_name in rerun:
-            stage = self._stages.get(stage_name)
-            if stage is None:
-                continue
-            try:
-                ctx = stage.run(ctx)
-            except Exception as exc:
-                ctx.errors.append(f"web_second_pass:{stage_name}:{type(exc).__name__}")
-                ctx.logs.append(f"stage=web_second_pass rerun_stage={stage_name} error={type(exc).__name__}")
-                break
-            if ctx.stop:
-                break
-        ctx.logs.append("stage=web_second_pass applied")
-        return ctx
-
-
 class MemoryWriteStage(PipelineStage):
     name = "memory_write"
 
@@ -2519,7 +2464,6 @@ class ResponsePipeline:
             "output_format": OutputFormatStage(provider=self.provider),
             "memory_write": MemoryWriteStage(),
         }
-        self._stages["web_second_pass"] = WebSecondPassStage(stages=self._stages)
         self._profiles: dict[str, tuple[str, ...]] = {
             PROFILE_FAST: (
                 "preprocess",
@@ -2548,7 +2492,6 @@ class ResponsePipeline:
                 "tool_router",
                 "verify",
                 "output_format",
-                "web_second_pass",
                 "memory_write",
             ),
             PROFILE_QUALITY: (
@@ -2565,7 +2508,6 @@ class ResponsePipeline:
                 "verify",
                 "postprocess",
                 "output_format",
-                "web_second_pass",
                 "memory_write",
             ),
             PROFILE_AUTONOMOUS: (
@@ -4234,64 +4176,6 @@ def _resolve_web_auto_profile(meta: dict[str, Any], state: dict[str, Any]) -> st
     return raw if raw in {"balanced", "aggressive"} else "balanced"
 
 
-def _has_precision_markers(text: str) -> bool:
-    low = str(text or "").strip().lower()
-    if not low:
-        return False
-    markers = (
-        "найди",
-        "точн",
-        "проверь",
-        "актуал",
-        "источник",
-        "ссылка",
-        "рецепт",
-        "latest",
-        "exact",
-        "verify",
-        "source",
-    )
-    return any(token in low for token in markers)
-
-
-def _should_trigger_web_second_pass(ctx: PipelineContext) -> bool:
-    user_text = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
-    answer = str(ctx.text or "").strip()
-    if not user_text:
-        return False
-    intent = str(ctx.tags.get("intent") or "").strip().lower()
-    smalltalk_re = re.compile(
-        r"\b(\u043a\u0430\u043a \u0434\u0435\u043b\u0430|\u0447\u0442\u043e \u043d\u043e\u0432\u043e\u0433\u043e|\u043f\u0440\u0438\u0432\u0435\u0442|hello|hi|how are you)\b",
-        flags=re.I,
-    )
-    if bool(smalltalk_re.search(user_text)):
-        return False
-    if not answer:
-        return True
-    answer_low = answer.lower()
-    uncertain_markers = (
-        "не уверен",
-        "не знаю",
-        "не могу",
-        "не удалось",
-        "нет данных",
-        "может быть",
-        "possibly",
-        "probably",
-        "not sure",
-        "cannot verify",
-        "can't verify",
-    )
-    if any(token in answer_low for token in uncertain_markers):
-        return True
-    question_like = ("?" in user_text) or (intent in {"question", "implementation", "action_request"})
-    if _has_precision_markers(user_text) and len(answer) < 280:
-        return True
-    if question_like and len(answer) < 140:
-        return True
-    return False
-
-
 def _resolve_web_trace_id(meta: dict[str, Any], user_msg: str) -> str:
     source = _pick(_as_dict(meta).get("web_trace_id"), _as_dict(meta).get("trace_id"))
     if source:
@@ -4351,3 +4235,4 @@ def _text_preview(value: str, max_chars: int = 120) -> str:
 
 def run_response_pipeline(text: str) -> str:
     return str(text or "").strip()
+

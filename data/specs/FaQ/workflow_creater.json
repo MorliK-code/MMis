@@ -1,8 +1,8 @@
-{
+﻿{
   "schema_version": 6,
   "id": "workflow_master",
   "title": "Unified Studio Creator Workflow",
-  "description": "Единый контракт студии для создания/обновления персонажей и modes в одном модуле /studio.",
+  "description": "Р•РґРёРЅС‹Р№ РєРѕРЅС‚СЂР°РєС‚ СЃС‚СѓРґРёРё РґР»СЏ СЃРѕР·РґР°РЅРёСЏ/РѕР±РЅРѕРІР»РµРЅРёСЏ РїРµСЂСЃРѕРЅР°Р¶РµР№ Рё modes РІ РѕРґРЅРѕРј РјРѕРґСѓР»Рµ /studio.",
   "studio_public_contract": {
     "supported_commands": [
       "/studio",
@@ -14,12 +14,12 @@
       "/cancel"
     ],
     "removed_commands": {
-      "/specs ...": "Команда удалена. Используй /studio ...",
-      "/studio mode ...": "Команда удалена. Используй /studio ..."
+      "/specs ...": "РљРѕРјР°РЅРґР° СѓРґР°Р»РµРЅР°. РСЃРїРѕР»СЊР·СѓР№ /studio ...",
+      "/studio mode ...": "РљРѕРјР°РЅРґР° СѓРґР°Р»РµРЅР°. РСЃРїРѕР»СЊР·СѓР№ /studio ..."
     },
     "local_handling": {
       "apply_cancel_local_only": true,
-      "description": "Команды apply/cancel обрабатываются локально внутри studio и не попадают в основной prompt модели."
+      "description": "РљРѕРјР°РЅРґС‹ apply/cancel РѕР±СЂР°Р±Р°С‚С‹РІР°СЋС‚СЃСЏ Р»РѕРєР°Р»СЊРЅРѕ РІРЅСѓС‚СЂРё studio Рё РЅРµ РїРѕРїР°РґР°СЋС‚ РІ РѕСЃРЅРѕРІРЅРѕР№ prompt РјРѕРґРµР»Рё."
     }
   },
   "runtime_state_contract": {
@@ -58,24 +58,24 @@
       "build_character_pack"
     ],
     "intent_matrix": {
-      "character_create": "seed содержит create/new/создай/новый без update -> create_character",
-      "character_update": "seed содержит update/change/обнови/измени без create -> update_character",
-      "mixed": "seed содержит одновременно character + mode -> mixed",
-      "ambiguous": "если интент неочевиден -> clarify по operation_type"
+      "character_create": "seed СЃРѕРґРµСЂР¶РёС‚ create/new/СЃРѕР·РґР°Р№/РЅРѕРІС‹Р№ Р±РµР· update -> create_character",
+      "character_update": "seed СЃРѕРґРµСЂР¶РёС‚ update/change/РѕР±РЅРѕРІРё/РёР·РјРµРЅРё Р±РµР· create -> update_character",
+      "mixed": "seed СЃРѕРґРµСЂР¶РёС‚ РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ character + mode -> mixed",
+      "ambiguous": "РµСЃР»Рё РёРЅС‚РµРЅС‚ РЅРµРѕС‡РµРІРёРґРµРЅ -> clarify РїРѕ operation_type"
     },
     "mode_scope_rules": {
-      "mode_for_character": "если в seed формат 'для <character>' и нет global -> scope=character",
-      "mode_global_and_character": "если есть и global, и 'для <character>' -> scope=mixed",
-      "target_required": "при scope=character|mixed studio обязана запросить target_character_id, если он не resolved"
+      "mode_for_character": "РµСЃР»Рё РІ seed С„РѕСЂРјР°С‚ 'РґР»СЏ <character>' Рё РЅРµС‚ global -> scope=character",
+      "mode_global_and_character": "РµСЃР»Рё РµСЃС‚СЊ Рё global, Рё 'РґР»СЏ <character>' -> scope=mixed",
+      "target_required": "РїСЂРё scope=character|mixed studio РѕР±СЏР·Р°РЅР° Р·Р°РїСЂРѕСЃРёС‚СЊ target_character_id, РµСЃР»Рё РѕРЅ РЅРµ resolved"
     },
     "question_ux": {
       "numbered_choices": "1..N",
-      "custom_choice": "0. Ввести свой вариант",
+      "custom_choice": "0. Р’РІРµСЃС‚Рё СЃРІРѕР№ РІР°СЂРёР°РЅС‚",
       "impact_block": [
-        "Изменит",
-        "Файлы",
-        "Для персонажа",
-        "Результат"
+        "РР·РјРµРЅРёС‚",
+        "Р¤Р°Р№Р»С‹",
+        "Р”Р»СЏ РїРµСЂСЃРѕРЅР°Р¶Р°",
+        "Р РµР·СѓР»СЊС‚Р°С‚"
       ]
     },
     "llm_profile": {
@@ -87,7 +87,7 @@
   },
   "file_layout_contracts": [
     {
-      "file": "data/specs/taxonomy.json",
+      "file": "data/specs/rules_for_all/taxonomy.json",
       "must_have_root_blocks": [
         "schema_version",
         "modes",
@@ -101,7 +101,7 @@
       ]
     },
     {
-      "file": "data/specs/modes_spec.json",
+      "file": "data/specs/rules_for_all/modes_spec.json",
       "must_have_root_blocks": [
         "schema_version",
         "modes"
@@ -114,7 +114,7 @@
       ]
     },
     {
-      "file": "data/specs/characters/{character_id}/character.json",
+      "file": "data/specs/rules_for_all/characters/{character_id}/character.json",
       "must_have_root_blocks": [
         "schema_version",
         "character_id",
@@ -127,7 +127,7 @@
       ]
     },
     {
-      "file": "data/specs/characters/{character_id}/persona_state.json",
+      "file": "data/specs/rules_for_all/characters/{character_id}/persona_state.json",
       "must_have_root_blocks": [
         "schema_version",
         "character_id",
@@ -140,7 +140,7 @@
       ]
     },
     {
-      "file": "data/specs/characters/{character_id}/persona_spec.json",
+      "file": "data/specs/rules_for_all/characters/{character_id}/persona_spec.json",
       "must_have_root_blocks": [
         "schema_version",
         "identity",
@@ -150,10 +150,10 @@
         "modes",
         "traits_rules"
       ],
-      "encoding_rule": "locks_map.informal_you должен быть ровно: Use informal address form ('ты')."
+      "encoding_rule": "locks_map.informal_you РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ СЂРѕРІРЅРѕ: Use informal address form ('С‚С‹')."
     },
     {
-      "file": "data/specs/characters/{character_id}/evolution_spec.json",
+      "file": "data/specs/rules_for_all/characters/{character_id}/evolution_spec.json",
       "must_have_root_blocks": [
         "schema_version",
         "rules",
@@ -179,8 +179,8 @@
     },
     "update_modes": {
       "sync_global": [
-        "data/specs/taxonomy.json",
-        "data/specs/modes_spec.json"
+        "data/specs/rules_for_all/taxonomy.json",
+        "data/specs/rules_for_all/modes_spec.json"
       ],
       "sync_character_when_scope": "scope=character|mixed -> sync persona_spec target character"
     }
@@ -206,12 +206,13 @@
   },
   "definition_of_done": {
     "rules": [
-      "Studio commands and lifecycle соответствуют public contract",
-      "apply/cancel локальны и не доходят до main-model prompt",
-      "creator в auto-first режиме задает только необходимые уточнения",
-      "llm_profile строго валидируется по dynamic enum",
-      "create/update/mixed всегда создают specs + blueprint + artifacts",
-      "тесты из раздела tests покрывают критические сценарии"
+      "Studio commands and lifecycle СЃРѕРѕС‚РІРµС‚СЃС‚РІСѓСЋС‚ public contract",
+      "apply/cancel Р»РѕРєР°Р»СЊРЅС‹ Рё РЅРµ РґРѕС…РѕРґСЏС‚ РґРѕ main-model prompt",
+      "creator РІ auto-first СЂРµР¶РёРјРµ Р·Р°РґР°РµС‚ С‚РѕР»СЊРєРѕ РЅРµРѕР±С…РѕРґРёРјС‹Рµ СѓС‚РѕС‡РЅРµРЅРёСЏ",
+      "llm_profile СЃС‚СЂРѕРіРѕ РІР°Р»РёРґРёСЂСѓРµС‚СЃСЏ РїРѕ dynamic enum",
+      "create/update/mixed РІСЃРµРіРґР° СЃРѕР·РґР°СЋС‚ specs + blueprint + artifacts",
+      "С‚РµСЃС‚С‹ РёР· СЂР°Р·РґРµР»Р° tests РїРѕРєСЂС‹РІР°СЋС‚ РєСЂРёС‚РёС‡РµСЃРєРёРµ СЃС†РµРЅР°СЂРёРё"
     ]
   }
 }
+

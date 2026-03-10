@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir --upgrade pip \
         fastapi \
         "uvicorn[standard]" \
         pydantic \
+        chromadb \
         ollama \
         openai \
         trafilatura \

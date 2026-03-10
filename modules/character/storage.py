@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ class CharacterStorage:
         self.character_logs_root.mkdir(parents=True, exist_ok=True)
         self.spec_root = (DATA_DIR / "specs" / "characters").resolve()
         self.spec_root.mkdir(parents=True, exist_ok=True)
+        self.legacy_spec_root = (DATA_DIR / "specs" / "rules_for_all" / "characters").resolve()
+        self._migrate_legacy_character_specs()
 
     @property
     def manifest_path(self) -> Path:
@@ -65,6 +68,31 @@ class CharacterStorage:
         self.ensure_character_structure("asya")
         self.ensure_all_character_structures()
         self._sync_manifest_with_directories()
+
+    def _migrate_legacy_character_specs(self) -> None:
+        src_root = self.legacy_spec_root
+        dst_root = self.spec_root
+        if not src_root.exists() or src_root == dst_root:
+            return
+        try:
+            for row in src_root.iterdir():
+                if not row.is_dir():
+                    continue
+                if row.name.startswith("_"):
+                    continue
+                src_dir = row.resolve()
+                dst_dir = (dst_root / row.name).resolve()
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                for item in src_dir.iterdir():
+                    if item.is_file():
+                        target = dst_dir / item.name
+                        if not target.exists():
+                            try:
+                                shutil.copy2(item, target)
+                            except Exception:
+                                continue
+        except Exception:
+            return
 
     def ensure_character_structure(self, character_id: str) -> None:
         cid = _safe_id(character_id)
@@ -378,7 +406,7 @@ class CharacterStorage:
 
     def read_prompt(self, character_id: str, rel_path: str) -> str:
         _ = (character_id, rel_path)
-        raise ValueError("TXT prompts are disabled in runtime. Use JSON specs under data/specs.")
+        raise ValueError("TXT prompts are disabled in runtime. Use JSON specs under data/specs/rules_for_all.")
 
     def append_event(self, character_id: str, event: dict[str, Any]) -> None:
         cid = _safe_id(character_id)

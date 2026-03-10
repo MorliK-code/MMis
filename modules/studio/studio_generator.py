@@ -59,12 +59,17 @@ class StudioGenerator:
         character_specs_root: str | Path | None = None,
     ) -> None:
         self.storage = storage or CharacterStorage()
-        self.specs_root = Path(specs_root).expanduser().resolve() if specs_root is not None else (DATA_DIR / "specs").resolve()
+        self.specs_root = (
+            Path(specs_root).expanduser().resolve()
+            if specs_root is not None
+            else (DATA_DIR / "specs" / "rules_for_all").resolve()
+        )
         self.specs_root.mkdir(parents=True, exist_ok=True)
+        self.default_character_specs_root = (DATA_DIR / "specs" / "characters").resolve()
         self.character_specs_root = (
             Path(character_specs_root).expanduser().resolve()
             if character_specs_root is not None
-            else (self.specs_root / "characters").resolve()
+            else self.default_character_specs_root
         )
         self.character_specs_root.mkdir(parents=True, exist_ok=True)
         self._llm_profiles_cache: list[str] = []
@@ -1086,7 +1091,7 @@ class StudioGenerator:
         impact = question.get("impact")
         if isinstance(impact, dict):
             changed = str(impact.get("changed") or "").strip() or "точность patch-изменений в studio."
-            files = str(impact.get("files") or "").strip() or "data/specs/*"
+            files = str(impact.get("files") or "").strip() or "data/specs/rules_for_all/*"
             character = str(impact.get("character") or "").strip() or "выбранная цель apply."
             result = str(impact.get("result") or "").strip() or "предсказуемое применение изменений без потери существующих данных."
             return (
@@ -1101,14 +1106,14 @@ class StudioGenerator:
             return (
                 "Что влияет:\n"
                 "- Изменит: точность patch-изменений в studio.\n"
-                "- Файлы: data/specs/*.\n"
+                "- Файлы: data/specs/rules_for_all/*.\n"
                 "- Для персонажа: выбранная цель apply.\n"
                 "- Результат: предсказуемое применение изменений без потери существующих данных."
             )
         return (
             "Что влияет:\n"
             f"- Изменит: {text}\n"
-            "- Файлы: data/specs/*.\n"
+            "- Файлы: data/specs/rules_for_all/*.\n"
             "- Для персонажа: выбранная цель apply.\n"
             "- Результат: предсказуемое применение изменений без потери существующих данных."
         )
@@ -1250,8 +1255,8 @@ class StudioGenerator:
         character_file = f"data/specs/characters/{char_id}/character.json"
         persona_state_file = f"data/specs/characters/{char_id}/persona_state.json"
         persona_spec_file = f"data/specs/characters/{char_id}/persona_spec.json"
-        taxonomy_file = "data/specs/taxonomy.json"
-        modes_spec_file = "data/specs/modes_spec.json"
+        taxonomy_file = "data/specs/rules_for_all/taxonomy.json"
+        modes_spec_file = "data/specs/rules_for_all/modes_spec.json"
         manifest_file = "runtime manifest.json"
 
         if qid == "operation_type":
@@ -1331,7 +1336,7 @@ class StudioGenerator:
         impact_text = str(template.get("impact") or "").strip() or "точность patch-изменений в studio."
         return {
             "changed": impact_text,
-            "files": "data/specs/*",
+            "files": "data/specs/rules_for_all/*",
             "character": char_id if char_id else "выбранная цель apply.",
             "result": "предсказуемое применение изменений без потери существующих данных.",
         }
@@ -2503,7 +2508,7 @@ class StudioGenerator:
             self._write_json(modes_spec_path, modes_spec)
             written_files.append(str(modes_spec_path))
 
-        if set_active_character and self.character_specs_root == (self.specs_root / "characters").resolve():
+        if set_active_character and self.character_specs_root == self.default_character_specs_root:
             self.storage.sync_manifest()
             manifest = self.storage.load_manifest()
             manifest["active_character_id"] = set_active_character
@@ -2767,7 +2772,7 @@ class StudioGenerator:
         written_files.extend([str(taxonomy_path), str(modes_spec_path)])
 
         set_active_character = char_id if bool(set_active) else ""
-        if set_active_character and self.character_specs_root == (self.specs_root / "characters").resolve():
+        if set_active_character and self.character_specs_root == self.default_character_specs_root:
             self.storage.sync_manifest()
             manifest = self.storage.load_manifest()
             manifest["active_character_id"] = set_active_character

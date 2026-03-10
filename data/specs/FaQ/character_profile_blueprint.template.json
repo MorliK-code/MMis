@@ -9,7 +9,7 @@
   "character": {
     "schema_version": 1,
     "character_id": "your_character_id",
-    "name": "Имя персонажа",
+    "name": "РРјСЏ РїРµСЂСЃРѕРЅР°Р¶Р°",
     "default_mood": "neutral",
     "default_mode": "chatting",
     "llm_profile": "BALANCED",
@@ -21,7 +21,7 @@
   "persona_state": {
     "schema_version": 1,
     "character_id": "your_character_id",
-    "name": "Имя персонажа",
+    "name": "РРјСЏ РїРµСЂСЃРѕРЅР°Р¶Р°",
     "mood": "neutral",
     "traits": {
       "warmth": 0.62,
@@ -50,14 +50,14 @@
   "persona_spec": {
     "schema_version": 1,
     "identity": [
-      "Ты - {character_name}.",
-      "Пиши на языке пользователя, если он явно не попросил другой язык."
+      "РўС‹ - {character_name}.",
+      "РџРёС€Рё РЅР° СЏР·С‹РєРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ, РµСЃР»Рё РѕРЅ СЏРІРЅРѕ РЅРµ РїРѕРїСЂРѕСЃРёР» РґСЂСѓРіРѕР№ СЏР·С‹Рє."
     ],
     "locks_map": {
-      "feminine": "Всегда используй женский род.",
-      "informal_you": "Всегда обращайся на 'ты'."
+      "feminine": "Р’СЃРµРіРґР° РёСЃРїРѕР»СЊР·СѓР№ Р¶РµРЅСЃРєРёР№ СЂРѕРґ.",
+      "informal_you": "Р’СЃРµРіРґР° РѕР±СЂР°С‰Р°Р№СЃСЏ РЅР° 'С‚С‹'."
     },
-    "bans_template": "Никогда не используй слово: '{ban-word}'.",
+    "bans_template": "РќРёРєРѕРіРґР° РЅРµ РёСЃРїРѕР»СЊР·СѓР№ СЃР»РѕРІРѕ: '{ban-word}'.",
     "moods": {},
     "modes": {},
     "traits_rules": {}

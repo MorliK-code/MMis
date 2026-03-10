@@ -172,55 +172,78 @@ class ChromaVectorBackend(VectorIndexBackend):
     def __init__(self, *, root_dir: str | Path, collection_name: str = "memory_v2"):
         self._root = Path(root_dir).expanduser().resolve()
         self._root.mkdir(parents=True, exist_ok=True)
-        self._records_path = self._root / "chroma_records.json"
-        self._fallback = LocalVectorBackend(path=self._records_path)
         self._collection_name = str(collection_name or "memory_v2")
-        self._chroma_available = False
-        self._collection = None
         try:
             import chromadb  # type: ignore
-
+        except Exception as exc:
+            raise RuntimeError("chromadb is required for Memory V2 vector index.") from exc
+        try:
             self._client = chromadb.PersistentClient(path=str(self._root / "chroma_db"))
             self._collection = self._client.get_or_create_collection(name=self._collection_name)
-            self._chroma_available = True
+        except Exception as exc:
+            raise RuntimeError("Failed to initialize ChromaDB persistent collection.") from exc
+
+    @staticmethod
+    def _to_chroma_metadata(record: MemoryRecord) -> dict[str, Any]:
+        # Keep metadata primitive-only for Chroma compatibility.
+        return {
+            "__record_json": json.dumps(record.to_dict(), ensure_ascii=False),
+            "namespace": str(record.namespace or ""),
+            "scope": str(record.scope.value),
+            "status": str(record.status.value),
+        }
+
+    @staticmethod
+    def _record_from_metadata(value: Any) -> MemoryRecord | None:
+        if not isinstance(value, dict):
+            return None
+        payload_raw = value.get("__record_json")
+        if isinstance(payload_raw, str) and payload_raw.strip():
+            try:
+                payload = json.loads(payload_raw)
+                if isinstance(payload, dict):
+                    return MemoryRecord.from_dict(payload)
+            except Exception:
+                return None
+        try:
+            return MemoryRecord.from_dict(dict(value))
         except Exception:
-            self._client = None
-            self._collection = None
-            self._chroma_available = False
+            return None
 
     def upsert(self, record: MemoryRecord) -> None:
-        self._fallback.upsert(record)
-        if not self._chroma_available or self._collection is None:
-            return
-        self._collection.upsert(
-            ids=[record.id],
-            documents=[record.text],
-            embeddings=[list(record.embedding or [])],
-            metadatas=[record.to_dict()],
-        )
+        try:
+            self._collection.upsert(
+                ids=[record.id],
+                documents=[record.text],
+                embeddings=[list(record.embedding or [])],
+                metadatas=[self._to_chroma_metadata(record)],
+            )
+        except Exception as exc:
+            raise RuntimeError("ChromaDB upsert failed.") from exc
 
     def batch_upsert(self, records: list[MemoryRecord]) -> None:
         rows = [x for x in list(records or []) if isinstance(x, MemoryRecord)]
         if not rows:
             return
-        self._fallback.batch_upsert(rows)
-        if not self._chroma_available or self._collection is None:
-            return
-        self._collection.upsert(
-            ids=[x.id for x in rows],
-            documents=[x.text for x in rows],
-            embeddings=[list(x.embedding or []) for x in rows],
-            metadatas=[x.to_dict() for x in rows],
-        )
+        try:
+            self._collection.upsert(
+                ids=[x.id for x in rows],
+                documents=[x.text for x in rows],
+                embeddings=[list(x.embedding or []) for x in rows],
+                metadatas=[self._to_chroma_metadata(x) for x in rows],
+            )
+        except Exception as exc:
+            raise RuntimeError("ChromaDB batch upsert failed.") from exc
 
     def delete(self, record_id: str) -> bool:
-        deleted = self._fallback.delete(record_id)
-        if self._chroma_available and self._collection is not None:
-            try:
-                self._collection.delete(ids=[str(record_id)])
-            except Exception:
-                pass
-        return bool(deleted)
+        key = str(record_id or "").strip()
+        if not key:
+            return False
+        try:
+            self._collection.delete(ids=[key])
+        except Exception as exc:
+            raise RuntimeError("ChromaDB delete failed.") from exc
+        return True
 
     def search(
         self,
@@ -232,38 +255,27 @@ class ChromaVectorBackend(VectorIndexBackend):
         include_stale: bool,
         metadata_filters: dict[str, Any],
     ) -> list[tuple[MemoryRecord, float]]:
-        if not self._chroma_available or self._collection is None:
-            return self._fallback.search(
-                embedding,
-                top_k,
-                namespace=namespace,
-                scopes=scopes,
-                include_stale=include_stale,
-                metadata_filters=metadata_filters,
-            )
-
         try:
             out = self._collection.query(
                 query_embeddings=[list(embedding or [])],
                 n_results=max(1, int(top_k * 4)),
+                include=["metadatas", "distances"],
             )
-        except Exception:
-            return self._fallback.search(
-                embedding,
-                top_k,
-                namespace=namespace,
-                scopes=scopes,
-                include_stale=include_stale,
-                metadata_filters=metadata_filters,
-            )
+        except Exception as exc:
+            raise RuntimeError("ChromaDB query failed.") from exc
 
         ids = list((out.get("ids") or [[]])[0] or [])
         dists = list((out.get("distances") or [[]])[0] or [])
-        fallback_rows = {x.id: x for x in self._fallback.iter_records(namespace=namespace)}
+        metas = list((out.get("metadatas") or [[]])[0] or [])
         scored: list[tuple[MemoryRecord, float]] = []
         for idx, rec_id in enumerate(ids):
-            record = fallback_rows.get(str(rec_id))
+            meta = metas[idx] if idx < len(metas) else {}
+            record = self._record_from_metadata(meta)
             if record is None:
+                continue
+            if record.id != str(rec_id):
+                continue
+            if record.namespace != str(namespace):
                 continue
             if record.scope == MemoryScope.PRIVATE_RUNTIME:
                 continue
@@ -280,19 +292,31 @@ class ChromaVectorBackend(VectorIndexBackend):
         return scored[: max(1, int(top_k))]
 
     def iter_records(self, *, namespace: str | None = None) -> list[MemoryRecord]:
-        return self._fallback.iter_records(namespace=namespace)
+        try:
+            out = self._collection.get(include=["metadatas"])
+        except Exception as exc:
+            raise RuntimeError("ChromaDB get failed.") from exc
+        rows = list(out.get("metadatas") or [])
+        selected: list[MemoryRecord] = []
+        ns = str(namespace) if namespace is not None else ""
+        for row in rows:
+            record = self._record_from_metadata(row)
+            if record is None:
+                continue
+            if ns and record.namespace != ns:
+                continue
+            selected.append(record)
+        return selected
 
     def reset(self) -> None:
-        self._fallback.reset()
-        if self._chroma_available and self._collection is not None:
-            try:
-                self._client.delete_collection(self._collection_name)
-                self._collection = self._client.get_or_create_collection(name=self._collection_name)
-            except Exception:
-                pass
+        try:
+            self._client.delete_collection(self._collection_name)
+            self._collection = self._client.get_or_create_collection(name=self._collection_name)
+        except Exception as exc:
+            raise RuntimeError("ChromaDB reset failed.") from exc
 
     def close(self) -> None:
-        self._fallback.close()
+        return
 
 
 class SQLiteFTSBackend(LexicalIndexBackend):
@@ -556,10 +580,9 @@ class VectorStore:
         self._load_records()
 
         vector_root = self.root_dir / "vector"
-        if bool(use_chroma):
-            self.vector_backend: VectorIndexBackend = ChromaVectorBackend(root_dir=vector_root, collection_name=collection_name)
-        else:
-            self.vector_backend = LocalVectorBackend(path=vector_root / "local_vectors.json")
+        if not bool(use_chroma):
+            raise ValueError("Memory V2 vector backend supports only ChromaDB. Set use_chroma=True.")
+        self.vector_backend: VectorIndexBackend = ChromaVectorBackend(root_dir=vector_root, collection_name=collection_name)
         self.lexical_backend: LexicalIndexBackend = SQLiteFTSBackend(path=self.root_dir / "lexical_index.sqlite3")
 
         self.reindex_required = False
@@ -568,10 +591,6 @@ class VectorStore:
         # Ensure lexical index is populated from canonical store at startup.
         startup_rows = list(self._records.values())
         self.lexical_backend.batch_upsert(startup_rows)
-        if not self.reindex_required:
-            vector_rows = [x for x in startup_rows if x.scope != MemoryScope.PRIVATE_RUNTIME]
-            if vector_rows:
-                self.vector_backend.batch_upsert(vector_rows)
 
     def _load_records(self) -> None:
         if not self.records_path.exists():
@@ -626,12 +645,38 @@ class VectorStore:
     def _write_index_meta(self, payload: dict[str, Any]) -> None:
         self.index_meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _prepare_record(self, record: MemoryRecord) -> MemoryRecord:
+    @staticmethod
+    def _to_canonical_record(record: MemoryRecord) -> MemoryRecord:
+        return MemoryRecord(
+            id=record.id,
+            text=record.text,
+            memory_type=record.memory_type,
+            level=record.level,
+            scope=record.scope,
+            namespace=record.namespace,
+            metadata=dict(record.metadata or {}),
+            embedding=None,
+            importance=record.importance,
+            confidence=record.confidence,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            expires_at=record.expires_at,
+            status=record.status,
+            version=record.version,
+            parent_id=record.parent_id,
+            chunk_index=record.chunk_index,
+            source_event_id=record.source_event_id,
+            embedding_model=record.embedding_model,
+            embedding_fingerprint=record.embedding_fingerprint,
+            embedding_version=record.embedding_version,
+        )
+
+    def _prepare_record(self, record: MemoryRecord, *, force_embed: bool = False) -> MemoryRecord:
         model_name = str(getattr(self.embedding_provider, "model_name", "") or "")
         fingerprint = str(self.embedding_provider.model_fingerprint())
         version = str(getattr(self.embedding_provider, "embedding_version", EMBED_VERSION) or EMBED_VERSION)
         embedding = list(record.embedding or [])
-        if not embedding and record.scope != MemoryScope.PRIVATE_RUNTIME and not self.reindex_required:
+        if not embedding and record.scope != MemoryScope.PRIVATE_RUNTIME and (force_embed or not self.reindex_required):
             embedding = list(self.embedding_provider.embed(record.text))
         return MemoryRecord(
             id=record.id,
@@ -659,11 +704,12 @@ class VectorStore:
 
     def upsert(self, record: MemoryRecord) -> None:
         prepared = self._prepare_record(record)
+        canonical = self._to_canonical_record(prepared)
         with self._lock:
-            self._records[prepared.id] = prepared
+            self._records[canonical.id] = canonical
             self._save_records()
-        if prepared.scope != MemoryScope.PRIVATE_RUNTIME:
-            self.lexical_backend.upsert(prepared)
+        if canonical.scope != MemoryScope.PRIVATE_RUNTIME:
+            self.lexical_backend.upsert(canonical)
             if not self.reindex_required:
                 self.vector_backend.upsert(prepared)
 
@@ -671,15 +717,17 @@ class VectorStore:
         prepared_rows = [self._prepare_record(x) for x in list(records or []) if isinstance(x, MemoryRecord)]
         if not prepared_rows:
             return
+        canonical_rows = [self._to_canonical_record(x) for x in prepared_rows]
         with self._lock:
-            for row in prepared_rows:
+            for row in canonical_rows:
                 self._records[row.id] = row
             self._save_records()
-        lexical_rows = [x for x in prepared_rows if x.scope != MemoryScope.PRIVATE_RUNTIME]
+        lexical_rows = [x for x in canonical_rows if x.scope != MemoryScope.PRIVATE_RUNTIME]
         if lexical_rows:
             self.lexical_backend.batch_upsert(lexical_rows)
             if not self.reindex_required:
-                self.vector_backend.batch_upsert(lexical_rows)
+                vector_rows = [x for x in prepared_rows if x.scope != MemoryScope.PRIVATE_RUNTIME]
+                self.vector_backend.batch_upsert(vector_rows)
 
     def delete(self, record_id: str) -> bool:
         key = str(record_id or "").strip()
@@ -780,8 +828,9 @@ class VectorStore:
             self.lexical_backend.reset()
             self.vector_backend.reset()
 
-        prepared = [self._prepare_record(x) for x in records if x.scope != MemoryScope.PRIVATE_RUNTIME]
-        self.lexical_backend.batch_upsert(prepared)
+        prepared = [self._prepare_record(x, force_embed=True) for x in records if x.scope != MemoryScope.PRIVATE_RUNTIME]
+        canonical = [self._to_canonical_record(x) for x in prepared]
+        self.lexical_backend.batch_upsert(canonical)
         self.vector_backend.batch_upsert(prepared)
         self.reindex_required = False
         self._write_index_meta(

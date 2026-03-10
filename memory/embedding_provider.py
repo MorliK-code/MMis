@@ -80,7 +80,14 @@ class SentenceTransformerEmbeddingProvider(BaseEmbeddingProvider):
         kwargs: dict[str, Any] = {}
         if str(device or "").strip():
             kwargs["device"] = str(device)
-        self._model = SentenceTransformer(self.model_name, **kwargs)
+        if "jina" in self.model_name.lower():
+            kwargs["trust_remote_code"] = True
+        try:
+            self._model = SentenceTransformer(self.model_name, **kwargs)
+        except TypeError:
+            # Older sentence-transformers builds may not support trust_remote_code.
+            kwargs.pop("trust_remote_code", None)
+            self._model = SentenceTransformer(self.model_name, **kwargs)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         rows = [str(x or "") for x in list(texts or [])]
@@ -95,6 +102,94 @@ class SentenceTransformerEmbeddingProvider(BaseEmbeddingProvider):
             else:
                 out.append([float(x) for x in list(row or [])])
         return out
+
+
+class OllamaEmbeddingProvider(BaseEmbeddingProvider):
+    def __init__(
+        self,
+        *,
+        model_name: str = "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M",
+        host: str | None = None,
+        timeout_sec: float | None = None,
+    ):
+        self.model_name = str(model_name or "hf.co/Qwen/Qwen3-Embedding-4B-GGUF:Q4_K_M").strip()
+        self.embedding_version = "ollama_embedding_v1"
+        self._host = str(host or "").strip()
+        try:
+            import ollama  # type: ignore
+        except Exception as exc:  # pragma: no cover - runtime dependency
+            raise RuntimeError("ollama package is not available") from exc
+
+        kwargs: dict[str, Any] = {}
+        if self._host:
+            kwargs["host"] = self._host
+        if timeout_sec is not None:
+            kwargs["timeout"] = float(timeout_sec)
+        self._client = ollama.Client(**kwargs)
+
+    @staticmethod
+    def _coerce_vectors(payload: Any) -> list[list[float]]:
+        if not isinstance(payload, dict):
+            return []
+        rows = payload.get("embeddings")
+        if isinstance(rows, list):
+            out: list[list[float]] = []
+            for row in rows:
+                if isinstance(row, list):
+                    out.append([float(x) for x in row])
+            if out:
+                return out
+        one = payload.get("embedding")
+        if isinstance(one, list):
+            return [[float(x) for x in one]]
+        return []
+
+    def _model_candidates(self) -> list[str]:
+        primary = str(self.model_name or "").strip()
+        if not primary:
+            return []
+        out = [primary]
+        low = primary.lower()
+        # Convenience alias: allow local short model names for HF Qwen GGUF pulls.
+        if "/" not in primary and low.startswith("qwen") and "gguf" in low:
+            out.append(f"hf.co/Qwen/{primary}")
+        return out
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        rows = [str(x or "") for x in list(texts or [])]
+        if not rows:
+            return []
+
+        last_error: Exception | None = None
+        for model_name in self._model_candidates():
+            # Newer Ollama Python clients: client.embed(model=..., input=[...]).
+            embed = getattr(self._client, "embed", None)
+            if callable(embed):
+                try:
+                    payload = embed(model=model_name, input=rows)
+                    vecs = self._coerce_vectors(payload)
+                    if vecs:
+                        return vecs
+                except Exception as exc:
+                    last_error = exc
+
+            # Older clients: client.embeddings(model=..., prompt="...") one-by-one.
+            embeddings = getattr(self._client, "embeddings", None)
+            if callable(embeddings):
+                try:
+                    out: list[list[float]] = []
+                    for text in rows:
+                        payload = embeddings(model=model_name, prompt=text)
+                        vecs = self._coerce_vectors(payload)
+                        out.append(list(vecs[0]) if vecs else [])
+                    if out:
+                        return out
+                except Exception as exc:
+                    last_error = exc
+
+        if last_error is not None:
+            raise RuntimeError(str(last_error))
+        raise RuntimeError("Ollama client does not expose embed/embeddings methods.")
 
 
 class CachedEmbeddingProvider(BaseEmbeddingProvider):
@@ -184,6 +279,35 @@ class FallbackEmbeddingProvider(BaseEmbeddingProvider):
             return self._fallback.embed_batch(texts)
 
 
+class FixedDimEmbeddingProvider(BaseEmbeddingProvider):
+    def __init__(self, *, base: BaseEmbeddingProvider, dim: int):
+        self._base = base
+        self._dim = max(32, int(dim))
+        self.model_name = base.model_name
+        self.embedding_version = f"{base.embedding_version}|fixed_dim_{self._dim}"
+
+    def model_fingerprint(self) -> str:
+        raw = f"{self._base.model_fingerprint()}|fixed_dim:{self._dim}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _resize(self, vector: list[float]) -> list[float]:
+        src = [float(x) for x in list(vector or [])]
+        if not src:
+            return [0.0 for _ in range(self._dim)]
+        if len(src) == self._dim:
+            return _normalize_vector(src)
+        if len(src) < self._dim:
+            return _normalize_vector(src + ([0.0] * (self._dim - len(src))))
+        folded = [0.0] * self._dim
+        for idx, value in enumerate(src):
+            folded[idx % self._dim] += float(value)
+        return _normalize_vector(folded)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        rows = self._base.embed_batch(texts)
+        return [self._resize(row) for row in list(rows or [])]
+
+
 def build_embedding_provider(
     *,
     backend: str,
@@ -191,9 +315,12 @@ def build_embedding_provider(
     cache_path: str | Path,
     dim: int = 384,
     device: str | None = None,
+    ollama_host: str | None = None,
+    ollama_timeout_sec: float | None = None,
 ) -> BaseEmbeddingProvider:
+    target_dim = max(32, int(dim))
     backend_name = str(backend or "sentence_transformers").strip().lower()
-    fallback = HashEmbeddingProvider(dim=max(32, int(dim)))
+    fallback = HashEmbeddingProvider(dim=target_dim)
 
     if backend_name in {"sentence_transformers", "sentence-transformers", "st"}:
         try:
@@ -202,8 +329,18 @@ def build_embedding_provider(
             primary = fallback
     elif backend_name in {"hash", "fallback"}:
         primary = fallback
+    elif backend_name in {"ollama", "ollama_embeddings", "ollama-embeddings"}:
+        try:
+            primary = OllamaEmbeddingProvider(
+                model_name=model_name,
+                host=ollama_host,
+                timeout_sec=ollama_timeout_sec,
+            )
+        except Exception:
+            primary = fallback
     else:
         primary = fallback
 
     provider = FallbackEmbeddingProvider(primary=primary, fallback=fallback)
+    provider = FixedDimEmbeddingProvider(base=provider, dim=target_dim)
     return CachedEmbeddingProvider(base=provider, cache_path=cache_path)

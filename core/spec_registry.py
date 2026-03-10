@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -42,15 +43,54 @@ def _assert_json_path(path: Path, *, label: str = "spec path") -> None:
 
 class SpecRegistry:
     def __init__(self, root: str | Path | None = None):
-        base = Path(root).expanduser() if root is not None else (DATA_DIR / "specs")
-        self.root = base.resolve()
+        default_root = (DATA_DIR / "specs" / "rules_for_all").resolve()
+        legacy_root = (DATA_DIR / "specs").resolve()
+        default_character_root = (DATA_DIR / "specs" / "characters").resolve()
+        if root is None:
+            self.root = default_root
+            self._legacy_root: Path | None = legacy_root
+            self._character_root = default_character_root
+        else:
+            base = Path(root).expanduser().resolve()
+            if (base / "taxonomy.json").exists() or (base / "system_spec.json").exists():
+                self.root = base
+                self._character_root = (base / "characters").resolve()
+            elif (base / "rules_for_all").exists():
+                self.root = (base / "rules_for_all").resolve()
+                sibling_char_root = (base / "characters").resolve()
+                self._character_root = sibling_char_root if sibling_char_root.exists() else (self.root / "characters").resolve()
+            else:
+                self.root = base
+                self._character_root = (base / "characters").resolve()
+            self._legacy_root = None
         self.root.mkdir(parents=True, exist_ok=True)
+        self._character_root.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_specs()
         self._cache: dict[str, dict[str, Any]] = {}
         self._lock = RLock()
 
+    def _migrate_legacy_specs(self) -> None:
+        src_root = self._legacy_root
+        dst_root = self.root
+        if src_root is None or not src_root.exists() or src_root == dst_root:
+            return
+        try:
+            for path in src_root.rglob("*"):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(src_root)
+                if rel.parts and str(rel.parts[0]).strip().lower() in {"rules_for_all", "characters", "faq"}:
+                    continue
+                target = (dst_root / rel).resolve()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if not target.exists():
+                    shutil.copy2(path, target)
+        except Exception:
+            return
+
     @property
     def character_root(self) -> Path:
-        return self.root / "characters"
+        return self._character_root
 
     def invalidate(self) -> None:
         with self._lock:

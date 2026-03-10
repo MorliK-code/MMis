@@ -128,6 +128,27 @@ class ConfigSettingsRefactorTests(unittest.TestCase):
         profile = get_profile("BALANCED")
         self.assertEqual(float(profile.generation.temperature), 0.23)
 
+    def test_memory_backend_accepts_chroma_and_chromadb(self) -> None:
+        load_config(force_reload=True)
+        update_config_values({"memory.backend": "chroma"})
+        self.assertEqual(str(load_config(force_reload=True).memory_backend), "chroma")
+        update_config_values({"memory.backend": "chromadb"})
+        self.assertEqual(str(load_config(force_reload=True).memory_backend), "chromadb")
+
+    def test_memory_backend_rejects_local_with_explicit_instruction(self) -> None:
+        load_config(force_reload=True)
+        cfg = self._read_cfg()
+        memory = dict(cfg.get("memory") or {})
+        memory["backend"] = "local"
+        cfg["memory"] = memory
+        self._cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        with self.assertRaises(ValueError) as ctx:
+            load_config(force_reload=True)
+        message = str(ctx.exception)
+        self.assertIn("memory.backend must be one of ['chroma', 'chromadb']", message)
+        self.assertIn("Switch memory.backend to 'chroma' or 'chromadb'", message)
+
     def test_logging_and_paths_sections_are_present(self) -> None:
         load_config(force_reload=True)
         cfg = self._read_cfg()
