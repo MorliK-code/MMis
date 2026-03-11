@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "character_id": "asya",
+  "name": "Asya",
+  "default_mood": "neutral",
+  "default_mode": "engineer",
+  "model_profile": "ASYA",
+  "custom_from_spec": "enabled"
+}

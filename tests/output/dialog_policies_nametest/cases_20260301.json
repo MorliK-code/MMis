@@ -1,0 +1,134 @@
+{
+  "suite": "dialog_policies_nametest",
+  "date": "20260301",
+  "cases": [
+    {
+      "test_num": 1,
+      "case": "user_greeting_short",
+      "text": "привет",
+      "now": "2026-03-01T10:00:00+02:00",
+      "state": {
+        "greeted_on_date": "",
+        "last_turn_ts": "2026-03-01T00:00:00+02:00",
+        "conversation_state": "new_session"
+      },
+      "config": {
+        "new_session_after_min": 360,
+        "greeting_max_words": 6,
+        "greeting_max_chars": 35
+      },
+      "expected": {
+        "user_greeting": true,
+        "allow_greeting": true,
+        "smalltalk_allowed": true
+      }
+    },
+    {
+      "test_num": 2,
+      "case": "exclusion_forward_greeting",
+      "text": "передай привет Оле",
+      "now": "2026-03-01T10:00:00+02:00",
+      "state": {
+        "greeted_on_date": "",
+        "last_turn_ts": "2026-03-01T09:30:00+02:00",
+        "conversation_state": "continuing_smalltalk"
+      },
+      "config": {
+        "new_session_after_min": 360,
+        "greeting_max_words": 6,
+        "greeting_max_chars": 35
+      },
+      "expected": {
+        "user_greeting": false,
+        "allow_greeting": false,
+        "smalltalk_allowed": true
+      }
+    },
+    {
+      "test_num": 3,
+      "case": "tech_with_greeting",
+      "text": "привет, у меня ошибка Traceback: ValueError в C:\\repo\\app.py",
+      "now": "2026-03-01T10:00:00+02:00",
+      "state": {
+        "greeted_on_date": "",
+        "last_turn_ts": "2026-03-01T09:40:00+02:00",
+        "conversation_state": "continuing_smalltalk"
+      },
+      "config": {
+        "new_session_after_min": 360,
+        "greeting_max_words": 6,
+        "greeting_max_chars": 35
+      },
+      "expected": {
+        "user_greeting": false,
+        "allow_greeting": false,
+        "smalltalk_allowed": false
+      }
+    },
+    {
+      "test_num": 4,
+      "case": "long_technical_message",
+      "text": "Traceback (most recent call last): File \"C:\\repo\\main.py\", line 1, in <module> Exception: fail",
+      "now": "2026-03-01T10:00:00+02:00",
+      "state": {
+        "greeted_on_date": "",
+        "last_turn_ts": "2026-03-01T09:50:00+02:00",
+        "conversation_state": "continuing_smalltalk"
+      },
+      "config": {
+        "new_session_after_min": 360,
+        "greeting_max_words": 6,
+        "greeting_max_chars": 35
+      },
+      "expected": {
+        "user_greeting": false,
+        "allow_greeting": false,
+        "smalltalk_allowed": false
+      }
+    },
+    {
+      "test_num": 5,
+      "case": "new_session_auto_greeting_allowed",
+      "text": "покажи лог по задаче",
+      "now": "2026-03-01T10:00:00+02:00",
+      "state": {
+        "greeted_on_date": "",
+        "last_turn_ts": "2026-02-28T23:00:00+02:00",
+        "conversation_state": "new_session"
+      },
+      "config": {
+        "new_session_after_min": 360,
+        "greeting_max_words": 6,
+        "greeting_max_chars": 35
+      },
+      "expected": {
+        "user_greeting": false,
+        "new_session": true,
+        "allow_greeting": true,
+        "smalltalk_allowed": true
+      }
+    },
+    {
+      "test_num": 6,
+      "case": "new_session_but_continuing_smalltalk",
+      "text": "напомни, что решили",
+      "now": "2026-03-01T10:00:00+02:00",
+      "state": {
+        "greeted_on_date": "",
+        "last_turn_ts": "2026-02-28T23:00:00+02:00",
+        "conversation_state": "continuing_smalltalk"
+      },
+      "config": {
+        "new_session_after_min": 360,
+        "greeting_max_words": 6,
+        "greeting_max_chars": 35
+      },
+      "expected": {
+        "user_greeting": false,
+        "new_session": true,
+        "allow_greeting": false,
+        "smalltalk_allowed": true
+      }
+    }
+  ]
+}
