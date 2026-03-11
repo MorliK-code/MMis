@@ -173,7 +173,6 @@
   "internet": {
     "enabled": true,
     "web_mode": "on",
-    "web_auto_profile": "aggressive",
     "web_v2": {
       "enabled": true,
       "thresholds": {
@@ -305,7 +304,7 @@
   },
   "memory": {
     "memory_dir": "{dir_path}\\data\\memory_storage",
-    "cache_dir": "{dir_path}\\data\\cache",
+    "cache_dir": "{dir_path}\\data\\memory_storage\\cache",
     "log_dir": "{dir_path}\\data\\logs",
     "db_path": "{dir_path}\\data\\memory_storage\\memory.db",
     "version": "v2",

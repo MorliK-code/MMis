@@ -94,10 +94,8 @@ class WebStageV2:
     def run(self, ctx):
         trace = str(_as_dict(getattr(ctx, "meta", {})).get("web_trace_id") or "").strip() or "-"
         mode = _resolve_web_mode(_as_dict(ctx.meta), _as_dict(ctx.state))
-        auto_profile = _resolve_web_auto_profile(_as_dict(ctx.meta), _as_dict(ctx.state))
         if isinstance(getattr(ctx, "meta", None), dict):
             ctx.meta["web_mode"] = mode
-            ctx.meta["web_auto_profile"] = auto_profile
 
         text = str(getattr(ctx, "clean_user_msg", "") or getattr(ctx, "user_msg", "") or "").strip()
         preview = _clip(text.replace("\n", " "), 120)
@@ -179,7 +177,6 @@ class WebStageV2:
             confidence=confidence,
             freshness=freshness,
             web_mode=mode,
-            web_auto_profile=auto_profile,
             internet_enabled=bool(self._app.internet_enabled),
             user_override=user_override,
             policy_context=_as_dict(getattr(ctx, "meta", {})),
@@ -571,11 +568,6 @@ def _resolve_web_mode(meta: dict[str, Any], state: dict[str, Any]) -> str:
     if raw in {"on", "off", "auto"}:
         return raw
     return "auto"
-
-
-def _resolve_web_auto_profile(meta: dict[str, Any], state: dict[str, Any]) -> str:
-    raw = str(_pick(meta.get("web_auto_profile"), state.get("web_auto_profile"), "balanced") or "balanced").strip().lower()
-    return raw if raw in {"balanced", "aggressive"} else "balanced"
 
 
 def _strip_web_prefix(text: str) -> str:

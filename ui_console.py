@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -156,10 +156,6 @@ def _sync_runtime_pref_to_settings_file(key: str, value) -> None:
         text = str(value or "").strip().lower()
         if text in {"on", "off", "auto"}:
             updates["internet.web_mode"] = text
-    elif field == "web_auto_profile":
-        text = str(value or "").strip().lower()
-        if text in {"balanced", "aggressive"}:
-            updates["internet.web_auto_profile"] = text
     elif field == "json_mode_enabled":
         flag = bool(value)
         updates["llm.json_mode_enabled"] = flag
@@ -266,60 +262,57 @@ def _print_header(state: ConsoleState) -> None:
         _print_health_short(state, startup=True)
         return
 
-    print("API недоступен.")
+    print("API РЅРµРґРѕСЃС‚СѓРїРµРЅ.")
     if state.auto_start_api:
-        print("Пробую авто-запуск API...")
+        print("РџСЂРѕР±СѓСЋ Р°РІС‚Рѕ-Р·Р°РїСѓСЃРє API...")
         if _start_api_process(state) and _wait_for_api(state, timeout_s=18.0):
-            print("API поднят автоматически.")
+            print("API РїРѕРґРЅСЏС‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.")
             _print_health_short(state, startup=True)
             _ensure_model_backend(state)
             return
-    print("Запусти вручную: python api_main.py --mmis-tag mmis")
+    print("Р—Р°РїСѓСЃС‚Рё РІСЂСѓС‡РЅСѓСЋ: python api_main.py --mmis-tag mmis")
 
 
 def _print_help() -> None:
-    print("Доступные команды:")
+    print("Р”РѕСЃС‚СѓРїРЅС‹Рµ РєРѕРјР°РЅРґС‹:")
     print("")
-    print("Локальные (UI):")
-    print("/help                        показать эту справку")
-    print("/connect [url]               переподключиться к API (можно указать URL)")
-    print("/restartapi                  перезапустить локальный API-процесс")
-    print("/restartall                  полный рестарт UI+API в этом же окне")
-    print("/cleanapi                    убить все MMis API-процессы (tag=mmis)")
-    print("/models                      показать доступные модели")
-    print("/model                       показать текущую модель")
-    print("/model <name>                переключить модель")
-    print("/show-thinking               показывать поток thinking")
-    print("/hide-thinking               скрывать поток thinking")
-    print("/thinking-first              показывать thinking до ответа")
-    print("/thinking-last               показывать ответ без ожидания thinking")
-    print("/store on|off                включить/выключить сохранение turns")
-    print("/health                      проверить состояние API")
-    print("/exit или /quit              выход")
+    print("Р›РѕРєР°Р»СЊРЅС‹Рµ (UI):")
+    print("/help                        РїРѕРєР°Р·Р°С‚СЊ СЌС‚Сѓ СЃРїСЂР°РІРєСѓ")
+    print("/connect [url]               РїРµСЂРµРїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє API (РјРѕР¶РЅРѕ СѓРєР°Р·Р°С‚СЊ URL)")
+    print("/restartapi                  РїРµСЂРµР·Р°РїСѓСЃС‚РёС‚СЊ Р»РѕРєР°Р»СЊРЅС‹Р№ API-РїСЂРѕС†РµСЃСЃ")
+    print("/restartall                  РїРѕР»РЅС‹Р№ СЂРµСЃС‚Р°СЂС‚ UI+API РІ СЌС‚РѕРј Р¶Рµ РѕРєРЅРµ")
+    print("/cleanapi                    СѓР±РёС‚СЊ РІСЃРµ MMis API-РїСЂРѕС†РµСЃСЃС‹ (tag=mmis)")
+    print("/models                      РїРѕРєР°Р·Р°С‚СЊ РґРѕСЃС‚СѓРїРЅС‹Рµ РјРѕРґРµР»Рё")
+    print("/model                       РїРѕРєР°Р·Р°С‚СЊ С‚РµРєСѓС‰СѓСЋ РјРѕРґРµР»СЊ")
+    print("/model <name>                РїРµСЂРµРєР»СЋС‡РёС‚СЊ РјРѕРґРµР»СЊ")
+    print("/show-thinking               РїРѕРєР°Р·С‹РІР°С‚СЊ РїРѕС‚РѕРє thinking")
+    print("/hide-thinking               СЃРєСЂС‹РІР°С‚СЊ РїРѕС‚РѕРє thinking")
+    print("/thinking-first              РїРѕРєР°Р·С‹РІР°С‚СЊ thinking РґРѕ РѕС‚РІРµС‚Р°")
+    print("/thinking-last               РїРѕРєР°Р·С‹РІР°С‚СЊ РѕС‚РІРµС‚ Р±РµР· РѕР¶РёРґР°РЅРёСЏ thinking")
+    print("/store on|off                РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ СЃРѕС…СЂР°РЅРµРЅРёРµ turns")
+    print("/health                      РїСЂРѕРІРµСЂРёС‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ API")
+    print("/exit РёР»Рё /quit              РІС‹С…РѕРґ")
     print("")
-    print("Команды, отправляемые в backend:")
-    print("/think                       включить thinking у модели")
-    print("/nothink                     выключить thinking у модели")
-    print("/web                         включить web-поиск (SearxNG backend)")
-    print("/no-web                      выключить web-поиск")
-    print("/web-auto                    включить auto web (текущий web_auto_profile)")
-    print("/web-auto balanced|aggressive переключить профиль auto-решений web")
-    print("/web-auto status             показать текущий web_auto_profile")
-    print("/output status               показать формат вывода")
-    print("/output parameters on|off    включить/выключить блок [PARAMETERS]")
-    print("/output summary on|off       включить/выключить блок [SUMMARY]")
-    print("/mode <name>                 переключить backend mode (автоматически mode_lock=on)")
-    print("/mode_lock on|off            включить/выключить lock mode")
-    print("/brain_debug                 показать debug brain state")
-    print("/persona_debug               показать debug persona state")
-    print("/json                        включить JSON-режим ответа")
-    print("/nojson                      выключить JSON-режим ответа")
-    print("/character ...               команды управления персонажем")
-    print("/character delete <id>       удалить персонажа (кроме default)")
-    print("/trait ...                   команды управления traits")
-    print("/studio ...                  единый модуль работы с персонажем (create/update/modes/mixed/build_pack)")
-    print("/studio apply|cancel         локальные команды студии (не отправляются в основной чат-промпт)")
-    print("/apply | /cancel             короткие локальные команды студии при active session")
+    print("РљРѕРјР°РЅРґС‹, РѕС‚РїСЂР°РІР»СЏРµРјС‹Рµ РІ backend:")
+    print("/think                       РІРєР»СЋС‡РёС‚СЊ thinking Сѓ РјРѕРґРµР»Рё")
+    print("/nothink                     РІС‹РєР»СЋС‡РёС‚СЊ thinking Сѓ РјРѕРґРµР»Рё")
+    print("/web [query]                 enable web mode and optionally run query")
+    print("/no-web                      РІС‹РєР»СЋС‡РёС‚СЊ web-РїРѕРёСЃРє")
+    print("/output status               РїРѕРєР°Р·Р°С‚СЊ С„РѕСЂРјР°С‚ РІС‹РІРѕРґР°")
+    print("/output parameters on|off    РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ Р±Р»РѕРє [PARAMETERS]")
+    print("/output summary on|off       РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ Р±Р»РѕРє [SUMMARY]")
+    print("/mode <name>                 РїРµСЂРµРєР»СЋС‡РёС‚СЊ backend mode (Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё mode_lock=on)")
+    print("/mode_lock on|off            РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ lock mode")
+    print("/brain_debug                 РїРѕРєР°Р·Р°С‚СЊ debug brain state")
+    print("/persona_debug               РїРѕРєР°Р·Р°С‚СЊ debug persona state")
+    print("/json                        РІРєР»СЋС‡РёС‚СЊ JSON-СЂРµР¶РёРј РѕС‚РІРµС‚Р°")
+    print("/nojson                      РІС‹РєР»СЋС‡РёС‚СЊ JSON-СЂРµР¶РёРј РѕС‚РІРµС‚Р°")
+    print("/character ...               РєРѕРјР°РЅРґС‹ СѓРїСЂР°РІР»РµРЅРёСЏ РїРµСЂСЃРѕРЅР°Р¶РµРј")
+    print("/character delete <id>       СѓРґР°Р»РёС‚СЊ РїРµСЂСЃРѕРЅР°Р¶Р° (РєСЂРѕРјРµ default)")
+    print("/trait ...                   РєРѕРјР°РЅРґС‹ СѓРїСЂР°РІР»РµРЅРёСЏ traits")
+    print("/studio ...                  РµРґРёРЅС‹Р№ РјРѕРґСѓР»СЊ СЂР°Р±РѕС‚С‹ СЃ РїРµСЂСЃРѕРЅР°Р¶РµРј (create/update/modes/mixed/build_pack)")
+    print("/studio apply|cancel         Р»РѕРєР°Р»СЊРЅС‹Рµ РєРѕРјР°РЅРґС‹ СЃС‚СѓРґРёРё (РЅРµ РѕС‚РїСЂР°РІР»СЏСЋС‚СЃСЏ РІ РѕСЃРЅРѕРІРЅРѕР№ С‡Р°С‚-РїСЂРѕРјРїС‚)")
+    print("/apply | /cancel             РєРѕСЂРѕС‚РєРёРµ Р»РѕРєР°Р»СЊРЅС‹Рµ РєРѕРјР°РЅРґС‹ СЃС‚СѓРґРёРё РїСЂРё active session")
 
 
 def _print_health_short(state: ConsoleState, *, startup: bool = False) -> None:
@@ -419,7 +412,7 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         if not _ensure_connected_or_start(state):
             return True
         if not arg:
-            print(f"Current model: {state.api.get_runtime_model() or '—'}")
+            print(f"Current model: {state.api.get_runtime_model() or 'вЂ”'}")
             return True
         try:
             state.api.set_model(arg)
@@ -458,41 +451,21 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         print(f"Thinking-first: {'on' if state.thinking_first else 'off'}")
         return True
     
-    if key in {"/web", "/no-web", "/web-auto"}:
+    if key in {"/web", "/no-web"}:
         if not _ensure_connected_or_start(state):
             return True
 
-        if key in {"/web", "/no-web"}:
-            target = "on" if key == "/web" else "off"
-            try:
-                actual = str(state.api.set_web_mode(target))
-                state.web_mode = actual
-                _set_runtime_pref(state, "web_mode", str(actual).strip().lower())
-                print(f"Web mode: {actual}")
-                if arg:
-                    _send_chat(state, arg)
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
-            return True
-
-        web_auto_arg = str(arg or "").strip().lower()
-        if not web_auto_arg:
-            try:
-                actual = str(state.api.set_web_mode("auto"))
-                state.web_mode = actual
-                _set_runtime_pref(state, "web_mode", str(actual).strip().lower())
-                print(f"Web mode: {actual}")
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
-            return True
-        if web_auto_arg not in {"balanced", "aggressive", "status"}:
-            print("Usage: /web-auto [balanced|aggressive|status]")
-            return True
-        rc = _send_chat(state, raw, command_output=True)
-        if rc == 0 and web_auto_arg in {"balanced", "aggressive"}:
-            _set_runtime_pref(state, "web_auto_profile", web_auto_arg)
+        target = "on" if key == "/web" else "off"
+        try:
+            actual = str(state.api.set_web_mode(target))
+            state.web_mode = actual
+            _set_runtime_pref(state, "web_mode", str(actual).strip().lower())
+            print(f"Web mode: {actual}")
+            if key == "/web" and arg:
+                _send_chat(state, arg)
+        except ApiClientError as exc:
+            state.online = False
+            print(f"API error: {exc}")
         return True
     
     if key in {"/json", "/nojson"}:
@@ -557,7 +530,7 @@ def _chat_once(state: ConsoleState, text: str) -> int:
     if not user_text:
         return 0
     if _looks_like_shell_command(user_text):
-        print("Это похоже на команду терминала. Вводи ее в PowerShell, не в `you>`.")
+        print("Р­С‚Рѕ РїРѕС…РѕР¶Рµ РЅР° РєРѕРјР°РЅРґСѓ С‚РµСЂРјРёРЅР°Р»Р°. Р’РІРѕРґРё РµРµ РІ PowerShell, РЅРµ РІ `you>`.")
         return 1
     if not _ensure_connected_or_start(state):
         return 1
@@ -580,7 +553,7 @@ def _chat_loop(state: ConsoleState) -> int:
                 return 0
             continue
         if _looks_like_shell_command(line):
-            print("Это похоже на команду терминала. Вводи ее в PowerShell, не в `you>`.")
+            print("Р­С‚Рѕ РїРѕС…РѕР¶Рµ РЅР° РєРѕРјР°РЅРґСѓ С‚РµСЂРјРёРЅР°Р»Р°. Р’РІРѕРґРё РµРµ РІ PowerShell, РЅРµ РІ `you>`.")
             continue
         if not _ensure_connected_or_start(state):
             continue
@@ -940,7 +913,7 @@ def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) 
         reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
         if _is_generation_fallback(reply.answer):
             print()
-            print("LLM backend недоступен. Пробую автоматически переключиться на локальный Ollama и повторить запрос...")
+            print("LLM backend РЅРµРґРѕСЃС‚СѓРїРµРЅ. РџСЂРѕР±СѓСЋ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРµСЂРµРєР»СЋС‡РёС‚СЊСЃСЏ РЅР° Р»РѕРєР°Р»СЊРЅС‹Р№ Ollama Рё РїРѕРІС‚РѕСЂРёС‚СЊ Р·Р°РїСЂРѕСЃ...")
             if _ensure_model_backend(state):
                 reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
         if _is_generation_fallback(reply.answer):
@@ -1035,7 +1008,7 @@ def _ensure_connected_or_start(state: ConsoleState) -> bool:
         return True
     if state.auto_start_api and _start_api_process(state) and _wait_for_api(state, timeout_s=18.0):
         return True
-    print("API offline. Запусти: python api_main.py --mmis-tag mmis")
+    print("API offline. Р—Р°РїСѓСЃС‚Рё: python api_main.py --mmis-tag mmis")
     return False
 
 
@@ -1233,7 +1206,7 @@ def _is_generation_fallback(answer: str) -> bool:
 
 
 def _print_backend_hint(state: ConsoleState) -> None:
-    runtime_model = state.api.get_runtime_model() or "—"
+    runtime_model = state.api.get_runtime_model() or "вЂ”"
     models: list[str] = []
     try:
         payload = state.api.list_models()
@@ -1241,15 +1214,15 @@ def _print_backend_hint(state: ConsoleState) -> None:
     except ApiClientError:
         pass
 
-    print("Диагностика:")
+    print("Р”РёР°РіРЅРѕСЃС‚РёРєР°:")
     print(f"- runtime model: {runtime_model}")
     if models:
         print(f"- models available: {len(models)}")
         if runtime_model not in models:
-            print("- runtime model не найдена в списке. Смени модель: /models -> /model <name>")
+            print("- runtime model РЅРµ РЅР°Р№РґРµРЅР° РІ СЃРїРёСЃРєРµ. РЎРјРµРЅРё РјРѕРґРµР»СЊ: /models -> /model <name>")
     else:
         print("- models available: 0")
-        print("- Ollama не отдает список моделей. Проверь:")
+        print("- Ollama РЅРµ РѕС‚РґР°РµС‚ СЃРїРёСЃРѕРє РјРѕРґРµР»РµР№. РџСЂРѕРІРµСЂСЊ:")
         print("  1) ollama serve")
         print("  2) ollama list")
         print("  3) ollama pull qwen3:8b")
@@ -1450,9 +1423,6 @@ def main() -> int:
             except ApiClientError as exc:
                 state.online = False
                 print(f"API error: {exc}")
-        web_auto_profile_cfg = str(config.web_auto_profile or "").strip().lower()
-        if web_auto_profile_cfg in {"balanced", "aggressive"}:
-            _send_backend_command_silent(state, f"/web-auto {web_auto_profile_cfg}")
         _apply_persisted_runtime_settings(state)
 
     if state.think_enabled is not None:

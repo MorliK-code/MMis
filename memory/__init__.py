@@ -6,6 +6,7 @@ from memory.embedding_provider import build_embedding_provider
 from memory.fact_extractor import FactExtractor
 from memory.long_memory import LongMemoryV2
 from memory.memory_manager import MemoryManager
+from memory.memory_policy import MemoryPolicy
 from memory.memory_models import (
     ChunkRecord,
     ContextCompressor,
@@ -62,6 +63,7 @@ __all__ = [
     "FactExtractor",
     "DocumentMemory",
     "LongMemoryV2",
+    "MemoryPolicy",
     "build_embedding_provider",
     "run_auto_migration",
 ]

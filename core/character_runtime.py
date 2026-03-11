@@ -149,7 +149,6 @@ class StateSnapshot:
     mode_lock: bool = False
     mode_until: str = ""
     web_mode: str = "auto"
-    web_auto_profile: str = "balanced"
     thinking_enabled: bool = False
     output_format: dict[str, Any] = field(default_factory=dict)
     last_signals: dict[str, Any] = field(default_factory=dict)
@@ -363,7 +362,6 @@ class CharacterRuntime:
             "mode_lock": False,
             "mode_until": "",
             "web_mode": "auto",
-            "web_auto_profile": "balanced",
             "thinking_enabled": False,
             "output_format": dict(output_format),
             "quality_profile": "BALANCED",
@@ -384,7 +382,6 @@ class CharacterRuntime:
             "mode_lock": bool(global_state["mode_lock"]),
             "mode_until": "",
             "web_mode": str(global_state["web_mode"]),
-            "web_auto_profile": str(global_state["web_auto_profile"]),
             "thinking_enabled": bool(global_state["thinking_enabled"]),
             "output_format": dict(output_format),
             "last_signals": {},
@@ -446,10 +443,6 @@ class CharacterRuntime:
     def _coerce_web_mode(self, value: Any) -> str:
         text = str(value or "auto").strip().lower()
         return text if text in {"auto", "on", "off"} else "auto"
-
-    def _coerce_web_auto_profile(self, value: Any) -> str:
-        text = str(value or "balanced").strip().lower()
-        return text if text in {"balanced", "aggressive"} else "balanced"
 
     @staticmethod
     def _coerce_nullable_bool(value) -> bool | None:
@@ -549,7 +542,6 @@ class CharacterRuntime:
             "active_goal": str(self._state.get("active_goal") or "").strip(),
             "thinking_enabled": self._coerce_bool(self._state.get("thinking_enabled"), default=False),
             "web_mode": self._coerce_web_mode(self._state.get("web_mode")),
-            "web_auto_profile": self._coerce_web_auto_profile(self._state.get("web_auto_profile")),
             "turn_id": int(self._state.get("turn_id") or 0),
             "traits": traits,
             "locks": {str(k): bool(v) for k, v in locks.items() if str(k).strip()},
@@ -598,7 +590,6 @@ class CharacterRuntime:
             "mode_lock": self._coerce_bool(src.get("mode_lock"), default=False),
             "mode_until": to_local_iso(src.get("mode_until"), default=""),
             "web_mode": self._coerce_web_mode(src.get("web_mode")),
-            "web_auto_profile": self._coerce_web_auto_profile(src.get("web_auto_profile")),
             "thinking_enabled": self._coerce_bool(src.get("thinking_enabled"), default=False),
             "output_format": self._coerce_output_format(src.get("output_format")),
             "quality_profile": self._normalize_profile(src.get("quality_profile")),
@@ -624,7 +615,6 @@ class CharacterRuntime:
                 "mode_lock": src_global.get("mode_lock", flat.get("mode_lock")),
                 "mode_until": src_global.get("mode_until", flat.get("mode_until")),
                 "web_mode": src_global.get("web_mode", flat.get("web_mode")),
-                "web_auto_profile": src_global.get("web_auto_profile", flat.get("web_auto_profile")),
                 "thinking_enabled": src_global.get("thinking_enabled", flat.get("thinking_enabled")),
                 "output_format": src_global.get("output_format", flat.get("output_format")),
                 "quality_profile": src_global.get("quality_profile", flat.get("quality_profile")),
@@ -645,7 +635,6 @@ class CharacterRuntime:
         self._state["mode_lock"] = self._coerce_bool(global_payload.get("mode_lock"), default=False)
         self._state["mode_until"] = str(global_payload.get("mode_until") or "")
         self._state["web_mode"] = str(global_payload.get("web_mode") or "auto")
-        self._state["web_auto_profile"] = self._coerce_web_auto_profile(global_payload.get("web_auto_profile"))
         self._state["thinking_enabled"] = self._coerce_bool(global_payload.get("thinking_enabled"), default=False)
         self._state["output_format"] = self._coerce_output_format(global_payload.get("output_format"))
         self._state["quality_profile"] = str(global_payload.get("quality_profile") or "BALANCED")
@@ -762,7 +751,6 @@ class CharacterRuntime:
             merged["mode_lock"] = self._coerce_bool(merged.get("mode_lock"), default=False)
             merged["mode_until"] = to_local_iso(merged.get("mode_until"), default="")
             merged["web_mode"] = self._coerce_web_mode(merged.get("web_mode"))
-            merged["web_auto_profile"] = self._coerce_web_auto_profile(merged.get("web_auto_profile"))
             merged["thinking_enabled"] = self._coerce_bool(merged.get("thinking_enabled"), default=False)
             merged["output_format"] = self._coerce_output_format(merged.get("output_format"))
             merged["last_signals"] = dict(merged.get("last_signals") or {})
@@ -825,7 +813,6 @@ class CharacterRuntime:
             "mode_lock",
             "mode_until",
             "web_mode",
-            "web_auto_profile",
             "thinking_enabled",
             "output_format",
             "quality_profile",
@@ -871,7 +858,6 @@ class CharacterRuntime:
             "mode_lock",
             "mode_until",
             "web_mode",
-            "web_auto_profile",
             "thinking_enabled",
             "output_format",
             "quality_profile",
@@ -1004,7 +990,6 @@ class CharacterRuntime:
             mode_lock=self._coerce_bool(raw.get("mode_lock"), default=False),
             mode_until=to_local_iso(raw.get("mode_until"), default=""),
             web_mode=self._coerce_web_mode(raw.get("web_mode")),
-            web_auto_profile=self._coerce_web_auto_profile(raw.get("web_auto_profile")),
             thinking_enabled=self._coerce_bool(raw.get("thinking_enabled"), default=False),
             output_format=self._coerce_output_format(raw.get("output_format")),
             last_signals=dict(raw.get("last_signals") or {}),
@@ -1330,7 +1315,6 @@ class CharacterRuntime:
                 "active_mode": self._normalize_active_mode(merged.get("active_mode") or merged.get("mode") or "chatting"),
                 "mode_lock": self._coerce_bool(merged.get("mode_lock"), default=False),
                 "web_mode": self._coerce_web_mode(merged.get("web_mode")),
-                "web_auto_profile": self._coerce_web_auto_profile(merged.get("web_auto_profile")),
                 "thinking_enabled": self._coerce_bool(merged.get("thinking_enabled"), default=False),
                 "output_format": self._coerce_output_format(merged.get("output_format")),
                 "quality_profile": effective_quality_profile,

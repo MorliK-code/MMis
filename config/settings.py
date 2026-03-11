@@ -23,9 +23,10 @@ CONFIG_DIR = BASE_DIR / "config"
 DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
 LOG_DIR = DATA_DIR / "logs"
-CACHE_DIR = DATA_DIR / "cache"
 DEFAULT_MEMORY_DIR = DATA_DIR / "memory_storage"
 LEGACY_MEMORY_DIR = BASE_DIR / "memory_storage"
+CACHE_DIR = DEFAULT_MEMORY_DIR / "cache"
+LEGACY_CACHE_DIR = DATA_DIR / "cache"
 DIR_PATH_TOKEN = "{dir_path}"
 _DIR_PATH_TOKEN_LOW = DIR_PATH_TOKEN.lower()
 
@@ -91,6 +92,17 @@ def _resolve_memory_dir_default() -> Path:
     return DEFAULT_MEMORY_DIR
 
 
+def _resolve_cache_dir_default(memory_dir: Path | None = None) -> Path:
+    env_path = _from_env_path("MMIS_CACHE_DIR")
+    if env_path is not None:
+        return env_path
+    if memory_dir is not None:
+        root = Path(memory_dir).expanduser().resolve()
+    else:
+        root = _resolve_memory_dir_default().expanduser().resolve()
+    return (root / "cache").resolve()
+
+
 def resolve_memory_dir() -> Path:
     cache = globals().get("_SETTINGS_CACHE")
     if cache is not None and getattr(cache, "memory_dir", None):
@@ -119,7 +131,8 @@ MEMORY_DIR = resolve_memory_dir()
 def ensure_dirs(memory_dir: str | Path | None = None) -> dict[str, Path]:
     mem_dir = _to_path(memory_dir, resolve_memory_dir()) if memory_dir is not None else resolve_memory_dir()
     cfg = globals().get("_SETTINGS_CACHE")
-    cache_dir = _to_path(cfg.cache_dir, CACHE_DIR.resolve()) if cfg is not None and cfg.cache_dir else CACHE_DIR.resolve()
+    default_cache_dir = _resolve_cache_dir_default(mem_dir)
+    cache_dir = _to_path(cfg.cache_dir, default_cache_dir) if cfg is not None and cfg.cache_dir else default_cache_dir
     logs_dir = _to_path(cfg.log_dir, LOG_DIR.resolve()) if cfg is not None and cfg.log_dir else LOG_DIR.resolve()
     data_dir = _to_path(cfg.data_dir, DATA_DIR.resolve()) if cfg is not None and cfg.data_dir else DATA_DIR.resolve()
     models_dir = _to_path(cfg.models_dir, MODELS_DIR.resolve()) if cfg is not None and cfg.models_dir else MODELS_DIR.resolve()
@@ -237,7 +250,6 @@ class AppSettings:
     port: int = 8027
     thinking_enabled: bool = True
     web_mode: str = "auto"
-    web_auto_profile: str = "balanced"
     web_v2: dict[str, Any] = field(default_factory=dict)
     json_mode_enabled: bool = False
     internet_enabled: bool = True
@@ -249,10 +261,10 @@ class AppSettings:
     prompt_response_formatting_enabled: bool = True
     data_dir: Path = DATA_DIR
     models_dir: Path = MODELS_DIR
-    memory_dir: Path = field(default_factory=lambda: DATA_DIR / "memory")
-    cache_dir: Path = field(default_factory=lambda: Path(".cache").resolve())
+    memory_dir: Path = field(default_factory=lambda: DEFAULT_MEMORY_DIR.resolve())
+    cache_dir: Path = field(default_factory=lambda: CACHE_DIR.resolve())
     log_dir: Path = field(default_factory=lambda: Path("logs").resolve())
-    db_path: Path = field(default_factory=lambda: DATA_DIR / "memory" / "memory.db")
+    db_path: Path = field(default_factory=lambda: DEFAULT_MEMORY_DIR.resolve() / "memory.db")
     dialog_new_session_after_min: int = 360
     dialog_greeting_max_words: int = 6
     dialog_greeting_max_chars: int = 35
@@ -602,7 +614,7 @@ def _default_model_profiles_tree() -> dict[str, Any]:
 
 def _default_config_tree() -> dict[str, Any]:
     memory_dir = _resolve_memory_dir_default().expanduser().resolve()
-    cache_dir = CACHE_DIR.resolve()
+    cache_dir = _resolve_cache_dir_default(memory_dir).resolve()
     log_dir = LOG_DIR.resolve()
     return {
         "app": {
@@ -652,7 +664,6 @@ def _default_config_tree() -> dict[str, Any]:
         "internet": {
             "enabled": True,
             "web_mode": "auto",
-            "web_auto_profile": "balanced",
             "web_v2": {
                 "enabled": True,
                 "thresholds": {
@@ -905,6 +916,8 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
     memory_dir = _to_path(_get_dotted(row, "memory.memory_dir"), _resolve_memory_dir_default().expanduser().resolve())
     dirs = ensure_dirs(memory_dir=memory_dir)
     cache_dir = _to_path(_get_dotted(row, "memory.cache_dir"), dirs["cache"])
+    if cache_dir.resolve() == LEGACY_CACHE_DIR.resolve():
+        cache_dir = _resolve_cache_dir_default(memory_dir).resolve()
     log_dir = _to_path(_get_dotted(row, "memory.log_dir"), dirs["logs"])
     db_path = _to_path(_get_dotted(row, "memory.db_path"), memory_dir / "memory.db")
 
@@ -939,7 +952,6 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         port=_to_int(_get_dotted(row, "api.port"), default=8027),
         thinking_enabled=_to_bool(_get_dotted(row, "llm.thinking_enabled")),
         web_mode=_norm_lower(_get_dotted(row, "internet.web_mode") or "auto"),
-        web_auto_profile=_norm_lower(_get_dotted(row, "internet.web_auto_profile") or "balanced"),
         web_v2=_as_dict(_get_dotted(row, "internet.web_v2")),
         json_mode_enabled=_to_bool(_get_dotted(row, "llm.json_mode_enabled")),
         internet_enabled=_to_bool(_get_dotted(row, "internet.enabled")),
@@ -1608,7 +1620,6 @@ def _bootstrap_seed_from_env(*, dotenv_cfg: dict[str, str]) -> dict[str, Any]:
         ("MMIS_THINKING_ENABLED", "llm.thinking_enabled", _to_bool),
         ("MMIS_JSON_MODE", "llm.json_mode_enabled", _to_bool),
         ("MMIS_WEB_MODE", "internet.web_mode", _norm_lower),
-        ("MMIS_WEB_AUTO_PROFILE", "internet.web_auto_profile", _norm_lower),
         ("MMIS_INTERNET_ENABLED", "internet.enabled", _to_bool),
         ("MMIS_AUTOMATION_ENABLED", "modules.automation_enabled", _to_bool),
         ("MMIS_SCREEN_ENABLED", "modules.screen_enabled", _to_bool),
@@ -1708,10 +1719,6 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append("startup.mode cannot be empty")
     if not str(settings.log_format or "").strip():
         errors.append("logging.format cannot be empty")
-    if str(settings.web_auto_profile or "").strip().lower() not in {"balanced", "aggressive"}:
-        errors.append(
-            f"internet.web_auto_profile must be one of ['aggressive', 'balanced'], got: {settings.web_auto_profile}"
-        )
     if str(settings.web_mode or "").strip().lower() not in {"on", "off", "auto"}:
         errors.append(f"internet.web_mode must be one of ['auto', 'off', 'on'], got: {settings.web_mode}")
     errors.extend(_validate_web_v2_settings(settings.web_v2))

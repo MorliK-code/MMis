@@ -230,19 +230,23 @@ def chat(req: ChatRequest) -> ChatResponse:
     with _runtime.lock:
         native = _handle_native_chat_command(text)
         if native is not None:
-            answer = str(native.get("answer") or "")
-            stats = {"served_model": _runtime.model, "native_command": True}
-            if bool(req.store_turn) and _should_store_metadata(text=text):
-                _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
-                _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
-            return ChatResponse(
-                answer=answer,
-                thinking="",
-                stats=stats,
-                model=_runtime.model,
-                parameters=None,
-                summary=None,
-            )
+            pass_text = str(native.get("pass_text") or "").strip()
+            if pass_text:
+                text = pass_text
+            else:
+                answer = str(native.get("answer") or "")
+                stats = {"served_model": _runtime.model, "native_command": True}
+                if bool(req.store_turn) and _should_store_metadata(text=text):
+                    _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+                    _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+                return ChatResponse(
+                    answer=answer,
+                    thinking="",
+                    stats=stats,
+                    model=_runtime.model,
+                    parameters=None,
+                    summary=None,
+                )
 
         log_json(
             LOGGER,
@@ -302,27 +306,32 @@ def chat_stream(req: ChatRequest):
         raise HTTPException(status_code=400, detail="Text is empty")
 
     def generate():
+        request_text = text
         with _runtime.lock:
-            native = _handle_native_chat_command(text)
+            native = _handle_native_chat_command(request_text)
             if native is not None:
-                answer = str(native.get("answer") or "")
-                stats = {"served_model": _runtime.model, "native_command": True}
-                payload = {
-                    "answer": answer,
-                    "thinking": "",
-                    "stats": stats,
-                    "model": _runtime.model,
-                    "parameters": None,
-                    "summary": None,
-                }
-                if bool(req.store_turn) and _should_store_metadata(text=text):
-                    _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
-                    _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
-                for chunk in _split_chunks(answer, chunk_size=48):
-                    if chunk:
-                        yield _ndjson("chunk", chunk)
-                yield _ndjson("final", payload)
-                return
+                pass_text = str(native.get("pass_text") or "").strip()
+                if pass_text:
+                    request_text = pass_text
+                else:
+                    answer = str(native.get("answer") or "")
+                    stats = {"served_model": _runtime.model, "native_command": True}
+                    payload = {
+                        "answer": answer,
+                        "thinking": "",
+                        "stats": stats,
+                        "model": _runtime.model,
+                        "parameters": None,
+                        "summary": None,
+                    }
+                    if bool(req.store_turn) and _should_store_metadata(text=request_text):
+                        _append_metadata_row(model=_runtime.model, role="user", text=request_text, context=answer)
+                        _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=request_text)
+                    for chunk in _split_chunks(answer, chunk_size=48):
+                        if chunk:
+                            yield _ndjson("chunk", chunk)
+                    yield _ndjson("final", payload)
+                    return
 
         events: queue.Queue[tuple[str, str]] = queue.Queue()
         done = threading.Event()
@@ -347,13 +356,13 @@ def chat_stream(req: ChatRequest):
                         LOGGER,
                         "api_chat_stream_start",
                         model=_runtime.model,
-                        text_chars=len(text),
+                        text_chars=len(request_text),
                         store_turn=bool(req.store_turn),
                         think=_runtime.thinking_enabled if req.think is None else bool(req.think),
                         json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                     )
                     result = _runtime.brain.handle_message(
-                        text,
+                        request_text,
                         meta=_build_chat_meta(
                             req=req,
                             source="api",
@@ -414,9 +423,9 @@ def chat_stream(req: ChatRequest):
         }
         _runtime.last_thinking = thinking
 
-        if bool(req.store_turn) and _should_store_metadata(text=text, structured_output=structured):
-            _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
-            _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+        if bool(req.store_turn) and _should_store_metadata(text=request_text, structured_output=structured):
+            _append_metadata_row(model=_runtime.model, role="user", text=request_text, context=answer)
+            _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=request_text)
 
         if sent_thinking == 0:
             for t_chunk in _split_chunks(thinking, chunk_size=48):
@@ -583,7 +592,7 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
         return {
             "answer": (
                 "Native API commands:\n"
-                "/health\n/models\n/model [name]\n/think\n/nothink\n/json\n/nojson\n/character delete <id>\n/help"
+                "/health\n/models\n/model [name]\n/think\n/nothink\n/web [query]\n/no-web\n/json\n/nojson\n/character delete <id>\n/help"
             )
         }
     if cmd == "/health":
@@ -638,13 +647,6 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
     if cmd in {"/no-web", "/noweb", "/no_web"}:
         _runtime.web_mode = "off"
         return {"answer": "Web: off"}
-
-    if cmd in {"/web-auto", "/web_auto", "/autoweb"}:
-        if arg:
-            _runtime.web_mode = "auto"
-            return None
-        _runtime.web_mode = "auto"
-        return {"answer": "Web: auto"}
     if cmd == "/json":
         _runtime.json_mode_enabled = True
         return {"answer": "JSON mode: on"}

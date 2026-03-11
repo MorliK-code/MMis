@@ -94,26 +94,24 @@ class WebPolicyEngine:
         confidence: ConfidenceAssessment,
         freshness: FreshnessAssessment,
         web_mode: str,
-        web_auto_profile: str,
         internet_enabled: bool,
         user_override: str | None = None,
         policy_context: dict[str, Any] | None = None,
     ) -> WebPolicyDecision:
         mode_raw = str(web_mode or "auto").strip().lower()
-        auto_profile = str(web_auto_profile or "balanced").strip().lower()
         source = str(query or "").strip().lower()
         context_override = ""
         if isinstance(policy_context, dict):
             context_override = str(policy_context.get("web_override") or "").strip()
         override = _normalize_user_override(user_override or context_override)
         weights = self._cfg.weights
-        thresholds = _profile_adjusted_thresholds(self._cfg.thresholds, auto_profile=auto_profile)
+        thresholds = self._cfg.thresholds
 
         if not bool(internet_enabled):
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="internet_disabled")
         if override == "no-web":
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="user_override_no_web")
-        if mode_raw == "off":
+        if mode_raw == "off" and override != "web":
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="web_mode_off")
 
         force_keyword = _has_any(source, self._cfg.force_search_keywords)
@@ -325,18 +323,6 @@ def _mode_from_score(*, score: float, thresholds: PolicyThresholds) -> WebSearch
     if value <= thresholds.targeted_max:
         return WebSearchMode.TARGETED_SEARCH
     return WebSearchMode.DEEP_SEARCH
-
-
-def _profile_adjusted_thresholds(thresholds: PolicyThresholds, *, auto_profile: str) -> PolicyThresholds:
-    profile = str(auto_profile or "balanced").strip().lower()
-    if profile != "aggressive":
-        return thresholds
-    return PolicyThresholds(
-        no_search_max=max(0.0, thresholds.no_search_max - 0.05),
-        verify_max=max(0.0, thresholds.verify_max - 0.05),
-        soft_max=max(0.0, thresholds.soft_max - 0.04),
-        targeted_max=max(0.0, thresholds.targeted_max - 0.03),
-    )
 
 
 def _has_any(text: str, items: list[str]) -> bool:

@@ -36,7 +36,6 @@ LEGACY_KEY_MAP: dict[str, str] = {
     "openai_max_retries": "llm.providers.openai.max_retries",
     "internet_enabled": "internet.enabled",
     "web_mode": "internet.web_mode",
-    "web_auto_profile": "internet.web_auto_profile",
     "search_api_url": "internet.search.api_url",
     "search_provider": "internet.search.provider",
     "search_strict_endpoint": "internet.search.strict_endpoint",
@@ -106,10 +105,12 @@ _DEPRECATED_TOP_LEVEL_KEYS: set[str] = {
     "default_memory_dir",
     "legacy_memory_dir",
     "console_last_api_base_url",
+    "web_auto_profile",
 }
 
 _DEPRECATED_DOTTED_KEYS: tuple[str, ...] = (
     "startup.read_only_tools",
+    "internet.web_auto_profile",
     "ui.console.model",
     "ui.console.json_mode_enabled",
     "ui.console.last_api_base_url",
@@ -218,9 +219,6 @@ class ConfigManager:
             web_mode = str(runtime_state.get("web_mode") or "").strip().lower()
             if web_mode in {"on", "off", "auto"} and _get_dotted(out, "internet.web_mode") is None:
                 _set_dotted(out, "internet.web_mode", web_mode)
-            web_profile = str(runtime_state.get("web_auto_profile") or "").strip().lower()
-            if web_profile in {"balanced", "aggressive"} and _get_dotted(out, "internet.web_auto_profile") is None:
-                _set_dotted(out, "internet.web_auto_profile", web_profile)
             if runtime_state.get("mode_lock") is not None and _get_dotted(out, "ui.console.runtime.mode_lock") is None:
                 _set_dotted(out, "ui.console.runtime.mode_lock", bool(runtime_state.get("mode_lock")))
             if str(runtime_state.get("active_mode") or "").strip() and _get_dotted(out, "ui.console.runtime.active_mode") in {None, ""}:
@@ -388,10 +386,6 @@ def _migrate_nested_deprecated_keys(payload: dict[str, Any]) -> bool:
         web_mode = str(runtime.get("web_mode") or "").strip().lower()
         if web_mode in {"on", "off", "auto"} and _get_dotted(payload, "internet.web_mode") is None:
             _set_dotted(payload, "internet.web_mode", web_mode)
-            changed = True
-        web_auto_profile = str(runtime.get("web_auto_profile") or "").strip().lower()
-        if web_auto_profile in {"balanced", "aggressive"} and _get_dotted(payload, "internet.web_auto_profile") is None:
-            _set_dotted(payload, "internet.web_auto_profile", web_auto_profile)
             changed = True
         if str(runtime.get("model") or "").strip() and _get_dotted(payload, "llm.model_name") in {None, ""}:
             _set_dotted(payload, "llm.model_name", str(runtime.get("model")).strip())
