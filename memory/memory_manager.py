@@ -261,6 +261,9 @@ class MemoryManager:
                         "event_id": event_id,
                         "ts": now_ts,
                         "type": "memory_document_ingest_v2",
+                        "trace_id": str(metadata.get("trace_id") or ""),
+                        "model": str(metadata.get("model") or ""),
+                        "latency_ms": float(metadata.get("latency_ms") or 0.0),
                         "payload": {
                             "role": str(event.role or ""),
                             "scope": scope.value,
@@ -268,6 +271,9 @@ class MemoryManager:
                             "record_id": doc_result.document.id,
                             "namespace": namespace,
                             "chunk_count": len(doc_result.chunks),
+                            "request_id": str(metadata.get("request_id") or ""),
+                            "turn_id": str(metadata.get("turn_id") or ""),
+                            "conversation_id": str(metadata.get("conversation_id") or namespace),
                         },
                         "tags": [scope.value, memory_type.value, "document"],
                     }
@@ -276,6 +282,11 @@ class MemoryManager:
                 log_json(
                     LOGGER,
                     "memory_v2_ingest_document",
+                    summary=(
+                        f"type={memory_type.value} scope={scope.value} stored={len(stored_ids)} "
+                        f"source={source or '-'}"
+                    ),
+                    context=self._event_log_context(metadata=metadata, namespace=namespace),
                     namespace=namespace,
                     scope=scope.value,
                     source=source,
@@ -381,6 +392,9 @@ class MemoryManager:
                     "event_id": event_id,
                     "ts": now_ts,
                     "type": "memory_ingest_v2",
+                    "trace_id": str(metadata.get("trace_id") or ""),
+                    "model": str(metadata.get("model") or ""),
+                    "latency_ms": float(metadata.get("latency_ms") or 0.0),
                     "payload": {
                         "role": str(event.role or ""),
                         "scope": scope.value,
@@ -395,6 +409,9 @@ class MemoryManager:
                             else ""
                         ),
                         "preview_facts_count": int(len(preview_facts)),
+                        "request_id": str(metadata.get("request_id") or ""),
+                        "turn_id": str(metadata.get("turn_id") or ""),
+                        "conversation_id": str(metadata.get("conversation_id") or namespace),
                     },
                     "tags": [scope.value, memory_type.value],
                 }
@@ -404,6 +421,12 @@ class MemoryManager:
         log_json(
             LOGGER,
             "memory_v2_ingest",
+            summary=(
+                f"type={memory_type.value} scope={scope.value} stored={len(stored_ids)} "
+                f"facts={len(extracted_facts)} promotions={len(promoted_ids)} "
+                f"reason={str(lifecycle_decision.reason or '-')}"
+            ),
+            context=self._event_log_context(metadata=metadata, namespace=namespace),
             namespace=namespace,
             scope=scope.value,
             memory_type=memory_type.value,
@@ -911,7 +934,21 @@ class MemoryManager:
             }
         )
         facts_count = len(list(preview_facts or []))
-        fact_signal = self._clamp01(float(facts_count) / 2.0)
+        relation_weights = {
+            "decision": 0.24,
+            "issue": 0.22,
+            "task": 0.20,
+            "project": 0.18,
+            "preference": 0.18,
+            "environment": 0.14,
+            "identity": 0.10,
+            "temporary": 0.06,
+            "resolved": 0.12,
+            "unresolved": 0.12,
+        }
+        relation_bonus = sum(float(relation_weights.get(name, 0.08)) for name in fact_relations)
+        fact_signal = self._clamp01((0.24 * min(3, facts_count)) + min(0.52, relation_bonus))
+        fact_relation_diversity = self._clamp01(float(len(fact_relations)) / 3.0)
 
         out["promotion_project_signal"] = self._meta_float(out, "promotion_project_signal", signal.project_relevance)
         out["promotion_task_signal"] = self._meta_float(out, "promotion_task_signal", signal.task_intent)
@@ -932,6 +969,9 @@ class MemoryManager:
             out, "promotion_stable_fact_signal", signal.stable_fact_signal
         )
         out["promotion_fact_signal"] = self._meta_float(out, "promotion_fact_signal", fact_signal)
+        out["promotion_fact_relation_diversity"] = self._meta_float(
+            out, "promotion_fact_relation_diversity", fact_relation_diversity
+        )
         out["extracted_facts_count"] = int(max(0, self._to_int(out.get("extracted_facts_count"), facts_count)))
         out["extracted_fact_relations"] = list(fact_relations)[:16]
         return out
@@ -1014,6 +1054,16 @@ class MemoryManager:
             pass
         return self._clamp01(fallback)
 
+    @staticmethod
+    def _event_log_context(*, metadata: dict[str, Any], namespace: str) -> dict[str, Any]:
+        row = dict(metadata or {})
+        return {
+            "trace_id": str(row.get("trace_id") or "").strip(),
+            "request_id": str(row.get("request_id") or "").strip(),
+            "turn_id": str(row.get("turn_id") or "").strip(),
+            "conversation_id": str(row.get("conversation_id") or namespace or "").strip(),
+        }
+
     def _importance_score(self, *, text: str, metadata: dict[str, Any], namespace: str) -> float:
         explicit = metadata.get("importance")
         if explicit is not None:
@@ -1046,14 +1096,23 @@ class MemoryManager:
         signal_score = self._meta_float(metadata, "promotion_signal_score", 0.0)
         stable_fact_signal = self._meta_float(metadata, "promotion_stable_fact_signal", 0.0)
         fact_signal = self._meta_float(metadata, "promotion_fact_signal", 0.0)
+        fact_relation_diversity = self._meta_float(metadata, "promotion_fact_relation_diversity", 0.0)
+        project_signal = self._meta_float(metadata, "promotion_project_signal", 0.0)
+        task_signal = self._meta_float(metadata, "promotion_task_signal", 0.0)
+        decision_signal = self._meta_float(metadata, "promotion_decision_signal", 0.0)
+        preference_signal = self._meta_float(metadata, "promotion_preference_signal", 0.0)
+        issue_signal = self._meta_float(metadata, "promotion_issue_signal", 0.0)
         smalltalk_signal = self._meta_float(metadata, "promotion_smalltalk_signal", 0.0)
         blended = (
-            (0.56 * legacy_score)
-            + (0.44 * float(salience))
+            (0.52 * legacy_score)
+            + (0.40 * float(salience))
             + (0.20 * signal_score)
+            + (0.08 * max(project_signal, task_signal))
+            + (0.06 * max(decision_signal, issue_signal, preference_signal))
             + (0.08 * stable_fact_signal)
             + (0.07 * fact_signal)
-            - (0.16 * smalltalk_signal)
+            + (0.04 * fact_relation_diversity)
+            - (0.18 * smalltalk_signal)
         )
         return max(0.0, min(1.0, blended))
 

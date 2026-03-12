@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -262,57 +262,57 @@ def _print_header(state: ConsoleState) -> None:
         _print_health_short(state, startup=True)
         return
 
-    print("API РЅРµРґРѕСЃС‚СѓРїРµРЅ.")
+    print("API недоступен.")
     if state.auto_start_api:
-        print("РџСЂРѕР±СѓСЋ Р°РІС‚Рѕ-Р·Р°РїСѓСЃРє API...")
+        print("Пробую авто-запуск API...")
         if _start_api_process(state) and _wait_for_api(state, timeout_s=18.0):
-            print("API РїРѕРґРЅСЏС‚ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё.")
+            print("API поднят автоматически.")
             _print_health_short(state, startup=True)
             _ensure_model_backend(state)
             return
-    print("Р—Р°РїСѓСЃС‚Рё РІСЂСѓС‡РЅСѓСЋ: python api_main.py --mmis-tag mmis")
+    print("Запусти вручную: python api_main.py --mmis-tag mmis")
 
 
 def _print_help() -> None:
-    print("Р”РѕСЃС‚СѓРїРЅС‹Рµ РєРѕРјР°РЅРґС‹:")
+    print("Доступные команды:")
     print("")
-    print("Р›РѕРєР°Р»СЊРЅС‹Рµ (UI):")
-    print("/help                        РїРѕРєР°Р·Р°С‚СЊ СЌС‚Сѓ СЃРїСЂР°РІРєСѓ")
-    print("/connect [url]               РїРµСЂРµРїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє API (РјРѕР¶РЅРѕ СѓРєР°Р·Р°С‚СЊ URL)")
-    print("/restartapi                  РїРµСЂРµР·Р°РїСѓСЃС‚РёС‚СЊ Р»РѕРєР°Р»СЊРЅС‹Р№ API-РїСЂРѕС†РµСЃСЃ")
-    print("/restartall                  РїРѕР»РЅС‹Р№ СЂРµСЃС‚Р°СЂС‚ UI+API РІ СЌС‚РѕРј Р¶Рµ РѕРєРЅРµ")
-    print("/cleanapi                    СѓР±РёС‚СЊ РІСЃРµ MMis API-РїСЂРѕС†РµСЃСЃС‹ (tag=mmis)")
-    print("/models                      РїРѕРєР°Р·Р°С‚СЊ РґРѕСЃС‚СѓРїРЅС‹Рµ РјРѕРґРµР»Рё")
-    print("/model                       РїРѕРєР°Р·Р°С‚СЊ С‚РµРєСѓС‰СѓСЋ РјРѕРґРµР»СЊ")
-    print("/model <name>                РїРµСЂРµРєР»СЋС‡РёС‚СЊ РјРѕРґРµР»СЊ")
-    print("/show-thinking               РїРѕРєР°Р·С‹РІР°С‚СЊ РїРѕС‚РѕРє thinking")
-    print("/hide-thinking               СЃРєСЂС‹РІР°С‚СЊ РїРѕС‚РѕРє thinking")
-    print("/thinking-first              РїРѕРєР°Р·С‹РІР°С‚СЊ thinking РґРѕ РѕС‚РІРµС‚Р°")
-    print("/thinking-last               РїРѕРєР°Р·С‹РІР°С‚СЊ РѕС‚РІРµС‚ Р±РµР· РѕР¶РёРґР°РЅРёСЏ thinking")
-    print("/store on|off                РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ СЃРѕС…СЂР°РЅРµРЅРёРµ turns")
-    print("/health                      РїСЂРѕРІРµСЂРёС‚СЊ СЃРѕСЃС‚РѕСЏРЅРёРµ API")
-    print("/exit РёР»Рё /quit              РІС‹С…РѕРґ")
+    print("Локальные (UI):")
+    print("/help                        показать эту справку")
+    print("/connect [url]               переподключиться к API (можно указать URL)")
+    print("/restartapi                  перезапустить локальный API-процесс")
+    print("/restartall                  полный рестарт UI+API в этом же окне")
+    print("/cleanapi                    убить все MMis API-процессы (tag=mmis)")
+    print("/models                      показать доступные модели")
+    print("/model                       показать текущую модель")
+    print("/model <name>                переключить модель")
+    print("/show-thinking               показывать поток thinking")
+    print("/hide-thinking               скрывать поток thinking")
+    print("/thinking-first              показывать thinking до ответа")
+    print("/thinking-last               показывать ответ без ожидания thinking")
+    print("/store on|off                включить/выключить сохранение turns")
+    print("/health                      проверить состояние API")
+    print("/exit или /quit              выход")
     print("")
-    print("РљРѕРјР°РЅРґС‹, РѕС‚РїСЂР°РІР»СЏРµРјС‹Рµ РІ backend:")
-    print("/think                       РІРєР»СЋС‡РёС‚СЊ thinking Сѓ РјРѕРґРµР»Рё")
-    print("/nothink                     РІС‹РєР»СЋС‡РёС‚СЊ thinking Сѓ РјРѕРґРµР»Рё")
+    print("Команды, отправляемые в backend:")
+    print("/think                       включить thinking у модели")
+    print("/nothink                     выключить thinking у модели")
     print("/web [query]                 enable web mode and optionally run query")
-    print("/no-web                      РІС‹РєР»СЋС‡РёС‚СЊ web-РїРѕРёСЃРє")
-    print("/output status               РїРѕРєР°Р·Р°С‚СЊ С„РѕСЂРјР°С‚ РІС‹РІРѕРґР°")
-    print("/output parameters on|off    РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ Р±Р»РѕРє [PARAMETERS]")
-    print("/output summary on|off       РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ Р±Р»РѕРє [SUMMARY]")
-    print("/mode <name>                 РїРµСЂРµРєР»СЋС‡РёС‚СЊ backend mode (Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё mode_lock=on)")
-    print("/mode_lock on|off            РІРєР»СЋС‡РёС‚СЊ/РІС‹РєР»СЋС‡РёС‚СЊ lock mode")
-    print("/brain_debug                 РїРѕРєР°Р·Р°С‚СЊ debug brain state")
-    print("/persona_debug               РїРѕРєР°Р·Р°С‚СЊ debug persona state")
-    print("/json                        РІРєР»СЋС‡РёС‚СЊ JSON-СЂРµР¶РёРј РѕС‚РІРµС‚Р°")
-    print("/nojson                      РІС‹РєР»СЋС‡РёС‚СЊ JSON-СЂРµР¶РёРј РѕС‚РІРµС‚Р°")
-    print("/character ...               РєРѕРјР°РЅРґС‹ СѓРїСЂР°РІР»РµРЅРёСЏ РїРµСЂСЃРѕРЅР°Р¶РµРј")
-    print("/character delete <id>       СѓРґР°Р»РёС‚СЊ РїРµСЂСЃРѕРЅР°Р¶Р° (РєСЂРѕРјРµ default)")
-    print("/trait ...                   РєРѕРјР°РЅРґС‹ СѓРїСЂР°РІР»РµРЅРёСЏ traits")
-    print("/studio ...                  РµРґРёРЅС‹Р№ РјРѕРґСѓР»СЊ СЂР°Р±РѕС‚С‹ СЃ РїРµСЂСЃРѕРЅР°Р¶РµРј (create/update/modes/mixed/build_pack)")
-    print("/studio apply|cancel         Р»РѕРєР°Р»СЊРЅС‹Рµ РєРѕРјР°РЅРґС‹ СЃС‚СѓРґРёРё (РЅРµ РѕС‚РїСЂР°РІР»СЏСЋС‚СЃСЏ РІ РѕСЃРЅРѕРІРЅРѕР№ С‡Р°С‚-РїСЂРѕРјРїС‚)")
-    print("/apply | /cancel             РєРѕСЂРѕС‚РєРёРµ Р»РѕРєР°Р»СЊРЅС‹Рµ РєРѕРјР°РЅРґС‹ СЃС‚СѓРґРёРё РїСЂРё active session")
+    print("/no-web                      выключить web-поиск")
+    print("/output status               показать формат вывода")
+    print("/output parameters on|off    включить/выключить блок [PARAMETERS]")
+    print("/output summary on|off       включить/выключить блок [SUMMARY]")
+    print("/mode <name>                 переключить backend mode (автоматически mode_lock=on)")
+    print("/mode_lock on|off            включить/выключить lock mode")
+    print("/brain_debug                 показать debug brain state")
+    print("/persona_debug               показать debug persona state")
+    print("/json                        включить JSON-режим ответа")
+    print("/nojson                      выключить JSON-режим ответа")
+    print("/character ...               команды управления персонажем")
+    print("/character delete <id>       удалить персонажа (кроме default)")
+    print("/trait ...                   команды управления traits")
+    print("/studio ...                  единый модуль работы с персонажем (create/update/modes/mixed/build_pack)")
+    print("/studio apply|cancel         локальные команды студии (не отправляются в основной чат-промпт)")
+    print("/apply | /cancel             короткие локальные команды студии при active session")
 
 
 def _print_health_short(state: ConsoleState, *, startup: bool = False) -> None:
@@ -530,7 +530,7 @@ def _chat_once(state: ConsoleState, text: str) -> int:
     if not user_text:
         return 0
     if _looks_like_shell_command(user_text):
-        print("Р­С‚Рѕ РїРѕС…РѕР¶Рµ РЅР° РєРѕРјР°РЅРґСѓ С‚РµСЂРјРёРЅР°Р»Р°. Р’РІРѕРґРё РµРµ РІ PowerShell, РЅРµ РІ `you>`.")
+        print("Это похоже на команду терминала. Вводи ее в PowerShell, не в `you>`.")
         return 1
     if not _ensure_connected_or_start(state):
         return 1
@@ -553,7 +553,7 @@ def _chat_loop(state: ConsoleState) -> int:
                 return 0
             continue
         if _looks_like_shell_command(line):
-            print("Р­С‚Рѕ РїРѕС…РѕР¶Рµ РЅР° РєРѕРјР°РЅРґСѓ С‚РµСЂРјРёРЅР°Р»Р°. Р’РІРѕРґРё РµРµ РІ PowerShell, РЅРµ РІ `you>`.")
+            print("Это похоже на команду терминала. Вводи ее в PowerShell, не в `you>`.")
             continue
         if not _ensure_connected_or_start(state):
             continue
@@ -913,7 +913,7 @@ def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) 
         reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
         if _is_generation_fallback(reply.answer):
             print()
-            print("LLM backend РЅРµРґРѕСЃС‚СѓРїРµРЅ. РџСЂРѕР±СѓСЋ Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РїРµСЂРµРєР»СЋС‡РёС‚СЊСЃСЏ РЅР° Р»РѕРєР°Р»СЊРЅС‹Р№ Ollama Рё РїРѕРІС‚РѕСЂРёС‚СЊ Р·Р°РїСЂРѕСЃ...")
+            print("LLM backend недоступен. Пробую автоматически переключиться на локальный Ollama и повторить запрос...")
             if _ensure_model_backend(state):
                 reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
         if _is_generation_fallback(reply.answer):
@@ -927,15 +927,6 @@ def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) 
             model = str(getattr(reply, "model", "") or "")
             if model:
                 print(f"[model: {model}]")
-            stats_map = getattr(reply, "stats", {}) if isinstance(getattr(reply, "stats", None), dict) else {}
-            params_map = getattr(reply, "parameters", {}) if isinstance(getattr(reply, "parameters", None), dict) else {}
-            web_trace_id = str(
-                stats_map.get("web_trace_id")
-                or params_map.get("web_trace_id")
-                or ""
-            ).strip()
-            if web_trace_id:
-                print(f"[web_trace_id: {web_trace_id}]")
             if state.show_thinking:
                 thinking = str(getattr(reply, "thinking", "") or "")
                 if str(streamed_thinking or "").strip():
@@ -1008,7 +999,7 @@ def _ensure_connected_or_start(state: ConsoleState) -> bool:
         return True
     if state.auto_start_api and _start_api_process(state) and _wait_for_api(state, timeout_s=18.0):
         return True
-    print("API offline. Р—Р°РїСѓСЃС‚Рё: python api_main.py --mmis-tag mmis")
+    print("API offline. Запусти: python api_main.py --mmis-tag mmis")
     return False
 
 
@@ -1214,15 +1205,15 @@ def _print_backend_hint(state: ConsoleState) -> None:
     except ApiClientError:
         pass
 
-    print("Р”РёР°РіРЅРѕСЃС‚РёРєР°:")
+    print("Диагностика:")
     print(f"- runtime model: {runtime_model}")
     if models:
         print(f"- models available: {len(models)}")
         if runtime_model not in models:
-            print("- runtime model РЅРµ РЅР°Р№РґРµРЅР° РІ СЃРїРёСЃРєРµ. РЎРјРµРЅРё РјРѕРґРµР»СЊ: /models -> /model <name>")
+            print("- runtime model не найдена в списке. Смени модель: /models -> /model <name>")
     else:
         print("- models available: 0")
-        print("- Ollama РЅРµ РѕС‚РґР°РµС‚ СЃРїРёСЃРѕРє РјРѕРґРµР»РµР№. РџСЂРѕРІРµСЂСЊ:")
+        print("- Ollama не отдает список моделей. Проверь:")
         print("  1) ollama serve")
         print("  2) ollama list")
         print("  3) ollama pull qwen3:8b")

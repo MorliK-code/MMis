@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from modules.character.trait_limits import apply_trait_delta, clamp_trait_map, clamp_trait_scalar
+
 DEFAULT_BASELINE_TRAITS: dict[str, float] = {
     "warmth": 0.58,
     "sarcasm": 0.24,
@@ -27,7 +29,8 @@ def update_persona(
     signals: dict[str, Any] | None,
     *,
     max_delta_per_turn: float = 0.02,
-    decay_to_baseline: float = 0.005,
+    decay_to_baseline: float = 0.0,
+    allow_transient_persona_drift: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     current = dict(persona or {})
     sig = dict(signals or {})
@@ -43,7 +46,6 @@ def update_persona(
     learned = dict(current.get("learned") or {})
     confirmed = [str(x).strip().lower() for x in list(learned.get("preferences_confirmed") or []) if str(x).strip()]
     pending = [str(x).strip().lower() for x in list(learned.get("preferences_pending") or []) if str(x).strip()]
-    style_bias = dict(learned.get("style_bias") or {})
 
     baselines = _coerce_baselines(
         current.get("baseline_traits"),
@@ -51,13 +53,13 @@ def update_persona(
     )
     if not baselines:
         if traits:
-            baselines = {k: float(_clamp01(v)) for k, v in traits.items()}
+            baselines = {k: float(clamp_trait_scalar(k, v, minimum=0.0, maximum=1.0)) for k, v in traits.items()}
         else:
             baselines = dict(DEFAULT_BASELINE_TRAITS)
 
     # Any newly seen trait is anchored to baseline at first appearance.
     for key, value in list(traits.items()):
-        baselines.setdefault(str(key), float(_clamp01(value)))
+        baselines.setdefault(str(key), float(clamp_trait_scalar(key, value, minimum=0.0, maximum=1.0)))
 
     decay_deltas: dict[str, float] = {}
     for key, baseline in baselines.items():
@@ -66,27 +68,43 @@ def update_persona(
             continue
         before = float(traits.get(trait_name, baseline))
         delta = _clamp(float(baseline) - before, -abs(decay_to_baseline), abs(decay_to_baseline))
-        after = _clamp01(before + delta)
+        after = apply_trait_delta(
+            trait_name,
+            before,
+            delta,
+            minimum=0.0,
+            maximum=1.0,
+            soften=True,
+        )
         if abs(after - before) > 1e-9:
             decay_deltas[trait_name] = float(after - before)
             traits[trait_name] = after
 
-    implicit_raw = _implicit_trait_deltas(sig)
     implicit_deltas: dict[str, float] = {}
-    for key, delta in implicit_raw.items():
-        trait_name = _normalize_trait_name(key)
-        if not trait_name:
-            continue
-        baseline = float(baselines.get(trait_name, _default_baseline_for_trait(trait_name)))
-        if trait_name not in traits:
-            traits[trait_name] = baseline
-            baselines[trait_name] = baseline
-        before = float(traits.get(trait_name, baseline))
-        step = _clamp(float(delta), -trait_limit, trait_limit)
-        after = _clamp01(before + step)
-        if abs(after - before) > 1e-9:
-            implicit_deltas[trait_name] = implicit_deltas.get(trait_name, 0.0) + float(after - before)
-            traits[trait_name] = after
+    transient_signals = _collect_transient_signals(sig)
+    if allow_transient_persona_drift:
+        implicit_raw = _implicit_trait_deltas(sig)
+        for key, delta in implicit_raw.items():
+            trait_name = _normalize_trait_name(key)
+            if not trait_name:
+                continue
+            baseline = float(baselines.get(trait_name, _default_baseline_for_trait(trait_name)))
+            if trait_name not in traits:
+                traits[trait_name] = baseline
+                baselines[trait_name] = baseline
+            before = float(traits.get(trait_name, baseline))
+            step = _clamp(float(delta), -trait_limit, trait_limit)
+            after = apply_trait_delta(
+                trait_name,
+                before,
+                step,
+                minimum=0.0,
+                maximum=1.0,
+                soften=True,
+            )
+            if abs(after - before) > 1e-9:
+                implicit_deltas[trait_name] = implicit_deltas.get(trait_name, 0.0) + float(after - before)
+                traits[trait_name] = after
 
     feedback_items = [str(x).strip().lower() for x in list(sig.get("user_feedback") or []) if str(x).strip()]
     feedback_deltas: dict[str, float] = {}
@@ -160,23 +178,34 @@ def update_persona(
                 baselines[key] = baseline
             before = float(traits.get(key, baseline))
             step = _clamp(float(delta), -feedback_limit, feedback_limit)
-            after = _clamp01(before + step)
+            after = apply_trait_delta(
+                key,
+                before,
+                step,
+                minimum=0.0,
+                maximum=1.0,
+                soften=True,
+            )
             if abs(after - before) > 1e-9:
                 feedback_deltas[key] = feedback_deltas.get(key, 0.0) + float(after - before)
                 traits[key] = after
 
+    next_style_bias: dict[str, float] = {}
     for key, baseline in baselines.items():
         if key not in traits:
             continue
-        style_bias[key] = float(_clamp01(traits.get(key, baseline)) - float(baseline))
+        diff = float(_clamp01(traits.get(key, baseline)) - float(baseline))
+        if abs(diff) <= 1e-9:
+            continue
+        next_style_bias[key] = diff
 
     learned["preferences_confirmed"] = confirmed[-64:]
     learned["preferences_pending"] = pending[-64:]
-    learned["style_bias"] = {k: float(v) for k, v in style_bias.items()}
+    learned["style_bias"] = {k: float(v) for k, v in next_style_bias.items()}
     learned["baseline_traits"] = {k: float(v) for k, v in baselines.items()}
 
     updated = dict(current)
-    updated["traits"] = {k: float(_clamp01(v)) for k, v in traits.items()}
+    updated["traits"] = {k: float(v) for k, v in clamp_trait_map(traits).items()}
     updated["locks"] = dict(locks)
     updated["bans"] = sorted(set(str(x).strip().lower() for x in bans if str(x).strip()))
     updated["learned"] = learned
@@ -189,6 +218,8 @@ def update_persona(
         "feedback_applied": feedback_items,
         "lock_changes": lock_changes,
         "ban_changes": ban_changes,
+        "transient_persona_learning_enabled": bool(allow_transient_persona_drift),
+        "transient_signals_ignored": {} if allow_transient_persona_drift else transient_signals,
         "max_delta_per_turn": float(trait_limit),
         "decay_to_baseline": float(decay_to_baseline),
         "baseline_size": len(baselines),
@@ -203,7 +234,7 @@ def _coerce_traits(value: Any) -> dict[str, float]:
         name = _normalize_trait_name(key)
         if not name:
             continue
-        out[name] = _clamp01(_to_float(raw, _default_baseline_for_trait(name)))
+        out[name] = clamp_trait_scalar(name, raw, minimum=0.0, maximum=1.0)
     return out
 
 
@@ -299,6 +330,29 @@ def _implicit_trait_deltas(signals: dict[str, Any]) -> dict[str, float]:
     return out
 
 
+def _collect_transient_signals(signals: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    intent = str(signals.get("intent") or "").strip().lower()
+    emotion = str(signals.get("emotion") or "").strip().lower()
+    mode = str(signals.get("mode") or "").strip().lower()
+    tags = sorted(
+        {
+            str(x).strip().lower()
+            for x in list(signals.get("tags") or [])
+            if str(x).strip()
+        }
+    )
+    if intent:
+        out["intent"] = intent
+    if emotion:
+        out["emotion"] = emotion
+    if mode:
+        out["mode"] = mode
+    if tags:
+        out["tags"] = tags[:16]
+    return out
+
+
 def _feedback_trait_deltas(item: str) -> dict[str, float]:
     mapping: dict[str, dict[str, float]] = {
         "less_compliments": {"warmth": -0.04, "humor": -0.03, "emoji_rate": -0.02},
@@ -341,7 +395,7 @@ def _coerce_baselines(*values: Any) -> dict[str, float]:
             name = _normalize_trait_name(key)
             if not name:
                 continue
-            out[name] = float(_clamp01(_to_float(raw, _default_baseline_for_trait(name))))
+            out[name] = float(clamp_trait_scalar(name, raw, minimum=0.0, maximum=1.0))
     return out
 
 

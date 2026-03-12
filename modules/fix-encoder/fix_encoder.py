@@ -6,25 +6,71 @@ from datetime import datetime
 from pathlib import Path
 import zipfile
 
-# Что считаем "текстовыми" файлами проекта
+
 TEXT_EXTS = {
-    ".py", ".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".env", ".bat", ".ps1", ".sh", ".sql", ".csv", ".ts", ".tsx", ".js", ".jsx",
-    ".html", ".css", ".xml"
+    ".py",
+    ".txt",
+    ".md",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".env",
+    ".bat",
+    ".ps1",
+    ".sh",
+    ".sql",
+    ".csv",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".html",
+    ".css",
+    ".xml",
 }
 
-# Какие папки пропускаем (можешь дополнять)
 SKIP_DIRS = {
-    ".git", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", ".idea", ".vscode", "node_modules", "dist", "build", "out",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".idea",
+    ".vscode",
+    "node_modules",
+    "dist",
+    "build",
+    "out",
 }
 
-# Сигнатуры "крякозябр" твоего типа: "С„Р°Р·Р°", "С‚РµРє..." и т.п.
-# (UTF-8 русский, открыли как CP1251 и сохранили в UTF-8)
 MOJI_MARKERS = (
-    "ф", "т", "я", "ь", "ш", "щ", "ч", "ю", "э",
-    "а", "о", "е", "и", "к", "л", "н", "п", "р", "с", "у",
+    "С„",
+    "С‚",
+    "СЏ",
+    "СЊ",
+    "С€",
+    "С‰",
+    "С‡",
+    "СЋ",
+    "СЌ",
+    "Р°",
+    "Рѕ",
+    "Рµ",
+    "Рё",
+    "Рє",
+    "Р»",
+    "РЅ",
+    "Рї",
+    "СЂ",
+    "СЃ",
+    "Сѓ",
 )
+
 
 @dataclass
 class PlannedChange:
@@ -57,17 +103,10 @@ def find_project_root(start: Path) -> Path:
             return p
         if (p / "requirements.txt").exists():
             return p
-    # fallback: modules/fix-encoder -> project root
     return start.resolve().parents[2]
 
 
 def try_read_text(path: Path) -> tuple[str, str] | None:
-    """
-    Читаем текст максимально безопасно:
-    - сначала utf-8-sig (срежет BOM)
-    - потом utf-8
-    - потом cp1251/cp866/latin1 (на всякий)
-    """
     for enc in ("utf-8-sig", "utf-8", "cp1251", "cp866", "latin1"):
         try:
             return path.read_text(encoding=enc), enc
@@ -79,19 +118,11 @@ def try_read_text(path: Path) -> tuple[str, str] | None:
 
 
 def is_mojibake_line(line: str) -> bool:
-    # Мягкий, но рабочий критерий: в строке есть 2+ маркера
-    hits = sum(line.count(m) for m in MOJI_MARKERS)
+    hits = sum(line.count(marker) for marker in MOJI_MARKERS)
     return hits >= 2
 
 
 def fix_mojibake_text(text: str) -> tuple[str, int]:
-    """
-    Исправляем ПОСТРОЧНО:
-    - Только строки, похожие на кракозябры
-    - Основной метод: encode cp1251 -> decode utf-8
-    - Если попадается мусорный символ (как \x98) — игнорируем его в ЭТОЙ строке
-    Возвращает (new_text, changed_lines_count)
-    """
     lines = text.splitlines(keepends=True)
     out: list[str] = []
     changed = 0
@@ -119,9 +150,16 @@ def fix_mojibake_text(text: str) -> tuple[str, int]:
 
 def write_zip(zip_path: Path, items: list[tuple[Path, bytes]]) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for rel, blob in items:
-            z.writestr(rel.as_posix(), blob)
+            archive.writestr(rel.as_posix(), blob)
+
+
+def write_manifest(path: Path, planned: list[PlannedChange]) -> None:
+    lines = [f"files={len(planned)}"]
+    lines.extend(f"{item.rel.as_posix()} | {item.reason}" for item in planned)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def plan_changes(project_root: Path) -> list[PlannedChange]:
@@ -140,75 +178,92 @@ def plan_changes(project_root: Path) -> list[PlannedChange]:
         if changed_lines <= 0:
             continue
 
-        # сохраняем как utf-8 (без BOM)
         new_bytes = new_text.encode("utf-8")
         orig_bytes = path.read_bytes()
         if new_bytes == orig_bytes:
             continue
 
         rel = path.resolve().relative_to(project_root.resolve())
-        planned.append(PlannedChange(
-            path=path,
-            rel=rel,
-            reason=f"mojibake_lines:{changed_lines} (read:{enc})",
-            original_bytes=orig_bytes,
-            new_bytes=new_bytes
-        ))
+        planned.append(
+            PlannedChange(
+                path=path,
+                rel=rel,
+                reason=f"mojibake_lines:{changed_lines} (read:{enc})",
+                original_bytes=orig_bytes,
+                new_bytes=new_bytes,
+            )
+        )
 
     return planned
 
 
 def apply_changes(planned: list[PlannedChange]) -> None:
-    for c in planned:
-        c.path.write_bytes(c.new_bytes)
+    for item in planned:
+        item.path.write_bytes(item.new_bytes)
+
+
+def _print_plan(planned: list[PlannedChange], limit: int = 200) -> None:
+    for i, change in enumerate(planned[:limit], 1):
+        print(f" {i:03d}. {change.rel} ({change.reason})")
+    if len(planned) > limit:
+        print(f" ... and {len(planned) - limit} more files")
+
+
+def _print_samples(planned: list[PlannedChange], limit: int = 15) -> None:
+    print("\n--- samples (first 15 files) ---")
+    for change in planned[:limit]:
+        try:
+            text = change.original_bytes.decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+        for line in text.splitlines():
+            if is_mojibake_line(line):
+                print(f"{change.rel}: {line[:160]}")
+                break
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Fix mojibake (cp1251-opened utf8) across project with backups zip.")
-    ap.add_argument("--root", default=None, help="Корень проекта (если не задан — авто)")
-    ap.add_argument("--dry-run", action="store_true", help="Только анализ + will_change.zip")
-    ap.add_argument("--show-samples", action="store_true", help="Показать 1 пример строки для первых 15 файлов")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Fix mojibake (UTF-8 text opened as CP1251). "
+            "Default mode applies fixes immediately and creates backups."
+        )
+    )
+    parser.add_argument("--root", default=None, help="Project root (auto-detected if omitted)")
+    parser.add_argument("--dry-run", action="store_true", help="Only scan and create will_change.zip")
+    parser.add_argument("--show-samples", action="store_true", help="Show sample mojibake lines")
+    args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
-    backups_dir = script_dir / "backups"
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     project_root = Path(args.root).resolve() if args.root else find_project_root(script_dir)
 
     planned = plan_changes(project_root)
     if not planned:
-        print(f"[OK] Изменений не требуется. Корень проекта: {project_root}")
+        print(f"[OK] No changes required. Project root: {project_root}")
         return 0
 
+    backups_dir = script_dir / "backups"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     batch_dir = backups_dir / ts
+
     will_zip = batch_dir / "will_change.zip"
     write_zip(will_zip, [(c.rel, c.original_bytes) for c in planned])
+    write_manifest(batch_dir / "manifest.txt", planned)
 
-    print(f"Корень проекта: {project_root}")
-    print(f"Файлов будет изменено: {len(planned)}")
-    print(f"[ZIP] Оригиналы (ТОЛЬКО изменяемые): {will_zip}")
+    apply_mode = not bool(args.dry_run)
 
-    for i, c in enumerate(planned[:200], 1):
-        print(f" {i:03d}. {c.rel} ({c.reason})")
-    if len(planned) > 200:
-        print(f" ... и ещё {len(planned) - 200} файлов")
+    print(f"Project root: {project_root}")
+    print(f"Files to change: {len(planned)}")
+    print(f"Mode: {'APPLY (default)' if apply_mode else 'DRY-RUN'}")
+    print(f"[ZIP] Backup before changes: {will_zip}")
+    print(f"[META] Plan manifest: {batch_dir / 'manifest.txt'}")
+    _print_plan(planned)
 
     if args.show_samples:
-        print("\n--- samples (первые 15) ---")
-        for c in planned[:15]:
-            try:
-                t = c.original_bytes.decode("utf-8", errors="ignore")
-                # покажем первую строку, где есть маркеры
-                for ln in t.splitlines():
-                    if is_mojibake_line(ln):
-                        print(f"{c.rel}: {ln[:160]}")
-                        break
-            except Exception:
-                pass
+        _print_samples(planned)
 
-    if args.dry_run:
-        print("[DRY] Ничего не изменено (только анализ + will_change.zip).")
+    if not apply_mode:
+        print("[DRY] No files changed.")
         return 0
 
     apply_changes(planned)
@@ -216,8 +271,8 @@ def main() -> int:
     after_zip = batch_dir / "after.zip"
     write_zip(after_zip, [(c.rel, c.new_bytes) for c in planned])
 
-    print("[OK] Изменения применены.")
-    print(f"[ZIP] Исправленные версии этих файлов: {after_zip}")
+    print("[OK] Changes applied.")
+    print(f"[ZIP] Snapshot after changes: {after_zip}")
     return 0
 
 

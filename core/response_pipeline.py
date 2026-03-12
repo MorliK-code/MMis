@@ -9,6 +9,7 @@ import datetime as dt
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import RLock
 from types import SimpleNamespace
 from typing import Any
 
@@ -25,6 +26,7 @@ from core.character_runtime import CharacterRuntime
 from core.character_runtime import PromptPack
 from core.mode_selector import ModeSelector, list_runtime_modes, normalize_mode_name
 from llm.provider_base import LLMProviderBase, LLMRequest, Message, ToolCall, ToolSpec
+from llm.task_router import run_task_model
 from llm.tokenizer import estimate_tokens
 from memory.memory_models import ContextBuildRequest, MemoryScope
 from metadata.metadata_extractor import MetadataExtractor
@@ -43,7 +45,9 @@ PROFILE_QUALITY = "QUALITY"
 PROFILE_ECONOM = "ECONOM"
 PROFILE_ASYA = "ASYA"
 PROFILE_AUTONOMOUS = "AUTONOMOUS"
+LOGGER = get_logger(__name__)
 WEB_TRACE_LOGGER = get_logger("web.trace")
+_WEB_TRACE_JSONL_LOCK = RLock()
 
 
 @dataclass
@@ -118,12 +122,22 @@ class PreprocessStage(PipelineStage):
         ctx.tags = {
             "lang": metadata.lang,
             "mood": metadata.emotion.label,
+            "emotion": metadata.emotion.label,
             "intent": metadata.intent.label,
             "topic": topic or "",
             "intent_conf": float(metadata.intent.conf),
             "emotion_intensity": float(metadata.emotion.intensity),
+            "emotion_arousal": float(metadata.emotion.arousal),
             "metadata_tags": list(metadata.tags),
         }
+        for key in ("now_iso", "timezone", "previous_user_at", "minutes_since_previous", "same_calendar_day"):
+            value = ctx.meta.get(key)
+            if value is None:
+                continue
+            text_value = str(value).strip()
+            if not text_value:
+                continue
+            ctx.tags[key] = text_value
         greeting_flags = _compute_greeting_flags(
             text=clean,
             state=ctx.state,
@@ -178,6 +192,10 @@ class PreprocessStage(PipelineStage):
         state_tags["is_technical"] = ctx.tags["is_technical"]
         state_tags["allowed_term"] = ctx.tags["allowed_term"]
         state_tags["use_term_now"] = ctx.tags["use_term_now"]
+        for key in ("now_iso", "timezone", "previous_user_at", "minutes_since_previous", "same_calendar_day"):
+            value = str(ctx.tags.get(key) or "").strip()
+            if value:
+                state_tags[key] = value
         if greeting_flags["conversation_state"]:
             state_tags["conversation_state"] = str(greeting_flags["conversation_state"])
         ctx.state["context_tags"] = state_tags
@@ -214,6 +232,23 @@ class PreprocessStage(PipelineStage):
             f"lang={ctx.tags.get('lang')} intent={ctx.tags.get('intent')} "
             f"mood={ctx.tags.get('mood')} allow_greeting={ctx.tags.get('allow_greeting')} "
             f"use_term_now={ctx.tags.get('use_term_now')} verbosity={ctx.tags.get('dialog_verbosity_level')}"
+        )
+        _emit_turn_summary(
+            ctx,
+            "intent_summary",
+            summary=(
+                f"intent={ctx.tags.get('intent') or '-'} lang={ctx.tags.get('lang') or '-'} "
+                f"mood={ctx.tags.get('mood') or '-'} topic={ctx.tags.get('topic') or '-'} "
+                f"intent_conf={float(_to_float(ctx.tags.get('intent_conf'), 0.0) or 0.0):.2f}"
+            ),
+            route=str(ctx.route or ""),
+            intent=str(ctx.tags.get("intent") or ""),
+            intent_confidence=float(_to_float(ctx.tags.get("intent_conf"), 0.0) or 0.0),
+            lang=str(ctx.tags.get("lang") or ""),
+            mood=str(ctx.tags.get("mood") or ""),
+            topic=str(ctx.tags.get("topic") or ""),
+            metadata_tags=list(_as_list(ctx.tags.get("metadata_tags"))),
+            is_technical=_to_bool(ctx.meta.get("is_technical"), default=False),
         )
         return ctx
 
@@ -335,6 +370,9 @@ class PersonalityStage(PipelineStage):
                 "lang": str(ctx.tags.get("lang") or ""),
                 "intent": str(ctx.tags.get("intent") or ""),
                 "mood": str(ctx.tags.get("mood") or ""),
+                "emotion": str(ctx.tags.get("emotion") or ctx.tags.get("mood") or ""),
+                "emotion_intensity": float(_to_float(ctx.tags.get("emotion_intensity"), 0.0)),
+                "emotion_arousal": float(_to_float(ctx.tags.get("emotion_arousal"), 0.0)),
                 "mode": str(ctx.state.get("mode") or "chat"),
                 "active_mode": str(ctx.state.get("active_mode") or "chatting"),
                 "turn_id": ctx.meta.get("turn_id"),
@@ -351,6 +389,8 @@ class PersonalityStage(PipelineStage):
         ctx.state["active_character_id"] = update.character_id
         ctx.state["active_personality_id"] = update.character_id
         ctx.state["character_state"] = dict(update.state)
+        ctx.state["user_addressing"] = dict(update.user_addressing or {})
+        ctx.meta["user_addressing"] = dict(update.user_addressing or {})
         try:
             compiled_persona = str(self._characters.build_personality_block(update.character_id) or "").strip()
         except Exception:
@@ -549,6 +589,26 @@ class MemoryRetrieveStage(PipelineStage):
             f"compress={len(truncation_log)} "
             f"tail={len(_as_list(ctx.state.get('history')))}"
         )
+        hit_summary = _memory_hit_summary(retrieved)
+        _emit_turn_summary(
+            ctx,
+            "memory_summary",
+            summary=(
+                f"hits={hit_summary['retrieved']} semantic={hit_summary['semantic']} "
+                f"episodic={hit_summary['episodic']} docs={hit_summary['docs']} "
+                f"web={hit_summary['web']} dropped={len(dropped)} truncated={len(truncation_log)}"
+            ),
+            route=str(ctx.route or ""),
+            selected_hits=int(hit_summary["retrieved"]),
+            semantic_hits=int(hit_summary["semantic"]),
+            episodic_hits=int(hit_summary["episodic"]),
+            document_hits=int(hit_summary["docs"]),
+            web_hits=int(hit_summary["web"]),
+            dropped_count=int(len(dropped)),
+            truncation_count=int(len(truncation_log)),
+            has_session_summary=bool(session_summary),
+            memory_block_keys=sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
+        )
         return ctx
 
 
@@ -565,6 +625,29 @@ class PromptBuildStage(PipelineStage):
         prompt_state = dict(ctx.state or {})
         merged_tags = _as_dict(prompt_state.get("context_tags"))
         merged_tags.update(dict(ctx.tags or {}))
+        intent_alignment = _as_dict(ctx.meta.get("intent_alignment"))
+        resolved_intent = str(
+            _pick_value(
+                intent_alignment.get("final_intent"),
+                intent_alignment.get("corrected_intent"),
+                ctx.meta.get("resolved_intent"),
+                ctx.tags.get("resolved_intent"),
+                ctx.tags.get("intent"),
+                "",
+            )
+        ).strip()
+        if resolved_intent:
+            merged_tags["resolved_intent"] = resolved_intent
+        if bool(intent_alignment.get("applied")):
+            merged_tags["original_intent"] = str(intent_alignment.get("original_intent") or "")
+            merged_tags["intent_alignment_reason"] = str(intent_alignment.get("reason") or "")
+        for key in ("continuation_ref", "context_confidence", "query_effective"):
+            value = ctx.meta.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                merged_tags[key] = text
         prompt_state["context_tags"] = merged_tags
         if ctx.plan:
             prompt_state["plan"] = ctx.plan
@@ -607,6 +690,11 @@ class PromptBuildStage(PipelineStage):
         if web_used and web_evidence_context:
             prompt_state["web_evidence_context"] = dict(web_evidence_context)
         retrieved_for_prompt = list(_as_list(ctx.retrieved_memories))
+        if bool(intent_alignment.get("applied")) and resolved_intent in {"fx_rate", "weather", "news_release"}:
+            _append_policy_rule(
+                ctx.policies,
+                f"This turn is a factual {resolved_intent} request aligned from web classification, not open-ended chat. Keep the answer direct and evidence-led.",
+            )
 
         if web_used and web_intent in {"fx_rate", "weather", "news_release"}:
             filtered, dropped = _filter_retrieved_memories_for_time_sensitive_web(retrieved_for_prompt)
@@ -628,6 +716,10 @@ class PromptBuildStage(PipelineStage):
             _append_policy_rule(
                 ctx.policies,
                 "When web evidence is used, include compact citations (domain + date/time) without turning the answer into a verbose report.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "Live web lookup already executed for this turn. Do not claim lack of internet/web access or say that you cannot check the data; use WEB_EVIDENCE as the factual source.",
             )
 
         if web_fresh_missing:
@@ -652,6 +744,26 @@ class PromptBuildStage(PipelineStage):
             tags_map = _as_dict(prompt_state.get("context_tags"))
             tags_map["web_response_style"] = web_response_style
             prompt_state["context_tags"] = tags_map
+        same_day = _to_bool(
+            _pick_value(ctx.meta.get("same_calendar_day"), ctx.tags.get("same_calendar_day"), False),
+            default=False,
+        )
+        minutes_since_previous = _to_float(
+            _pick_value(ctx.meta.get("minutes_since_previous"), ctx.tags.get("minutes_since_previous"), None),
+            None,
+        )
+        if same_day and minutes_since_previous is not None and float(minutes_since_previous) < 180.0:
+            _append_policy_rule(
+                ctx.policies,
+                "If the previous user turn was within the same calendar day and within 180 minutes, do not phrase it as 'yesterday'/'day before yesterday'; use exact or neutral timing.",
+            )
+        continuation_ref = str(ctx.meta.get("continuation_ref") or "").strip()
+        context_confidence = _to_float(ctx.meta.get("context_confidence"), 0.0) or 0.0
+        if continuation_ref and context_confidence >= 0.35:
+            _append_policy_rule(
+                ctx.policies,
+                "Treat short follow-up as continuation of active task unless the user explicitly switches topic.",
+            )
         ctx.prompt_pack = self.character_runtime.build(
             state=prompt_state,
             user_msg=ctx.clean_user_msg,
@@ -710,6 +822,26 @@ class PromptEngineStage(PipelineStage):
         ctx.prompt_messages = list(result.messages)
         ctx.prompt_sections = dict(result.sections)
         ctx.logs.append(f"stage=prompt_engine messages={len(ctx.prompt_messages)}")
+        section_names = [str(x).strip() for x in list(ctx.prompt_sections.keys()) if str(x).strip()]
+        token_usage = dict(getattr(ctx.prompt_pack, "token_usage", {}) or {})
+        web_context = _as_dict(_pick_value(ctx.meta.get("web_evidence_context"), ctx.state.get("web_evidence_context"), {}))
+        _emit_turn_summary(
+            ctx,
+            "prompt_summary",
+            summary=(
+                f"messages={len(ctx.prompt_messages)} sections={len(section_names)} "
+                f"memory_hits={len(_as_list(ctx.retrieved_memories))} "
+                f"web_sources={len(_as_list(web_context.get('sources')))}"
+            ),
+            route=str(ctx.route or ""),
+            message_count=int(len(ctx.prompt_messages)),
+            section_names=section_names,
+            prompt_tokens=int(_to_int(token_usage.get("prompt_tokens"), 0) or 0),
+            total_tokens=int(_to_int(token_usage.get("total_tokens"), 0) or 0),
+            memory_hits=int(len(_as_list(ctx.retrieved_memories))),
+            web_sources=int(len(_as_list(web_context.get("sources")))),
+            has_web_context=bool(web_context),
+        )
         return ctx
 
 
@@ -870,6 +1002,13 @@ class GenerateStage(PipelineStage):
                 )
             ctx.logs.append("stage=generate route=chat web_guardrail=local_reply")
             return ctx
+
+        if ctx.route == "chat":
+            clarifying = str(ctx.meta.get("web_clarifying_question") or "").strip()
+            if clarifying:
+                ctx.text = clarifying
+                ctx.logs.append("stage=generate route=chat web_guardrail=clarifying_question")
+                return ctx
 
         req = self._build_request(ctx)
         stream_answer_cb = ctx.meta.get("stream_on_answer_chunk")
@@ -1287,53 +1426,8 @@ class GenerateStage(PipelineStage):
             return True
 
         if cmd.startswith("/web-auto") or cmd.startswith("/web_auto") or cmd.startswith("/auto-web"):
-            raw_parts = [x for x in str(ctx.clean_user_msg or "").strip().split(" ") if x]
-            arg = str(raw_parts[1] or "").strip().lower() if len(raw_parts) >= 2 else ""
-            if arg and arg not in {"balanced", "aggressive", "status"}:
-                ctx.text = "Usage: /web-auto [balanced|aggressive|status]"
-                ctx.logs.append(f"stage=generate command=web-auto:usage arg={arg}")
-                return True
-
-            if arg == "status":
-                if scope == "chat":
-                    mode_value = str(ctx.state.get("web_mode") or "auto").strip().lower()
-                    profile_value = str(ctx.state.get("web_auto_profile") or "balanced").strip().lower()
-                else:
-                    mode_value = str(self._scope_get(ctx, scope, "web_mode", "auto") or "auto").strip().lower()
-                    profile_value = str(self._scope_get(ctx, scope, "web_auto_profile", "balanced") or "balanced").strip().lower()
-                if mode_value not in {"on", "off", "auto"}:
-                    mode_value = "auto"
-                if profile_value not in {"balanced", "aggressive"}:
-                    profile_value = "balanced"
-                ctx.text = (
-                    "Web auto status:\n"
-                    f"- scope: {scope}\n"
-                    f"- web_mode: {mode_value}\n"
-                    f"- web_auto_profile: {profile_value}"
-                )
-                ctx.logs.append(f"stage=generate command=web-auto:status scope={scope}")
-                return True
-
-            profile_set = arg if arg in {"balanced", "aggressive"} else ""
-            if scope == "chat":
-                ctx.memory_ops.append({"op": "state_web_mode", "value": "auto"})
-                if profile_set:
-                    ctx.memory_ops.append({"op": "state_web_auto_profile", "value": profile_set})
-            else:
-                updates: dict[str, Any] = {"web_mode": "auto"}
-                if profile_set:
-                    updates["web_auto_profile"] = profile_set
-                self._scope_set(ctx, scope, **updates)
-
-            if profile_set:
-                ctx.text = f"Web mode set to auto ({profile_set})" + (f" for scope: {scope}." if scope != "chat" else ".")
-            else:
-                ctx.text = "Web mode set to auto." if scope == "chat" else f"Web mode set to auto for scope: {scope}."
-            ctx.ui_actions.append({"type": "set_web_mode", "mode": "auto"})
-            ctx.logs.append(
-                "stage=generate command=web-auto mode=auto "
-                f"profile={profile_set or '-'} scope={scope}"
-            )
+            ctx.text = "Web auto profiles are removed. Use /web to enable web mode or /no-web to disable it."
+            ctx.logs.append(f"stage=generate command=web-auto:deprecated scope={scope}")
             return True
 
         if cmd in {"/output", "/output status"}:
@@ -1953,9 +2047,6 @@ class GenerateStage(PipelineStage):
         scoped_web_mode = str(self._scope_get(ctx, scope, "web_mode", "") or "").strip().lower()
         if scoped_web_mode in {"on", "off", "auto"}:
             ctx.meta["web_mode"] = scoped_web_mode
-        scoped_web_auto_profile = str(self._scope_get(ctx, scope, "web_auto_profile", "") or "").strip().lower()
-        if scoped_web_auto_profile in {"balanced", "aggressive"}:
-            ctx.meta["web_auto_profile"] = scoped_web_auto_profile
         scoped_output = self._scope_get(ctx, scope, "output_format", None)
         if isinstance(scoped_output, dict):
             ctx.state["output_format"] = _coerce_output_format_state(scoped_output)
@@ -2098,6 +2189,7 @@ class PostprocessStage(PipelineStage):
                 dialog_mode=dialog_mode,
                 metadata=ctx.meta,
                 address_terms_policy=address_terms_policy,
+                user_addressing=_resolve_user_addressing(ctx),
             )
             if hard_applied:
                 ctx.logs.append("stage=postprocess hard_constraints=" + ",".join(hard_applied))
@@ -2120,6 +2212,31 @@ class PostprocessStage(PipelineStage):
                 text = web_fixed
                 ctx.logs.append(f"stage=postprocess web_failsafe=applied intent={web_intent}")
 
+            web_sync_fixed, web_sync_changed = _apply_web_tool_sync_guard(
+                text,
+                meta=_as_dict(ctx.meta),
+                web_evidence_context=_as_dict(
+                    _pick_value(
+                        ctx.meta.get("web_evidence_context"),
+                        ctx.state.get("web_evidence_context"),
+                        {},
+                    )
+                ),
+                web_intent=web_intent,
+            )
+            if web_sync_changed:
+                text = web_sync_fixed
+                ctx.logs.append(f"stage=postprocess web_tool_sync=applied intent={web_intent}")
+
+            temporal_fixed, temporal_changed = _apply_temporal_consistency_guard(
+                text=text,
+                user_text=ctx.clean_user_msg,
+                meta=ctx.meta,
+            )
+            if temporal_changed:
+                text = temporal_fixed
+                ctx.logs.append("stage=postprocess temporal_grounding=applied")
+
             if _should_apply_echo_guard(ctx.clean_user_msg) and _looks_like_echo_response(answer=text, user_msg=ctx.clean_user_msg):
                 text = _echo_fallback_text(ctx.clean_user_msg)
                 ctx.logs.append("stage=postprocess echo_guard=applied")
@@ -2133,8 +2250,9 @@ class PostprocessStage(PipelineStage):
 
             # Citations are mandatory for web-backed answers, but remain compact and adaptive.
             web_used = _to_bool(_pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False), default=False)
+            skip_citations = _to_bool(ctx.meta.get("web_skip_citations"), default=False)
             compact_citations = [str(x) for x in _as_list(_as_dict(ctx.meta).get("web_citations")) if str(x).strip()]
-            if web_used and compact_citations:
+            if web_used and compact_citations and not skip_citations:
                 classification = _as_dict(_as_dict(ctx.meta).get("web_query_classification"))
                 text = format_postprocess_citation_suffix(
                     text=text,
@@ -2364,7 +2482,6 @@ class OutputFormatStage(PipelineStage):
             "emotion": emotion,
             "topics": topics,
             "tags": tags,
-            "web_trace_id": str(_pick(ctx.stats.get("web_trace_id"), ctx.meta.get("web_trace_id"), "")),
             "thinking_tokens": thinking_tokens,
             "answer_tokens": answer_tokens,
             "total_tokens": total_tokens,
@@ -2414,19 +2531,37 @@ class OutputFormatStage(PipelineStage):
 
     def _summary_mini_pass(self, ctx: PipelineContext, text: str) -> str:
         model = str(ctx.stats.get("served_model") or ctx.meta.get("model") or "").strip()
+        system_prompt = "Summarize assistant response in 1-2 concise sentences. Keep key action points. No bullet list."
+        user_prompt = f"Response:\n{text}\n\nShort summary:"
+        try:
+            result = run_task_model(
+                "summary_mini_pass",
+                user_prompt,
+                system_prompt=system_prompt,
+                metadata={
+                    "trace_id": str(ctx.meta.get("trace_id") or f"summary_{int(time.time() * 1000)}"),
+                    "summary_mini_pass": True,
+                },
+                max_output_chars=240,
+                max_retries=1,
+                context=_turn_log_context(ctx),
+            )
+            summary = _normalize_text(str(result.text or ""))
+            if summary and not _looks_like_json(summary):
+                ctx.logs.append("stage=output_format summary_mini_pass=task_model")
+                return _squeeze_summary(summary)
+        except Exception as exc:
+            ctx.logs.append(f"stage=output_format summary_mini_pass_task_model_error={type(exc).__name__}")
         request = LLMRequest(
             model=model,
             messages=[
                 Message(
                     role="system",
-                    content=(
-                        "Summarize assistant response in 1-2 concise sentences. "
-                        "Keep key action points. No bullet list."
-                    ),
+                    content=system_prompt,
                 ),
                 Message(
                     role="user",
-                    content=f"Response:\n{text}\n\nShort summary:",
+                    content=user_prompt,
                 ),
             ],
             temperature=0.2,
@@ -2441,6 +2576,7 @@ class OutputFormatStage(PipelineStage):
         except Exception as exc:
             ctx.logs.append(f"stage=output_format summary_mini_pass_error={type(exc).__name__}")
             return ""
+        ctx.logs.append("stage=output_format summary_mini_pass=legacy")
         summary = _normalize_text(str(response.text or ""))
         if not summary:
             return ""
@@ -2465,6 +2601,7 @@ class MemoryWriteStage(PipelineStage):
             ctx.logs.append("stage=memory_write skipped(command)")
             return ctx
 
+        context = _turn_log_context(ctx)
         if ctx.route in {"chat", "command"} and ctx.clean_user_msg:
             turn_tags = dict(ctx.tags)
             turn_tags["active_mode"] = normalize_mode_name(
@@ -2484,6 +2621,10 @@ class MemoryWriteStage(PipelineStage):
                     "text": ctx.clean_user_msg,
                     "tags": turn_tags,
                     "ts": now_local_ts(),
+                    "trace_id": context.get("trace_id"),
+                    "request_id": context.get("request_id"),
+                    "turn_id": context.get("turn_id"),
+                    "conversation_id": context.get("conversation_id"),
                 }
             )
         if ctx.route in {"chat", "command"} and ctx.text:
@@ -2506,6 +2647,10 @@ class MemoryWriteStage(PipelineStage):
                     "thinking": str(ctx.thinking or ""),
                     "tags": turn_tags,
                     "ts": now_local_ts(),
+                    "trace_id": context.get("trace_id"),
+                    "request_id": context.get("request_id"),
+                    "turn_id": context.get("turn_id"),
+                    "conversation_id": context.get("conversation_id"),
                 }
             )
         if ctx.prompt_pack is not None:
@@ -2523,9 +2668,33 @@ class MemoryWriteStage(PipelineStage):
                         "op": "conversation_summary",
                         "text": long_summary,
                         "ts": now_local_ts(),
+                        "trace_id": context.get("trace_id"),
+                        "request_id": context.get("request_id"),
+                        "turn_id": context.get("turn_id"),
+                        "conversation_id": context.get("conversation_id"),
                     }
                 )
         ctx.logs.append(f"stage=memory_write ops={len(ctx.memory_ops)}")
+        op_summary = _queued_memory_ops_summary(ctx.memory_ops)
+        _emit_turn_summary(
+            ctx,
+            "memory_write_summary",
+            summary=(
+                f"queued={op_summary['queued']} turn_user={op_summary['turn_user']} "
+                f"turn_assistant={op_summary['turn_assistant']} "
+                f"web_items={op_summary['web_memory_items']} "
+                f"summaries={op_summary['conversation_summary']}"
+            ),
+            route=str(ctx.route or ""),
+            queue_only=True,
+            queued_ops=int(op_summary["queued"]),
+            queued_turn_user=int(op_summary["turn_user"]),
+            queued_turn_assistant=int(op_summary["turn_assistant"]),
+            queued_web_memory_writes=int(op_summary["web_memory_write"]),
+            queued_web_memory_items=int(op_summary["web_memory_items"]),
+            queued_conversation_summaries=int(op_summary["conversation_summary"]),
+            queued_prompt_stats=int(op_summary["prompt_stats"]),
+        )
         return ctx
 
 
@@ -2642,17 +2811,25 @@ class ResponsePipeline:
             policies=_as_dict(policies),
             profile=self._resolve_profile(meta=meta, state=state, policies=policies),
         )
-        web_trace_id = _resolve_web_trace_id(ctx.meta, ctx.user_msg)
-        ctx.meta["web_trace_id"] = web_trace_id
+        _inject_temporal_grounding(ctx)
+        ctx.meta.setdefault("conversation_id", ctx.state.get("conversation_id"))
+        ctx.meta.setdefault("turn_id", ctx.state.get("turn_id"))
+        turn_token = int(_to_int(_pick_value(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), 0), 0) or 0)
+        if not str(ctx.meta.get("request_id") or "").strip():
+            ctx.meta["request_id"] = f"req_{int(time.time() * 1000)}_{turn_token}"
+        if not str(ctx.meta.get("trace_id") or "").strip():
+            ctx.meta["trace_id"] = f"trace_{int(time.time() * 1000)}_{int(_to_int(ctx.state.get('turn_id'), 0) or 0)}"
+        trace_id = str(_pick(ctx.meta.get("trace_id"), ctx.state.get("conversation_id"), "-")).strip() or "-"
+        request_id = str(_pick(ctx.meta.get("request_id"), ctx.meta.get("trace_id"), "")).strip()
         web_mode = _resolve_web_mode(ctx.meta, ctx.state)
-        web_auto_profile = _resolve_web_auto_profile(ctx.meta, ctx.state)
         ctx.meta.setdefault("web_mode", web_mode)
-        ctx.meta.setdefault("web_auto_profile", web_auto_profile)
         force_web = _is_forced_web_request(ctx.user_msg)
         input_preview = _text_preview(ctx.user_msg, 120)
 
         stage_profile = self._resolve_stage_profile(ctx.profile)
         ctx.meta["stage_profile"] = stage_profile
+        ctx.meta["_web_trace_events"] = []
+        ctx.meta["web_trace_started_at"] = _utc_now_iso()
         ctx.meta["emit_web_trace_event"] = lambda event, payload=None: self._emit_web_trace_event(
             ctx,
             event=event,
@@ -2664,8 +2841,7 @@ class ResponsePipeline:
         ctx.logs.append(f"stages={','.join(stage_names)}")
         ctx.logs.append(
             "stage=web_trace start "
-            f"trace={web_trace_id} route={ctx.route} web_mode={web_mode} "
-            f"web_auto_profile={web_auto_profile} "
+            f"trace={trace_id} request={request_id or '-'} route={ctx.route} web_mode={web_mode} "
             f"force={int(bool(force_web))} input_len={len(str(ctx.user_msg or '').strip())} "
             f"input_preview={input_preview}"
         )
@@ -2678,7 +2854,6 @@ class ResponsePipeline:
                 "input_preview": input_preview,
                 "active_profile": str(ctx.profile or ""),
                 "mode": str(web_mode or "auto"),
-                "auto_profile": str(web_auto_profile or "balanced"),
             },
         )
 
@@ -2707,10 +2882,17 @@ class ResponsePipeline:
         web_query = str(ctx.meta.get("web_query") or "").strip()
         web_fetched = int(_to_int(ctx.meta.get("web_fetched"), 0) or 0)
         web_result_count = int(_to_int(ctx.meta.get("web_result_count"), 0) or 0)
+        if bool(ctx.meta.get("web_guardrail_local_reply")):
+            _append_turn_warning(ctx, "web_guardrail_local_reply")
+        if _to_bool(_pick(ctx.meta.get("web_fresh_missing"), ctx.tags.get("web_fresh_missing"), False), default=False):
+            _append_turn_warning(ctx, "web_fresh_missing")
+        if str(ctx.meta.get("web_clarify_reason") or "").strip():
+            _append_turn_warning(ctx, f"web_clarify:{str(ctx.meta.get('web_clarify_reason') or '').strip()}")
+        if list(ctx.errors or []):
+            _append_turn_warning(ctx, f"pipeline_errors:{len(list(ctx.errors or []))}")
         ctx.logs.append(
             "stage=web_trace end "
-            f"trace={web_trace_id} route={ctx.route} web_mode={web_mode} web_used={web_used} "
-            f"web_auto_profile={web_auto_profile} "
+            f"trace={trace_id} request={request_id or '-'} route={ctx.route} web_mode={web_mode} web_used={web_used} "
             f"query_len={len(web_query)} results={web_result_count} fetched={web_fetched} "
             f"output_len={output_len} output_preview={output_preview}"
         )
@@ -2729,11 +2911,24 @@ class ResponsePipeline:
                 "errors": len(list(ctx.errors or [])),
             },
         )
-
-        ctx.stats["web_trace_id"] = str(web_trace_id)
-        meta_payload = _as_dict(ctx.structured_output.get("meta"))
-        meta_payload["web_trace_id"] = str(web_trace_id)
-        ctx.structured_output["meta"] = meta_payload
+        trace_file = self._flush_web_trace_file(ctx)
+        if trace_file:
+            ctx.logs.append(f"stage=web_trace file={trace_file}")
+        detail_trace_file = str(ctx.meta.get("web_trace_detail_file_path") or "").strip()
+        if detail_trace_file:
+            ctx.logs.append(f"stage=web_trace detail_file={detail_trace_file}")
+        compact_trace_file = str(ctx.meta.get("web_trace_compact_file_path") or "").strip()
+        if compact_trace_file:
+            ctx.logs.append(f"stage=web_trace compact_file={compact_trace_file}")
+        if isinstance(meta, dict):
+            meta["trace_id"] = str(ctx.meta.get("trace_id") or "")
+            meta["request_id"] = str(ctx.meta.get("request_id") or "")
+            meta["conversation_id"] = str(_pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), ""))
+            meta["turn_id"] = _pick_value(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), 0)
+            meta["turn_log_summaries"] = _as_dict(ctx.meta.get("turn_log_summaries"))
+            meta["turn_log_warnings"] = [str(x).strip() for x in list(_as_list(ctx.meta.get("turn_log_warnings"))) if str(x).strip()]
+            meta["web_trace_detail_file_path"] = detail_trace_file
+            meta["web_trace_compact_file_path"] = compact_trace_file
 
         return PipelineResult(
             text=str(ctx.text or ""),
@@ -2747,9 +2942,11 @@ class ResponsePipeline:
         )
 
     def _emit_web_trace_event(self, ctx: PipelineContext, *, event: str, payload: dict[str, Any] | None = None) -> None:
-        web_trace_id = str(ctx.meta.get("web_trace_id") or "").strip() or "-"
+        trace_id = str(_pick(ctx.meta.get("trace_id"), ctx.state.get("conversation_id"), "-")).strip() or "-"
         row = {
-            "trace_id": web_trace_id,
+            "event": str(event or "").strip(),
+            "trace_id": trace_id,
+            "request_id": str(_pick(ctx.meta.get("request_id"), ctx.meta.get("trace_id"), "")),
             "ts": _utc_now_iso(),
             "conversation_id": str(_pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "")),
             "turn_id": str(_pick(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), "")),
@@ -2757,15 +2954,343 @@ class ResponsePipeline:
             "profile": str(ctx.profile or ""),
             "stage_profile": str(ctx.meta.get("stage_profile") or ""),
             "web_mode": str(ctx.meta.get("web_mode") or ctx.state.get("web_mode") or "auto"),
-            "web_auto_profile": str(
-                ctx.meta.get("web_auto_profile") or ctx.state.get("web_auto_profile") or "balanced"
-            ),
             "web_query_intent": str(_pick(ctx.meta.get("web_query_intent"), ctx.tags.get("web_query_intent"), "generic")),
             "web_fresh_required": _to_bool(_pick(ctx.meta.get("web_fresh_required"), ctx.tags.get("web_fresh_required"), False), default=False),
             "web_fresh_missing": _to_bool(_pick(ctx.meta.get("web_fresh_missing"), ctx.tags.get("web_fresh_missing"), False), default=False),
             "payload": dict(payload or {}),
         }
-        log_json(WEB_TRACE_LOGGER, str(event or "").strip(), **row)
+        events = _as_list(ctx.meta.get("_web_trace_events"))
+        if isinstance(ctx.meta, dict):
+            events = list(events)
+            events.append(dict(row))
+            ctx.meta["_web_trace_events"] = events
+        log_json(
+            WEB_TRACE_LOGGER,
+            "web_trace_event",
+            context={"trace_id": trace_id, "request_id": str(row.get("request_id") or ""), "turn_id": str(row.get("turn_id") or ""), "conversation_id": str(row.get("conversation_id") or "")},
+            trace_id=trace_id,
+            trace_event=str(event or "").strip(),
+            route=str(ctx.route or ""),
+            web_mode=str(ctx.meta.get("web_mode") or ctx.state.get("web_mode") or "auto"),
+        )
+
+    def _flush_web_trace_file(self, ctx: PipelineContext) -> str:
+        events = [x for x in _as_list(ctx.meta.get("_web_trace_events")) if isinstance(x, dict)]
+        if not events:
+            return ""
+        cfg = load_config()
+        trace_id = str(_pick(ctx.meta.get("trace_id"), ctx.state.get("conversation_id"), "-")).strip() or "-"
+        safe_trace_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", trace_id).strip("._") or "trace"
+        day = dt.datetime.now(dt.timezone.utc).date().isoformat()
+        log_root = Path(str(cfg.log_dir or "")).expanduser().resolve()
+        root = log_root / "web_trace" / day
+        root.mkdir(parents=True, exist_ok=True)
+        jsonl_path = log_root / "web_trace.jsonl"
+        path = root / f"{safe_trace_id}.json"
+        compact_path = root / f"{safe_trace_id}.compact.json"
+
+        by_event: dict[str, dict[str, Any]] = {}
+        for row in events:
+            name = str(row.get("event") or "").strip()
+            if not name:
+                continue
+            by_event[name] = dict(row)
+
+        trace_context = self._web_trace_context(ctx)
+        query_plan = _as_dict(_as_dict(by_event.get("web_query_plan")).get("payload"))
+        search_results = _as_dict(_as_dict(by_event.get("web_search_results")).get("payload"))
+        policy_payload = _as_dict(_as_dict(by_event.get("web_policy_decision")).get("payload"))
+        start_payload = _as_dict(_as_dict(by_event.get("web_trace_start")).get("payload"))
+        end_payload = _as_dict(_as_dict(by_event.get("web_trace_end")).get("payload"))
+        evidence_quality = _as_dict(_as_dict(by_event.get("web_evidence_quality")).get("payload"))
+        if not evidence_quality:
+            evidence_quality = _as_dict(ctx.meta.get("web_evidence_quality"))
+        compact_events = [self._compact_web_trace_event(row, trace_context=trace_context) for row in events]
+        compact_summary = self._build_compact_web_trace_summary_doc(
+            ctx,
+            by_event=by_event,
+            trace_context=trace_context,
+        )
+
+        trace_doc = {
+            "trace_id": trace_id,
+            "created_at": str(ctx.meta.get("web_trace_started_at") or _utc_now_iso()),
+            "trace_context": dict(trace_context),
+            "compact_summary_path": str(compact_path),
+            "input": {
+                "raw_text": str(ctx.user_msg or ""),
+                "clean_text": str(ctx.clean_user_msg or ""),
+                "web_mode": str(ctx.meta.get("web_mode") or ctx.state.get("web_mode") or "auto"),
+                "start": dict(start_payload),
+            },
+            "context_link": {
+                "continuation_ref": str(ctx.meta.get("continuation_ref") or ""),
+                "context_confidence": float(_to_float(ctx.meta.get("context_confidence"), 0.0) or 0.0),
+                "active_task": _as_dict(_as_dict(ctx.state).get("web_active_task")),
+                "minutes_since_previous": str(ctx.meta.get("minutes_since_previous") or ""),
+                "same_calendar_day": _to_bool(ctx.meta.get("same_calendar_day"), default=False),
+            },
+            "policy_decision_breakdown": {
+                "mode": str(policy_payload.get("mode") or ""),
+                "should_search": bool(policy_payload.get("should_search")),
+                "web_need_score": float(_to_float(policy_payload.get("web_need_score"), 0.0) or 0.0),
+                "reason": str(policy_payload.get("reason") or ""),
+                "decision_breakdown": dict(policy_payload.get("decision_breakdown") or {}),
+                "category_penalty_overridden": bool(policy_payload.get("category_penalty_overridden")),
+            },
+            "queries": {
+                "query_effective": str(ctx.meta.get("web_query_effective") or ctx.meta.get("query_effective") or ""),
+                "query_plan": dict(query_plan),
+                "queries_used": list(search_results.get("queries_used") or []),
+                "scout_queries_used": list(search_results.get("scout_queries_used") or []),
+                "focused_queries_used": list(search_results.get("focused_queries_used") or []),
+            },
+            "ranked_sources": list(search_results.get("top_results") or []),
+            "consensus": dict(_as_dict(ctx.meta.get("web_consensus"))),
+            "evidence_quality": dict(evidence_quality),
+            "final_outcome": {
+                "web_used": bool(end_payload.get("web_used")),
+                "fresh_missing": bool(end_payload.get("fresh_missing")),
+                "guardrail_applied": bool(end_payload.get("guardrail_applied")),
+                "clarify_needed": bool(str(ctx.meta.get("web_clarifying_question") or "").strip()),
+                "clarifying_question": str(ctx.meta.get("web_clarifying_question") or ""),
+                "end": dict(end_payload),
+            },
+            "compact_summary": dict(compact_summary),
+            "raw_event_count": int(len(compact_events)),
+            "events": compact_events,
+        }
+        path.write_text(json.dumps(trace_doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        compact_path.write_text(
+            json.dumps(
+                {
+                    "trace_id": trace_id,
+                    "created_at": str(ctx.meta.get("web_trace_started_at") or _utc_now_iso()),
+                    "trace_context": dict(trace_context),
+                    "summary": dict(compact_summary),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        jsonl_row = self._build_web_trace_jsonl_row(
+            ctx,
+            trace_context=trace_context,
+            compact_summary=compact_summary,
+            compact_events=compact_events,
+            detail_path=path,
+            compact_path=compact_path,
+        )
+        self._append_jsonl_row(jsonl_path, jsonl_row)
+        ctx.meta["web_trace_file_path"] = str(jsonl_path)
+        ctx.meta["web_trace_detail_file_path"] = str(path)
+        ctx.meta["web_trace_compact_file_path"] = str(compact_path)
+        log_json(
+            WEB_TRACE_LOGGER,
+            "web_trace_summary",
+            context=trace_context,
+            trace_id=trace_id,
+            route=str(ctx.route or ""),
+            web_mode=str(ctx.meta.get("web_mode") or ctx.state.get("web_mode") or "auto"),
+            web_used=bool(end_payload.get("web_used")),
+            file=str(jsonl_path),
+            detail_file=str(path),
+            compact_file=str(compact_path),
+            raw_event_count=int(len(compact_events)),
+        )
+        return str(jsonl_path)
+
+    @staticmethod
+    def _append_jsonl_row(path: Path, row: dict[str, Any]) -> None:
+        payload = json.dumps(dict(row or {}), ensure_ascii=False)
+        with _WEB_TRACE_JSONL_LOCK:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(payload + "\n")
+
+    def _build_web_trace_jsonl_row(
+        self,
+        ctx: PipelineContext,
+        *,
+        trace_context: dict[str, Any],
+        compact_summary: dict[str, Any],
+        compact_events: list[dict[str, Any]],
+        detail_path: Path,
+        compact_path: Path,
+    ) -> dict[str, Any]:
+        summary = dict(compact_summary or {})
+        return {
+            "event": "web_trace_turn",
+            "trace_id": str(trace_context.get("trace_id") or ""),
+            "request_id": str(trace_context.get("request_id") or ""),
+            "conversation_id": str(trace_context.get("conversation_id") or ""),
+            "turn_id": str(trace_context.get("turn_id") or ""),
+            "route": str(trace_context.get("route") or ctx.route or ""),
+            "profile": str(trace_context.get("profile") or ""),
+            "stage_profile": str(trace_context.get("stage_profile") or ""),
+            "created_at": str(ctx.meta.get("web_trace_started_at") or _utc_now_iso()),
+            "query": str(summary.get("query") or ""),
+            "status": str(summary.get("status") or ""),
+            "web_used": bool(summary.get("web_used")),
+            "mode": str(summary.get("mode") or ""),
+            "summary": summary,
+            "timeline": self._compact_jsonl_timeline(compact_events),
+            "detail_file": str(detail_path),
+            "compact_file": str(compact_path),
+        }
+
+    @staticmethod
+    def _compact_jsonl_timeline(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for row in list(rows or []):
+            item = dict(row or {})
+            out.append(
+                {
+                    "ts": str(item.get("ts") or ""),
+                    "event": str(item.get("event") or ""),
+                    "summary": ResponsePipeline._timeline_summary(_as_dict(item.get("payload"))),
+                }
+            )
+        return out
+
+    @staticmethod
+    def _timeline_summary(payload: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for key in (
+            "mode",
+            "reason",
+            "query",
+            "effective_query",
+            "should_search",
+            "decision_score",
+            "result_count",
+            "fetched",
+            "web_used",
+            "error",
+        ):
+            value = payload.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                parts.append(f"{key}={str(value).lower()}")
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            if len(text) > 96:
+                text = text[:93].rstrip() + "..."
+            parts.append(f"{key}={text}")
+        return " ".join(parts)
+
+    def _web_trace_context(self, ctx: PipelineContext) -> dict[str, Any]:
+        return {
+            "trace_id": str(_pick(ctx.meta.get("trace_id"), ctx.state.get("conversation_id"), "-")).strip() or "-",
+            "request_id": str(_pick(ctx.meta.get("request_id"), ctx.meta.get("trace_id"), "")).strip(),
+            "conversation_id": str(_pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "")),
+            "turn_id": str(_pick(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), "")),
+            "route": str(ctx.route or ""),
+            "profile": str(ctx.profile or ""),
+            "stage_profile": str(ctx.meta.get("stage_profile") or ""),
+            "web_mode": str(ctx.meta.get("web_mode") or ctx.state.get("web_mode") or "auto"),
+            "web_query_intent": str(_pick(ctx.meta.get("web_query_intent"), ctx.tags.get("web_query_intent"), "generic")),
+            "web_fresh_required": _to_bool(_pick(ctx.meta.get("web_fresh_required"), ctx.tags.get("web_fresh_required"), False), default=False),
+            "web_fresh_missing": _to_bool(_pick(ctx.meta.get("web_fresh_missing"), ctx.tags.get("web_fresh_missing"), False), default=False),
+        }
+
+    @staticmethod
+    def _compact_web_trace_event(row: dict[str, Any], *, trace_context: dict[str, Any]) -> dict[str, Any]:
+        item = {
+            "ts": str(row.get("ts") or ""),
+            "event": str(row.get("event") or ""),
+            "payload": dict(row.get("payload") or {}),
+        }
+        for key in ("web_mode", "web_query_intent", "web_fresh_required", "web_fresh_missing"):
+            if row.get(key) != trace_context.get(key):
+                item[key] = row.get(key)
+        return item
+
+    def _build_compact_web_trace_summary_doc(
+        self,
+        ctx: PipelineContext,
+        *,
+        by_event: dict[str, dict[str, Any]],
+        trace_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        compact = _as_dict(ctx.meta.get("web_trace_compact_summary"))
+        if not compact:
+            compact = _as_dict(_as_dict(by_event.get("web_summary")).get("payload"))
+
+        policy_payload = _as_dict(_as_dict(by_event.get("web_policy_decision")).get("payload"))
+        query_plan = _as_dict(_as_dict(by_event.get("web_query_plan")).get("payload"))
+        search_results = _as_dict(_as_dict(by_event.get("web_search_results")).get("payload"))
+        budget_update = _as_dict(_as_dict(by_event.get("web_budget_update")).get("payload"))
+        evidence_pack = _as_dict(_as_dict(by_event.get("web_evidence_pack")).get("payload"))
+        end_payload = _as_dict(_as_dict(by_event.get("web_trace_end")).get("payload"))
+
+        out = dict(compact or {})
+        out.setdefault("status", "ok" if bool(end_payload.get("web_used")) else ("skipped" if not search_results else "ok"))
+        out.setdefault(
+            "policy",
+            {
+                "mode": str(policy_payload.get("mode") or trace_context.get("web_mode") or ""),
+                "reason": str(policy_payload.get("reason") or ""),
+                "should_search": bool(policy_payload.get("should_search")),
+                "decision_score": float(_to_float(policy_payload.get("web_need_score"), 0.0) or 0.0),
+            },
+        )
+        out.setdefault(
+            "queries",
+            {
+                "planned_total": int(len(list(_as_list(_as_dict(query_plan).get("scout_queries"))) + list(_as_list(_as_dict(query_plan).get("focused_queries"))) + list(_as_list(_as_dict(query_plan).get("fallback_queries"))))),
+                "used_total": int(len(list(search_results.get("queries_used") or []))),
+                "used": [str(x or "").strip() for x in list(search_results.get("queries_used") or []) if str(x or "").strip()][:8],
+                "roles": dict(_as_dict(query_plan.get("query_roles"))),
+                "runs": [dict(x or {}) for x in list(search_results.get("query_runs") or [])[:8] if isinstance(x, dict)],
+            },
+        )
+        out.setdefault(
+            "budget",
+            {
+                "limit": dict(_as_dict(budget_update.get("budget"))),
+                "used": dict(_as_dict(budget_update.get("used"))),
+                "cooldown_applied": bool(budget_update.get("cooldown_applied")),
+                "retries_used": int(_to_int(budget_update.get("retries_used"), 0) or 0),
+            },
+        )
+        out.setdefault(
+            "sources",
+            {
+                "scanned": int(_to_int(_as_dict(_as_dict(evidence_pack.get("selection_summary"))).get("sources_scanned"), 0) or 0),
+                "selected": int(_to_int(_as_dict(_as_dict(evidence_pack.get("selection_summary"))).get("selected_sources"), 0) or 0),
+                "filtered": int(_to_int(_as_dict(_as_dict(evidence_pack.get("selection_summary"))).get("filtered_sources"), 0) or 0),
+            },
+        )
+        out.setdefault(
+            "evidence",
+            {
+                "count": int(_to_int(evidence_pack.get("items"), 0) or 0),
+                "citations": int(_to_int(evidence_pack.get("citations"), 0) or 0),
+                "key_facts": int(_to_int(evidence_pack.get("key_facts"), 0) or 0),
+                "conflicting_sources": bool(evidence_pack.get("conflicting_sources")),
+            },
+        )
+        issues = [str(x).strip() for x in list(_as_list(out.get("issues"))) if str(x).strip()]
+        warnings = [str(x).strip() for x in list(_as_list(out.get("warnings"))) if str(x).strip()]
+        if bool(end_payload.get("fresh_missing")) and "fresh_data_missing" not in issues:
+            issues.append("fresh_data_missing")
+        if bool(end_payload.get("guardrail_applied")) and "guardrail_applied" not in warnings:
+            warnings.append("guardrail_applied")
+        out["issues"] = issues
+        out["warnings"] = warnings
+        out["outcome"] = {
+            "web_used": bool(end_payload.get("web_used")),
+            "results": int(_to_int(end_payload.get("results"), 0) or 0),
+            "fetched": int(_to_int(end_payload.get("fetched"), 0) or 0),
+            "fresh_missing": bool(end_payload.get("fresh_missing")),
+            "guardrail_applied": bool(end_payload.get("guardrail_applied")),
+        }
+        return out
 
     def is_studio_active(self, *, conversation_id: str = "", state: dict[str, Any] | None = None) -> bool:
         state_map = _as_dict(state)
@@ -2922,7 +3447,9 @@ def _apply_memory_context_to_prompt_pack(
 
     merged = dict(pack.blocks or {})
     merged["retrieved_memories"] = _render_memory_context_for_prompt(blocks)
-    merged["conversation_tail"] = ""
+    conversation_tail_hint = str(blocks.get("conversation_tail") or "").strip()
+    if conversation_tail_hint:
+        merged["conversation_tail"] = conversation_tail_hint
 
     summary = str(blocks.get("session_summary") or "").strip()
     if summary:
@@ -2993,7 +3520,15 @@ def _apply_web_evidence_to_prompt_pack(
 def _render_web_evidence_for_prompt(context: dict[str, Any]) -> str:
     direct = str(context.get("prompt_block") or "").strip()
     if direct:
-        return direct
+        if "[WEB_TOOL_STATUS]" in direct:
+            return direct
+        status_block = (
+            "[WEB_TOOL_STATUS]\n"
+            "- live_web_lookup: already_executed_for_this_turn\n"
+            "- response_rule: do not say that you cannot browse/check the internet or access live data for this turn.\n"
+            "- response_rule: answer from the WEB_EVIDENCE facts below."
+        )
+        return _join_non_empty([status_block, direct])
 
     summary = str(context.get("summary") or "").strip()
     freshness = str(context.get("freshness_summary") or "").strip()
@@ -3033,7 +3568,13 @@ def _render_web_evidence_for_prompt(context: dict[str, Any]) -> str:
 
     if not lines:
         return ""
-    return "[WEB_EVIDENCE]\n" + "\n".join(lines).strip()
+    status_block = (
+        "[WEB_TOOL_STATUS]\n"
+        "- live_web_lookup: already_executed_for_this_turn\n"
+        "- response_rule: do not say that you cannot browse/check the internet or access live data for this turn.\n"
+        "- response_rule: answer from the WEB_EVIDENCE facts below."
+    )
+    return _join_non_empty([status_block, "[WEB_EVIDENCE]\n" + "\n".join(lines).strip()])
 
 
 def _render_memory_context_for_prompt(blocks: dict[str, Any]) -> str:
@@ -3146,10 +3687,110 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "is_technical",
         "active_mode",
         "mode_lock",
+        "now_iso",
+        "timezone",
+        "previous_user_at",
+        "minutes_since_previous",
+        "same_calendar_day",
+        "continuation_ref",
+        "context_confidence",
     ):
         if key in meta:
             out[key] = meta.get(key)
     return out
+
+
+def _inject_temporal_grounding(ctx: PipelineContext) -> None:
+    meta = _as_dict(ctx.meta)
+    state = _as_dict(ctx.state)
+    cooldowns = _as_dict(state.get("cooldowns"))
+    context_tags = _as_dict(state.get("context_tags"))
+
+    timezone_name = str(
+        _pick(
+            meta.get("timezone"),
+            context_tags.get("timezone"),
+            meta.get("user_timezone"),
+            "Europe/Kiev",
+        )
+    ).strip() or "Europe/Kiev"
+    tzinfo = _zoneinfo_or_utc(timezone_name)
+    now_dt = dt.datetime.now(tzinfo)
+
+    previous_user_at = str(cooldowns.get("prev_user_ts") or cooldowns.get("last_user_ts") or "").strip()
+    minutes_since_previous: int | None = None
+    same_calendar_day = False
+    if previous_user_at:
+        prev_ts = parse_time_to_epoch(previous_user_at, 0.0)
+        if float(prev_ts) > 0:
+            prev_dt = dt.datetime.fromtimestamp(float(prev_ts), tz=tzinfo)
+            delta_minutes = max(0.0, (now_dt - prev_dt).total_seconds() / 60.0)
+            minutes_since_previous = int(round(delta_minutes))
+            same_calendar_day = bool(prev_dt.date() == now_dt.date())
+
+    meta["now_iso"] = now_dt.isoformat()
+    meta["timezone"] = timezone_name
+    meta["previous_user_at"] = previous_user_at
+    meta["minutes_since_previous"] = (
+        "" if minutes_since_previous is None else str(max(0, int(minutes_since_previous)))
+    )
+    meta["same_calendar_day"] = "true" if same_calendar_day else "false"
+    ctx.meta = meta
+
+
+def _apply_temporal_consistency_guard(*, text: str, user_text: str, meta: dict[str, Any]) -> tuple[str, bool]:
+    source = str(text or "").strip()
+    if not source:
+        return ("", False)
+
+    same_day = _to_bool(meta.get("same_calendar_day"), default=False)
+    minutes = _to_int(meta.get("minutes_since_previous"), None)
+    if not same_day or minutes is None or int(minutes) >= 180:
+        return (source, False)
+
+    user_low = str(user_text or "").strip().lower()
+    if any(token in user_low for token in ("вчера", "позавчера", "yesterday", "day before yesterday")):
+        return (source, False)
+
+    out = source
+    replacement_ru = _relative_time_ru(int(minutes))
+    replacement_en = _relative_time_en(int(minutes))
+
+    out = re.sub(r"(?i)\bпозавчера\b", replacement_ru, out)
+    out = re.sub(r"(?i)\bвчера\b", replacement_ru, out)
+    out = re.sub(r"(?i)\bday before yesterday\b", replacement_en, out)
+    out = re.sub(r"(?i)\byesterday\b", replacement_en, out)
+
+    changed = out != source
+    return (out, changed)
+
+
+def _relative_time_ru(minutes: int) -> str:
+    mins = max(1, int(minutes))
+    if mins < 60:
+        return f"{mins} минут назад"
+    hours = max(1, int(round(float(mins) / 60.0)))
+    return f"{hours} часов назад"
+
+
+def _relative_time_en(minutes: int) -> str:
+    mins = max(1, int(minutes))
+    if mins < 60:
+        return f"{mins} minutes ago"
+    hours = max(1, int(round(float(mins) / 60.0)))
+    return f"{hours} hours ago"
+
+
+def _zoneinfo_or_utc(name: str) -> dt.tzinfo:
+    token = str(name or "").strip()
+    if not token:
+        return dt.timezone.utc
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(token)
+    except Exception:
+        return dt.timezone.utc
 
 
 def _tool_call_to_dict(row: ToolCall) -> dict[str, Any]:
@@ -3282,6 +3923,38 @@ _WEB_STYLE_REPLACEMENTS = (
     re.compile(r"^\s*ах,\s*ты\b[^.!?\n]*[.!?]\s*", flags=re.IGNORECASE),
     re.compile(r"^\s*(?:ах|ой|ну)\b[^.!?\n]{0,180}[.!?]\s*", flags=re.IGNORECASE),
 )
+_WEB_FALSE_LIMITATION_RE = (
+    re.compile(
+        r"(?:^|[\s\n])(?:я|мы)\s+(?:не\s+могу|не\s+можем|не\s+умею|не\s+имею\s+доступа|не\s+могу\s+сейчас)\b"
+        r"[^.!?\n]{0,180}\b(?:проверить|посмотреть|найти|искать|погоду|курс|новости|данные|интернет|веб|сайт)\b[^.!?\n]*[.!?]?\s*",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|[\s\n])(?:у\s+меня\s+нет|нет)\s+доступа\s+к\s+(?:интернету|вебу|сети)\b[^.!?\n]*[.!?]?\s*",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|[\s\n])i\s+(?:can't|cannot|do\s+not\s+have\s+access)\b[^.!?\n]{0,180}\b(?:browse|check|look\s+up|access|internet|web|live\s+data|weather|rates|news)\b[^.!?\n]*[.!?]?\s*",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|[\s\n])(?:но|but)?\s*без\s+прямого\s+доступа\s+к\s+внешним\s+ресурсам\b[^.!?\n]{0,260}"
+        r"(?:не\s+могу|не\s+можем)\s+(?:предоставить|дать|сообщить|подтвердить)\b[^.!?\n]{0,120}"
+        r"(?:актуальн\w*\s+данн\w*|данн\w*|курс|погод\w*|новост\w*)[^.!?\n]*[.!?]?\s*",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:^|[\s\n])(?:я|мы)\s+понима\w+[^.!?\n]{0,180}(?:но|but)\b[^.!?\n]{0,220}"
+        r"(?:не\s+могу|не\s+можем)\s+(?:предоставить|дать|сообщить|подтвердить)\b[^.!?\n]{0,120}"
+        r"(?:актуальн\w*\s+данн\w*|данн\w*|курс|погод\w*|новост\w*)[^.!?\n]*[.!?]?\s*",
+        flags=re.IGNORECASE,
+    ),
+)
+_WEB_EMPTYISH_RE = re.compile(r"^(?:[^\w\u0400-\u04FF]*|(?:but|но|однако|however)\b[^\w\u0400-\u04FF]*)*$", flags=re.IGNORECASE)
+_WEB_FALSE_LIMITATION_RESIDUAL_RE = (
+    re.compile(r"(?:^|[\s\n])(?:но|but)?\s*без\s+прямого\s+доступа\s+к\s+внешним\s+ресурсам\b[.!?]?\s*", flags=re.IGNORECASE),
+    re.compile(r"(?:^|[\s\n])(?:но|but)?\s*(?:without|no)\s+direct\s+access\s+to\s+external\s+resources\b[.!?]?\s*", flags=re.IGNORECASE),
+)
 
 
 def _enforce_response_hygiene(text: str) -> str:
@@ -3348,6 +4021,101 @@ def _apply_time_sensitive_web_failsafe(
             break
     cleaned = _normalize_text(cleaned)
     return cleaned or src
+
+
+def _apply_web_tool_sync_guard(
+    text: str,
+    *,
+    meta: dict[str, Any] | None = None,
+    web_evidence_context: dict[str, Any] | None = None,
+    web_intent: str = "",
+) -> tuple[str, bool]:
+    src = _normalize_text(text)
+    meta_map = _as_dict(meta)
+    context = _as_dict(web_evidence_context)
+    web_used = _to_bool(_pick_value(meta_map.get("web_used"), False), default=False)
+    if not src or not web_used or not context:
+        return src, False
+
+    cleaned = src
+    changed = False
+    for rx in _WEB_FALSE_LIMITATION_RE:
+        nxt = rx.sub(" ", cleaned)
+        if nxt != cleaned:
+            cleaned = nxt
+            changed = True
+    for rx in _WEB_FALSE_LIMITATION_RESIDUAL_RE:
+        nxt = rx.sub(" ", cleaned)
+        if nxt != cleaned:
+            cleaned = nxt
+            changed = True
+    cleaned = _normalize_text(cleaned)
+    if not changed and _looks_like_false_web_limitation(src):
+        fallback = _build_web_tool_sync_fallback(context=context, web_intent=web_intent)
+        if fallback:
+            return fallback, True
+        return src, False
+    if not changed:
+        return src, False
+
+    if not cleaned or _WEB_EMPTYISH_RE.match(cleaned or ""):
+        fallback = _build_web_tool_sync_fallback(context=context, web_intent=web_intent)
+        if fallback:
+            return fallback, True
+        return src, False
+    return cleaned, True
+
+
+def _build_web_tool_sync_fallback(*, context: dict[str, Any], web_intent: str = "") -> str:
+    summary = str(context.get("summary") or "").strip()
+    if summary:
+        return summary
+
+    key_facts = [str(x).strip() for x in _as_list(context.get("key_facts")) if str(x).strip()]
+    if key_facts:
+        if str(web_intent or "").strip().lower() == "weather" and len(key_facts) >= 2:
+            return "; ".join(key_facts[:2])
+        return key_facts[0]
+
+    citations = [str(x).strip() for x in _as_list(context.get("compact_citations")) if str(x).strip()]
+    if citations:
+        return f"По веб-источникам есть подтверждение: {citations[0]}"
+    return ""
+
+
+def _looks_like_false_web_limitation(text: str) -> bool:
+    low = _normalize_text(text).lower()
+    if not low:
+        return False
+    deny_markers = (
+        "не могу проверить",
+        "не могу предоставить",
+        "не могу дать",
+        "не могу сообщить",
+        "не могу подтвердить",
+        "не имею доступа",
+        "нет доступа к интернету",
+        "без прямого доступа к внешним ресурсам",
+        "can't browse",
+        "cannot browse",
+        "cannot check",
+        "don't have access",
+    )
+    web_markers = (
+        "интернет",
+        "веб",
+        "внешним ресурсам",
+        "актуальн",
+        "данн",
+        "курс",
+        "погод",
+        "новост",
+        "weather",
+        "rate",
+        "rates",
+        "news",
+    )
+    return any(marker in low for marker in deny_markers) and any(marker in low for marker in web_markers)
 
 
 def _strip_service_markers(text: str) -> str:
@@ -3620,6 +4388,18 @@ def _resolve_address_terms_policy(ctx: PipelineContext) -> dict[str, Any]:
         default=False,
     )
     return policy
+
+
+def _resolve_user_addressing(ctx: PipelineContext) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for src in (
+        _as_dict(ctx.meta.get("user_addressing")),
+        _as_dict(ctx.state.get("user_addressing")),
+        _as_dict(_as_dict(ctx.state.get("character_state")).get("user_addressing")),
+    ):
+        if src:
+            out.update(src)
+    return out
 
 
 def _apply_address_term_updates(
@@ -4429,27 +5209,6 @@ def _resolve_web_mode(meta: dict[str, Any], state: dict[str, Any]) -> str:
     return "auto"
 
 
-def _resolve_web_auto_profile(meta: dict[str, Any], state: dict[str, Any]) -> str:
-    raw = str(
-        _pick(
-            _as_dict(meta).get("web_auto_profile"),
-            _as_dict(state).get("web_auto_profile"),
-            "balanced",
-        )
-        or "balanced"
-    ).strip().lower()
-    return raw if raw in {"balanced", "aggressive"} else "balanced"
-
-
-def _resolve_web_trace_id(meta: dict[str, Any], user_msg: str) -> str:
-    source = _pick(_as_dict(meta).get("web_trace_id"), _as_dict(meta).get("trace_id"))
-    if source:
-        return source
-    ts = int(time.time() * 1000)
-    msg_len = len(str(user_msg or "").strip())
-    return f"web-{ts}-{msg_len}"
-
-
 def _utc_now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
@@ -4498,6 +5257,95 @@ def _text_preview(value: str, max_chars: int = 120) -> str:
     return src[: n - 3].rstrip() + "..."
 
 
+def _turn_log_context(ctx: PipelineContext) -> dict[str, Any]:
+    return {
+        "trace_id": str(_pick(ctx.meta.get("trace_id"), ctx.state.get("conversation_id"), "-")).strip() or "-",
+        "request_id": str(_pick(ctx.meta.get("request_id"), ctx.meta.get("trace_id"), "")).strip(),
+        "turn_id": str(_pick(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), "")).strip(),
+        "conversation_id": str(_pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "")).strip(),
+    }
+
+
+def _remember_turn_summary(ctx: PipelineContext, event: str, payload: dict[str, Any]) -> None:
+    if not isinstance(ctx.meta, dict):
+        return
+    summaries = _as_dict(ctx.meta.get("turn_log_summaries"))
+    summaries[str(event or "").strip()] = dict(payload or {})
+    ctx.meta["turn_log_summaries"] = summaries
+
+
+def _append_turn_warning(ctx: PipelineContext, warning: str) -> None:
+    text = str(warning or "").strip()
+    if not text or not isinstance(ctx.meta, dict):
+        return
+    warnings = [str(x).strip() for x in list(_as_list(ctx.meta.get("turn_log_warnings"))) if str(x).strip()]
+    if text not in warnings:
+        warnings.append(text)
+    ctx.meta["turn_log_warnings"] = warnings
+
+
+def _emit_turn_summary(ctx: PipelineContext, event: str, *, summary: str, **payload) -> None:
+    context = _turn_log_context(ctx)
+    compact = str(summary or "").strip()
+    ctx.logs.append(
+        "summary="
+        f"{str(event or '').strip()} "
+        f"trace={context.get('trace_id') or '-'} "
+        f"request={context.get('request_id') or '-'} "
+        f"turn={context.get('turn_id') or '-'} "
+        f"conversation={context.get('conversation_id') or '-'} "
+        f"{compact}"
+    )
+    row = dict(payload or {})
+    _remember_turn_summary(ctx, str(event or "").strip(), row)
+    log_json(LOGGER, str(event or "").strip(), summary=compact, context=context, **row)
+
+
+def _memory_hit_summary(rows: list[Any]) -> dict[str, int]:
+    selected = [_as_dict(x) for x in list(rows or [])]
+    semantic = 0
+    episodic = 0
+    docs = 0
+    web = 0
+    for row in selected:
+        level = str(row.get("level") or "").strip().lower()
+        memory_type = str(row.get("memory_type") or "").strip().lower()
+        if level == "l3_semantic" or memory_type == "fact":
+            semantic += 1
+        if level == "l2_episodic":
+            episodic += 1
+        if level == "l4_document" or memory_type in {"document", "document_chunk"}:
+            docs += 1
+        if _is_web_memory_item(row):
+            web += 1
+    return {
+        "retrieved": int(len(selected)),
+        "semantic": int(semantic),
+        "episodic": int(episodic),
+        "docs": int(docs),
+        "web": int(web),
+    }
+
+
+def _queued_memory_ops_summary(ops: list[dict[str, Any]]) -> dict[str, int]:
+    rows = [dict(x) for x in list(ops or []) if isinstance(x, dict)]
+    counts: dict[str, int] = {
+        "queued": int(len(rows)),
+        "turn_user": 0,
+        "turn_assistant": 0,
+        "web_memory_write": 0,
+        "web_memory_items": 0,
+        "conversation_summary": 0,
+        "prompt_stats": 0,
+    }
+    for row in rows:
+        key = str(row.get("op") or "").strip().lower()
+        if key in counts:
+            counts[key] += 1
+        if key == "web_memory_write":
+            counts["web_memory_items"] += len([x for x in list(row.get("items") or []) if isinstance(x, dict)])
+    return counts
+
+
 def run_response_pipeline(text: str) -> str:
     return str(text or "").strip()
-

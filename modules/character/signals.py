@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.mode_selector import normalize_mode_name
-from metadata.taxonomy import normalize_lang
+from metadata.taxonomy import normalize_emotion, normalize_lang
 from modules.character.feedback_detector import detect_feedback
 
 
@@ -13,6 +13,8 @@ class CharacterSignals:
     lang: str = "unknown"
     intent: str = "chat"
     emotion: str = "neutral"
+    emotion_intensity: float = 0.0
+    emotion_arousal: float = 0.0
     mode: str = "chatting"
     topics: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
@@ -23,6 +25,8 @@ class CharacterSignals:
             "lang": str(self.lang or "unknown"),
             "intent": str(self.intent or "chat"),
             "emotion": str(self.emotion or "neutral"),
+            "emotion_intensity": float(_clamp01(self.emotion_intensity)),
+            "emotion_arousal": float(_clamp01(self.emotion_arousal)),
             "mode": str(self.mode or "chatting"),
             "topics": [str(x) for x in list(self.topics or []) if str(x).strip()],
             "tags": [str(x) for x in list(self.tags or []) if str(x).strip()],
@@ -40,7 +44,9 @@ def build_character_signals(*, text: str, metadata: dict[str, Any] | None = None
     return CharacterSignals(
         lang=lang,
         intent=str(meta.get("intent") or "chat").strip().lower() or "chat",
-        emotion=str(meta.get("mood") or meta.get("emotion") or "neutral").strip().lower() or "neutral",
+        emotion=normalize_emotion(str(meta.get("emotion") or meta.get("mood") or "neutral").strip().lower() or "neutral"),
+        emotion_intensity=_coerce_unit_float(meta.get("emotion_intensity"), default=0.0),
+        emotion_arousal=_coerce_unit_float(meta.get("emotion_arousal"), default=0.0),
         mode=_resolve_mode(meta=meta),
         topics=topics,
         tags=tags,
@@ -125,3 +131,14 @@ def _canonicalize_lang_tag(*, tags: list[str], lang: str) -> list[str]:
 def _resolve_mode(*, meta: dict[str, Any]) -> str:
     source = str(meta.get("mode") or meta.get("active_mode") or "chatting").strip().lower()
     return normalize_mode_name(source, allow_custom=True)
+
+
+def _coerce_unit_float(value: Any, *, default: float) -> float:
+    try:
+        return _clamp01(float(value))
+    except Exception:
+        return float(default)
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))

@@ -292,6 +292,7 @@ class AppSettings:
     llm_max_tokens_lower_bound: int = 2048
     llm_max_tokens_upper_bound: int = 8192
     llm_profiles: dict[str, Any] = field(default_factory=dict)
+    task_model_profiles: dict[str, Any] = field(default_factory=dict)
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_timeout_sec: float = 120.0
     ollama_retries: int = 1
@@ -612,6 +613,127 @@ def _default_model_profiles_tree() -> dict[str, Any]:
     }
 
 
+def _default_task_model_profiles_tree(
+    *,
+    provider: str = "ollama",
+    model: str = "qcwind/qwen3-8b-instruct-Q4-K-M",
+) -> dict[str, Any]:
+    provider_name = _norm_lower(provider) or "ollama"
+    model_name = _norm_str(model) or "qcwind/qwen3-8b-instruct-Q4-K-M"
+    return {
+        "emotion": {
+            "name": "emotion",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.15,
+            "max_tokens": 128,
+            "timeout": 20.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "tagging": {
+            "name": "tagging",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.10,
+            "max_tokens": 128,
+            "timeout": 20.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "intent_judge": {
+            "name": "intent_judge",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.10,
+            "max_tokens": 160,
+            "timeout": 20.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "query_rewrite": {
+            "name": "query_rewrite",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.20,
+            "max_tokens": 192,
+            "timeout": 25.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "source_relevance": {
+            "name": "source_relevance",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.10,
+            "max_tokens": 160,
+            "timeout": 20.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "summary_mini_pass": {
+            "name": "summary_mini_pass",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.20,
+            "max_tokens": 96,
+            "timeout": 20.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "studio_seed_extract": {
+            "name": "studio_seed_extract",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.35,
+            "max_tokens": 540,
+            "timeout": 45.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "studio_options": {
+            "name": "studio_options",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.55,
+            "max_tokens": 220,
+            "timeout": 25.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "studio_pack_blueprint": {
+            "name": "studio_pack_blueprint",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.55,
+            "max_tokens": 4096,
+            "timeout": 90.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "fact_filter": {
+            "name": "fact_filter",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.10,
+            "max_tokens": 192,
+            "timeout": 20.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+        "final_response": {
+            "name": "final_response",
+            "provider": provider_name,
+            "model": model_name,
+            "temperature": 0.70,
+            "max_tokens": 1024,
+            "timeout": 120.0,
+            "enabled": True,
+            "fallback_profile": "",
+        },
+    }
+
+
 def _default_config_tree() -> dict[str, Any]:
     memory_dir = _resolve_memory_dir_default().expanduser().resolve()
     cache_dir = _resolve_cache_dir_default(memory_dir).resolve()
@@ -639,6 +761,7 @@ def _default_config_tree() -> dict[str, Any]:
             "thinking_enabled": True,
             "json_mode_enabled": False,
             "profiles": _default_model_profiles_tree(),
+            "task_models": _default_task_model_profiles_tree(),
             "max_tokens": {
                 "lower_bound": 2048,
                 "upper_bound": 8192,
@@ -704,6 +827,17 @@ def _default_config_tree() -> dict[str, Any]:
                     "deep_search": 2,
                     "backoff_ms": 250,
                 },
+                "continuation": {
+                    "ttl_minutes": 20,
+                    "max_user_turns": 6,
+                    "short_followup_max_tokens": 9,
+                },
+                "evidence_quality": {
+                    "min_score": 0.46,
+                    "min_usable_results": 2,
+                    "min_unique_domains": 2,
+                    "min_trusted_count": 1,
+                },
                 "force_search_keywords": [
                     "сейчас",
                     "актуально",
@@ -732,6 +866,59 @@ def _default_config_tree() -> dict[str, Any]:
                 },
                 "preferred_domains": [],
                 "blocked_domains": [],
+                "trust_policy": {
+                    "trusted_allowlist": [],
+                    "preferred_domains": [],
+                    "blocked_domains": [],
+                    "risky_domains": [
+                        "medium.com",
+                        "substack.com",
+                    ],
+                    "degraded_domains": [
+                        "blogspot.com",
+                    ],
+                    "trusted_allowlist_by_category": {
+                        "docs": [
+                            "docs.python.org",
+                            "developer.mozilla.org",
+                            "openai.com",
+                            "docs.docker.com",
+                            "kubernetes.io",
+                        ],
+                        "finance": [
+                            "bank.gov.ua",
+                        ],
+                        "news": [
+                            "reuters.com",
+                            "apnews.com",
+                        ],
+                        "generic": [],
+                    },
+                    "preferred_domains_by_category": {
+                        "docs": [
+                            "github.com",
+                        ],
+                        "finance": [
+                            "minfin.com.ua",
+                            "finance.ua",
+                        ],
+                        "weather": [
+                            "sinoptik.ua",
+                            "meteo.ua",
+                        ],
+                        "news": [
+                            "ukrinform.ua",
+                        ],
+                        "generic": [],
+                    },
+                    "manual_overrides": {
+                        "trusted": [],
+                        "preferred": [],
+                        "blocked": [],
+                        "risky": [],
+                        "degraded": [],
+                    },
+                },
                 "citations": {
                     "enabled": True,
                     "style": "compact",
@@ -930,6 +1117,8 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         log_file = Path(str(log_file_raw)).expanduser()
 
     safety_mode = _norm_lower(_pick_value(_get_dotted(row, "startup.safety_mode"), "read_only_tools"))
+    llm_default_provider = _norm_lower(_get_dotted(row, "llm.provider") or "ollama")
+    model_name = _norm_str(_get_dotted(row, "llm.model_name") or "qcwind/qwen3-8b-instruct-Q4-K-M")
 
     runtime = _normalize_ui_console_runtime(_as_dict(_get_dotted(row, "ui.console.runtime")))
     features_flags = _as_dict(_get_dotted(row, "features.flags"))
@@ -937,6 +1126,16 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
     if not profile_rows:
         profile_rows = copy.deepcopy(_default_model_profiles_tree())
     profile_rows = _normalize_profile_rows(profile_rows)
+    task_model_rows = _as_dict(_get_dotted(row, "llm.task_models"))
+    if not task_model_rows:
+        task_model_rows = copy.deepcopy(
+            _default_task_model_profiles_tree(provider=llm_default_provider, model=model_name)
+        )
+    task_model_rows = _normalize_task_model_profile_rows(
+        task_model_rows,
+        default_provider=llm_default_provider,
+        default_model=model_name,
+    )
     log_channels = _normalize_log_channels(_as_dict(_get_dotted(row, "logging.channels")))
 
     settings = AppSettings(
@@ -946,8 +1145,8 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         default_language=_norm_str(_get_dotted(row, "app.default_language") or "ru"),
         startup_mode=_norm_lower(_get_dotted(row, "startup.mode") or "api"),
         active_profile=_norm_upper(_get_dotted(row, "startup.active_profile") or "BALANCED"),
-        llm_default_provider=_norm_lower(_get_dotted(row, "llm.provider") or "ollama"),
-        model_name=_norm_str(_get_dotted(row, "llm.model_name") or "qcwind/qwen3-8b-instruct-Q4-K-M"),
+        llm_default_provider=llm_default_provider,
+        model_name=model_name,
         host=_norm_str(_get_dotted(row, "api.host") or "127.0.0.1"),
         port=_to_int(_get_dotted(row, "api.port"), default=8027),
         thinking_enabled=_to_bool(_get_dotted(row, "llm.thinking_enabled")),
@@ -988,6 +1187,7 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         llm_max_tokens_lower_bound=max(1, _to_int(_get_dotted(row, "llm.max_tokens.lower_bound"), default=2048)),
         llm_max_tokens_upper_bound=max(1, _to_int(_get_dotted(row, "llm.max_tokens.upper_bound"), default=8192)),
         llm_profiles=profile_rows,
+        task_model_profiles=task_model_rows,
         ollama_base_url=_norm_str(_get_dotted(row, "llm.providers.ollama.base_url") or "http://127.0.0.1:11434"),
         ollama_timeout_sec=float(_pick_value(_get_dotted(row, "llm.providers.ollama.timeout_sec"), 120.0)),
         ollama_retries=max(0, _to_int(_get_dotted(row, "llm.providers.ollama.retries"), default=1)),
@@ -1420,19 +1620,8 @@ def setup_logging(settings: AppSettings | None = None, *, force: bool = False) -
         handler.addFilter(_LoggerPrefixFilter(tuple(prefixes)))
         root.addHandler(handler)
 
-    if bool(cfg.log_web_trace_enabled):
-        if not _has_file_handler(root, "web_trace.jsonl"):
-            trace_logger = str(cfg.log_web_trace_logger or _LOG_WEB_TRACE_LOGGER_DEFAULT).strip() or _LOG_WEB_TRACE_LOGGER_DEFAULT
-            web_trace_handler = _file_handler(
-                log_dir / "web_trace.jsonl",
-                level,
-                fmt=fmt,
-                max_bytes=max_bytes,
-                backup_count=backup_count,
-            )
-            web_trace_handler.setFormatter(logging.Formatter("%(message)s"))
-            web_trace_handler.addFilter(_LoggerPrefixFilter((trace_logger,)))
-            root.addHandler(web_trace_handler)
+    # Web trace v2 writes per-trace JSON files from pipeline code.
+    # Keep logger channels only; no dedicated jsonl sink.
 
     for channel, prefixes in channels.items():
         logging.getLogger(channel).setLevel(level)
@@ -1526,6 +1715,47 @@ def _normalize_profile_rows(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
         out[name] = payload
     if not out:
         return copy.deepcopy(_default_model_profiles_tree())
+    return out
+
+
+def _normalize_task_model_profile_rows(
+    value: dict[str, Any],
+    *,
+    default_provider: str = "ollama",
+    default_model: str = "qcwind/qwen3-8b-instruct-Q4-K-M",
+) -> dict[str, dict[str, Any]]:
+    src = dict(value or {})
+    out: dict[str, dict[str, Any]] = {}
+    defaults = _default_task_model_profiles_tree(provider=default_provider, model=default_model)
+    generic_default = {
+        "name": "",
+        "provider": _norm_lower(default_provider) or "ollama",
+        "model": _norm_str(default_model) or "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "temperature": 0.2,
+        "max_tokens": 256,
+        "timeout": 30.0,
+        "enabled": True,
+        "fallback_profile": "",
+    }
+    for key, raw in src.items():
+        name = _norm_lower(key)
+        if not name:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        payload = copy.deepcopy(defaults.get(name, generic_default))
+        payload.update(copy.deepcopy(raw))
+        payload["name"] = _norm_lower(_pick_value(payload.get("name"), name)) or name
+        payload["provider"] = _norm_lower(_pick_value(payload.get("provider"), payload.get("provider") or default_provider))
+        payload["model"] = _norm_str(_pick_value(payload.get("model"), payload.get("model") or default_model))
+        payload["temperature"] = float(_pick_value(payload.get("temperature"), payload.get("temperature") or 0.2))
+        payload["max_tokens"] = max(1, _to_int(_pick_value(payload.get("max_tokens"), payload.get("max_tokens") or 256), default=256))
+        payload["timeout"] = max(1.0, float(_pick_value(payload.get("timeout"), payload.get("timeout") or 30.0)))
+        payload["enabled"] = bool(_pick_value(payload.get("enabled"), True))
+        payload["fallback_profile"] = _norm_lower(payload.get("fallback_profile"))
+        out[name] = payload
+    if not out:
+        return copy.deepcopy(defaults)
     return out
 
 
@@ -1709,6 +1939,7 @@ def _validate_settings(settings: AppSettings) -> None:
         errors.append(f"MMIS_LLM_PROVIDER must be one of {sorted(VALID_PROVIDERS)}, got: {settings.llm_default_provider}")
     if settings.safety_mode not in VALID_SAFETY_MODES:
         errors.append(f"MMIS_SAFETY_MODE must be one of {sorted(VALID_SAFETY_MODES)}, got: {settings.safety_mode}")
+    errors.extend(_validate_task_model_profiles(settings.task_model_profiles))
     if not settings.host:
         errors.append("api.host cannot be empty")
     if settings.port < 1 or settings.port > 65535:
@@ -1801,6 +2032,56 @@ def _validate_settings(settings: AppSettings) -> None:
         raise ValueError("Invalid application settings:\n- " + "\n- ".join(errors))
 
 
+def _validate_task_model_profiles(payload: dict[str, Any] | None) -> list[str]:
+    errors: list[str] = []
+    rows = _normalize_task_model_profile_rows(_as_dict(payload))
+    if not rows:
+        errors.append("llm.task_models must define at least one task profile")
+        return errors
+    known_names = {str(name or "").strip().lower() for name in rows.keys()}
+    for task_name, raw in rows.items():
+        profile = _as_dict(raw)
+        label = f"llm.task_models.{task_name}"
+        provider = _norm_lower(profile.get("provider"))
+        if provider not in VALID_PROVIDERS:
+            errors.append(f"{label}.provider must be one of {sorted(VALID_PROVIDERS)}, got: {provider or '<empty>'}")
+        if not _norm_str(profile.get("model")):
+            errors.append(f"{label}.model cannot be empty")
+        try:
+            temperature = float(profile.get("temperature"))
+        except Exception:
+            errors.append(f"{label}.temperature must be a number")
+            temperature = 0.0
+        if not (0.0 <= temperature <= 2.0):
+            errors.append(f"{label}.temperature must be in [0, 2], got: {temperature}")
+        try:
+            max_tokens = int(profile.get("max_tokens"))
+        except Exception:
+            errors.append(f"{label}.max_tokens must be an integer")
+            max_tokens = 0
+        if max_tokens < 1:
+            errors.append(f"{label}.max_tokens must be >= 1, got: {max_tokens}")
+        try:
+            timeout = float(profile.get("timeout"))
+        except Exception:
+            errors.append(f"{label}.timeout must be a number")
+            timeout = 0.0
+        if timeout <= 0.0:
+            errors.append(f"{label}.timeout must be > 0, got: {timeout}")
+        enabled = profile.get("enabled")
+        if not isinstance(enabled, bool):
+            errors.append(f"{label}.enabled must be a boolean")
+        fallback_profile = _norm_lower(profile.get("fallback_profile"))
+        if fallback_profile:
+            if fallback_profile == task_name:
+                errors.append(f"{label}.fallback_profile cannot point to itself")
+            elif fallback_profile not in known_names:
+                errors.append(
+                    f"{label}.fallback_profile must reference an existing task profile, got: {fallback_profile}"
+                )
+    return errors
+
+
 def _validate_web_v2_settings(payload: dict[str, Any] | None) -> list[str]:
     errors: list[str] = []
     cfg = _as_dict(payload)
@@ -1884,7 +2165,7 @@ def _validate_web_v2_settings(payload: dict[str, Any] | None) -> list[str]:
             if backoff_ms < 0:
                 errors.append("internet.web_v2.retry_policy.backoff_ms must be >= 0")
 
-    for key in ("force_search_keywords", "preferred_domains", "blocked_domains"):
+    for key in ("force_search_keywords", "preferred_domains", "blocked_domains", "trusted_allowlist", "risky_domains", "degraded_domains"):
         value = cfg.get(key)
         if value is None:
             continue
@@ -1904,6 +2185,80 @@ def _validate_web_v2_settings(payload: dict[str, Any] | None) -> list[str]:
             continue
         if days < 1:
             errors.append(f"internet.web_v2.ttl_days.{key} must be >= 1")
+
+    trust_policy = _as_dict(cfg.get("trust_policy"))
+    for key in (
+        "trusted_allowlist",
+        "preferred_domains",
+        "blocked_domains",
+        "risky_domains",
+        "degraded_domains",
+    ):
+        value = trust_policy.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            errors.append(f"internet.web_v2.trust_policy.{key} must be a list of strings")
+            continue
+        for idx, item in enumerate(value):
+            if not str(item or "").strip():
+                errors.append(f"internet.web_v2.trust_policy.{key}[{idx}] must be a non-empty string")
+
+    for key in (
+        "trusted_allowlist_by_category",
+        "preferred_domains_by_category",
+        "blocked_domains_by_category",
+        "risky_domains_by_category",
+        "degraded_domains_by_category",
+    ):
+        value = trust_policy.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            errors.append(f"internet.web_v2.trust_policy.{key} must be a dict of category -> list[str]")
+            continue
+        for category, domains in value.items():
+            if not str(category or "").strip():
+                errors.append(f"internet.web_v2.trust_policy.{key} contains an empty category key")
+                continue
+            if not isinstance(domains, list):
+                errors.append(f"internet.web_v2.trust_policy.{key}.{category} must be a list of strings")
+                continue
+            for idx, item in enumerate(domains):
+                if not str(item or "").strip():
+                    errors.append(f"internet.web_v2.trust_policy.{key}.{category}[{idx}] must be a non-empty string")
+
+    manual_overrides = trust_policy.get("manual_overrides")
+    if manual_overrides is not None:
+        if not isinstance(manual_overrides, dict):
+            errors.append("internet.web_v2.trust_policy.manual_overrides must be a dict")
+        else:
+            valid_states = {"trusted", "preferred", "blocked", "risky", "degraded"}
+            keys = {str(k or "").strip().lower() for k in manual_overrides.keys()}
+            grouped_shape = bool(keys) and keys.issubset(valid_states)
+            if grouped_shape:
+                for state, domains in manual_overrides.items():
+                    token = str(state or "").strip().lower()
+                    if token not in valid_states:
+                        errors.append(f"internet.web_v2.trust_policy.manual_overrides.{state} is not a valid state")
+                        continue
+                    if not isinstance(domains, list):
+                        errors.append(f"internet.web_v2.trust_policy.manual_overrides.{state} must be a list of strings")
+                        continue
+                    for idx, item in enumerate(domains):
+                        if not str(item or "").strip():
+                            errors.append(
+                                f"internet.web_v2.trust_policy.manual_overrides.{state}[{idx}] must be a non-empty string"
+                            )
+            else:
+                for domain, state in manual_overrides.items():
+                    if not str(domain or "").strip():
+                        errors.append("internet.web_v2.trust_policy.manual_overrides contains an empty domain key")
+                    token = str(state or "").strip().lower()
+                    if token not in valid_states:
+                        errors.append(
+                            f"internet.web_v2.trust_policy.manual_overrides[{domain!r}] must be one of {sorted(valid_states)}"
+                        )
 
     return errors
 

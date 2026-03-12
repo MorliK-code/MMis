@@ -12,6 +12,135 @@ MODE_FAST = "FAST"
 MODE_BALANCED = "BALANCED"
 MODE_QUALITY = "QUALITY"
 
+_SPACE_RE = re.compile(r"\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?:[!?]+|\.(?=\s|$)|\n)+")
+_CLAUSE_SPLIT_RE = re.compile(
+    r",\s+(?=(?:а|но|и|and|but|в проекте|у меня|я |мы |мне |надо|нужно|проблема|problem|issue|решили|оставляем|"
+    r"i use|we use|i want|need to)\b)",
+    flags=re.I,
+)
+_TRIM_LEADING_RE = re.compile(
+    r"^(?:что|that|to|про|about|это|is|are|будто|как будто)\s+",
+    flags=re.I,
+)
+_TRIM_TRAILING_RE = re.compile(r"\s+(?:пожалуйста|please|pls)$", flags=re.I)
+_GENERIC_VALUES = {
+    "это",
+    "так",
+    "там",
+    "тут",
+    "ничего",
+    "something",
+    "anything",
+    "everything",
+    "this",
+    "that",
+}
+_NAME_BLOCKLIST = {
+    "люблю",
+    "хочу",
+    "использую",
+    "работаю",
+    "думаю",
+    "считаю",
+    "знаю",
+    "нужно",
+    "надо",
+    "i",
+    "prefer",
+    "want",
+    "use",
+    "need",
+}
+_PROJECT_VALUE_BLOCKLIST = {
+    "это",
+    "так",
+    "все",
+    "ничего",
+    "something",
+    "anything",
+}
+_ACTION_KEYWORDS = (
+    "fix",
+    "add",
+    "update",
+    "remove",
+    "support",
+    "implement",
+    "rewrite",
+    "refactor",
+    "check",
+    "verify",
+    "build",
+    "ship",
+    "почин",
+    "исправ",
+    "добав",
+    "обнов",
+    "убра",
+    "поддерж",
+    "провер",
+    "сдела",
+    "доработ",
+    "перепис",
+    "рефактор",
+    "вынес",
+    "настро",
+    "почист",
+)
+_ENVIRONMENT_CUES = (
+    "i use",
+    "we use",
+    "i am on",
+    "i'm on",
+    "running on",
+    "run on",
+    "using",
+    "у меня",
+    "я использую",
+    "мы используем",
+    "работаю на",
+    "сижу на",
+    "запускаю в",
+    "поднимаю в",
+)
+_ENVIRONMENT_STATIC_RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (re.compile(r"\bwindows(?:\s+11|\s+10)?\b", re.I), "environment_os", "windows"),
+    (re.compile(r"\blinux\b", re.I), "environment_os", "linux"),
+    (re.compile(r"\bubuntu\b", re.I), "environment_os", "ubuntu"),
+    (re.compile(r"\bdebian\b", re.I), "environment_os", "debian"),
+    (re.compile(r"\bmac(?:os)?\b", re.I), "environment_os", "macos"),
+    (re.compile(r"\bwsl\b", re.I), "environment_tool", "wsl"),
+    (re.compile(r"\bdocker\b", re.I), "environment_tool", "docker"),
+    (re.compile(r"\bpower\s?shell\b", re.I), "environment_shell", "powershell"),
+    (re.compile(r"\bbash\b", re.I), "environment_shell", "bash"),
+    (re.compile(r"\bzsh\b", re.I), "environment_shell", "zsh"),
+    (re.compile(r"\bcmd\b", re.I), "environment_shell", "cmd"),
+    (re.compile(r"\bpoetry\b", re.I), "environment_tool", "poetry"),
+    (re.compile(r"\buv\b", re.I), "environment_tool", "uv"),
+    (re.compile(r"\bvenv\b", re.I), "environment_tool", "venv"),
+)
+_ENVIRONMENT_VERSION_RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (re.compile(r"\bpython\s*([0-9]+(?:\.[0-9]+){0,2})\b", re.I), "environment_runtime_python", "python"),
+    (re.compile(r"\bnode(?:\.js)?\s*v?([0-9]+(?:\.[0-9]+){0,2})\b", re.I), "environment_runtime_node", "node"),
+)
+_PROBLEM_MARKERS = (
+    "error",
+    "failed",
+    "exception",
+    "traceback",
+    "bug",
+    "problem",
+    "issue",
+    "ошибка",
+    "не работает",
+    "проблема",
+    "сломал",
+    "ломает",
+    "падает",
+    "не ловит",
+)
+
 
 class FactExtractor:
     def extract_v2(
@@ -23,7 +152,7 @@ class FactExtractor:
         scope: MemoryScope = MemoryScope.CONVERSATION,
         mode: str = MODE_BALANCED,
     ) -> list[FactRecordV2]:
-        src = str(text or "").strip()
+        src = self._normalize_text(text)
         if not src:
             return []
         meta = dict(metadata or {})
@@ -34,17 +163,18 @@ class FactExtractor:
         if profile not in {MODE_FAST, MODE_BALANCED, MODE_QUALITY}:
             profile = MODE_BALANCED
 
+        segments = self._segments(src)
         rows: list[FactRecordV2] = []
-        rows.extend(self._identity_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._project_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._environment_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._preference_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._task_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._decision_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._issue_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._relationship_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._temporary_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._resolution_facts(src, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._identity_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._project_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._environment_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._preference_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._task_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._decision_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._issue_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._relationship_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._temporary_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(self._resolution_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
 
         if profile == MODE_FAST:
             allowed = {"identity", "preference", "task", "issue", "decision"}
@@ -130,243 +260,590 @@ class FactExtractor:
             metadata={"relation": str(relation or ""), "key": pred},
         )
 
-    def _identity_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        src = str(text or "").strip()
+        if not src:
+            return ""
+        src = (
+            src.replace("“", '"')
+            .replace("”", '"')
+            .replace("«", '"')
+            .replace("»", '"')
+            .replace("’", "'")
+            .replace("`", "'")
+            .replace("\u00a0", " ")
+        )
+        return _SPACE_RE.sub(" ", src).strip()
+
+    def _segments(self, text: str) -> list[str]:
+        src = self._normalize_text(text)
+        if not src:
+            return []
+        out: list[str] = []
+
+        def _push(value: str) -> None:
+            item = self._normalize_text(value).strip(" ,;:-")
+            if item and item not in out:
+                out.append(item)
+
+        for row in _SENTENCE_SPLIT_RE.split(src):
+            _push(row)
+        if not out:
+            _push(src)
+        for row in list(out):
+            for part in _CLAUSE_SPLIT_RE.split(row):
+                _push(part)
+        return out
+
+    def _clean_value(self, value: str) -> str:
+        src = self._normalize_text(value)
+        src = src.strip(" \"'()[]{}")
+        src = _TRIM_LEADING_RE.sub("", src)
+        src = _TRIM_TRAILING_RE.sub("", src)
+        src = re.sub(r"\s+(?:и|and|но|but)$", "", src, flags=re.I)
+        return src.strip(" ,;:-")
+
+    def _is_informative(self, value: str, *, min_chars: int = 3) -> bool:
+        src = self._clean_value(value)
+        if len(src) < max(1, int(min_chars)):
+            return False
+        low = src.lower()
+        if low in _GENERIC_VALUES:
+            return False
+        if re.fullmatch(r"[\d\W_]+", src):
+            return False
+        if re.fullmatch(r"\d{1,4}", src):
+            return False
+        return True
+
+    def _looks_like_name(self, value: str) -> bool:
+        src = self._clean_value(value)
+        if not self._is_informative(src, min_chars=2):
+            return False
+        tokens = [x for x in src.split() if x]
+        if not tokens or len(tokens) > 3:
+            return False
+        for token in tokens:
+            low = token.lower()
+            if low in _NAME_BLOCKLIST:
+                return False
+            if not re.fullmatch(r"[A-Za-zА-Яа-яЁёІіЇїЄєҐґ][A-Za-zА-Яа-яЁёІіЇїЄєҐґ' -]{1,30}", token):
+                return False
+            if token[:1].lower() == token[:1]:
+                return False
+        return True
+
+    def _looks_project_name(self, value: str) -> bool:
+        src = self._clean_value(value)
+        if not self._is_informative(src, min_chars=2):
+            return False
+        return bool(re.fullmatch(r"[A-Za-zА-Яа-яЁёІіЇїЄєҐґ0-9_.\-]{2,48}", src))
+
+    def _looks_project_value(self, value: str) -> bool:
+        src = self._clean_value(value)
+        if not self._is_informative(src, min_chars=3):
+            return False
+        low = src.lower()
+        if low in _PROJECT_VALUE_BLOCKLIST:
+            return False
+        if low.startswith(("что ", "that ")):
+            return False
+        return True
+
+    def _looks_actionable_task(self, value: str) -> bool:
+        src = self._clean_value(value)
+        if not self._is_informative(src, min_chars=4):
+            return False
+        low = src.lower()
+        first = str((low.split() or [""])[0])
+        if any(first.endswith(suffix) for suffix in ("ть", "ти", "ться", "ировать", "овать", "ать", "ить", "еть")):
+            return True
+        return any(token in low for token in _ACTION_KEYWORDS)
+
+    def _looks_preference_value(self, value: str) -> bool:
+        src = self._clean_value(value)
+        if not self._is_informative(src, min_chars=4):
+            return False
+        return not self._looks_actionable_task(src)
+
+    def _has_any(self, text: str, tokens: tuple[str, ...]) -> bool:
+        low = str(text or "").lower()
+        return any(token in low for token in tokens)
+
+    def _normalized_signature(self, value: str) -> str:
+        src = self._clean_value(value).lower()
+        if not src:
+            return ""
+        return _SPACE_RE.sub(" ", re.sub(r"[\W_]+", " ", src)).strip()
+
+    def _append_fact(
+        self,
+        out: list[FactRecordV2],
+        *,
+        subject: str,
+        predicate: str,
+        value: Any,
+        scope: MemoryScope,
+        confidence: float,
+        importance: float,
+        evidence: str,
+        event_id: str,
+        relation: str,
+        namespace: str,
+        valid_to: float | None = None,
+    ) -> None:
+        cleaned = self._clean_value(str(value or ""))
+        if not self._is_informative(cleaned, min_chars=2):
+            return
+        out.append(
+            self._mk(
+                subject=subject,
+                predicate=predicate,
+                value=cleaned,
+                scope=scope,
+                confidence=confidence,
+                importance=importance,
+                evidence=evidence,
+                event_id=event_id,
+                relation=relation,
+                valid_to=valid_to,
+                namespace=namespace,
+            )
+        )
+
+    def _extract_pattern_facts(
+        self,
+        *,
+        segments: list[str],
+        subject: str,
+        scope: MemoryScope,
+        event_id: str,
+        namespace: str,
+        rules: list[dict[str, Any]],
     ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
-        patterns = [
-            r"\b(?:my name is|i am)\s+([A-Za-z\u0400-\u04ff][A-Za-z\u0400-\u04ff' -]{1,40})",
-            r"\b(?:меня зовут)\s+([A-Za-z\u0400-\u04ff][A-Za-z\u0400-\u04ff' -]{1,40})",
+        for segment in list(segments or []):
+            for rule in list(rules or []):
+                pattern = rule.get("pattern")
+                if not hasattr(pattern, "finditer"):
+                    continue
+                for match in pattern.finditer(segment):
+                    group_index = int(rule.get("group", 1))
+                    try:
+                        raw_value = str(match.group(group_index) or "")
+                    except Exception:
+                        raw_value = str(match.group(0) or "")
+                    value = self._clean_value(raw_value)
+                    validator = rule.get("validator")
+                    if callable(validator) and not bool(validator(value)):
+                        continue
+                    self._append_fact(
+                        out,
+                        subject=subject,
+                        predicate=str(rule.get("predicate") or ""),
+                        value=value,
+                        scope=(rule.get("scope") or scope),
+                        confidence=float(rule.get("confidence", 0.70)),
+                        importance=float(rule.get("importance", 0.70)),
+                        evidence=segment,
+                        event_id=event_id,
+                        relation=str(rule.get("relation") or ""),
+                        namespace=namespace,
+                        valid_to=rule.get("valid_to"),
+                    )
+        return out
+
+    def _identity_facts(
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
+    ) -> list[FactRecordV2]:
+        out: list[FactRecordV2] = []
+        if subject != "user":
+            return out
+        rules = [
+            {
+                "pattern": re.compile(r"\b(?:my name is|i am|i'm)\s+([A-Za-zА-Яа-яЁёІіЇїЄєҐґ][A-Za-zА-Яа-яЁёІіЇїЄєҐґ' -]{1,40})", re.I),
+                "predicate": "identity_name",
+                "relation": "identity",
+                "confidence": 0.88,
+                "importance": 0.82,
+                "validator": self._looks_like_name,
+            },
+            {
+                "pattern": re.compile(r"\b(?:меня зовут)\s+([A-Za-zА-Яа-яЁёІіЇїЄєҐґ][A-Za-zА-Яа-яЁёІіЇїЄєҐґ' -]{1,40})", re.I),
+                "predicate": "identity_name",
+                "relation": "identity",
+                "confidence": 0.88,
+                "importance": 0.82,
+                "validator": self._looks_like_name,
+            },
         ]
-        for pattern in patterns:
-            m = re.search(pattern, text, re.I)
-            if not m:
+        out.extend(
+            self._extract_pattern_facts(
+                segments=segments,
+                subject=subject,
+                scope=scope,
+                event_id=event_id,
+                namespace=namespace,
+                rules=rules,
+            )
+        )
+        for segment in list(segments or []):
+            match = re.match(r"^[Яя]\s+([A-ZА-ЯЁ][A-Za-zА-Яа-яЁёІіЇїЄєҐґ' -]{1,30})(?:\b|[,.;!?])", segment)
+            if not match:
                 continue
-            name = str(m.group(1) or "").strip()
-            if not name:
+            name = self._clean_value(str(match.group(1) or ""))
+            if not self._looks_like_name(name):
                 continue
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="identity_name",
-                    value=name,
-                    scope=scope,
-                    confidence=0.88,
-                    importance=0.82,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="identity",
-                    namespace=namespace,
-                )
+            self._append_fact(
+                out,
+                subject=subject,
+                predicate="identity_name",
+                value=name,
+                scope=scope,
+                confidence=0.90,
+                importance=0.84,
+                evidence=segment,
+                event_id=event_id,
+                relation="identity",
+                namespace=namespace,
             )
         return out
 
     def _project_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
-        out: list[FactRecordV2] = []
-        m = re.search(r"\bproject\s+([A-Za-z0-9_\-]{2,40})", text, re.I)
-        if m:
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="project_name",
-                    value=str(m.group(1) or "").strip(),
-                    scope=MemoryScope.PROJECT,
-                    confidence=0.74,
-                    importance=0.78,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="project",
-                    namespace=namespace,
-                )
-            )
-        return out
+        rules = [
+            {
+                "pattern": re.compile(r"\b(?:мой|наш)\s+проект\s+(?:называется|это|called|is called)\s+([A-Za-zА-Яа-яЁёІіЇїЄєҐґ0-9_.\-]{2,48})\b", re.I),
+                "predicate": "project_name",
+                "relation": "project",
+                "scope": MemoryScope.PROJECT,
+                "confidence": 0.83,
+                "importance": 0.84,
+                "validator": self._looks_project_name,
+            },
+            {
+                "pattern": re.compile(r"\b(?:project|проект)\s+([A-Za-z][A-Za-z0-9_.\-]{2,40})\b", re.I),
+                "predicate": "project_name",
+                "relation": "project",
+                "scope": MemoryScope.PROJECT,
+                "confidence": 0.74,
+                "importance": 0.78,
+                "validator": self._looks_project_name,
+            },
+            {
+                "pattern": re.compile(r"\b(?:в|для)\s+проекте\s+(?:используется|используем|использую|стоит|есть|держим|храним|работает|поднят)\s+([^.!?;\n]{3,140})", re.I),
+                "predicate": "project_fact",
+                "relation": "project",
+                "scope": MemoryScope.PROJECT,
+                "confidence": 0.80,
+                "importance": 0.82,
+                "validator": self._looks_project_value,
+            },
+            {
+                "pattern": re.compile(r"\b(?:мой|наш)\s+проект\s+(?:использует|собран на|работает на|построен на|на)\s+([^.!?;\n]{3,140})", re.I),
+                "predicate": "project_fact",
+                "relation": "project",
+                "scope": MemoryScope.PROJECT,
+                "confidence": 0.79,
+                "importance": 0.82,
+                "validator": self._looks_project_value,
+            },
+            {
+                "pattern": re.compile(r"\b(?:я|мы)\s+использу(?:ю|ем)\s+([^.!?;\n]{2,100})\s+(?:в|для)\s+проекта\b", re.I),
+                "predicate": "project_fact",
+                "relation": "project",
+                "scope": MemoryScope.PROJECT,
+                "confidence": 0.76,
+                "importance": 0.79,
+                "validator": self._looks_project_value,
+            },
+            {
+                "pattern": re.compile(r"\b(?:i|we)\s+use\s+([^.!?;\n]{2,100})\s+(?:in|for)\s+(?:the\s+)?project\b", re.I),
+                "predicate": "project_fact",
+                "relation": "project",
+                "scope": MemoryScope.PROJECT,
+                "confidence": 0.76,
+                "importance": 0.79,
+                "validator": self._looks_project_value,
+            },
+        ]
+        return self._extract_pattern_facts(
+            segments=segments,
+            subject=subject,
+            scope=scope,
+            event_id=event_id,
+            namespace=namespace,
+            rules=rules,
+        )
 
     def _environment_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
-        env_tokens = {
-            "windows": "windows",
-            "linux": "linux",
-            "mac": "macos",
-            "ubuntu": "ubuntu",
-            "docker": "docker",
-        }
-        low = str(text or "").lower()
-        for token, value in env_tokens.items():
-            if token not in low:
-                continue
-            out.append(
-                self._mk(
+        candidate_segments = [segment for segment in list(segments or []) if self._has_any(segment, _ENVIRONMENT_CUES)]
+        if not candidate_segments:
+            return out
+        seen_pairs: set[tuple[str, str]] = set()
+        for segment in candidate_segments:
+            for pattern, predicate, value in _ENVIRONMENT_STATIC_RULES:
+                if not pattern.search(segment):
+                    continue
+                key = (predicate, str(value).lower())
+                if key in seen_pairs:
+                    continue
+                seen_pairs.add(key)
+                self._append_fact(
+                    out,
                     subject=subject,
-                    predicate="environment",
+                    predicate=predicate,
                     value=value,
                     scope=scope,
-                    confidence=0.67,
-                    importance=0.63,
-                    evidence=text,
+                    confidence=0.70,
+                    importance=0.66,
+                    evidence=segment,
                     event_id=event_id,
                     relation="environment",
                     namespace=namespace,
                 )
-            )
+            for pattern, predicate, label in _ENVIRONMENT_VERSION_RULES:
+                for match in pattern.finditer(segment):
+                    version = str(match.group(1) or "").strip()
+                    if not version:
+                        continue
+                    fact_value = f"{label} {version}"
+                    key = (predicate, fact_value.lower())
+                    if key in seen_pairs:
+                        continue
+                    seen_pairs.add(key)
+                    self._append_fact(
+                        out,
+                        subject=subject,
+                        predicate=predicate,
+                        value=fact_value,
+                        scope=scope,
+                        confidence=0.74,
+                        importance=0.70,
+                        evidence=segment,
+                        event_id=event_id,
+                        relation="environment",
+                        namespace=namespace,
+                    )
         return out
 
     def _preference_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
-        out: list[FactRecordV2] = []
-        pref_patterns = [
-            r"\b(?:i prefer|prefer)\s+([^.,;!?]{2,120})",
-            r"\b(?:i like)\s+([^.,;!?]{2,120})",
-            r"\b(?:предпочитаю|люблю)\s+([^.,;!?]{2,120})",
+        rules = [
+            {
+                "pattern": re.compile(r"\b(?:i prefer|prefer)\s+([^.,;!?]{2,120})", re.I),
+                "predicate": "preference",
+                "relation": "preference",
+                "confidence": 0.74,
+                "importance": 0.68,
+                "validator": self._looks_preference_value,
+            },
+            {
+                "pattern": re.compile(r"\b(?:i like|i love)\s+([^.,;!?]{2,120})", re.I),
+                "predicate": "preference",
+                "relation": "preference",
+                "confidence": 0.72,
+                "importance": 0.66,
+                "validator": self._looks_preference_value,
+            },
+            {
+                "pattern": re.compile(r"\b(?:предпочитаю|люблю|мне нравится|мне удобнее|мне важнее)\s+([^.,;!?]{2,120})", re.I),
+                "predicate": "preference",
+                "relation": "preference",
+                "confidence": 0.76,
+                "importance": 0.70,
+                "validator": self._looks_preference_value,
+            },
         ]
-        for pattern in pref_patterns:
-            m = re.search(pattern, text, re.I)
-            if not m:
-                continue
-            value = str(m.group(1) or "").strip()
-            if not value:
-                continue
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="preference",
-                    value=value,
-                    scope=scope,
-                    confidence=0.72,
-                    importance=0.66,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="preference",
-                    namespace=namespace,
-                )
-            )
-        return out
+        return self._extract_pattern_facts(
+            segments=segments,
+            subject=subject,
+            scope=scope,
+            event_id=event_id,
+            namespace=namespace,
+            rules=rules,
+        )
 
     def _task_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
-        out: list[FactRecordV2] = []
-        patterns = [
-            r"\b(?:need to|please|todo|task)\s+([^\n]{3,180})",
-            r"\b(?:нужно|сделай|задача)\s+([^\n]{3,180})",
+        rules = [
+            {
+                "pattern": re.compile(r"\b(?:need to|need|todo|task)\s+([^\n.!?]{3,180})", re.I),
+                "predicate": "task",
+                "relation": "task",
+                "confidence": 0.69,
+                "importance": 0.82,
+                "validator": self._looks_actionable_task,
+            },
+            {
+                "pattern": re.compile(r"\b(?:нужно|надо|надо бы|сделай|задача)\s+([^\n.!?]{3,180})", re.I),
+                "predicate": "task",
+                "relation": "task",
+                "confidence": 0.73,
+                "importance": 0.84,
+                "validator": self._looks_actionable_task,
+            },
+            {
+                "pattern": re.compile(r"\b(?:i want to|i want|я хочу)\s+([^\n.!?]{3,180})", re.I),
+                "predicate": "task_goal",
+                "relation": "task",
+                "confidence": 0.70,
+                "importance": 0.80,
+                "validator": self._looks_actionable_task,
+            },
         ]
-        for pattern in patterns:
-            m = re.search(pattern, text, re.I)
-            if not m:
-                continue
-            task = str(m.group(1) or "").strip()
-            if not task:
-                continue
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="task",
-                    value=task,
-                    scope=scope,
-                    confidence=0.69,
-                    importance=0.82,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="task",
-                    namespace=namespace,
-                )
-            )
-        return out
+        return self._extract_pattern_facts(
+            segments=segments,
+            subject=subject,
+            scope=scope,
+            event_id=event_id,
+            namespace=namespace,
+            rules=rules,
+        )
 
     def _decision_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
-        out: list[FactRecordV2] = []
-        patterns = [
-            r"\b(?:we decided|decided to|let's use)\s+([^.,;!?]{2,160})",
-            r"\b(?:решили|давай использовать)\s+([^.,;!?]{2,160})",
+        rules = [
+            {
+                "pattern": re.compile(r"\b(?:we decided|decided to|let's use|lets use|we(?:'ll| will) use)\s+([^.,;!?]{2,160})", re.I),
+                "predicate": "decision",
+                "relation": "decision",
+                "confidence": 0.78,
+                "importance": 0.84,
+                "validator": self._looks_project_value,
+            },
+            {
+                "pattern": re.compile(r"\b(?:мы решили|решили|решено|оставляем|выбрали|не будем|пусть будет)\s+([^.,;!?]{2,160})", re.I),
+                "predicate": "decision",
+                "relation": "decision",
+                "confidence": 0.80,
+                "importance": 0.86,
+                "validator": self._looks_project_value,
+            },
+            {
+                "pattern": re.compile(r"^(?:мы\s+)?будем\s+([^.,;!?]{2,160})", re.I),
+                "predicate": "decision",
+                "relation": "decision",
+                "confidence": 0.74,
+                "importance": 0.82,
+                "validator": self._looks_project_value,
+            },
         ]
-        for pattern in patterns:
-            m = re.search(pattern, text, re.I)
-            if not m:
-                continue
-            decision = str(m.group(1) or "").strip()
-            if not decision:
-                continue
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="decision",
-                    value=decision,
-                    scope=scope,
-                    confidence=0.78,
-                    importance=0.84,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="decision",
-                    namespace=namespace,
-                )
-            )
-        return out
+        return self._extract_pattern_facts(
+            segments=segments,
+            subject=subject,
+            scope=scope,
+            event_id=event_id,
+            namespace=namespace,
+            rules=rules,
+        )
 
     def _issue_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
-        out: list[FactRecordV2] = []
-        low = str(text or "").lower()
-        markers = ["error", "failed", "exception", "traceback", "bug", "ошибка", "не работает"]
-        if any(token in low for token in markers):
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="issue",
-                    value=text[:200],
-                    scope=scope,
-                    confidence=0.76,
-                    importance=0.81,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="issue",
-                    namespace=namespace,
-                )
+        rules = [
+            {
+                "pattern": re.compile(r"\b(?:problem is(?: that)?|issue is(?: that)?)\s+([^.!?;\n]{4,220})", re.I),
+                "predicate": "issue",
+                "relation": "issue",
+                "confidence": 0.79,
+                "importance": 0.82,
+                "validator": self._is_informative,
+            },
+            {
+                "pattern": re.compile(r"\b(?:проблема(?:\s+в\s+том,\s+что)?|беда\s+в\s+том,\s+что)\s+([^.!?;\n]{4,220})", re.I),
+                "predicate": "issue",
+                "relation": "issue",
+                "confidence": 0.82,
+                "importance": 0.84,
+                "validator": self._is_informative,
+            },
+            {
+                "pattern": re.compile(r"\b(?:не работает|сломалось|ломается|падает|сыпется|не ловит)\s+([^.!?;\n]{3,180})", re.I),
+                "predicate": "issue",
+                "relation": "issue",
+                "confidence": 0.80,
+                "importance": 0.82,
+                "validator": self._is_informative,
+            },
+        ]
+        out = self._extract_pattern_facts(
+            segments=segments,
+            subject=subject,
+            scope=scope,
+            event_id=event_id,
+            namespace=namespace,
+            rules=rules,
+        )
+        captured_signatures = {self._normalized_signature(str(row.value or "")) for row in out if str(row.predicate) == "issue"}
+        for segment in list(segments or []):
+            if not self._has_any(segment, _PROBLEM_MARKERS):
+                continue
+            segment_value = segment[:200]
+            segment_signature = self._normalized_signature(segment_value)
+            if segment_signature and any(signature and signature in segment_signature for signature in captured_signatures):
+                continue
+            if segment_signature in captured_signatures:
+                continue
+            self._append_fact(
+                out,
+                subject=subject,
+                predicate="issue",
+                value=segment_value,
+                scope=scope,
+                confidence=0.74,
+                importance=0.80,
+                evidence=segment,
+                event_id=event_id,
+                relation="issue",
+                namespace=namespace,
             )
+            if segment_signature:
+                captured_signatures.add(segment_signature)
         return out
 
     def _relationship_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
-        out: list[FactRecordV2] = []
-        patterns = [
-            r"\bmy\s+(team|manager|colleague|client)\b",
-            r"\b(команда|менеджер|коллега|клиент)\b",
+        rules = [
+            {
+                "pattern": re.compile(r"\bmy\s+(team|manager|colleague|client)\b", re.I),
+                "predicate": "relationship",
+                "relation": "relationship",
+                "confidence": 0.64,
+                "importance": 0.57,
+            },
+            {
+                "pattern": re.compile(r"\b(команда|менеджер|коллега|клиент)\b", re.I),
+                "predicate": "relationship",
+                "relation": "relationship",
+                "confidence": 0.64,
+                "importance": 0.57,
+            },
         ]
-        for pattern in patterns:
-            m = re.search(pattern, text, re.I)
-            if not m:
-                continue
-            value = str(m.group(1) or "").strip().lower()
-            if not value:
-                continue
-            out.append(
-                self._mk(
-                    subject=subject,
-                    predicate="relationship",
-                    value=value,
-                    scope=scope,
-                    confidence=0.64,
-                    importance=0.57,
-                    evidence=text,
-                    event_id=event_id,
-                    relation="relationship",
-                    namespace=namespace,
-                )
-            )
-        return out
+        return self._extract_pattern_facts(
+            segments=segments,
+            subject=subject,
+            scope=scope,
+            event_id=event_id,
+            namespace=namespace,
+            rules=rules,
+        )
 
     def _temporary_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
         low = str(text or "").lower()
-        if not any(token in low for token in ("for now", "temporarily", "временно", "пока")):
+        _ = segments
+        if not any(token in low for token in ("for now", "temporarily", "временно", "пока", "пока что")):
             return []
         return [
             self._mk(
@@ -385,11 +862,12 @@ class FactExtractor:
         ]
 
     def _resolution_facts(
-        self, text: str, *, subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
         low = str(text or "").lower()
+        _ = segments
         out: list[FactRecordV2] = []
-        if any(token in low for token in ("still", "unresolved", "не решено", "все еще")):
+        if any(token in low for token in ("still", "unresolved", "не решено", "все еще", "всё ещё")):
             out.append(
                 self._mk(
                     subject=subject,
@@ -404,7 +882,7 @@ class FactExtractor:
                     namespace=namespace,
                 )
             )
-        elif any(token in low for token in ("resolved", "fixed", "починил", "решено")):
+        elif any(token in low for token in ("resolved", "fixed", "починил", "решено", "исправлено")):
             out.append(
                 self._mk(
                     subject=subject,

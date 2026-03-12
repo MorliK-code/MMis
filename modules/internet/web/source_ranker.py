@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from modules.internet.search import SearchResult
+from modules.internet.web.domain_reputation import DomainTrustPolicy
 
 
 @dataclass(frozen=True)
@@ -14,6 +16,7 @@ class RankedSource:
     bonus: float
     quality_score: float = 0.0
     freshness_score: float = 0.0
+    audit: dict[str, Any] = field(default_factory=dict)
 
 
 _OFFICIAL_DOCS_DOMAINS = (
@@ -58,6 +61,14 @@ _LOW_TRUST_PATTERNS = (
     "medium.com",
     "substack.com",
 )
+_DOCS_DOMAIN_HINTS = ("docs.", "developer.", "readthedocs", "github.com", "gitlab.com", "pypi.org", "npmjs.com")
+_FINANCE_DOMAIN_HINTS = ("bank.", "bank.gov", "minfin", "finance.", "forex", "fx", "kurs", "invest", "marketwatch")
+_WEATHER_DOMAIN_HINTS = ("weather", "meteo", "forecast", "sinoptik", "accuweather", "gismeteo")
+_NEWS_DOMAIN_HINTS = ("news", "reuters", "apnews", "bbc", "ukrinform", "cnn", "nytimes", "wsj")
+
+_MID_TRUST_TIERS = {"community_verified", "learned_mid", "policy_preferred"}
+_OPEN_WEB_TIERS = {"general_web", "forum_discussion"}
+_WEAK_TIERS = {"blog_random", "unknown", "degraded_source", "policy_risky", "policy_degraded"}
 
 
 def rank_sources(
@@ -65,31 +76,84 @@ def rank_sources(
     items: list[SearchResult],
     preferred_domains: list[str] | None = None,
     blocked_domains: list[str] | None = None,
+    trust_policy: DomainTrustPolicy | dict[str, Any] | None = None,
+    reputation_scores: dict[str, float] | None = None,
+    reputation_stats: dict[str, dict[str, Any]] | None = None,
+    query_intent: str = "generic",
+    query_category: str = "",
+    geo_hint: str = "",
+    limit_hint: int = 0,
 ) -> list[RankedSource]:
     preferred = [str(x or "").strip().lower() for x in list(preferred_domains or []) if str(x or "").strip()]
     blocked = [str(x or "").strip().lower() for x in list(blocked_domains or []) if str(x or "").strip()]
+    reputation = {
+        str(k or "").strip().lower(): _clamp(float(v), -1.0, 1.0)
+        for k, v in dict(reputation_scores or {}).items()
+        if str(k or "").strip()
+    }
+    policy = _resolve_trust_policy(trust_policy).with_runtime(
+        preferred_domains=preferred,
+        blocked_domains=blocked,
+    )
     out: list[RankedSource] = []
 
     for item in list(items or []):
         domain = str(item.source or "").strip().lower()
         if not domain:
             continue
-        if _is_blocked(domain=domain, blocked_domains=blocked):
+
+        audit = build_source_audit_entry(
+            item=item,
+            preferred_domains=preferred,
+            blocked_domains=blocked,
+            trust_policy=policy,
+            reputation_scores=reputation,
+            reputation_stats=reputation_stats,
+            query_category=query_category,
+            geo_hint=geo_hint,
+        )
+        if bool(audit.get("blocked_hit")):
             continue
 
-        trust_score, trust_tier = _trust_for(item=item)
-        preferred_bonus = 0.08 if _matches_any_domain(domain, preferred) else 0.0
-        freshness_score = _freshness_score(str(item.published_date or "").strip())
-        quality_score = _quality_score(item=item)
+        base_trust_score = float(audit.get("base_trust_score") or 0.0)
+        base_trust_tier = str(audit.get("base_trust_tier") or "unknown")
+        reputation_score = float(audit.get("reputation_score") or 0.0)
+        reputation_bonus = float(audit.get("reputation_bonus") or 0.0)
+        policy_bonus = float(audit.get("policy_bonus") or 0.0)
+        trust_tier = str(audit.get("trust_tier") or "unknown")
+        effective_trust_score = float(audit.get("trust_score") or 0.0)
+        freshness_score = float(audit.get("freshness_score") or 0.0)
+        quality_score = float(audit.get("quality_score") or 0.0)
+        geo_score = float(audit.get("geo_bonus") or 0.0)
+        category_bonus = float(audit.get("category_bonus") or 0.0)
 
         base_score = max(0.0, float(item.score or 0.0))
-        total_score = base_score + trust_score + preferred_bonus + freshness_score + quality_score
+        total_score = (
+            base_score
+            + base_trust_score
+            + policy_bonus
+            + freshness_score
+            + quality_score
+            + reputation_bonus
+            + geo_score
+            + category_bonus
+        )
+        preferred_bonus = float(audit.get("preferred_bonus") or 0.0)
+        audit["ranking_score_total"] = round(float(total_score), 6)
+        audit["filtered_out_reason"] = ""
+        audit["selected_for_evidence"] = False
         score_breakdown = {
             **dict(item.score_breakdown or {}),
-            "v2_source_trust": round(float(trust_score), 6),
+            "v2_source_trust_base": round(float(base_trust_score), 6),
+            "v2_source_trust": round(float(effective_trust_score), 6),
+            "v2_reputation_score": round(float(reputation_score), 6),
+            "v2_reputation_bonus": round(float(reputation_bonus), 6),
+            "v2_policy_bonus": round(float(policy_bonus), 6),
             "v2_preferred_bonus": round(float(preferred_bonus), 6),
             "v2_freshness_bonus": round(float(freshness_score), 6),
             "v2_quality_bonus": round(float(quality_score), 6),
+            "v2_geo_bonus": round(float(geo_score), 6),
+            "v2_category_bonus": round(float(category_bonus), 6),
         }
         row = SearchResult(
             title=item.title,
@@ -101,23 +165,126 @@ def rank_sources(
             score_breakdown=score_breakdown,
             raw={
                 **dict(item.raw or {}),
+                "v2_base_trust_tier": base_trust_tier,
                 "v2_trust_tier": trust_tier,
-                "v2_trust_score": float(trust_score),
+                "v2_base_trust_score": float(base_trust_score),
+                "v2_trust_score": float(effective_trust_score),
+                "v2_policy_state": str(audit.get("policy_state") or "neutral"),
+                "v2_policy_bonus": float(policy_bonus),
+                "v2_policy_reasons": list(audit.get("policy_reasons") or []),
+                "v2_manual_override": str(audit.get("manual_override") or ""),
+                "v2_reputation_state": str(audit.get("reputation_state") or "neutral"),
+                "v2_reputation_score": float(reputation_score),
+                "v2_reputation_bonus": float(reputation_bonus),
+                "v2_source_audit": dict(audit),
             },
         )
         out.append(
             RankedSource(
                 item=row,
-                trust_score=trust_score,
+                trust_score=effective_trust_score,
                 trust_tier=trust_tier,
-                bonus=preferred_bonus,
+                bonus=(policy_bonus + reputation_bonus),
                 quality_score=quality_score,
                 freshness_score=freshness_score,
+                audit=dict(audit),
             )
         )
 
     out.sort(key=lambda x: float(x.item.score or 0.0), reverse=True)
+    out = _rebalance_trust_mix(out, query_intent=query_intent, limit_hint=limit_hint)
+    out = _rebalance_domain_streak(out, max_streak=2)
     return out
+
+
+def build_source_audit_entry(
+    *,
+    item: SearchResult,
+    preferred_domains: list[str] | None = None,
+    blocked_domains: list[str] | None = None,
+    trust_policy: DomainTrustPolicy | dict[str, Any] | None = None,
+    reputation_scores: dict[str, float] | None = None,
+    reputation_stats: dict[str, dict[str, Any]] | None = None,
+    query_category: str = "",
+    geo_hint: str = "",
+) -> dict[str, Any]:
+    preferred = [str(x or "").strip().lower() for x in list(preferred_domains or []) if str(x or "").strip()]
+    blocked = [str(x or "").strip().lower() for x in list(blocked_domains or []) if str(x or "").strip()]
+    reputation = {
+        str(k or "").strip().lower(): _clamp(float(v), -1.0, 1.0)
+        for k, v in dict(reputation_scores or {}).items()
+        if str(k or "").strip()
+    }
+    policy = _resolve_trust_policy(trust_policy).with_runtime(
+        preferred_domains=preferred,
+        blocked_domains=blocked,
+    )
+    domain = str(item.source or "").strip().lower()
+    url = str(item.url or "").strip()
+    title = str(item.title or "").strip()
+    base_trust_score, base_trust_tier = _trust_for(item=item)
+    reputation_score = _reputation_score(domain=domain, reputation=reputation)
+    trust_assessment = policy.evaluate(
+        domain,
+        reputation_score=reputation_score,
+        query_category=query_category,
+    )
+    policy_bonus = _policy_bonus(trust_assessment=trust_assessment, base_tier=base_trust_tier)
+    reputation_bonus = _reputation_bonus(
+        reputation_score,
+        base_tier=base_trust_tier,
+        policy_state=str(trust_assessment.policy_state or ""),
+    )
+    trust_tier = (
+        "policy_blocked"
+        if bool(trust_assessment.hard_blocked)
+        else _apply_effective_tier(
+            base_tier=base_trust_tier,
+            trust_assessment=trust_assessment,
+            reputation_score=reputation_score,
+        )
+    )
+    effective_trust_score = _clamp(base_trust_score + policy_bonus + reputation_bonus, 0.0, 1.0)
+    freshness_score = _freshness_score(str(item.published_date or "").strip())
+    source_quality_score = _quality_score(item=item)
+    geo_bonus = _geo_bonus(domain=domain, geo_hint=geo_hint)
+    category_bonus = _category_bonus(domain=domain, query_category=query_category)
+    policy_state = str(trust_assessment.policy_state or "neutral")
+    preferred_bonus = policy_bonus if policy_state == "preferred" else 0.0
+    rep_stats = _reputation_stats_for(domain=domain, reputation_stats=reputation_stats)
+
+    return {
+        "domain": domain,
+        "url": url,
+        "title": title,
+        "base_trust_tier": str(base_trust_tier),
+        "trust_tier": str(trust_tier),
+        "base_trust_score": float(base_trust_score),
+        "trust_score": float(effective_trust_score),
+        "quality_score": float(source_quality_score),
+        "ranking_quality_score": float(source_quality_score),
+        "freshness_score": float(freshness_score),
+        "freshness_tag": _freshness_tag_from_score(freshness_score=freshness_score),
+        "preferred_hit": bool(policy_state == "preferred"),
+        "trusted_hit": bool(policy_state == "trusted"),
+        "blocked_hit": bool(trust_assessment.hard_blocked),
+        "risky_hit": bool(policy_state in {"risky", "degraded"}),
+        "selected_for_evidence": False,
+        "filtered_out_reason": "blocked_by_policy" if bool(trust_assessment.hard_blocked) else "",
+        "selection_reason": "",
+        "policy_state": policy_state,
+        "policy_category": str(query_category or "").strip().lower(),
+        "policy_bonus": float(policy_bonus),
+        "preferred_bonus": float(preferred_bonus),
+        "policy_reasons": [str(x or "").strip() for x in list(getattr(trust_assessment, "reasons", ()) or ()) if str(x or "").strip()],
+        "manual_override": str(getattr(trust_assessment, "manual_override", "") or ""),
+        "reputation_score": float(reputation_score),
+        "reputation_bonus": float(reputation_bonus),
+        "reputation_state": str(getattr(trust_assessment, "reputation_state", "neutral") or "neutral"),
+        "reputation_stats": dict(rep_stats),
+        "geo_bonus": float(geo_bonus),
+        "category_bonus": float(category_bonus),
+    }
 
 
 def _trust_for(*, item: SearchResult) -> tuple[float, str]:
@@ -145,6 +312,97 @@ def _trust_for(*, item: SearchResult) -> tuple[float, str]:
     return (0.03, "general_web")
 
 
+def _reputation_score(*, domain: str, reputation: dict[str, float]) -> float:
+    src = str(domain or "").strip().lower()
+    if not src:
+        return 0.0
+    if src in reputation:
+        return _clamp(float(reputation.get(src) or 0.0), -1.0, 1.0)
+    for key, value in reputation.items():
+        if src == key or src.endswith("." + key):
+            return _clamp(float(value), -1.0, 1.0)
+    return 0.0
+
+
+def _resolve_trust_policy(value: DomainTrustPolicy | dict[str, Any] | None) -> DomainTrustPolicy:
+    if isinstance(value, DomainTrustPolicy):
+        return value
+    if isinstance(value, dict):
+        return DomainTrustPolicy.from_config(value)
+    return DomainTrustPolicy()
+
+
+def _policy_bonus(*, trust_assessment, base_tier: str) -> float:
+    state = str(getattr(trust_assessment, "policy_state", "") or "").strip().lower()
+    manual = bool(str(getattr(trust_assessment, "manual_override", "") or "").strip())
+    tier = str(base_tier or "").strip().lower()
+    if tier in _WEAK_TIERS or tier in _OPEN_WEB_TIERS:
+        positive_scale = 1.0
+        negative_scale = 1.0
+    elif tier in _MID_TRUST_TIERS:
+        positive_scale = 0.7
+        negative_scale = 0.8
+    else:
+        positive_scale = 0.5
+        negative_scale = 0.6
+
+    manual_boost = 0.04 if manual else 0.0
+    if state == "trusted":
+        return (0.16 * positive_scale) + manual_boost
+    if state == "preferred":
+        return (0.10 * positive_scale) + (0.02 if manual else 0.0)
+    if state == "risky":
+        return -((0.14 * negative_scale) + manual_boost)
+    if state == "degraded":
+        return -((0.22 * negative_scale) + manual_boost)
+    return 0.0
+
+
+def _reputation_bonus(reputation_score: float, *, base_tier: str, policy_state: str = "") -> float:
+    score = _clamp(float(reputation_score), -1.0, 1.0)
+    tier = str(base_tier or "").strip().lower()
+    policy = str(policy_state or "").strip().lower()
+    if tier in {"official_docs", "official_repo_release", "official_repo", "vendor_docs", "institutional"}:
+        scale = 0.04
+    elif tier in {"reputable_tech"}:
+        scale = 0.06
+    else:
+        scale = 0.12
+    if policy in {"trusted", "preferred"} and score > 0.0:
+        scale *= 0.85
+    if policy in {"risky", "degraded"} and score < 0.0:
+        scale *= 1.15
+    return score * scale
+
+
+def _apply_reputation_tier(*, base_tier: str, reputation_score: float) -> str:
+    tier = str(base_tier or "").strip().lower()
+    score = _clamp(float(reputation_score), -1.0, 1.0)
+    if score >= 0.40 and tier in {"general_web", "forum_discussion", "blog_random", "unknown"}:
+        return "learned_mid"
+    if score <= -0.55 and tier in {"general_web", "forum_discussion", "blog_random", "unknown"}:
+        return "degraded_source"
+    return tier
+
+
+def _apply_effective_tier(*, base_tier: str, trust_assessment, reputation_score: float) -> str:
+    state = str(getattr(trust_assessment, "policy_state", "") or "").strip().lower()
+    tier = str(base_tier or "").strip().lower()
+    if state == "trusted":
+        if tier in _OPEN_WEB_TIERS or tier in _WEAK_TIERS or tier in {"unknown"}:
+            return "policy_trusted"
+        return tier
+    if state == "preferred":
+        if tier in _OPEN_WEB_TIERS or tier in _WEAK_TIERS or tier in {"unknown"}:
+            return "policy_preferred"
+        return tier
+    if state == "risky":
+        return "policy_risky"
+    if state == "degraded":
+        return "policy_degraded"
+    return _apply_reputation_tier(base_tier=tier, reputation_score=reputation_score)
+
+
 def _quality_score(*, item: SearchResult) -> float:
     title = str(item.title or "").strip()
     snippet = str(item.snippet or "").strip()
@@ -152,6 +410,31 @@ def _quality_score(*, item: SearchResult) -> float:
     snippet_bonus = min(0.05, float(len(snippet)) / 700.0)
     has_digits_bonus = 0.02 if any(ch.isdigit() for ch in (title + " " + snippet)) else 0.0
     return max(0.0, min(0.12, title_bonus + snippet_bonus + has_digits_bonus))
+
+
+def _reputation_stats_for(*, domain: str, reputation_stats: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
+    src = str(domain or "").strip().lower()
+    if not src:
+        return {}
+    stats = dict(reputation_stats or {})
+    if src in stats and isinstance(stats.get(src), dict):
+        row = dict(stats.get(src) or {})
+    else:
+        row = {}
+        for key, value in stats.items():
+            token = str(key or "").strip().lower()
+            if src == token or src.endswith("." + token):
+                row = dict(value or {}) if isinstance(value, dict) else {}
+                break
+    if not row:
+        return {}
+    return {
+        "score": float(row.get("score") or 0.0),
+        "evidence_count": int(row.get("evidence_count") or 0),
+        "positive_count": int(row.get("positive_count") or 0),
+        "negative_count": int(row.get("negative_count") or 0),
+        "last_updated": str(row.get("last_updated") or ""),
+    }
 
 
 def _freshness_score(published_date: str) -> float:
@@ -166,6 +449,17 @@ def _freshness_score(published_date: str) -> float:
     if age_days <= 30:
         return 0.02
     return 0.0
+
+
+def _freshness_tag_from_score(*, freshness_score: float) -> str:
+    value = max(0.0, float(freshness_score))
+    if value >= 0.05:
+        return "fresh"
+    if value >= 0.02:
+        return "recent"
+    if value > 0.0:
+        return "recent"
+    return "unknown"
 
 
 def _parse_day(value: str) -> dt.date | None:
@@ -208,3 +502,160 @@ def _matches_any_domain(domain: str, candidates: tuple[str, ...] | list[str]) ->
         if cur in src:
             return True
     return False
+
+
+def _rebalance_trust_mix(rows: list[RankedSource], *, query_intent: str, limit_hint: int) -> list[RankedSource]:
+    ranked = list(rows or [])
+    if len(ranked) <= 2:
+        return ranked
+
+    trusted: list[RankedSource] = []
+    mid: list[RankedSource] = []
+    open_web: list[RankedSource] = []
+    weak: list[RankedSource] = []
+
+    for row in ranked:
+        tier = str(row.trust_tier or "").strip().lower()
+        if tier in _WEAK_TIERS:
+            weak.append(row)
+        elif tier in _MID_TRUST_TIERS:
+            mid.append(row)
+        elif tier in _OPEN_WEB_TIERS:
+            open_web.append(row)
+        else:
+            trusted.append(row)
+
+    if not trusted and not mid:
+        return ranked
+
+    high_stakes = _is_high_stakes_intent(query_intent)
+    trusted_ratio = 0.60 if high_stakes else 0.40
+    cap = max(3, int(limit_hint) if int(limit_hint or 0) > 0 else min(8, len(ranked)))
+    desired_trusted = int(round(float(cap) * trusted_ratio))
+    desired_open = max(0, cap - desired_trusted)
+
+    trusted_pool: list[RankedSource] = []
+    trusted_pool.extend(trusted)
+    trusted_pool.extend(mid)
+    open_pool = list(open_web)
+    weak_pool = list(weak)
+
+    selected: list[RankedSource] = []
+    trusted_used = 0
+    open_used = 0
+    while len(selected) < cap and (trusted_pool or open_pool):
+        candidate: RankedSource | None = None
+        if trusted_used < desired_trusted and trusted_pool:
+            candidate = trusted_pool.pop(0)
+            trusted_used += 1
+        elif open_used < desired_open and open_pool:
+            candidate = open_pool.pop(0)
+            open_used += 1
+        elif trusted_pool:
+            candidate = trusted_pool.pop(0)
+            trusted_used += 1
+        elif open_pool:
+            candidate = open_pool.pop(0)
+            open_used += 1
+        if candidate is None:
+            break
+        selected.append(candidate)
+
+    tail = list(trusted_pool) + list(open_pool) + list(weak_pool)
+    return selected + tail
+
+
+def _is_trusted_tier(value: str) -> bool:
+    tier = str(value or "").strip().lower()
+    return tier not in _WEAK_TIERS and tier not in _OPEN_WEB_TIERS
+
+
+def _is_high_stakes_intent(query_intent: str) -> bool:
+    token = str(query_intent or "").strip().lower()
+    return token in {"weather", "fx_rate", "currency_rate", "news", "news_release"}
+
+
+def _geo_bonus(*, domain: str, geo_hint: str) -> float:
+    host = str(domain or "").strip().lower()
+    geo = str(geo_hint or "").strip().lower()
+    if not host or not geo:
+        return 0.0
+    if host.startswith("www."):
+        host = host[4:]
+    if any(token in geo for token in ("ukraine", "kyiv", "kiev", "украин", "україн", "киев", "київ", "ua")):
+        if host.endswith(".ua") or host.endswith(".com.ua"):
+            return 0.12
+        if host.endswith(".pl") or host.endswith(".de"):
+            return 0.02
+    return 0.0
+
+
+def _category_bonus(*, domain: str, query_category: str) -> float:
+    category = str(query_category or "").strip().lower()
+    host = str(domain or "").strip().lower()
+    if not category or not host:
+        return 0.0
+    if _matches_any_domain(host, _LOW_TRUST_PATTERNS):
+        return 0.0
+    if category in {"version", "docs"}:
+        if _matches_any_hint(host, _DOCS_DOMAIN_HINTS):
+            return 0.06
+        if _matches_any_hint(host, _FINANCE_DOMAIN_HINTS + _WEATHER_DOMAIN_HINTS):
+            return -0.08
+        return 0.0
+    if category == "finance":
+        if _matches_any_hint(host, _FINANCE_DOMAIN_HINTS):
+            return 0.08
+        if _matches_any_hint(host, _DOCS_DOMAIN_HINTS + _WEATHER_DOMAIN_HINTS):
+            return -0.12
+        return 0.0
+    if category == "weather":
+        if _matches_any_hint(host, _WEATHER_DOMAIN_HINTS):
+            return 0.08
+        if _matches_any_hint(host, _DOCS_DOMAIN_HINTS + _FINANCE_DOMAIN_HINTS):
+            return -0.12
+        return 0.0
+    if category == "news":
+        if _matches_any_hint(host, _NEWS_DOMAIN_HINTS):
+            return 0.06
+        if _matches_any_hint(host, _DOCS_DOMAIN_HINTS):
+            return -0.08
+        return 0.0
+    return 0.0
+
+
+def _matches_any_hint(domain: str, hints: tuple[str, ...]) -> bool:
+    host = str(domain or "").strip().lower()
+    if not host:
+        return False
+    return any(str(hint or "").strip().lower() in host for hint in hints)
+
+
+def _rebalance_domain_streak(rows: list[RankedSource], *, max_streak: int) -> list[RankedSource]:
+    if max_streak <= 0:
+        return list(rows or [])
+    pool = list(rows or [])
+    if len(pool) <= max_streak:
+        return pool
+    out: list[RankedSource] = []
+    while pool:
+        pick_idx = 0
+        for idx, row in enumerate(pool):
+            domain = str(row.item.source or "").strip().lower()
+            if not domain:
+                pick_idx = idx
+                break
+            if len(out) < max_streak:
+                pick_idx = idx
+                break
+            recent_domains = [str(x.item.source or "").strip().lower() for x in out[-max_streak:]]
+            if all(domain == recent for recent in recent_domains):
+                continue
+            pick_idx = idx
+            break
+        out.append(pool.pop(pick_idx))
+    return out
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, float(value)))

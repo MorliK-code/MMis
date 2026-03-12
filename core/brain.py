@@ -21,7 +21,7 @@ from memory.text_sanitizer import (
 )
 from metadata.metadata_extractor import MetadataExtractor
 from utils.datetime_local import parse_time_to_epoch
-from utils.logger import get_logger, log_json
+from utils.logger import append_human_log, get_logger, log_json
 
 
 LOGGER = get_logger(__name__)
@@ -161,7 +161,6 @@ class Brain:
         state_map.setdefault("last_signals", state_snapshot.last_signals)
         state_map.setdefault("last_actions", state_snapshot.last_actions)
         state_map.setdefault("web_mode", state_snapshot.web_mode)
-        state_map.setdefault("web_auto_profile", state_snapshot.web_auto_profile)
         state_map.setdefault("thinking_enabled", state_snapshot.thinking_enabled)
         state_map.setdefault("output_format", state_snapshot.output_format)
         character_quality_profile = self._character_quality_profile(state_snapshot=state_snapshot, state_map=state_map)
@@ -200,7 +199,7 @@ class Brain:
                 policies=policies,
             )
             result = self._to_brain_result(route=route, pipeline_result=pipeline_result)
-            self._apply_memory_ops(result.memory_ops)
+            memory_apply_summary = self._apply_memory_ops(result.memory_ops)
             self._update_state_after_success(
                 route=route,
                 event_name=event_name,
@@ -208,12 +207,20 @@ class Brain:
                 result=result,
                 track_state=state_updates_enabled,
             )
-            self._persist_turns(
+            persisted_summary = self._persist_turns(
                 route=route,
                 user_text=text,
                 result=result,
                 meta=meta_for_pipeline,
                 non_persistent_turn=non_persistent_turn,
+            )
+            self._append_turn_summaries(
+                result=result,
+                route=route,
+                user_text=text,
+                meta=meta_for_pipeline,
+                memory_apply_summary=memory_apply_summary,
+                persisted_summary=persisted_summary,
             )
         except Exception as exc:
             result = self._build_error_result(route=route, error=exc)
@@ -264,7 +271,8 @@ class Brain:
             status="ok",
         )
 
-    def _apply_memory_ops(self, ops: list[dict[str, Any]]) -> None:
+    def _apply_memory_ops(self, ops: list[dict[str, Any]]) -> dict[str, Any]:
+        summary = self._empty_memory_write_summary()
         for op in list(ops or []):
             if not isinstance(op, dict):
                 continue
@@ -290,14 +298,14 @@ class Brain:
                 value = str(op.get("value") or "").strip().lower()
                 if value in {"auto", "on", "off"}:
                     self.state_manager.patch({"web_mode": value})
-            elif key == "state_web_auto_profile":
-                value = str(op.get("value") or "").strip().lower()
-                if value in {"balanced", "aggressive"}:
-                    self.state_manager.patch({"web_auto_profile": value})
             elif key == "state_scoped_settings":
                 value = op.get("value")
                 if isinstance(value, dict):
                     self.state_manager.patch({"command_scopes": dict(value)})
+            elif key == "state_patch":
+                value = op.get("value")
+                if isinstance(value, dict) and value:
+                    self.state_manager.patch(dict(value))
             elif key == "state_personality":
                 value = str(op.get("value") or "").strip().lower()
                 if value:
@@ -355,18 +363,35 @@ class Brain:
                 if text:
                     self.state_manager.set_dialog_summary(text)
                     try:
-                        self.memory_manager.ingest_event(
+                        ingest_result = self.memory_manager.ingest_event(
                             MemoryEvent(
                                 role="system",
                                 text=text,
                                 namespace=str(self.state_manager.get("conversation_id") or "default"),
                                 scope=MemoryScope.SESSION,
                                 memory_type=MemoryType.SUMMARY,
-                                metadata={"source": "rolling_summary", "importance": 0.6, "confidence": 0.7},
+                                metadata={
+                                    "source": "rolling_summary",
+                                    "importance": 0.6,
+                                    "confidence": 0.7,
+                                    "trace_id": str(op.get("trace_id") or ""),
+                                    "request_id": str(op.get("request_id") or ""),
+                                    "turn_id": op.get("turn_id"),
+                                    "conversation_id": str(
+                                        op.get("conversation_id")
+                                        or self.state_manager.get("conversation_id")
+                                        or "default"
+                                    ),
+                                },
                             )
                         )
+                        self._capture_memory_ingest(
+                            summary,
+                            ingest_result,
+                            bucket="conversation_summary",
+                        )
                     except Exception:
-                        pass
+                        self._append_summary_warning(summary, "conversation_summary_failed")
             elif key == "web_memory_write":
                 if self.memory_manager is None:
                     continue
@@ -375,8 +400,10 @@ class Brain:
                     or self.state_manager.get("conversation_id")
                     or "default"
                 ).strip() or "default"
+                context = self._log_context_from_meta(op, conversation_id=default_namespace)
                 items = [x for x in list(op.get("items") or []) if isinstance(x, dict)]
                 written = 0
+                summary["planned_web_memory_items"] += int(len(items))
                 for row in list(items):
                     text = str(row.get("text") or "").strip()
                     if not text:
@@ -390,6 +417,10 @@ class Brain:
                     write_type = str(row.get("write_type") or "").strip().lower()
                     if write_type:
                         metadata.setdefault("web_v2_write_type", write_type)
+                    metadata.setdefault("trace_id", str(context.get("trace_id") or ""))
+                    metadata.setdefault("request_id", str(context.get("request_id") or ""))
+                    metadata.setdefault("turn_id", context.get("turn_id"))
+                    metadata.setdefault("conversation_id", str(context.get("conversation_id") or namespace))
                     confidence = row.get("confidence")
                     importance = row.get("importance")
                     ttl_sec = row.get("ttl_sec")
@@ -420,12 +451,16 @@ class Brain:
                             )
                         )
                         written += 1
+                        self._capture_memory_ingest(summary, ingest_result, bucket="web_memory_write")
                     except Exception:
+                        self._append_summary_warning(summary, "web_memory_write_failed")
                         continue
                 if written > 0:
                     log_json(
                         LOGGER,
                         "web_memory_write_applied",
+                        summary=f"written={written} namespace={default_namespace}",
+                        context=context,
                         namespace=default_namespace,
                         written=written,
                     )
@@ -448,6 +483,7 @@ class Brain:
                     if tags.get("topic"):
                         ctx["topic"] = str(tags.get("topic"))
                     self.state_manager.patch({"context_tags": ctx})
+        return summary
 
     def _sync_active_character_manifest(self, state_map: dict[str, Any]) -> None:
         active = str((state_map or {}).get("active_character_id") or "").strip().lower()
@@ -499,16 +535,17 @@ class Brain:
         result: BrainResult,
         meta: dict[str, Any],
         non_persistent_turn: bool = False,
-    ) -> None:
+    ) -> dict[str, Any]:
+        summary = self._empty_memory_write_summary()
         if route not in {"chat", "command"}:
-            return
+            return summary
         if bool(non_persistent_turn):
-            return
+            return summary
         if not bool(meta.get("store_turn", True)):
-            return
+            return summary
         # By default, do not persist slash-commands to memory stores.
         if route == "command" and not bool(meta.get("store_command_turns", False)):
-            return
+            return summary
 
         source = str(meta.get("source") or route or "text")
         conversation_id = str(meta.get("conversation_id") or self.state_manager.get("conversation_id") or "")
@@ -521,6 +558,7 @@ class Brain:
             turn_id = int(self.state_manager.get("turn_id") or 0)
         quality_profile = str(meta.get("quality_profile") or self.state_manager.get("quality_profile") or "BALANCED")
         trace_id = str(meta.get("trace_id") or "")
+        request_id = str(meta.get("request_id") or "")
         model = str(result.stats.get("served_model") or meta.get("model") or "")
 
         state_snapshot = self.state_manager.snapshot()
@@ -551,7 +589,7 @@ class Brain:
                 latency_ms=0.0,
                 personality_id=personality_id,
             )
-            self.memory_manager.ingest_event(
+            ingest_result = self.memory_manager.ingest_event(
                 MemoryEvent(
                     role="user",
                     text=user_payload,
@@ -561,13 +599,16 @@ class Brain:
                     metadata={
                         **dict(user_meta or {}),
                         "trace_id": trace_id,
+                        "request_id": request_id,
                         "source": source,
                         "model": model,
                         "quality_profile": quality_profile,
                         "turn_id": turn_id,
+                        "conversation_id": conversation_id or "default",
                     },
                 )
             )
+            self._capture_memory_ingest(summary, ingest_result, bucket="user_turn")
 
         assistant_sanitized = clean_assistant_text_for_memory(result)
         assistant_payload = str(assistant_sanitized.text or "").strip()
@@ -575,6 +616,8 @@ class Brain:
             log_json(
                 LOGGER,
                 "memory_text_sanitized",
+                summary=f"reason={assistant_sanitized.reason} changed={int(bool(assistant_sanitized.changed))}",
+                context=self._log_context_from_meta(meta, conversation_id=conversation_id),
                 reason=assistant_sanitized.reason,
                 changed=bool(assistant_sanitized.changed),
                 had_service_sections=bool(assistant_sanitized.had_service_sections),
@@ -586,6 +629,11 @@ class Brain:
             log_json(
                 LOGGER,
                 "memory_text_sanitized",
+                summary=(
+                    f"reason=guard_{str(guard.reason or 'fallback_strip')} "
+                    f"changed={int(bool(guard.changed))}"
+                ),
+                context=self._log_context_from_meta(meta, conversation_id=conversation_id),
                 reason=f"guard_{str(guard.reason or 'fallback_strip')}",
                 changed=bool(guard.changed),
                 had_service_sections=bool(guard.had_service_sections),
@@ -607,7 +655,7 @@ class Brain:
             )
             if persona_snapshot:
                 assistant_meta["persona_snapshot"] = dict(persona_snapshot)
-            self.memory_manager.ingest_event(
+            ingest_result = self.memory_manager.ingest_event(
                 MemoryEvent(
                     role="assistant",
                     text=assistant_payload,
@@ -618,13 +666,233 @@ class Brain:
                         **dict(assistant_meta or {}),
                         "thinking": str(result.thinking or ""),
                         "trace_id": trace_id,
+                        "request_id": request_id,
                         "source": source,
                         "model": model,
                         "quality_profile": quality_profile,
                         "turn_id": turn_id,
+                        "conversation_id": conversation_id or "default",
                     },
                 )
             )
+            self._capture_memory_ingest(summary, ingest_result, bucket="assistant_turn")
+        return summary
+
+    def _append_turn_summaries(
+        self,
+        *,
+        result: BrainResult,
+        route: str,
+        user_text: str,
+        meta: dict[str, Any],
+        memory_apply_summary: dict[str, Any],
+        persisted_summary: dict[str, Any],
+    ) -> None:
+        turn_summaries = _as_dict(meta.get("turn_log_summaries"))
+        planned_write_summary = _as_dict(turn_summaries.get("memory_write_summary"))
+        combined = self._merge_memory_write_summaries(memory_apply_summary, persisted_summary)
+        memory_hits = int(_as_dict(turn_summaries.get("memory_summary")).get("selected_hits") or 0)
+        intent_summary = _as_dict(turn_summaries.get("intent_summary"))
+        intent_alignment_summary = _as_dict(turn_summaries.get("intent_alignment_summary"))
+        web_summary = _as_dict(turn_summaries.get("web_summary"))
+        web_issues = [str(x).strip() for x in list(web_summary.get("issues") or []) if str(x).strip()]
+        web_warnings = [str(x).strip() for x in list(web_summary.get("warnings") or []) if str(x).strip()]
+        warnings = [str(x).strip() for x in list(meta.get("turn_log_warnings") or []) if str(x).strip()]
+        warnings.extend([str(x).strip() for x in list(combined.get("warnings") or []) if str(x).strip()])
+        warnings.extend(web_warnings)
+        warnings = [x for idx, x in enumerate(warnings) if x and x not in warnings[:idx]]
+        issues = [x for idx, x in enumerate(web_issues) if x and x not in web_issues[:idx]]
+        context = self._log_context_from_meta(meta, conversation_id=str(meta.get("conversation_id") or ""))
+
+        memory_payload = {
+            "route": str(route or ""),
+            "queue_only": False,
+            "queued_ops": int(planned_write_summary.get("queued_ops") or 0),
+            "queued_turn_user": int(planned_write_summary.get("queued_turn_user") or 0),
+            "queued_turn_assistant": int(planned_write_summary.get("queued_turn_assistant") or 0),
+            "queued_web_memory_items": int(planned_write_summary.get("queued_web_memory_items") or 0),
+            "queued_conversation_summaries": int(planned_write_summary.get("queued_conversation_summaries") or 0),
+            "attempted_writes": int(combined.get("attempted_writes") or 0),
+            "stored_records": int(combined.get("stored_records") or 0),
+            "facts_extracted": int(combined.get("facts_extracted") or 0),
+            "promotions": int(combined.get("promotions") or 0),
+            "user_turns_written": int(combined.get("user_turns_written") or 0),
+            "assistant_turns_written": int(combined.get("assistant_turns_written") or 0),
+            "conversation_summaries_written": int(combined.get("conversation_summaries_written") or 0),
+            "web_memory_items_written": int(combined.get("web_memory_items_written") or 0),
+            "warnings": list(warnings),
+        }
+        memory_summary_text = (
+            f"queued={memory_payload['queued_ops']} written={memory_payload['attempted_writes']} "
+            f"facts={memory_payload['facts_extracted']} promotions={memory_payload['promotions']}"
+        )
+        result.logs.append(
+            "summary=memory_write_summary "
+            f"trace={context.get('trace_id') or '-'} "
+            f"request={context.get('request_id') or '-'} "
+            f"turn={context.get('turn_id') or '-'} "
+            f"conversation={context.get('conversation_id') or '-'} "
+            f"{memory_summary_text}"
+        )
+        log_json(LOGGER, "memory_write_summary", summary=memory_summary_text, context=context, **memory_payload)
+
+        final_payload = {
+            "route": str(route or ""),
+            "user_text": str(user_text or ""),
+            "final_intent": str(
+                intent_summary.get("intent")
+                or intent_alignment_summary.get("corrected_intent")
+                or ""
+            ),
+            "original_intent": str(
+                intent_alignment_summary.get("original_intent")
+                or intent_summary.get("original_intent")
+                or intent_summary.get("intent")
+                or ""
+            ),
+            "corrected_intent": str(
+                intent_alignment_summary.get("corrected_intent")
+                or intent_summary.get("corrected_intent")
+                or intent_summary.get("intent")
+                or ""
+            ),
+            "intent_alignment_applied": bool(
+                intent_alignment_summary.get("applied")
+                if intent_alignment_summary.get("applied") is not None
+                else intent_summary.get("intent_alignment_applied")
+            ),
+            "intent_alignment_reason": str(
+                intent_alignment_summary.get("reason")
+                or intent_summary.get("intent_alignment_reason")
+                or ""
+            ),
+            "web_intent": str(
+                intent_alignment_summary.get("web_intent")
+                or intent_summary.get("web_intent")
+                or web_summary.get("resolved_intent")
+                or ""
+            ),
+            "intent_confidence": float(intent_summary.get("intent_confidence") or 0.0),
+            "web_used": bool(web_summary.get("web_used", False)),
+            "web_mode": str(web_summary.get("mode") or meta.get("web_mode") or ""),
+            "web_result_count": int(web_summary.get("result_count") or 0),
+            "web_sources_scanned": int(_as_dict(web_summary.get("sources")).get("scanned") or 0),
+            "web_sources_selected": int(_as_dict(web_summary.get("sources")).get("selected") or 0),
+            "memory_hits": int(memory_hits),
+            "facts_extracted": int(combined.get("facts_extracted") or 0),
+            "promotions": int(combined.get("promotions") or 0),
+            "issues": list(issues),
+            "warnings": list(warnings),
+            "status": str(result.status or "ok"),
+        }
+        final_summary_text = (
+            f"intent={final_payload['final_intent'] or '-'} "
+            f"web_used={str(bool(final_payload['web_used'])).lower()} "
+            f"memory_hits={final_payload['memory_hits']} "
+            f"facts={final_payload['facts_extracted']} "
+            f"promotions={final_payload['promotions']} "
+            f"warnings={len(warnings)}"
+        )
+        result.logs.append(
+            "summary=final_turn_summary "
+            f"trace={context.get('trace_id') or '-'} "
+            f"request={context.get('request_id') or '-'} "
+            f"turn={context.get('turn_id') or '-'} "
+            f"conversation={context.get('conversation_id') or '-'} "
+            f"{final_summary_text}"
+        )
+        log_json(LOGGER, "final_turn_summary", summary=final_summary_text, context=context, **final_payload)
+        append_human_log(
+            "TURN",
+            context=context,
+            lines=_human_turn_summary_lines(
+                route=str(route or ""),
+                user_text=str(user_text or ""),
+                intent_summary=intent_summary,
+                intent_alignment_summary=intent_alignment_summary,
+                web_summary=web_summary,
+                memory_hits=memory_hits,
+                facts_extracted=int(combined.get("facts_extracted") or 0),
+                promotions=int(combined.get("promotions") or 0),
+                warnings=warnings,
+                issues=issues,
+                status=str(result.status or "ok"),
+            ),
+        )
+
+    @staticmethod
+    def _empty_memory_write_summary() -> dict[str, Any]:
+        return {
+            "attempted_writes": 0,
+            "stored_records": 0,
+            "facts_extracted": 0,
+            "promotions": 0,
+            "user_turns_written": 0,
+            "assistant_turns_written": 0,
+            "conversation_summaries_written": 0,
+            "web_memory_items_written": 0,
+            "planned_web_memory_items": 0,
+            "warnings": [],
+        }
+
+    @staticmethod
+    def _append_summary_warning(summary: dict[str, Any], warning: str) -> None:
+        text = str(warning or "").strip()
+        if not text:
+            return
+        warnings = [str(x).strip() for x in list(summary.get("warnings") or []) if str(x).strip()]
+        if text not in warnings:
+            warnings.append(text)
+        summary["warnings"] = warnings
+
+    def _capture_memory_ingest(self, summary: dict[str, Any], ingest_result, *, bucket: str) -> None:
+        summary["attempted_writes"] = int(summary.get("attempted_writes") or 0) + 1
+        stored_ids = list(getattr(ingest_result, "stored_ids", []) or [])
+        promoted_ids = list(getattr(ingest_result, "promoted_ids", []) or [])
+        extracted_facts = list(getattr(ingest_result, "extracted_facts", []) or [])
+        summary["stored_records"] = int(summary.get("stored_records") or 0) + len(stored_ids)
+        summary["facts_extracted"] = int(summary.get("facts_extracted") or 0) + len(extracted_facts)
+        summary["promotions"] = int(summary.get("promotions") or 0) + len(promoted_ids)
+        key = str(bucket or "").strip().lower()
+        if key == "user_turn":
+            summary["user_turns_written"] = int(summary.get("user_turns_written") or 0) + 1
+        elif key == "assistant_turn":
+            summary["assistant_turns_written"] = int(summary.get("assistant_turns_written") or 0) + 1
+        elif key == "conversation_summary":
+            summary["conversation_summaries_written"] = int(summary.get("conversation_summaries_written") or 0) + 1
+        elif key == "web_memory_write":
+            summary["web_memory_items_written"] = int(summary.get("web_memory_items_written") or 0) + 1
+
+    @staticmethod
+    def _merge_memory_write_summaries(*parts: dict[str, Any]) -> dict[str, Any]:
+        out = Brain._empty_memory_write_summary()
+        for part in list(parts or []):
+            row = dict(part or {})
+            for key in (
+                "attempted_writes",
+                "stored_records",
+                "facts_extracted",
+                "promotions",
+                "user_turns_written",
+                "assistant_turns_written",
+                "conversation_summaries_written",
+                "web_memory_items_written",
+                "planned_web_memory_items",
+            ):
+                out[key] = int(out.get(key) or 0) + int(row.get(key) or 0)
+            for warning in list(row.get("warnings") or []):
+                Brain._append_summary_warning(out, str(warning or ""))
+        return out
+
+    @staticmethod
+    def _log_context_from_meta(meta: dict[str, Any], *, conversation_id: str) -> dict[str, Any]:
+        row = dict(meta or {})
+        return {
+            "trace_id": str(row.get("trace_id") or "").strip(),
+            "request_id": str(row.get("request_id") or row.get("trace_id") or "").strip(),
+            "turn_id": str(row.get("turn_id") or "").strip(),
+            "conversation_id": str(row.get("conversation_id") or conversation_id or "").strip(),
+        }
 
     def _extract_turn_metadata(self, *, text: str, state: dict[str, Any], last_messages) -> dict[str, Any]:
         src = str(text or "").strip()
@@ -899,6 +1167,75 @@ def _as_dict(value) -> dict[str, Any]:
         return dict(vars(value))
     except Exception:
         return {}
+
+
+def _human_turn_summary_lines(
+    *,
+    route: str,
+    user_text: str,
+    intent_summary: dict[str, Any],
+    intent_alignment_summary: dict[str, Any],
+    web_summary: dict[str, Any],
+    memory_hits: int,
+    facts_extracted: int,
+    promotions: int,
+    warnings: list[str],
+    issues: list[str],
+    status: str,
+) -> list[str]:
+    web_sources = _as_dict(web_summary.get("sources"))
+    evidence = _as_dict(web_summary.get("evidence"))
+    intent = str(intent_summary.get("intent") or "").strip() or "-"
+    intent_conf = float(intent_summary.get("intent_confidence") or 0.0)
+    alignment_applied = bool(
+        intent_alignment_summary.get("applied")
+        if intent_alignment_summary.get("applied") is not None
+        else intent_summary.get("intent_alignment_applied")
+    )
+    original_intent = str(
+        intent_alignment_summary.get("original_intent")
+        or intent_summary.get("original_intent")
+        or ""
+    ).strip()
+    alignment_reason = str(
+        intent_alignment_summary.get("reason")
+        or intent_summary.get("intent_alignment_reason")
+        or ""
+    ).strip()
+    web_used = bool(web_summary.get("web_used", False))
+    mode = str(web_summary.get("mode") or "").strip() or "NO_SEARCH"
+    scanned = int(web_sources.get("scanned") or 0)
+    selected = int(web_sources.get("selected") or 0)
+    evidence_count = int(evidence.get("count") or 0)
+    quality_score = float(evidence.get("quality_score") or 0.0)
+    issue_text = ", ".join(str(x).strip() for x in list(issues or []) if str(x).strip()) or "none"
+    warning_text = ", ".join(str(x).strip() for x in list(warnings or []) if str(x).strip()) or "none"
+    return [
+        f"user: {_clip_text(user_text, max_chars=220) or '-'}",
+        (
+            f"intent: {intent} ({intent_conf:.2f}) route={route or '-'} status={status or 'ok'}"
+            + (
+                f" aligned_from={original_intent} reason={alignment_reason or '-'}"
+                if alignment_applied and original_intent and original_intent != intent
+                else ""
+            )
+        ),
+        (
+            f"web: used={'yes' if web_used else 'no'} mode={mode} "
+            f"sources={scanned}/{selected} evidence={evidence_count} quality={quality_score:.3f}"
+        ),
+        f"memory: hits={int(memory_hits)} facts={int(facts_extracted)} promotions={int(promotions)}",
+        f"issues: {issue_text}",
+        f"warnings: {warning_text}",
+    ]
+
+
+def _clip_text(value: Any, *, max_chars: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    limit = max(32, int(max_chars or 0))
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def _normalize_command_candidate(value: str) -> str:

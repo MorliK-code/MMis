@@ -8,6 +8,7 @@ from typing import Any
 
 from config.settings import DATA_DIR, get_model_profiles
 from llm.provider_base import LLMProviderBase, LLMRequest, Message
+from llm.task_router import run_task_model_json
 from modules.character.mode_profile import resolve_mode_profile
 from modules.character.storage import CharacterStorage
 from utils.datetime_local import now_local_iso
@@ -562,6 +563,71 @@ class StudioGenerator:
         known_modes = self._known_modes()
         known_chars = self._known_character_ids()
         llm_profiles_enum = self._llm_profile_enum_for_prompt()
+        system_prompt = (
+            "РўС‹ Р°РЅР°Р»РёР·РёСЂСѓРµС€СЊ Р·Р°РїСЂРѕСЃ РґР»СЏ Specs Studio. "
+            "Р’РµСЂРЅРё С‚РѕР»СЊРєРѕ JSON. Р‘РµР· РєРѕРјРјРµРЅС‚Р°СЂРёРµРІ. "
+            "Р¤РѕСЂРјР°С‚: "
+            "{"
+            "\"operation_type\":\"create_character|update_character|update_modes|mixed|build_character_pack\","
+            "\"targets\":{\"character_ids\":[],\"mode_ids\":[],\"scope\":\"global|character|mixed\"},"
+            "\"character\":{"
+            "\"character_id\":\"\","
+            "\"display_name\":\"\","
+            "\"vibe\":\"balanced|playful|strict|soft\","
+            "\"technicality\":0.0,"
+            "\"energy\":0.0,"
+            "\"default_mode\":\"\","
+            "\"extra_modes\":[],"
+            f"\"llm_profile\":\"{llm_profiles_enum}\","
+            "\"set_active\":true"
+            "},"
+            "\"mode_changes\":[{"
+            "\"mode_id\":\"\","
+            "\"action\":\"add|update|remove\","
+            "\"description\":\"\","
+            "\"legacy_mode\":\"\","
+            "\"show_parameters\":false,"
+            "\"show_summary\":false"
+            "}],"
+            "\"confidence\":{\"field\":0..1}"
+            "}"
+        )
+        user_prompt = (
+            f"known_character_ids={json.dumps(known_chars, ensure_ascii=False)}\n"
+            f"known_modes={json.dumps(known_modes, ensure_ascii=False)}\n"
+            f"seed={seed}"
+        )
+        try:
+            result = run_task_model_json(
+                "studio_seed_extract",
+                user_prompt,
+                system_prompt=system_prompt,
+                metadata={"think": True, "studio_specs_task": "seed_extract"},
+                required_fields=("operation_type",),
+                max_output_chars=8000,
+                max_retries=1,
+            )
+            payload = self._coerce_json_object(result.json_payload)
+            raw_data = dict(payload.get("data") or {})
+            character = dict(payload.get("character") or {})
+            if raw_data and not character:
+                character = dict(raw_data)
+            out: dict[str, Any] = {
+                "operation_type": payload.get("operation_type"),
+                "targets": dict(payload.get("targets") or {}),
+                "character": character,
+                "mode_changes": [dict(x) for x in list(payload.get("mode_changes") or payload.get("modes") or []) if isinstance(x, dict)],
+            }
+            if not out["targets"]:
+                out["targets"] = {
+                    "character_ids": [character.get("character_id")] if character.get("character_id") else [],
+                    "mode_ids": list(character.get("extra_modes") or []),
+                    "scope": "character",
+                }
+            conf = self._sanitize_confidence_map(payload.get("confidence"))
+            return out, conf, self._task_result_telemetry(result)
+        except Exception:
+            pass
         req = LLMRequest(
             model=str(model or "").strip(),
             messages=[
@@ -1556,6 +1622,47 @@ class StudioGenerator:
         model: str,
         attempt: int,
     ) -> tuple[list[str], dict[str, Any]]:
+        system_prompt = (
+            "РЎРіРµРЅРµСЂРёСЂСѓР№ 3-5 РІР°СЂРёР°РЅС‚РѕРІ РґР»СЏ С€Р°РіР° СЃС‚СѓРґРёРё. "
+            "Р’РµСЂРЅРё С‚РѕР»СЊРєРѕ JSON: {\"options\":[\"...\",\"...\",\"...\"]}. "
+            "РќРµ РґРѕР±Р°РІР»СЏР№ РїСѓРЅРєС‚ 'СЃРІРѕР№ РІР°СЂРёР°РЅС‚'."
+        )
+        user_prompt = (
+            f"question_id={question_id}\n"
+            f"prompt={prompt}\n"
+            f"attempt={attempt}\n"
+            f"operation_type={row.get('operation_type')}\n"
+            f"targets={json.dumps(dict(row.get('targets') or {}), ensure_ascii=False)}\n"
+            f"draft={json.dumps(dict(row.get('draft_changes') or {}), ensure_ascii=False)}"
+        )
+        try:
+            result = run_task_model_json(
+                "studio_options",
+                user_prompt,
+                system_prompt=system_prompt,
+                metadata={"think": True, "studio_specs_task": "options", "attempt": int(attempt)},
+                temperature=(0.7 if attempt == 1 else 0.45),
+                required_fields=("options",),
+                max_output_chars=1600,
+                max_retries=1,
+            )
+            payload = self._coerce_json_object(result.json_payload)
+            out: list[str] = []
+            seen: set[str] = set()
+            for item in list(payload.get("options") or []):
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                key = text.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(text)
+                if len(out) >= 5:
+                    break
+            return out, self._task_result_telemetry(result)
+        except Exception:
+            pass
         req = LLMRequest(
             model=str(model or "").strip(),
             messages=[
@@ -2836,6 +2943,26 @@ class StudioGenerator:
         provider: LLMProviderBase,
         model: str,
     ) -> dict[str, Any]:
+        system_prompt = (
+            "You are Studio character-pack generator. "
+            "Return only strict JSON object with keys: "
+            "character, modes, dialog_policy, prompts, samples, artifacts. "
+            "artifacts must be relative paths under character directory, kind=json|text, action=create_or_update."
+        )
+        user_prompt = "Generate a complete character pack for this data:\n" + json.dumps(data, ensure_ascii=False)
+        try:
+            result = run_task_model_json(
+                "studio_pack_blueprint",
+                user_prompt,
+                system_prompt=system_prompt,
+                metadata={"think": True, "studio_specs_task": "build_pack"},
+                required_fields=("character", "modes", "dialog_policy", "prompts", "samples", "artifacts"),
+                max_output_chars=24000,
+                max_retries=1,
+            )
+            return self._coerce_json_object(result.json_payload)
+        except Exception:
+            pass
         req = LLMRequest(
             model=str(model or "").strip(),
             messages=[
@@ -3161,6 +3288,31 @@ class StudioGenerator:
         except Exception:
             return {}
         return dict(obj) if isinstance(obj, dict) else {}
+
+    @staticmethod
+    def _response_telemetry(resp: Any) -> dict[str, Any]:
+        usage = getattr(resp, "usage", None)
+        return {
+            "thinking": str(getattr(resp, "thinking", "") or ""),
+            "prompt_eval_count": int(getattr(usage, "prompt_tokens", 0) or 0) if usage is not None else 0,
+            "eval_count": int(getattr(usage, "completion_tokens", 0) or 0) if usage is not None else 0,
+            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0) if usage is not None else 0,
+            "model": str(getattr(resp, "model", "") or ""),
+        }
+
+    @staticmethod
+    def _task_result_telemetry(result: Any) -> dict[str, Any]:
+        response = getattr(result, "response", None)
+        out = StudioGenerator._response_telemetry(response)
+        profile_name = str(getattr(result, "profile_name", "") or "").strip()
+        if profile_name:
+            out["task_profile"] = profile_name
+        out["used_fallback"] = bool(getattr(result, "used_fallback", False))
+        return out
+
+    @staticmethod
+    def _coerce_json_object(payload: Any) -> dict[str, Any]:
+        return dict(payload) if isinstance(payload, dict) else {}
 
     def _parse_review_edit(self, text: str, *, row: dict[str, Any]) -> tuple[str, Any] | None:
         src = str(text or "").strip()

@@ -7,7 +7,6 @@ from core.mode_selector import normalize_mode_name
 from modules.character.mode_profile import (
     MODE_BLEND_ALPHA,
     blend_mode_dialog_levels,
-    blend_mode_traits,
     resolve_mode_profile,
 )
 from modules.character.persona_compiler import compile_system_persona
@@ -18,7 +17,8 @@ _MOOD_MODIFIERS: dict[str, dict[str, float]] = {
     "thoughtful": {"warmth": 0.08, "verbosity": 0.06},
     "teasing": {"sarcasm": 0.14, "warmth": 0.02},
     "ironic": {"sarcasm": 0.10, "warmth": -0.04},
-    "romantic_soft": {"warmth": 0.18, "sarcasm": -0.12},
+    "soft_supportive": {"warmth": 0.16, "sarcasm": -0.14, "strictness": -0.04},
+    "playful": {"sarcasm": 0.08, "warmth": 0.04},
 }
 
 
@@ -49,6 +49,8 @@ class CharacterComposer:
         context_meta: dict[str, Any] | None = None,
     ) -> CharacterComposeResult:
         mood = str(state.get("mood") or character.get("default_mood") or "thoughtful").strip().lower()
+        if mood == "romantic_soft":
+            mood = "soft_supportive"
         active = set(str(x).strip().lower() for x in list(state.get("active_traits") or []) if str(x).strip())
         disabled = set(str(x).strip().lower() for x in list(state.get("disabled_traits") or []) if str(x).strip())
 
@@ -116,27 +118,33 @@ class CharacterComposer:
             elif trait_name == "thoughtfulness":
                 persona_traits.setdefault("empathy", float(score))
 
-        persona_payload = storage.load_persona_state(character_id)
-        persona_payload = dict(persona_payload or {})
+        persona_payload = dict(storage.load_persona_state(character_id) or {})
+        stable_traits_payload = dict(persona_payload.get("traits") or {})
+        if not stable_traits_payload:
+            stable_traits_payload.update(persona_traits)
+        persona_payload["traits"] = stable_traits_payload
         persona_payload["mood"] = mood
-        traits_payload = dict(persona_payload.get("traits") or {})
-        traits_payload.update(persona_traits)
-        traits_payload = blend_mode_traits(
-            base_traits=traits_payload,
-            trait_targets=mode_profile.trait_targets,
-            alpha=MODE_BLEND_ALPHA,
-        )
-        persona_payload["traits"] = traits_payload
+        persona_payload["emotional_state"] = dict(storage.load_emotion_state(character_id) or {})
+        if not dict(persona_payload.get("emotional_state") or {}).get("mood"):
+            persona_payload["emotional_state"] = dict(persona_payload.get("emotional_state") or {})
+            persona_payload["emotional_state"]["mood"] = mood
+        user_addressing = dict(storage.load_user_addressing(character_id) or {})
         for key in ("warmth", "sarcasm", "strictness", "verbosity", "empathy", "teasing"):
-            if key in traits_payload:
-                effective_traits[key] = float(_to_float(traits_payload.get(key), 0.5))
+            if key in stable_traits_payload:
+                effective_traits[key] = float(_to_float(stable_traits_payload.get(key), 0.5))
         prompt, _ = compile_system_persona(
             character_id=character_id,
             persona_state=persona_payload,
             active_mode=active_mode,
+            user_addressing=user_addressing,
         )
-        used = [f"spec:characters/{character_id}/persona_spec.json", f"spec:characters/{character_id}/persona_state.json"]
-        active_traits = sorted([k for k in ("warmth", "sarcasm", "strictness", "verbosity", "empathy", "teasing") if k in traits_payload])
+        used = [
+            f"spec:characters/{character_id}/persona_spec.json",
+            f"runtime:characters_runtime/{character_id}/persona_state.json",
+            f"runtime:characters_runtime/{character_id}/emotion_state.json",
+            f"runtime:characters_runtime/{character_id}/user_addressing.json",
+        ]
+        active_traits = sorted([k for k in ("warmth", "sarcasm", "strictness", "verbosity", "empathy", "teasing") if k in stable_traits_payload])
         return CharacterComposeResult(
             prompt=prompt,
             mood=mood,
@@ -259,8 +267,10 @@ def _resolve_style_coefficients(
             mood_modifier = -0.10
         elif mood == "teasing" and key == "sarcasm":
             mood_modifier = 0.12
-        elif mood == "romantic_soft" and key == "warmth":
+        elif mood == "soft_supportive" and key == "warmth":
             mood_modifier = 0.15
+        elif mood == "playful" and key == "sarcasm":
+            mood_modifier = 0.08
         dialog_target = _to_float(dialog_mode.get(f"{key}_level"), base)
         context_modifier = _to_float(context_mods.get(key), 0.0)
         overlay_modifier = _to_float(overlay_mods.get(key), 0.0)

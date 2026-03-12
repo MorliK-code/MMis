@@ -124,6 +124,7 @@ def detect_emotion(text: str) -> dict:
     return {
         "primary": result.label,
         "score": float(result.intensity),
+        "intensity": float(result.intensity),
         "scores": dict(result.scores),
         "arousal": float(result.arousal),
     }

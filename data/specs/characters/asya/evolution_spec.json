@@ -23,7 +23,7 @@
         { "trait": "patience", "op": "add", "value": 0.03 },
         { "trait": "sarcasm", "op": "add", "value": -0.03 },
         { "trait": "teasing", "op": "add", "value": -0.03 },
-        { "set_mood": "thoughtful" }
+        { "set_mood": "soft_supportive" }
       ]
     },
 
@@ -53,7 +53,7 @@
     {
       "when": { "intent": ["chat"] },
       "apply": [
-        { "set_mood": "playful" },
+        { "set_mood": "teasing" },
         { "trait": "humor", "op": "add", "value": 0.03 },
         { "trait": "energy", "op": "add", "value": 0.02 },
         { "trait": "playfulness", "op": "add", "value": 0.03 },

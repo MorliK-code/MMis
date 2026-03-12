@@ -51,6 +51,17 @@ _TECH_INTENTS = {
 }
 
 _SESSION_BAN_MARKER_PREFIX = "session:"
+_DIMINUTIVE_SUFFIX_PATTERNS = (
+    r"ечк(?:а|е|у|ой|и)?",
+    r"еньк(?:а|е|у|ой|и)?",
+    r"оньк(?:а|е|у|ой|и)?",
+    r"юш(?:а|е|у|ой|и|ка|ке|ку)?",
+    r"ушк(?:а|е|у|ой|и)?",
+    r"очк(?:а|е|у|ой|и)?",
+    r"чик(?:а|е|у|ом|и)?",
+    r"ик(?:а|е|у|ом|и)?",
+    r"уля(?:м|ми|х)?",
+)
 
 
 def is_user_greeting(
@@ -213,6 +224,37 @@ def deterministic_term_gate_score(
     value = int(digest[:16], 16)
     max_value = float(0xFFFFFFFFFFFFFFFF)
     return float(value / max_value)
+
+
+def sanitize_user_addressing_text(text: str, user_addressing: dict[str, Any] | None = None) -> tuple[str, list[str]]:
+    src = str(text or "").strip()
+    policy = _coerce_user_addressing_policy(user_addressing)
+    if not src:
+        return "", []
+
+    canonical = str(policy.get("canonical_name") or "").strip()
+    allowed_forms = [str(x).strip() for x in list(policy.get("allowed_forms") or []) if str(x).strip()]
+    forbidden_forms = [str(x).strip() for x in list(policy.get("forbidden_forms") or []) if str(x).strip()]
+    if not canonical and not forbidden_forms:
+        return src, []
+
+    out = src
+    applied: list[str] = []
+    for form in forbidden_forms:
+        out, changed = _replace_name_form(out, form=form, replacement=canonical)
+        if changed:
+            applied.append("user_addressing_forbidden_replaced" if canonical else "user_addressing_forbidden_removed")
+
+    if canonical and not bool(policy.get("allow_diminutives", False)):
+        out, changed = _replace_diminutive_name_forms(
+            out,
+            canonical=canonical,
+            known_forms=[canonical, *allowed_forms, *forbidden_forms],
+        )
+        if changed:
+            applied.append("user_addressing_diminutives_replaced")
+
+    return _cleanup_addressing_text(out), applied
 
 
 def compute_address_terms_policy(
@@ -915,6 +957,101 @@ def _read_list_attr(module, attr: str) -> list[str]:
         seen.add(low)
         out.append(item)
     return out
+
+
+def _coerce_user_addressing_policy(value: dict[str, Any] | None) -> dict[str, Any]:
+    row = _as_dict(value)
+    return {
+        "canonical_name": _normalize_user_name_form(row.get("canonical_name")),
+        "allowed_forms": _normalize_user_name_form_list(row.get("allowed_forms")),
+        "forbidden_forms": _normalize_user_name_form_list(row.get("forbidden_forms")),
+        "allow_diminutives": bool(row.get("allow_diminutives", False)),
+        "use_name_by_default": bool(row.get("use_name_by_default", False)),
+        "updated_at": str(row.get("updated_at") or "").strip(),
+    }
+
+
+def _normalize_user_name_form(value: Any) -> str:
+    text = str(value or "").strip()
+    text = text.strip(" \t\r\n.,!?;:()[]{}\"'`«»")
+    text = re.sub(r"\s+", " ", text)
+    if not text or " " in text:
+        return ""
+    if len(text) < 2 or len(text) > 40:
+        return ""
+    if any(ch.isdigit() for ch in text):
+        return ""
+    return text
+
+
+def _normalize_user_name_form_list(value: Any) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in list(value or []):
+        item = _normalize_user_name_form(row)
+        key = item.casefold()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _replace_name_form(text: str, *, form: str, replacement: str) -> tuple[str, bool]:
+    src = str(text or "")
+    item = _normalize_user_name_form(form)
+    if not src or not item:
+        return src, False
+    pattern = re.compile(rf"(?<!\w){re.escape(item)}(?!\w)", flags=re.IGNORECASE | re.UNICODE)
+    new_text, count = pattern.subn(str(replacement or ""), src)
+    return new_text, bool(count)
+
+
+def _replace_diminutive_name_forms(text: str, *, canonical: str, known_forms: list[str]) -> tuple[str, bool]:
+    src = str(text or "")
+    target = _normalize_user_name_form(canonical)
+    if not src or not target:
+        return src, False
+
+    stems = _build_name_stems([target, *list(known_forms or [])])
+    if not stems:
+        return src, False
+    stem_pattern = "|".join(re.escape(x) for x in stems)
+    suffix_pattern = "|".join(_DIMINUTIVE_SUFFIX_PATTERNS)
+    pattern = re.compile(
+        rf"(?<!\w)(?:{stem_pattern})(?:{suffix_pattern})(?!\w)",
+        flags=re.IGNORECASE | re.UNICODE,
+    )
+    new_text, count = pattern.subn(target, src)
+    return new_text, bool(count)
+
+
+def _build_name_stems(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in list(values or []):
+        token = re.sub(r"[^A-Za-z\u0400-\u04FF\-]", "", str(row or "").strip().lower())
+        if len(token) < 3:
+            continue
+        candidates = [token[:3]]
+        if len(token) >= 4:
+            candidates.append(token[:-1])
+        for candidate in candidates:
+            key = str(candidate or "").strip().lower()
+            if len(key) < 3 or key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+    out.sort(key=len, reverse=True)
+    return out
+
+
+def _cleanup_addressing_text(text: str) -> str:
+    out = str(text or "")
+    out = re.sub(r"\s{2,}", " ", out)
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+    out = re.sub(r"([,.;:!?]){2,}", r"\1", out)
+    return out.strip(" \t\r\n")
 
 
 def _pick_text(*values) -> str:

@@ -136,7 +136,14 @@ class PromptEngine:
             memory_blocks=memory_blocks,
             state_map=state_map,
         )
-        recent_chat_block = "" if memory_blocks else str(blocks.get("conversation_tail") or "")
+        recent_chat_block = str(
+            _pick_first(
+                memory_blocks.get("conversation_tail"),
+                blocks.get("conversation_tail"),
+                "",
+            )
+            or ""
+        )
         long_summary_block = str(
             _pick_first(
                 memory_blocks.get("session_summary"),
@@ -383,6 +390,22 @@ class PromptEngine:
             "allowed_term",
             "use_term_now",
             "address_terms_policy",
+            "now_iso",
+            "timezone",
+            "previous_user_at",
+            "minutes_since_previous",
+            "same_calendar_day",
+            "continuation_ref",
+            "context_confidence",
+            "query_effective",
+            "geo_hint",
+            "web_used",
+            "web_query_intent",
+            "web_search_mode",
+            "web_fresh_required",
+            "web_fresh_missing",
+            "web_response_style",
+            "web_guardrail",
         ):
             value = str(context.get(key) or "").strip()
             if value:
@@ -450,6 +473,20 @@ class PromptEngine:
         memory_blocks: dict[str, Any],
         state_map: dict[str, Any],
     ) -> str:
+        context_tags = _as_dict(state_map.get("context_tags"))
+        web_used = str(context_tags.get("web_used") or "").strip().lower() in {"true", "1", "yes"}
+        web_intent = str(context_tags.get("web_query_intent") or "").strip().lower() or "generic"
+        status_block = ""
+        if web_used:
+            status_lines = [
+                "[WEB_TOOL_STATUS]",
+                "- live_web_lookup: already_executed_for_this_turn",
+                f"- web_intent: {web_intent}",
+                "- response_rule: do not say that you cannot browse/check the internet or access live data for this turn.",
+                "- response_rule: use the WEB_EVIDENCE block below as the factual source for the answer.",
+            ]
+            status_block = "\n".join(status_lines).strip()
+
         direct_candidates = [
             str(memory_blocks.get("web_evidence") or "").strip(),
             str(blocks.get("web_evidence") or "").strip(),
@@ -457,7 +494,7 @@ class PromptEngine:
         ]
         for item in direct_candidates:
             if item:
-                return item
+                return _join_non_empty([status_block, item])
 
         context = _as_dict(state_map.get("web_evidence_context"))
         if not context:
@@ -489,7 +526,7 @@ class PromptEngine:
                 lines.append(f"  - {note}")
         if not lines:
             return ""
-        return "[WEB_EVIDENCE]\n" + "\n".join(lines).strip()
+        return _join_non_empty([status_block, "[WEB_EVIDENCE]\n" + "\n".join(lines).strip()])
 
     @staticmethod
     def _build_dynamic_rules_block(*, state_map: dict[str, Any], policies_map: dict[str, Any]) -> str:
@@ -510,6 +547,10 @@ class PromptEngine:
 
         context = _as_dict(state_map.get("context_tags"))
         style = str(context.get("web_response_style") or "").strip().lower()
+        web_used = str(context.get("web_used") or "").strip().lower() in {"true", "1", "yes"}
+        web_fresh_missing = str(context.get("web_fresh_missing") or "").strip().lower() in {"true", "1", "yes"}
+        if web_used and not web_fresh_missing:
+            rows.append("- Live web lookup already executed for this turn. Do not claim lack of internet/web access; answer from WEB_EVIDENCE.")
         if style == "factual_direct":
             rows.append("- Time-sensitive web answers must be direct and factual without rhetorical/flirty openers.")
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from modules.character.dialog_policies import trim_leading_greeting
+from modules.character.dialog_policies import sanitize_user_addressing_text, trim_leading_greeting
 
 
 class RuleEvaluator:
@@ -93,6 +93,7 @@ class ResponseConstraintEvaluator:
         dialog_mode: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         address_terms_policy: dict[str, Any] | None = None,
+        user_addressing: dict[str, Any] | None = None,
     ) -> tuple[str, list[str]]:
         mode = dict(dialog_mode or {})
         meta = dict(metadata or {})
@@ -121,6 +122,10 @@ class ResponseConstraintEvaluator:
         out, term_applied = self._apply_address_terms_policy(out, terms_policy)
         if term_applied:
             applied.extend(term_applied)
+
+        out, name_applied = sanitize_user_addressing_text(out, user_addressing)
+        if name_applied:
+            applied.extend(name_applied)
 
         out, did = self._remove_unneeded_apology(out, user_text=user_text, metadata=meta)
         if did:

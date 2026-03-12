@@ -117,6 +117,8 @@ class SearchPlanner:
             query=query,
             priority=1,
             location=location,
+            requires_freshness=True,
+            geo_hint=location,
             meta={"intent": "weather_query"},
         )
 
@@ -130,6 +132,8 @@ class SearchPlanner:
             query=query,
             priority=1,
             location=location,
+            requires_freshness=True,
+            geo_hint=location,
             meta={"intent": "finance_query", "concept": "currency", "currency": currency},
         )
 
@@ -144,6 +148,8 @@ class SearchPlanner:
             query=query,
             priority=1,
             location=location,
+            requires_freshness=True,
+            geo_hint=location,
             meta={"intent": "news_query"},
         )
 
@@ -158,6 +164,8 @@ class SearchPlanner:
             query=query,
             priority=2,
             location=context.resolved_location or "",
+            requires_freshness=True,
+            geo_hint=context.resolved_location or "",
             meta={"intent": "coding_question", "focus": focus or "programming"},
         )
 

@@ -102,6 +102,8 @@ class MemoryLifecycleManager:
             fallback=self._contains_any(record.text, ("python", "sql", "api", "backend", "frontend", "docker")),
         )
         repeated_signal = self._signal(meta.get("promotion_repeated_topic_signal"), fallback=False)
+        meaningful_signal = self._signal(meta.get("promotion_signal_score"), fallback=False)
+        stable_fact_signal = self._signal(meta.get("promotion_stable_fact_signal"), fallback=False)
         smalltalk_signal = self._signal(
             meta.get("promotion_smalltalk_signal"),
             fallback=self._contains_any(
@@ -112,22 +114,32 @@ class MemoryLifecycleManager:
 
         facts_count = self._to_int(meta.get("extracted_facts_count"), 0)
         fact_signal = self._signal(meta.get("promotion_fact_signal"), fallback=(facts_count > 0))
+        fact_relations = [
+            str(x).strip().lower()
+            for x in list(meta.get("extracted_fact_relations") or [])
+            if str(x).strip()
+        ][:16]
+        fact_relation_diversity = self._clamp01(float(len(fact_relations)) / 3.0)
+        semantic_fact_records_expected = facts_count > 0
 
         if record.memory_type in {MemoryType.TASK_STATE, MemoryType.TOOL_RESULT}:
             task_signal = max(task_signal, 0.85)
             technical_signal = max(technical_signal, 0.75)
 
-        base_score = (0.62 * importance) + (0.22 * confidence)
+        base_score = (0.58 * importance) + (0.20 * confidence)
         composite = (
             base_score
             + (self._clamp01(self.promote_project_signal_boost) * project_signal)
-            + (0.09 * task_signal)
+            + (0.10 * task_signal)
             + (self._clamp01(self.promote_decision_signal_boost) * decision_signal)
             + (0.08 * preference_signal)
-            + (0.08 * issue_signal)
-            + (0.06 * technical_signal)
-            + (0.05 * repeated_signal)
+            + (0.09 * issue_signal)
+            + (0.07 * technical_signal)
+            + (0.06 * repeated_signal)
             + (self._clamp01(self.promote_fact_signal_boost) * fact_signal)
+            + (0.08 * meaningful_signal)
+            + (0.06 * stable_fact_signal)
+            + (0.04 * fact_relation_diversity)
             - (self._clamp01(self.promote_smalltalk_penalty) * smalltalk_signal)
         )
         composite = self._clamp01(composite)
@@ -136,6 +148,8 @@ class MemoryLifecycleManager:
         confidence_threshold = self._clamp01(self.promote_message_confidence_threshold)
         composite_threshold = self._clamp01(max(0.38, float(importance_threshold) - 0.08))
         confidence_soft_gate = self._clamp01(max(0.30, float(confidence_threshold) - 0.10))
+        importance_support_floor = self._clamp01(max(0.32, float(importance_threshold) - 0.16))
+        near_threshold_floor = self._clamp01(max(0.0, float(composite_threshold) - 0.05))
         strong_signal = max(
             project_signal,
             task_signal,
@@ -145,16 +159,86 @@ class MemoryLifecycleManager:
             technical_signal,
             fact_signal,
             repeated_signal,
+            meaningful_signal,
+            stable_fact_signal,
+        )
+        strong_signal_count = sum(
+            1
+            for value in (
+                project_signal,
+                task_signal,
+                decision_signal,
+                preference_signal,
+                issue_signal,
+                technical_signal,
+                fact_signal,
+                repeated_signal,
+                meaningful_signal,
+                stable_fact_signal,
+            )
+            if float(value) >= 0.55
+        )
+        signal_bundle_score = self._clamp01(
+            (0.20 * project_signal)
+            + (0.20 * task_signal)
+            + (0.18 * decision_signal)
+            + (0.16 * issue_signal)
+            + (0.12 * preference_signal)
+            + (0.12 * stable_fact_signal)
+            + (0.10 * technical_signal)
+            + (0.08 * repeated_signal)
+            + (0.16 * fact_signal)
+            + (0.10 * meaningful_signal)
+            + (0.06 * fact_relation_diversity)
         )
         is_smalltalk_only = smalltalk_signal >= 0.75 and strong_signal < 0.45 and facts_count <= 0
+        hard_threshold = importance >= importance_threshold and confidence >= confidence_threshold
+        composite_threshold_pass = (
+            composite >= composite_threshold
+            and confidence >= confidence_soft_gate
+            and strong_signal >= 0.25
+        )
+        signal_bundle_pass = (
+            signal_bundle_score >= 0.56
+            and strong_signal_count >= 2
+            and confidence >= confidence_soft_gate
+            and importance >= importance_support_floor
+            and smalltalk_signal < 0.70
+        )
+        near_threshold_pass = (
+            composite >= near_threshold_floor
+            and signal_bundle_score >= 0.46
+            and strong_signal_count >= 2
+            and confidence >= confidence_soft_gate
+            and smalltalk_signal < 0.70
+        )
+        promotion_gap = max(0.0, float(composite_threshold - composite))
+        missing_for_promotion: list[str] = []
+        if composite < composite_threshold:
+            missing_for_promotion.append("composite_below_threshold")
+        if importance < importance_support_floor:
+            missing_for_promotion.append("importance_below_support_floor")
+        if confidence < confidence_soft_gate:
+            missing_for_promotion.append("confidence_below_soft_gate")
+        if signal_bundle_score < 0.46:
+            missing_for_promotion.append("insufficient_meaningful_signals")
+        if strong_signal_count < 2:
+            missing_for_promotion.append("not_enough_strong_signals")
+        if smalltalk_signal >= 0.70 and strong_signal < 0.45:
+            missing_for_promotion.append("smalltalk_dominates")
+        if semantic_fact_records_expected and not (hard_threshold or composite_threshold_pass or signal_bundle_pass or near_threshold_pass):
+            missing_for_promotion.append("facts_written_to_semantic_only")
 
         debug_payload = {
             "importance": float(importance),
             "confidence": float(confidence),
             "importance_threshold": float(importance_threshold),
             "confidence_threshold": float(confidence_threshold),
+            "importance_support_floor": float(importance_support_floor),
             "composite_score": float(composite),
             "composite_threshold": float(composite_threshold),
+            "near_threshold_floor": float(near_threshold_floor),
+            "promotion_gap": float(promotion_gap),
             "confidence_soft_gate": float(confidence_soft_gate),
             "signals": {
                 "project": float(project_signal),
@@ -165,9 +249,24 @@ class MemoryLifecycleManager:
                 "technical": float(technical_signal),
                 "repeated": float(repeated_signal),
                 "fact": float(fact_signal),
+                "stable_fact": float(stable_fact_signal),
+                "meaningful": float(meaningful_signal),
+                "fact_relation_diversity": float(fact_relation_diversity),
+                "signal_bundle_score": float(signal_bundle_score),
+                "strong_signal_count": int(strong_signal_count),
                 "smalltalk": float(smalltalk_signal),
                 "facts_count": int(facts_count),
             },
+            "fact_relations": list(fact_relations),
+            "semantic_fact_records_expected": bool(semantic_fact_records_expected),
+            "routes": {
+                "hard_threshold": bool(hard_threshold),
+                "composite_threshold": bool(composite_threshold_pass),
+                "signal_bundle": bool(signal_bundle_pass),
+                "near_threshold": bool(near_threshold_pass),
+                "smalltalk_only": bool(is_smalltalk_only),
+            },
+            "missing_for_promotion": list(missing_for_promotion),
         }
 
         if is_smalltalk_only:
@@ -177,14 +276,13 @@ class MemoryLifecycleManager:
                 decision_debug=debug_payload,
             )
 
-        hard_threshold = importance >= importance_threshold and confidence >= confidence_threshold
-        composite_threshold_pass = (
-            composite >= composite_threshold
-            and confidence >= confidence_soft_gate
-            and strong_signal >= 0.25
-        )
-        if hard_threshold or composite_threshold_pass:
-            reason = "message_promoted_hard_threshold" if hard_threshold else "message_promoted_composite"
+        if hard_threshold or composite_threshold_pass or signal_bundle_pass or near_threshold_pass:
+            if hard_threshold:
+                reason = "message_promoted_hard_threshold"
+            elif signal_bundle_pass:
+                reason = "message_promoted_signal_bundle"
+            else:
+                reason = "message_promoted_near_threshold" if near_threshold_pass else "message_promoted_composite"
             return LifecycleDecision(
                 promote_to=MemoryLevel.L2_EPISODIC,
                 reason=reason,

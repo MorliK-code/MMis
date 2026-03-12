@@ -1,4 +1,4 @@
-﻿"""MMis Desktop UI (PySide6)."""
+"""MMis Desktop UI (PySide6)."""
 
 from __future__ import annotations
 
@@ -1888,7 +1888,7 @@ class MainWindow(QMainWindow):
             header_layout.setContentsMargins(0, 0, 0, 0)
             header_layout.setSpacing(6)
 
-            think_toggle = QPushButton("Мысли ▾" if is_open else "Мысли ▸", header_wrap)
+            think_toggle = QPushButton("����� " if is_open else "����� ", header_wrap)
             think_toggle.setStyleSheet(
                 "QPushButton {"
                 "background: transparent;"
@@ -2180,7 +2180,7 @@ class MainWindow(QMainWindow):
             )
             think_toggle.setVisible(has_thinking)
             think_toggle.setEnabled(has_thinking)
-            think_toggle.setText("Мысли ▾" if is_open else "Мысли ▸")
+            think_toggle.setText("����� " if is_open else "����� ")
             compact_text = self._preview_last_words(think_text, max_words=7) if is_streaming_thinking else ""
             if isinstance(think_preview_label, QLabel) and isValid(think_preview_label):
                 if think_preview_label.text() != compact_text:

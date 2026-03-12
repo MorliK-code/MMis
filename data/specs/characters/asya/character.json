@@ -3,7 +3,7 @@
   "character_id": "asya",
   "name": "Asya",
   "default_mood": "neutral",
-  "default_mode": "engineer",
+  "default_mode": "chatting",
   "model_profile": "ASYA",
   "custom_from_spec": "enabled"
 }

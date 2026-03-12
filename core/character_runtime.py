@@ -21,6 +21,7 @@ from typing import Any
 
 from config.settings import load_config
 from core.mode_selector import normalize_mode_name
+from metadata.taxonomy import normalize_emotion
 from modules.character.composer import CharacterComposeResult, CharacterComposer, compute_context_trait_modifiers
 from modules.character.dialog_policies import (
     local_date_kyiv as dialog_local_date,
@@ -31,7 +32,20 @@ from modules.character.learner import update_persona
 from modules.character.signals import build_character_signals
 from modules.character.persona_compiler import compile_system_persona
 from modules.character.storage import CharacterStorage
+from modules.character.trait_policy import apply_trait_delta, clamp_trait_map, clamp_trait_scalar, normalize_trait_record
 from utils.datetime_local import now_local_iso, now_local_ts, parse_time_to_epoch, to_local_iso
+
+
+_EMOTION_TARGETS: dict[str, dict[str, float]] = {
+    "neutral": {"valence": 0.0, "arousal": 0.08},
+    "happy": {"valence": 0.56, "arousal": 0.36},
+    "excited": {"valence": 0.74, "arousal": 0.82},
+    "frustrated": {"valence": -0.46, "arousal": 0.62},
+    "angry": {"valence": -0.82, "arousal": 0.90},
+    "sad": {"valence": -0.64, "arousal": 0.22},
+    "anxious": {"valence": -0.52, "arousal": 0.70},
+    "tired": {"valence": -0.24, "arousal": 0.10},
+}
 
 
 # =============================================================================
@@ -154,6 +168,16 @@ class StateSnapshot:
     last_signals: dict[str, Any] = field(default_factory=dict)
     last_actions: list[dict[str, Any]] = field(default_factory=list)
 
+    @property
+    def web_auto_profile(self) -> str:
+        """
+        Backward-compat shim for legacy callers that still read web_auto_profile.
+
+        Web auto profiles are removed; keep a harmless empty value instead of
+        raising AttributeError in older UI/API paths.
+        """
+        return ""
+
 
 @dataclass(frozen=True)
 class CharacterRuntimeResult:
@@ -166,6 +190,7 @@ class CharacterRuntimeResult:
     traits: dict[str, Any]
     trait_values: dict[str, Any]
     state: dict[str, Any]
+    user_addressing: dict[str, Any]
     prompt_block: str
     used_prompt_files: list[str] = field(default_factory=list)
     changes: list[dict[str, Any]] = field(default_factory=list)
@@ -288,7 +313,7 @@ class CharacterRuntime:
         action_history_limit: int = 3,
     ):
         """
-        �нициализация CharacterRuntime.
+        ������������ CharacterRuntime.
 
         Args:
             character_path: Путь к директории персонажей.
@@ -538,7 +563,7 @@ class CharacterRuntime:
             "output_format": self._coerce_output_format(self._state.get("output_format")),
             "active_character_id": active_character,
             "active_personality_id": str(self._state.get("active_personality_id") or "default").strip().lower() or "default",
-            "mood": str(persona.get("mood") or self._state.get("mood") or "neutral").strip().lower() or "neutral",
+            "mood": str(self._state.get("mood") or persona.get("mood") or "neutral").strip().lower() or "neutral",
             "active_goal": str(self._state.get("active_goal") or "").strip(),
             "thinking_enabled": self._coerce_bool(self._state.get("thinking_enabled"), default=False),
             "web_mode": self._coerce_web_mode(self._state.get("web_mode")),
@@ -1231,6 +1256,20 @@ class CharacterRuntime:
             )
         self._autosave()
 
+    def get_user_addressing(self, character_id: str | None = None) -> dict[str, Any]:
+        cid = self._validate_character(character_id)
+        try:
+            return dict(self.storage.load_user_addressing(cid) or {})
+        except Exception:
+            return {
+                "canonical_name": "",
+                "allowed_forms": [],
+                "forbidden_forms": [],
+                "allow_diminutives": False,
+                "use_name_by_default": False,
+                "updated_at": "",
+            }
+
     def set_context_tags(self, tags: dict[str, str]) -> None:
         with self._lock:
             self._state["context_tags"] = self._coerce_string_dict(tags)
@@ -1251,7 +1290,7 @@ class CharacterRuntime:
             characters = dict(merged.get("characters") or {})
             entry = dict(characters.get(active_character) or {})
             persona = dict(entry.get("persona") or {})
-            mood = str(persona.get("mood") or merged.get("mood") or "neutral").strip().lower() or "neutral"
+            mood = str(merged.get("mood") or persona.get("mood") or "neutral").strip().lower() or "neutral"
             traits_raw = dict(persona.get("traits") or {})
             traits: dict[str, float] = {}
             for key in ("warmth", "sarcasm", "teasing", "strictness", "verbosity", "empathy"):
@@ -1270,6 +1309,7 @@ class CharacterRuntime:
             last_event = dict(events[-1] or {}) if events else {}
             event_changes = [dict(x) for x in list(last_event.get("changes") or []) if isinstance(x, dict)][:8]
             learner_delta = dict(last_event.get("learner_delta") or {})
+            user_addressing = self.get_user_addressing(active_character)
             feedback = []
             for row in event_changes:
                 if str(row.get("kind") or "").strip().lower() == "user_feedback":
@@ -1282,6 +1322,7 @@ class CharacterRuntime:
                 "traits": traits,
                 "locks": locks,
                 "bans": bans,
+                "user_addressing": user_addressing,
                 "last_deltas": deltas,
                 "last_event_changes": event_changes,
                 "learner_delta": learner_delta,
@@ -1502,7 +1543,9 @@ class CharacterRuntime:
             )
             signals = {
                 "intent": str(meta_map.get("intent") or "").strip().lower(),
-                "emotion": str(meta_map.get("mood") or meta_map.get("emotion") or "").strip().lower(),
+                "emotion": str(meta_map.get("emotion") or meta_map.get("mood") or "").strip().lower(),
+                "emotion_intensity": self._clamp01(self._to_float(meta_map.get("emotion_intensity"), 0.0)),
+                "emotion_arousal": self._clamp01(self._to_float(meta_map.get("emotion_arousal"), 0.0)),
                 "topic": str(meta_map.get("topic") or "").strip().lower(),
                 "active_mode": str(self._state.get("active_mode") or "chatting"),
                 "has_code": bool(meta_map.get("has_code", False)),
@@ -1901,6 +1944,228 @@ class CharacterRuntime:
             out[pid] = max(0.01, min(1.5, float(value)))
         return out
 
+    def update_emotional_state(
+        self,
+        character_id: str,
+        *,
+        state: dict[str, Any],
+        signals,
+        traits: dict[str, Any],
+        context: dict[str, Any] | None = None,
+        mood_hints: list[str] | None = None,
+        now_ts: float | None = None,
+        current_state: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        cid = self._validate_character(character_id)
+        now = float(now_ts or time.time())
+        current = self._coerce_emotion_state(current_state or self.storage.load_emotion_state(cid) or {})
+
+        label = normalize_emotion(getattr(signals, "emotion", "") or "neutral")
+        signal_intensity = self._clamp01(self._to_float(getattr(signals, "emotion_intensity", 0.0), 0.0))
+        signal_arousal = self._clamp01(self._to_float(getattr(signals, "emotion_arousal", 0.0), 0.0))
+        if label != "neutral" and signal_intensity <= 0.0:
+            signal_intensity = 0.35
+
+        target_base = dict(_EMOTION_TARGETS.get(label) or _EMOTION_TARGETS["neutral"])
+        amplitude = signal_intensity if label != "neutral" else 0.0
+        target_valence = self._clamp(float(target_base.get("valence", 0.0)) * amplitude, -1.0, 1.0)
+        base_arousal = float(target_base.get("arousal", 0.0)) * (0.25 + (0.75 * amplitude))
+        target_arousal = self._clamp01((base_arousal * 0.45) + ((signal_arousal or base_arousal) * 0.55))
+        target_intensity = amplitude
+
+        prev_label = normalize_emotion(current.get("trigger"))
+        prev_valence = self._clamp(self._to_float(current.get("valence"), 0.0), -1.0, 1.0)
+        prev_arousal = self._clamp01(self._to_float(current.get("arousal"), 0.0))
+        prev_intensity = self._clamp01(self._to_float(current.get("intensity"), 0.0))
+        cooldown_until = parse_time_to_epoch(current.get("cooldown_until_ts"), 0.0)
+
+        alpha = 0.14 + (target_intensity * 0.42)
+        if label == "neutral":
+            alpha = 0.10 + min(0.06, prev_intensity * 0.08)
+        if prev_label and prev_label == label and label != "neutral":
+            alpha += 0.08
+        if cooldown_until > now and label not in {"", "neutral", prev_label}:
+            alpha *= 0.6
+        if label == "neutral" and prev_intensity >= 0.65:
+            alpha = min(alpha, 0.12)
+        alpha = self._clamp(alpha, 0.08, 0.72)
+
+        next_valence = prev_valence + ((target_valence - prev_valence) * alpha)
+        next_arousal = prev_arousal + ((target_arousal - prev_arousal) * alpha)
+        next_intensity = prev_intensity + ((target_intensity - prev_intensity) * alpha)
+        if label == "neutral" and target_intensity <= 0.0:
+            next_valence *= 0.96
+            next_arousal = max(0.0, (next_arousal * 0.96) - 0.01)
+            next_intensity = max(0.0, (next_intensity * 0.95) - 0.01)
+
+        if label != "neutral" and target_intensity >= 0.08:
+            trigger = label
+        elif next_intensity < 0.10:
+            trigger = ""
+        else:
+            trigger = prev_label if prev_label != "neutral" else ""
+
+        if label != "neutral" and target_intensity >= 0.65:
+            cooldown_until_ts = to_local_iso(now + 180.0 + (target_intensity * 120.0), default="")
+        elif next_intensity <= 0.15:
+            cooldown_until_ts = ""
+        else:
+            cooldown_until_ts = to_local_iso(cooldown_until, default="") if cooldown_until > now else ""
+
+        next_state = {
+            "schema_version": 1,
+            "mood": "neutral",
+            "valence": float(self._clamp(next_valence, -1.0, 1.0)),
+            "arousal": float(self._clamp01(next_arousal)),
+            "intensity": float(self._clamp01(next_intensity)),
+            "trigger": str(trigger or ""),
+            "last_update_ts": now_local_ts(),
+            "cooldown_until_ts": cooldown_until_ts,
+        }
+        next_state["mood"] = self._derive_mood_from_emotion_state(
+            emotion_state=next_state,
+            signals=signals,
+            traits=traits,
+            context=context,
+            mood_hints=mood_hints,
+        )
+        state["mood"] = str(next_state.get("mood") or "neutral")
+        state["emotion"] = str(next_state.get("trigger") or label or "neutral")
+        return next_state, {
+            "label": label,
+            "alpha": float(alpha),
+            "target": {
+                "valence": float(target_valence),
+                "arousal": float(target_arousal),
+                "intensity": float(target_intensity),
+            },
+            "previous": {
+                "mood": str(current.get("mood") or "neutral"),
+                "valence": float(prev_valence),
+                "arousal": float(prev_arousal),
+                "intensity": float(prev_intensity),
+                "trigger": str(prev_label or ""),
+            },
+            "next": dict(next_state),
+            "mood_hints": [str(x).strip().lower() for x in list(mood_hints or []) if str(x).strip()],
+        }
+
+    def _derive_mood_from_emotion_state(
+        self,
+        *,
+        emotion_state: dict[str, Any],
+        signals,
+        traits: dict[str, Any],
+        context: dict[str, Any] | None = None,
+        mood_hints: list[str] | None = None,
+    ) -> str:
+        row = self._coerce_emotion_state(emotion_state)
+        ctx = dict(context or {})
+        trigger = normalize_emotion(row.get("trigger"))
+        valence = self._clamp(self._to_float(row.get("valence"), 0.0), -1.0, 1.0)
+        arousal = self._clamp01(self._to_float(row.get("arousal"), 0.0))
+        intensity = self._clamp01(self._to_float(row.get("intensity"), 0.0))
+        intent = str(ctx.get("intent") or getattr(signals, "intent", "") or "").strip().lower()
+        mode = self._normalize_active_mode(str(ctx.get("mode") or getattr(signals, "mode", "") or "chatting"))
+        tags = {str(x).strip().lower() for x in list(ctx.get("tags") or getattr(signals, "tags", []) or []) if str(x).strip()}
+        hints = {self._normalize_runtime_mood(x) for x in list(mood_hints or []) if str(x).strip()}
+        hints.discard("")
+
+        focused_bias = 0.0
+        if intent in {"task", "bug_report", "code_review", "planning", "question"}:
+            focused_bias += 0.18
+        if mode in {"engineer", "debugger", "planner"}:
+            focused_bias += 0.12
+        if {"has_traceback", "has_stacktrace", "has_logs", "has_code"} & tags:
+            focused_bias += 0.14
+        if "focused" in hints:
+            focused_bias += 0.18
+
+        supportive_bias = 0.0
+        if "soft_supportive" in hints:
+            supportive_bias += 0.18
+        if "thoughtful" in hints:
+            supportive_bias += 0.08
+
+        teasing_bias = 0.0
+        if {"teasing", "playful"} & hints:
+            teasing_bias += 0.18
+        if self._trait_scalar(traits, "playfulness") >= 0.52:
+            teasing_bias += 0.08
+
+        ironic_bias = 0.0
+        if "ironic" in hints:
+            ironic_bias += 0.14
+        if self._trait_scalar(traits, "sarcasm") >= 0.32:
+            ironic_bias += 0.06
+
+        if intensity < 0.16 and abs(valence) < 0.14 and arousal < 0.24:
+            if focused_bias >= 0.28:
+                return "focused"
+            if teasing_bias >= 0.24 and intent == "chat":
+                return "teasing"
+            if supportive_bias >= 0.24:
+                return "soft_supportive"
+            return "neutral"
+        if trigger in {"angry", "frustrated"}:
+            if intensity >= 0.55 or arousal >= 0.65 or focused_bias >= 0.28:
+                return "focused"
+            if ironic_bias >= 0.16 and intensity <= 0.45:
+                return "ironic"
+            return "thoughtful"
+        if trigger == "anxious":
+            if arousal >= 0.56 and focused_bias >= 0.20:
+                return "focused"
+            return "thoughtful"
+        if trigger in {"sad", "tired"}:
+            if intensity >= 0.22 or valence <= -0.18:
+                return "soft_supportive"
+            return "thoughtful"
+        if valence >= 0.28:
+            if arousal >= 0.45 and (teasing_bias >= 0.18 or intent == "chat"):
+                return "teasing"
+            if intensity >= 0.24:
+                return "thoughtful"
+            return "neutral"
+        if valence <= -0.30:
+            if arousal >= 0.58 and focused_bias >= 0.12:
+                return "focused"
+            if arousal <= 0.34:
+                return "soft_supportive"
+            return "thoughtful"
+        if focused_bias >= 0.28:
+            return "focused"
+        if supportive_bias >= 0.22 and valence < 0.0:
+            return "soft_supportive"
+        if teasing_bias >= 0.24 and intent == "chat":
+            return "teasing"
+        if intensity >= 0.20:
+            return "thoughtful"
+        return "neutral"
+
+    def _coerce_emotion_state(self, value: dict[str, Any] | None) -> dict[str, Any]:
+        row = dict(value or {})
+        mood = self._normalize_runtime_mood(row.get("mood"))
+        return {
+            "schema_version": 1,
+            "mood": mood or "neutral",
+            "valence": float(self._clamp(self._to_float(row.get("valence"), 0.0), -1.0, 1.0)),
+            "arousal": float(self._clamp01(self._to_float(row.get("arousal"), 0.0))),
+            "intensity": float(self._clamp01(self._to_float(row.get("intensity"), 0.0))),
+            "trigger": str(normalize_emotion(row.get("trigger")) if row.get("trigger") else ""),
+            "last_update_ts": to_local_iso(row.get("last_update_ts"), default=""),
+            "cooldown_until_ts": to_local_iso(row.get("cooldown_until_ts"), default=""),
+        }
+
+    @staticmethod
+    def _normalize_runtime_mood(value: Any) -> str:
+        mood = str(value or "").strip().lower()
+        if not mood:
+            return ""
+        if mood == "romantic_soft":
+            return "soft_supportive"
+        return mood
+
     def _build_blend(self, old_id: str, new_id: str, active: bool) -> dict[str, Any]:
         """Построить blend personality."""
         if not active or old_id == new_id:
@@ -1938,7 +2203,7 @@ class CharacterRuntime:
             key = self._normalize_trait_name(name)
             if not key:
                 continue
-            payload = self._normalize_trait(row)
+            payload = self._normalize_trait(row, trait_name=key)
             payload["_source"] = "builtin"
             merged[key] = payload
 
@@ -1946,7 +2211,7 @@ class CharacterRuntime:
             key = self._normalize_trait_name(name)
             if not key:
                 continue
-            payload = self._normalize_trait(row)
+            payload = self._normalize_trait(row, trait_name=key)
             existing = dict(merged.get(key) or {})
             existing.update(payload)
             existing["_source"] = "learned"
@@ -1990,10 +2255,11 @@ class CharacterRuntime:
         if row["type"] == "flag":
             row["value"] = bool(value)
         else:
-            row["value"] = self._clamp(
-                self._to_float(value, 0.0),
-                self._to_float(row.get("min"), 0.0),
-                self._to_float(row.get("max"), 1.0)
+            row["value"] = clamp_trait_scalar(
+                name,
+                value,
+                minimum=self._to_float(row.get("min"), 0.0),
+                maximum=self._to_float(row.get("max"), 1.0),
             )
         merged[name] = row
 
@@ -2115,26 +2381,74 @@ class CharacterRuntime:
 
         now = time.time()
         changes: list[dict[str, Any]] = []
+        emotion_state = self.storage.load_emotion_state(cid)
+        emotional_state_before = dict(emotion_state or {})
+        signals = build_character_signals(
+            text=str(text or ""),
+            metadata={
+                "lang": meta_map.get("lang"),
+                "intent": meta_map.get("intent"),
+                "emotion": meta_map.get("emotion"),
+                "mood": meta_map.get("mood"),
+                "emotion_intensity": meta_map.get("emotion_intensity"),
+                "emotion_arousal": meta_map.get("emotion_arousal"),
+                "mode": meta_map.get("active_mode") or meta_map.get("mode") or self._state.get("active_mode"),
+                "topic": meta_map.get("topic"),
+                "topics": meta_map.get("topics"),
+                "metadata_tags": meta_map.get("metadata_tags") or meta_map.get("tags"),
+            },
+        )
+        last_signals = signals.to_dict()
 
         # Apply decay
         self._apply_decay(merged, now=now, changes=changes)
 
         # Build context and apply rules
         ctx = self._build_context(text=text, meta=meta_map, state=state)
-        for rule in list(rules_payload.get("rules") or []):
+        mood_hints: list[str] = []
+        applied_rules: list[dict[str, Any]] = []
+        for index, rule in enumerate(list(rules_payload.get("rules") or []), start=1):
             if not isinstance(rule, dict):
                 continue
             when = dict(rule.get("when") or {})
             if not self.evaluator.matches(when, ctx=ctx, traits=merged):
                 continue
+            rule_name = str(
+                rule.get("id")
+                or rule.get("name")
+                or rule.get("label")
+                or f"rule_{index}"
+            ).strip() or f"rule_{index}"
+            applied_rules.append(
+                {
+                    "rule": rule_name,
+                    "action_count": len([x for x in list(rule.get("apply") or []) if isinstance(x, dict)]),
+                }
+            )
             self._apply_actions(
                 merged=merged,
                 state=state,
                 actions=list(rule.get("apply") or []),
                 now=now,
                 changes=changes,
+                mood_hints=mood_hints,
             )
 
+        prev_mood = str(state.get("mood") or "").strip().lower()
+        emotion_state, emotion_debug = self.update_emotional_state(
+            character_id=cid,
+            state=state,
+            signals=signals,
+            traits=merged,
+            context=ctx,
+            mood_hints=mood_hints,
+            now_ts=now,
+            current_state=emotion_state,
+        )
+        next_mood = str(state.get("mood") or "").strip().lower()
+        if prev_mood != next_mood:
+            changes.append({"kind": "mood", "from": prev_mood, "to": next_mood, "source": "emotion_state"})
+        self.storage.save_emotion_state(cid, emotion_state)
         self._resolve_conflicts(merged=merged, state=state, now=now, changes=changes)
         self._refresh_active_lists(state=state, traits=merged)
         self._apply_cleanup(
@@ -2170,29 +2484,49 @@ class CharacterRuntime:
         trait_values = self._flat_trait_values(merged)
         persona_entry = self._build_persona_entry(
             character_id=cid,
-            mood=str(composed.mood or state.get("mood") or "neutral"),
+            mood=str(state.get("mood") or composed.mood or "neutral"),
             trait_values=trait_values,
             existing=existing_entry,
         )
-        signals = build_character_signals(
-            text=str(text or ""),
-            metadata={
-                "lang": meta_map.get("lang"),
-                "intent": meta_map.get("intent"),
-                "emotion": meta_map.get("emotion"),
-                "mood": meta_map.get("mood"),
-                "mode": meta_map.get("active_mode") or meta_map.get("mode") or self._state.get("active_mode"),
-                "topic": meta_map.get("topic"),
-                "topics": meta_map.get("topics"),
-                "metadata_tags": meta_map.get("metadata_tags") or meta_map.get("tags"),
-            },
+        user_addressing = self.storage.load_user_addressing(cid)
+        feedback_items = [str(x).strip() for x in list(signals.user_feedback or []) if str(x).strip()]
+        persona_feedback_items = [self._normalize_feedback_token(x) for x in feedback_items if not self._is_user_addressing_feedback(x)]
+        user_addressing, addressing_debug = self._apply_user_addressing_feedback(
+            current=user_addressing,
+            feedback_items=feedback_items,
         )
-        learned_persona, learner_debug = update_persona(
-            dict(persona_entry.get("persona") or {}),
-            signals.to_dict(),
-            max_delta_per_turn=0.02,
-            decay_to_baseline=0.005,
-        )
+        if persona_feedback_items:
+            learning_signals = {
+                "user_feedback": list(persona_feedback_items),
+            }
+            learned_persona, learner_debug = update_persona(
+                dict(persona_entry.get("persona") or {}),
+                learning_signals,
+                max_delta_per_turn=0.02,
+                decay_to_baseline=0.0,
+            )
+        else:
+            learned_persona = dict(persona_entry.get("persona") or {})
+            learner_debug = {
+                "decay_deltas": {},
+                "implicit_deltas": {},
+                "feedback_deltas": {},
+                "feedback_applied": [],
+                "lock_changes": [],
+                "ban_changes": [],
+                "transient_persona_learning_enabled": False,
+                "transient_signals_ignored": {},
+                "max_delta_per_turn": 0.02,
+                "decay_to_baseline": 0.0,
+                "baseline_size": len(
+                    dict(
+                        learned_persona.get("baseline_traits")
+                        or (dict(learned_persona.get("learned") or {}).get("baseline_traits") or {})
+                    )
+                ),
+                "skipped_reason": "no_explicit_feedback",
+            }
+        persona_feedback_applied = [str(x).strip() for x in list(persona_feedback_items) if str(x).strip()]
         persona_entry["persona"] = learned_persona
         local_ctx = dict(persona_entry.get("local_context") or {})
         topic_weights = dict(local_ctx.get("last_topic_weights") or {})
@@ -2216,8 +2550,31 @@ class CharacterRuntime:
         if conversation_id:
             local_ctx["last_update_conversation_id"] = conversation_id
         persona_entry["local_context"] = local_ctx
+        state["last_signals"] = dict(last_signals)
+        state["applied_rules"] = list(applied_rules)
+        state["emotional_state_before"] = dict(emotional_state_before)
+        state["emotional_state_after"] = dict(emotion_state)
+        state["persona_feedback_applied"] = list(persona_feedback_applied)
+        self.storage.save_state(cid, state)
+        emotion_detector_payload = {
+            "emotion": str(meta_map.get("emotion") or meta_map.get("mood") or "").strip().lower(),
+            "emotion_intensity": self._clamp01(self._to_float(meta_map.get("emotion_intensity"), 0.0)),
+            "emotion_arousal": self._clamp01(self._to_float(meta_map.get("emotion_arousal"), 0.0)),
+            "source": "metadata",
+        }
+        emotional_state_delta = self._build_state_delta(
+            before=emotional_state_before,
+            after=emotion_state,
+            keys=("mood", "trigger", "valence", "arousal", "intensity"),
+        )
+        persona_feedback_delta = {
+            "applied": list(persona_feedback_applied),
+            "feedback_deltas": dict(learner_debug.get("feedback_deltas") or {}),
+            "lock_changes": list(learner_debug.get("lock_changes") or []),
+            "ban_changes": list(learner_debug.get("ban_changes") or []),
+            "skipped_reason": str(learner_debug.get("skipped_reason") or ""),
+        }
 
-        feedback_items = list(signals.user_feedback or [])
         if feedback_items:
             changes.append(
                 {
@@ -2226,6 +2583,14 @@ class CharacterRuntime:
                     "trait_deltas": dict(learner_debug.get("feedback_deltas") or {}),
                 }
             )
+            if addressing_debug.get("applied"):
+                changes.append(
+                    {
+                        "kind": "user_addressing",
+                        "feedback": list(addressing_debug.get("applied") or [])[:8],
+                        "state": dict(user_addressing),
+                    }
+                )
             self.dispatch_action(
                 {
                     "type": "FEEDBACK_RECEIVED",
@@ -2233,28 +2598,41 @@ class CharacterRuntime:
                     "feedback": feedback_items[:12],
                 }
             )
-        else:
-            changes.append(
-                {
-                    "kind": "persona_drift",
-                    "trait_deltas": dict(learner_debug.get("implicit_deltas") or {}),
-                }
-            )
         active_mode = self._normalize_active_mode(meta_map.get("active_mode") or self._state.get("active_mode"))
-        compiled_prompt, _ = compile_system_persona(
+        persona_prompt_payload = self._build_compiler_persona_payload(
             character_id=cid,
             persona_state=dict(persona_entry.get("persona") or {}),
+            mood=str(state.get("mood") or "neutral"),
+            emotional_state=emotion_state,
+        )
+        compiled_prompt, _ = compile_system_persona(
+            character_id=cid,
+            persona_state=persona_prompt_payload,
             active_mode=active_mode,
+            user_addressing=user_addressing,
         )
         self._set_character_persona_entry(cid, persona_entry)
+        self.storage.save_user_addressing(cid, user_addressing)
         self.storage.append_event(cid, {
             "type": "character_update",
             "intent": ctx.get("intent"),
             "emotion": ctx.get("emotion"),
             "mode": ctx.get("mode"),
             "mood": state.get("mood"),
-            "signals": signals.to_dict(),
+            "emotion_detector": emotion_detector_payload,
+            "signals": dict(last_signals),
+            "character_signals": dict(last_signals),
+            "last_signals": dict(last_signals),
+            "applied_rules": list(applied_rules),
+            "emotional_state_before": dict(emotional_state_before),
+            "emotional_state_after": dict(emotion_state),
+            "emotional_state_delta": emotional_state_delta,
+            "persona_feedback_applied": list(persona_feedback_applied),
+            "persona_feedback_delta": persona_feedback_delta,
+            "emotion_debug": emotion_debug,
             "learner_delta": learner_debug,
+            "user_addressing": user_addressing,
+            "user_addressing_debug": addressing_debug,
             "changes": changes[:16],
         })
 
@@ -2267,6 +2645,7 @@ class CharacterRuntime:
             traits={k: self._clean_trait(v) for k, v in merged.items()},
             trait_values=trait_values,
             state=dict(state),
+            user_addressing=dict(user_addressing),
             prompt_block=compiled_prompt or composed.prompt,
             used_prompt_files=list(composed.used_files),
             changes=changes,
@@ -2350,11 +2729,18 @@ class CharacterRuntime:
             },
         )
         trait_values = self._flat_trait_values(traits)
-        mood = str(persona.get("mood") or composed.mood or state.get("mood") or character.get("default_mood") or "neutral").strip().lower() or "neutral"
+        mood = str(state.get("mood") or composed.mood or persona.get("mood") or character.get("default_mood") or "neutral").strip().lower() or "neutral"
+        persona_prompt_payload = self._build_compiler_persona_payload(
+            character_id=cid,
+            persona_state=dict(persona or self.storage.load_persona_state(cid) or {}),
+            mood=mood,
+        )
+        user_addressing = self.storage.load_user_addressing(cid)
         prompt_block, _ = compile_system_persona(
             character_id=cid,
-            persona_state=persona or dict(self.storage.load_persona_state(cid) or {}),
+            persona_state=persona_prompt_payload,
             active_mode=active_mode,
+            user_addressing=user_addressing,
         )
         llm_profile = str(character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED"
         return CharacterRuntimeResult(
@@ -2364,6 +2750,7 @@ class CharacterRuntime:
             traits={k: self._clean_trait(v) for k, v in dict(traits or {}).items()},
             trait_values=trait_values,
             state=dict(state or {}),
+            user_addressing=dict(user_addressing),
             prompt_block=prompt_block or composed.prompt,
             used_prompt_files=list(composed.used_files),
             changes=[dict(x) for x in list(changes or []) if isinstance(x, dict)],
@@ -2408,26 +2795,30 @@ class CharacterRuntime:
         local = dict(row.get("local_context") or {})
         base_traits = dict(persona.get("traits") or {})
         next_traits = dict(base_traits)
+        seed_runtime_traits = not bool(base_traits)
         for raw_key, raw_value in dict(trait_values or {}).items():
             key = self._normalize_trait_name(raw_key)
             if not key or isinstance(raw_value, bool):
                 continue
             try:
-                source = self._clamp01(float(raw_value))
+                source = float(clamp_trait_scalar(key, raw_value, minimum=0.0, maximum=1.0))
             except Exception:
                 continue
-            if key not in next_traits:
+            if seed_runtime_traits and key not in next_traits:
+                # Only bootstrap an empty persona once. Existing persona traits
+                # must not absorb transient runtime reactions on each turn.
                 next_traits[key] = source
-                continue
-            prev = self._clamp01(self._to_float(next_traits.get(key), source))
-            # Keep learner drift while still nudging toward current engine traits.
-            next_traits[key] = self._clamp01((prev * 0.7) + (source * 0.3))
-        if "teasing" not in next_traits and "playfulness" in trait_values:
-            next_traits["teasing"] = self._clamp01(self._to_float(trait_values.get("playfulness"), 0.35))
-        if "empathy" not in next_traits and "thoughtfulness" in trait_values:
-            next_traits["empathy"] = self._clamp01(self._to_float(trait_values.get("thoughtfulness"), 0.55))
-        persona["traits"] = next_traits
-        persona["mood"] = str(mood or persona.get("mood") or "neutral").strip().lower() or "neutral"
+        if seed_runtime_traits and "teasing" not in next_traits and "playfulness" in trait_values:
+            next_traits["teasing"] = float(clamp_trait_scalar("teasing", trait_values.get("playfulness"), minimum=0.0, maximum=1.0))
+        if seed_runtime_traits and "empathy" not in next_traits and "thoughtfulness" in trait_values:
+            next_traits["empathy"] = float(clamp_trait_scalar("empathy", trait_values.get("thoughtfulness"), minimum=0.0, maximum=1.0))
+        persona["traits"] = dict(clamp_trait_map(next_traits))
+        persona["relation_state"] = self._coerce_relation_state_payload(
+            persona.get("relation_state"),
+            traits=persona["traits"],
+        )
+        if "mood" not in persona:
+            persona["mood"] = str(mood or "neutral").strip().lower() or "neutral"
         locks = dict(persona.get("locks") or {})
         locks.setdefault("feminine", True)
         locks.setdefault("informal_you", True)
@@ -2438,10 +2829,243 @@ class CharacterRuntime:
         learned.setdefault("preferences_pending", [])
         learned.setdefault("style_bias", {})
         persona["learned"] = learned
-        persona["baseline_traits"] = dict(persona.get("baseline_traits") or {})
+        persona["baseline_traits"] = dict(clamp_trait_map(persona.get("baseline_traits") or {}))
         local.setdefault("last_topic_weights", {})
         local["last_seen_ts"] = now_local_ts()
         return {"persona": persona, "local_context": local, "character_id": str(character_id or "")}
+
+    def _build_compiler_persona_payload(
+        self,
+        *,
+        character_id: str,
+        persona_state: dict[str, Any] | None,
+        mood: str = "",
+        emotional_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        cid = self._validate_character(character_id)
+        payload = dict(self.storage.load_persona_state(cid) or {})
+        payload.update(dict(persona_state or {}))
+        traits = dict(clamp_trait_map(payload.get("traits")))
+        payload["traits"] = traits
+        payload["relation_state"] = self._coerce_relation_state_payload(
+            payload.get("relation_state"),
+            traits=traits,
+        )
+        next_mood = str(
+            mood
+            or payload.get("mood")
+            or dict(payload.get("emotional_state") or {}).get("mood")
+            or "neutral"
+        ).strip().lower() or "neutral"
+        if next_mood == "romantic_soft":
+            next_mood = "soft_supportive"
+        payload["mood"] = next_mood
+        emotion_row = dict(emotional_state or payload.get("emotional_state") or self.storage.load_emotion_state(cid) or {})
+        emotion_row.setdefault("mood", next_mood)
+        if str(emotion_row.get("mood") or "").strip().lower() == "romantic_soft":
+            emotion_row["mood"] = "soft_supportive"
+        payload["emotional_state"] = emotion_row
+        return payload
+
+    def _coerce_relation_state_payload(
+        self,
+        value: dict[str, Any] | None,
+        *,
+        traits: dict[str, Any] | None = None,
+    ) -> dict[str, float]:
+        row = dict(traits or {})
+        warmth = float(clamp_trait_scalar("warmth", row.get("warmth", 0.58), minimum=0.0, maximum=1.0))
+        empathy = float(clamp_trait_scalar("empathy", row.get("empathy", 0.62), minimum=0.0, maximum=1.0))
+        teasing_seed = row.get("teasing", row.get("playfulness", 0.35))
+        teasing = float(clamp_trait_scalar("teasing", teasing_seed, minimum=0.0, maximum=1.0))
+        defaults = {
+            "familiarity": self._clamp01(0.28 + max(0.0, warmth - 0.5) * 0.12 + max(0.0, empathy - 0.5) * 0.08),
+            "trust": self._clamp01(0.54 + max(0.0, empathy - 0.5) * 0.16),
+            "teasing_permission": self._clamp01(0.08 + max(0.0, teasing - 0.3) * 0.55),
+            "softness_bias": self._clamp01((warmth * 0.55) + (empathy * 0.45)),
+        }
+        current = dict(value or {})
+        out = dict(defaults)
+        for key in ("familiarity", "trust", "teasing_permission", "softness_bias"):
+            if key not in current:
+                continue
+            out[key] = self._clamp01(self._to_float(current.get(key), out[key]))
+        return {k: float(v) for k, v in out.items()}
+
+    def _build_state_delta(
+        self,
+        *,
+        before: dict[str, Any] | None,
+        after: dict[str, Any] | None,
+        keys: tuple[str, ...],
+    ) -> dict[str, dict[str, Any]]:
+        prev = dict(before or {})
+        nxt = dict(after or {})
+        out: dict[str, dict[str, Any]] = {}
+        for key in keys:
+            left = prev.get(key)
+            right = nxt.get(key)
+            if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+                lval = self._to_float(left, 0.0)
+                rval = self._to_float(right, 0.0)
+                if abs(rval - lval) <= 1e-9:
+                    continue
+                out[str(key)] = {"before": lval, "after": rval}
+                continue
+            if str(left or "") == str(right or ""):
+                continue
+            out[str(key)] = {"before": left, "after": right}
+        return out
+
+    def _apply_user_addressing_feedback(
+        self,
+        *,
+        current: dict[str, Any] | None,
+        feedback_items: list[str],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        before = self._coerce_user_addressing(current)
+        updated = dict(before)
+        applied: list[str] = []
+
+        for raw in list(feedback_items or []):
+            item = str(raw or "").strip()
+            if not item:
+                continue
+            kind = self._feedback_kind(item)
+            payload = self._feedback_payload(item)
+            if kind == "set_canonical_name":
+                name = self._normalize_user_name_form(payload)
+                if not name:
+                    continue
+                updated["canonical_name"] = name
+                updated["allowed_forms"] = self._merge_name_forms(updated.get("allowed_forms"), [name])
+                updated["forbidden_forms"] = [
+                    x for x in list(updated.get("forbidden_forms") or [])
+                    if str(x).casefold() != name.casefold()
+                ]
+                applied.append(f"set_canonical_name:{name}")
+                continue
+            if kind == "allow_name_form":
+                name = self._normalize_user_name_form(payload)
+                if not name:
+                    continue
+                updated["allowed_forms"] = self._merge_name_forms(updated.get("allowed_forms"), [name])
+                updated["forbidden_forms"] = [
+                    x for x in list(updated.get("forbidden_forms") or [])
+                    if str(x).casefold() != name.casefold()
+                ]
+                applied.append(f"allow_name_form:{name}")
+                continue
+            if kind == "forbid_name_form":
+                name = self._normalize_user_name_form(payload)
+                canonical = str(updated.get("canonical_name") or "").strip()
+                if not name or (canonical and name.casefold() == canonical.casefold()):
+                    continue
+                updated["forbidden_forms"] = self._merge_name_forms(updated.get("forbidden_forms"), [name])
+                updated["allowed_forms"] = [
+                    x for x in list(updated.get("allowed_forms") or [])
+                    if str(x).casefold() != name.casefold()
+                ]
+                applied.append(f"forbid_name_form:{name}")
+                continue
+            if kind == "disable_diminutives":
+                updated["allow_diminutives"] = False
+                applied.append("disable_diminutives")
+                continue
+            if kind == "enable_diminutives":
+                updated["allow_diminutives"] = True
+                applied.append("enable_diminutives")
+
+        normalized = self._coerce_user_addressing(updated)
+        if normalized != before:
+            normalized["updated_at"] = now_local_iso()
+        return normalized, {
+            "applied": applied,
+            "before": before,
+            "after": normalized,
+        }
+
+    @staticmethod
+    def _is_user_addressing_feedback(value: str) -> bool:
+        return CharacterRuntime._feedback_kind(value) in {
+            "set_canonical_name",
+            "allow_name_form",
+            "forbid_name_form",
+            "disable_diminutives",
+            "enable_diminutives",
+        }
+
+    @staticmethod
+    def _feedback_kind(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if ":" not in text:
+            return text.lower()
+        kind, _ = text.split(":", 1)
+        return kind.strip().lower()
+
+    @staticmethod
+    def _feedback_payload(value: str) -> str:
+        text = str(value or "").strip()
+        if ":" not in text:
+            return ""
+        _, payload = text.split(":", 1)
+        return payload.strip()
+
+    @staticmethod
+    def _normalize_feedback_token(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if ":" not in text:
+            return text.lower()
+        kind, payload = text.split(":", 1)
+        return f"{kind.strip().lower()}:{payload.strip().lower()}"
+
+    @classmethod
+    def _coerce_user_addressing(cls, value: dict[str, Any] | None) -> dict[str, Any]:
+        row = dict(value or {})
+        canonical = cls._normalize_user_name_form(row.get("canonical_name"))
+        allowed = cls._merge_name_forms([], list(row.get("allowed_forms") or []))
+        forbidden = cls._merge_name_forms([], list(row.get("forbidden_forms") or []))
+        if canonical:
+            allowed = cls._merge_name_forms(allowed, [canonical])
+            forbidden = [x for x in forbidden if str(x).casefold() != canonical.casefold()]
+        return {
+            "canonical_name": canonical,
+            "allowed_forms": allowed,
+            "forbidden_forms": forbidden,
+            "allow_diminutives": bool(row.get("allow_diminutives", False)),
+            "use_name_by_default": bool(row.get("use_name_by_default", False)),
+            "updated_at": str(row.get("updated_at") or "").strip(),
+        }
+
+    @staticmethod
+    def _normalize_user_name_form(value: Any) -> str:
+        text = str(value or "").strip()
+        text = text.strip(" \t\r\n.,!?;:()[]{}\"'`«»")
+        text = " ".join(text.split())
+        if not text or " " in text:
+            return ""
+        if len(text) < 2 or len(text) > 40:
+            return ""
+        if any(ch.isdigit() for ch in text):
+            return ""
+        return text
+
+    @classmethod
+    def _merge_name_forms(cls, current: Any, extra: list[Any]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for row in [*list(current or []), *list(extra or [])]:
+            item = cls._normalize_user_name_form(row)
+            key = item.casefold()
+            if not item or key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+        return out
 
     # -------------------------------------------------------------------------
     # PROMPT BUILDER (РёР· prompt_builder)
@@ -2466,8 +3090,13 @@ class CharacterRuntime:
         self._set_character_persona_entry(cid, persona_entry)
         text, _ = compile_system_persona(
             character_id=cid,
-            persona_state=dict(persona_entry.get("persona") or {}),
+            persona_state=self._build_compiler_persona_payload(
+                character_id=cid,
+                persona_state=dict(persona_entry.get("persona") or {}),
+                mood=str(state.get("mood") or "neutral"),
+            ),
             active_mode=self.get_active_mode(),
+            user_addressing=self.storage.load_user_addressing(cid),
         )
         return text
 
@@ -2571,7 +3200,7 @@ class CharacterRuntime:
         traits: dict[str, Any],
         policies: dict[str, Any],
     ) -> dict[str, str]:
-        """�звлечь контекстные теги."""
+        """������ ����������� ����."""
         state_tags = _as_dict(state.get("context_tags"))
         policy_tags = _as_dict(policies.get("context_tags"))
         trait_tags = _as_dict(traits.get("context_tags"))
@@ -2754,19 +3383,28 @@ class CharacterRuntime:
 
         persona_payload = dict(persona_state)
         persona_payload["traits"] = trait_map
-        persona_payload["mood"] = str(
-            persona_payload.get("mood")
-            or state.get("mood")
-            or traits.get("mood")
-            or "neutral"
-        ).strip().lower()
+        persona_payload = self._build_compiler_persona_payload(
+            character_id=character,
+            persona_state=persona_payload,
+            mood=str(
+                persona_payload.get("mood")
+                or state.get("mood")
+                or traits.get("mood")
+                or "neutral"
+            ).strip().lower(),
+        )
         locks = dict(persona_payload.get("locks") or {})
         locks.setdefault("feminine", True)
         locks.setdefault("informal_you", True)
         persona_payload["locks"] = locks
         persona_payload["bans"] = [str(x).strip() for x in list(persona_payload.get("bans") or []) if str(x).strip()]
         mode = self._normalize_active_mode(state.get("active_mode") or state.get("mode") or "chatting")
-        text, _ = compile_system_persona(character_id=character, persona_state=persona_payload, active_mode=mode)
+        text, _ = compile_system_persona(
+            character_id=character,
+            persona_state=persona_payload,
+            active_mode=mode,
+            user_addressing=self.storage.load_user_addressing(character),
+        )
         return _normalize_text(text)
 
     def _build_state_summary_block(self, state: dict[str, Any]) -> str:
@@ -3037,7 +3675,7 @@ class CharacterRuntime:
             key = self._normalize_trait_name(name)
             if not key:
                 continue
-            payload = self._normalize_trait(row)
+            payload = self._normalize_trait(row, trait_name=key)
             payload["_source"] = "builtin"
             merged[key] = payload
 
@@ -3045,7 +3683,7 @@ class CharacterRuntime:
             key = self._normalize_trait_name(name)
             if not key:
                 continue
-            payload = self._normalize_trait(row)
+            payload = self._normalize_trait(row, trait_name=key)
             existing = dict(merged.get(key) or {})
             existing.update(payload)
             existing["_source"] = "learned"
@@ -3059,7 +3697,9 @@ class CharacterRuntime:
         return {
             "text": str(text or ""),
             "intent": str(meta.get("intent") or "").strip().lower(),
-            "emotion": str(meta.get("mood") or meta.get("emotion") or "").strip().lower(),
+            "emotion": str(meta.get("emotion") or meta.get("mood") or "").strip().lower(),
+            "emotion_intensity": self._clamp01(self._to_float(meta.get("emotion_intensity"), 0.0)),
+            "emotion_arousal": self._clamp01(self._to_float(meta.get("emotion_arousal"), 0.0)),
             "mode": str(
                 meta.get("active_mode")
                 or meta.get("mode")
@@ -3079,6 +3719,7 @@ class CharacterRuntime:
         actions: list[Any],
         now: float,
         changes: list[dict[str, Any]],
+        mood_hints: list[str] | None = None,
     ) -> None:
         """Применить actions из rules."""
         for row in list(actions or []):
@@ -3087,10 +3728,11 @@ class CharacterRuntime:
             if "set_mood" in row:
                 mood = str(row.get("set_mood") or "").strip().lower()
                 if mood:
-                    prev = str(state.get("mood") or "")
-                    state["mood"] = mood
-                    if prev != mood:
-                        changes.append({"kind": "mood", "from": prev, "to": mood, "source": "rule"})
+                    if mood == "romantic_soft":
+                        mood = "soft_supportive"
+                    if isinstance(mood_hints, list) and mood not in mood_hints:
+                        mood_hints.append(mood)
+                    changes.append({"kind": "mood_hint", "hint": mood, "source": "rule"})
                 continue
 
             trait_name = self._normalize_trait_name(row.get("trait"))
@@ -3108,7 +3750,7 @@ class CharacterRuntime:
                     "min": 0.0,
                     "max": 1.0,
                     "confidence": 0.45,
-                })
+                }, trait_name=trait_name)
                 trait["_source"] = "learned"
 
             trait_type = str(trait.get("type") or "scalar").strip().lower()
@@ -3131,12 +3773,19 @@ class CharacterRuntime:
                 max_v = self._to_float(trait.get("max"), 1.0)
                 val = self._to_float(value, 0.0)
                 if op in {"set", "update"}:
-                    nxt = val
+                    nxt = clamp_trait_scalar(trait_name, val, minimum=min_v, maximum=max_v)
                 elif op == "mul":
-                    nxt = cur * val
+                    nxt = clamp_trait_scalar(trait_name, cur * val, minimum=min_v, maximum=max_v)
                 else:
-                    nxt = cur + val
-                trait["value"] = self._clamp(nxt, min_v, max_v)
+                    nxt = apply_trait_delta(
+                        trait_name,
+                        cur,
+                        val,
+                        minimum=min_v,
+                        maximum=max_v,
+                        soften=True,
+                    )
+                trait["value"] = nxt
                 trait["disabled"] = False
 
             trait["confidence"] = self._clamp01(self._to_float(trait.get("confidence"), 0.5) + 0.03)
@@ -3290,7 +3939,7 @@ class CharacterRuntime:
         state["disabled_traits"] = sorted(set(disabled))
 
     def _extract_learned_delta(self, builtin: dict[str, Any], merged: dict[str, Any]) -> dict[str, Any]:
-        """�звлечь delta learned traits."""
+        """������ delta learned traits."""
         out: dict[str, Any] = {}
         for name, row in list(merged.items()):
             clean = self._clean_trait(row)
@@ -3326,30 +3975,9 @@ class CharacterRuntime:
         return "".join(ch for ch in raw if ch.isalnum() or ch in {"_", "-"})
 
     @staticmethod
-    def _normalize_trait(value: dict[str, Any] | None) -> dict[str, Any]:
+    def _normalize_trait(value: dict[str, Any] | None, *, trait_name: str = "") -> dict[str, Any]:
         """Нормализовать trait."""
-        row = dict(value or {})
-        ttype = str(row.get("type") or "scalar").strip().lower()
-        out = {
-            "type": "flag" if ttype == "flag" else "scalar",
-            "value": row.get("value", False if ttype == "flag" else 0.0),
-            "min": CharacterRuntime._to_float(row.get("min"), 0.0),
-            "max": CharacterRuntime._to_float(row.get("max"), 1.0),
-            "decay_per_day": max(0.0, CharacterRuntime._to_float(row.get("decay_per_day"), 0.0)),
-            "confidence": CharacterRuntime._clamp01(CharacterRuntime._to_float(row.get("confidence"), 0.6)),
-            "tags": [str(x).strip().lower() for x in list(row.get("tags") or []) if str(x).strip()],
-            "prompt_file": str(row.get("prompt_file") or "").strip(),
-            "ttl_days": max(0.0, CharacterRuntime._to_float(row.get("ttl_days"), 0.0)),
-            "disabled": bool(row.get("disabled", False)),
-            "updated_at": str(row.get("updated_at") or ""),
-            "last_used_ts": now_local_ts() if row.get("last_used_ts") else "",
-            "decay_ts": now_local_ts() if row.get("decay_ts") else "",
-        }
-        if out["type"] == "flag":
-            out["value"] = bool(out["value"])
-        else:
-            out["value"] = CharacterRuntime._clamp(out["value"], out["min"], out["max"])
-        return out
+        return normalize_trait_record(trait_name, value)
 
     @staticmethod
     def _clean_trait(value: dict[str, Any]) -> dict[str, Any]:

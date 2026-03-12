@@ -148,6 +148,118 @@
         }
       }
     },
+    "task_models": {
+      "emotion": {
+        "name": "emotion",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.15,
+        "max_tokens": 128,
+        "timeout": 20.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "tagging": {
+        "name": "tagging",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.1,
+        "max_tokens": 128,
+        "timeout": 20.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "intent_judge": {
+        "name": "intent_judge",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.1,
+        "max_tokens": 160,
+        "timeout": 20.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "query_rewrite": {
+        "name": "query_rewrite",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.2,
+        "max_tokens": 192,
+        "timeout": 25.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "source_relevance": {
+        "name": "source_relevance",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.1,
+        "max_tokens": 160,
+        "timeout": 20.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "summary_mini_pass": {
+        "name": "summary_mini_pass",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.2,
+        "max_tokens": 96,
+        "timeout": 20.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "studio_seed_extract": {
+        "name": "studio_seed_extract",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.35,
+        "max_tokens": 540,
+        "timeout": 45.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "studio_options": {
+        "name": "studio_options",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.55,
+        "max_tokens": 220,
+        "timeout": 25.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "studio_pack_blueprint": {
+        "name": "studio_pack_blueprint",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.55,
+        "max_tokens": 4096,
+        "timeout": 90.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "fact_filter": {
+        "name": "fact_filter",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.1,
+        "max_tokens": 192,
+        "timeout": 20.0,
+        "enabled": true,
+        "fallback_profile": ""
+      },
+      "final_response": {
+        "name": "final_response",
+        "provider": "ollama",
+        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "temperature": 0.7,
+        "max_tokens": 1024,
+        "timeout": 120.0,
+        "enabled": true,
+        "fallback_profile": ""
+      }
+    },
     "max_tokens": {
       "lower_bound": 2048,
       "upper_bound": 8192
@@ -238,6 +350,17 @@
         "deep_search": 2,
         "backoff_ms": 250
       },
+      "continuation": {
+        "ttl_minutes": 20,
+        "max_user_turns": 6,
+        "short_followup_max_tokens": 9
+      },
+      "evidence_quality": {
+        "min_score": 0.46,
+        "min_usable_results": 2,
+        "min_unique_domains": 2,
+        "min_trusted_count": 1
+      },
       "force_search_keywords": [
         "сейчас",
         "актуально",
@@ -271,6 +394,59 @@
       },
       "preferred_domains": [],
       "blocked_domains": [],
+      "trust_policy": {
+        "trusted_allowlist": [],
+        "preferred_domains": [],
+        "blocked_domains": [],
+        "risky_domains": [
+          "medium.com",
+          "substack.com"
+        ],
+        "degraded_domains": [
+          "blogspot.com"
+        ],
+        "trusted_allowlist_by_category": {
+          "docs": [
+            "docs.python.org",
+            "developer.mozilla.org",
+            "openai.com",
+            "docs.docker.com",
+            "kubernetes.io"
+          ],
+          "finance": [
+            "bank.gov.ua"
+          ],
+          "news": [
+            "reuters.com",
+            "apnews.com"
+          ],
+          "generic": []
+        },
+        "preferred_domains_by_category": {
+          "docs": [
+            "github.com"
+          ],
+          "finance": [
+            "minfin.com.ua",
+            "finance.ua"
+          ],
+          "weather": [
+            "sinoptik.ua",
+            "meteo.ua"
+          ],
+          "news": [
+            "ukrinform.ua"
+          ],
+          "generic": []
+        },
+        "manual_overrides": {
+          "trusted": [],
+          "preferred": [],
+          "blocked": [],
+          "risky": [],
+          "degraded": []
+        }
+      },
       "citations": {
         "enabled": true,
         "style": "compact",

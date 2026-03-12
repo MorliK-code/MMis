@@ -68,6 +68,7 @@ class WebMemoryBridge:
                 "web_v2_stability": stability,
                 "web_v2_ttl_sec": int(ttl_sec),
                 "web_v2_conflict_flags": list(item.conflict_flags or []),
+                "web_v2_source_audit": dict(getattr(item, "audit", {}) or {}),
             }
             prompt_items.append(prompt_row)
 
@@ -91,6 +92,7 @@ class WebMemoryBridge:
                                 "ttl_sec": int(ttl_sec),
                                 "trust_tier": str(item.trust_tier),
                                 "fetched_at": str(item.fetched_at or ""),
+                                "source_audit": dict(getattr(item, "audit", {}) or {}),
                                 "write_scope": "project",
                                 "write_type": "stable",
                             }
@@ -119,6 +121,7 @@ class WebMemoryBridge:
                             "ttl_sec": int(ttl_sec),
                             "trust_tier": str(item.trust_tier),
                             "fetched_at": str(item.fetched_at or ""),
+                            "source_audit": dict(getattr(item, "audit", {}) or {}),
                             "write_scope": "temporary",
                             "write_type": "temporary",
                         }
@@ -193,6 +196,7 @@ def _build_stable_write(
             "fetched_at": str(getattr(item, "fetched_at", "") or ""),
             "trust_tier": str(getattr(item, "trust_tier", "") or ""),
             "conflict_flags": list(getattr(item, "conflict_flags", []) or []),
+            "web_v2_source_audit": dict(getattr(item, "audit", {}) or {}),
         },
     }
 
@@ -242,6 +246,7 @@ def _build_temporary_write(
             "fetched_at": str(getattr(item, "fetched_at", "") or ""),
             "trust_tier": str(getattr(item, "trust_tier", "") or ""),
             "conflict_flags": list(getattr(item, "conflict_flags", []) or []),
+            "web_v2_source_audit": dict(getattr(item, "audit", {}) or {}),
         },
     }
 

@@ -7,6 +7,8 @@ from typing import Any
 
 from config.settings import DATA_DIR
 from config.settings import load_config
+from metadata.taxonomy import normalize_emotion
+from modules.character.trait_policy import clamp_trait_map, clamp_trait_scalar, normalize_trait_name, normalize_trait_record
 from utils.datetime_local import now_local_iso, now_local_ts
 
 DEFAULT_CHARACTER_ID = "default"
@@ -61,6 +63,36 @@ class CharacterStorage:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def persona_state_runtime_path(self, character_id: str) -> Path:
+        cid = _safe_id(character_id)
+        return (self.character_dir(cid) / "persona_state.json").resolve()
+
+    def persona_state_spec_path(self, character_id: str) -> Path:
+        cid = _safe_id(character_id)
+        path = (self.spec_root / cid / "persona_state.json").resolve()
+        try:
+            path.relative_to(self.spec_root)
+        except Exception as exc:
+            raise ValueError(f"persona_state spec path escapes root: {path}") from exc
+        return path
+
+    def persona_spec_path(self, character_id: str) -> Path:
+        cid = _safe_id(character_id)
+        path = (self.spec_root / cid / "persona_spec.json").resolve()
+        try:
+            path.relative_to(self.spec_root)
+        except Exception as exc:
+            raise ValueError(f"persona_spec path escapes root: {path}") from exc
+        return path
+
+    def emotion_state_runtime_path(self, character_id: str) -> Path:
+        cid = _safe_id(character_id)
+        return (self.character_dir(cid) / "emotion_state.json").resolve()
+
+    def user_addressing_runtime_path(self, character_id: str) -> Path:
+        cid = _safe_id(character_id)
+        return (self.character_dir(cid) / "user_addressing.json").resolve()
+
     def ensure_defaults(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.spec_root.mkdir(parents=True, exist_ok=True)
@@ -113,13 +145,20 @@ class CharacterStorage:
         _ensure_json(
             root / "state.json",
             {
-                "mood": "thoughtful",
+                "mood": "neutral",
                 "last_update_ts": "",
                 "active_traits": ["warmth", "thoughtfulness"],
                 "disabled_traits": [],
                 "counters": {"banter_hits": 0, "comfort_hits": 0},
+                "last_signals": {},
+                "applied_rules": [],
+                "emotional_state_before": {},
+                "emotional_state_after": {},
+                "persona_feedback_applied": [],
             },
         )
+        _ensure_json(root / "emotion_state.json", _default_emotion_state())
+        _ensure_json(root / "user_addressing.json", _default_user_addressing())
         _ensure_json(
             root / "traits" / "builtin.json",
             {
@@ -333,18 +372,44 @@ class CharacterStorage:
         cid = _safe_id(character_id)
         self.ensure_character_structure(cid)
         payload = _read_json(self.character_dir(cid) / "state.json")
-        if not isinstance(payload, dict):
-            payload = {}
-        payload.setdefault("mood", "thoughtful")
-        payload.setdefault("last_update_ts", "")
-        payload.setdefault("active_traits", [])
-        payload.setdefault("disabled_traits", [])
-        payload.setdefault("counters", {"banter_hits": 0, "comfort_hits": 0})
-        return payload
+        normalized = _normalize_runtime_state_payload(payload if isinstance(payload, dict) else {})
+        if normalized != payload:
+            _write_json(self.character_dir(cid) / "state.json", normalized)
+        return normalized
 
     def save_state(self, character_id: str, state: dict[str, Any]) -> None:
         cid = _safe_id(character_id)
-        _write_json(self.character_dir(cid) / "state.json", dict(state or {}))
+        _write_json(self.character_dir(cid) / "state.json", _normalize_runtime_state_payload(state))
+
+    def load_emotion_state(self, character_id: str) -> dict[str, Any]:
+        cid = _safe_id(character_id)
+        path = self.emotion_state_runtime_path(cid)
+        payload = _read_json(path)
+        normalized = _normalize_emotion_state_payload(payload if isinstance(payload, dict) else {})
+        if normalized != payload:
+            _write_json(path, normalized)
+        return normalized
+
+    def save_emotion_state(self, character_id: str, payload: dict[str, Any]) -> None:
+        cid = _safe_id(character_id)
+        row = self.load_emotion_state(cid)
+        row.update(dict(payload or {}))
+        _write_json(self.emotion_state_runtime_path(cid), _normalize_emotion_state_payload(row))
+
+    def load_user_addressing(self, character_id: str) -> dict[str, Any]:
+        cid = _safe_id(character_id)
+        path = self.user_addressing_runtime_path(cid)
+        payload = _read_json(path)
+        normalized = _normalize_user_addressing_payload(payload if isinstance(payload, dict) else {})
+        if normalized != payload:
+            _write_json(path, normalized)
+        return normalized
+
+    def save_user_addressing(self, character_id: str, payload: dict[str, Any]) -> None:
+        cid = _safe_id(character_id)
+        row = self.load_user_addressing(cid)
+        row.update(dict(payload or {}))
+        _write_json(self.user_addressing_runtime_path(cid), _normalize_user_addressing_payload(row))
 
     def load_builtin_traits(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
@@ -352,7 +417,10 @@ class CharacterStorage:
         payload = _read_json(self.character_dir(cid) / "traits" / "builtin.json")
         if not isinstance(payload, dict):
             return {}
-        return dict(payload.get("traits") or {})
+        traits = _normalize_trait_payload_map(payload.get("traits"))
+        if traits != dict(payload.get("traits") or {}):
+            _write_json(self.character_dir(cid) / "traits" / "builtin.json", {"traits": traits})
+        return traits
 
     def load_learned_traits(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
@@ -360,13 +428,16 @@ class CharacterStorage:
         payload = _read_json(self.character_dir(cid) / "traits" / "learned.json")
         if not isinstance(payload, dict):
             return {}
-        return dict(payload.get("traits") or {})
+        traits = _normalize_trait_payload_map(payload.get("traits"))
+        if traits != dict(payload.get("traits") or {}):
+            _write_json(self.character_dir(cid) / "traits" / "learned.json", {"traits": traits})
+        return traits
 
     def save_learned_traits(self, character_id: str, traits: dict[str, Any]) -> None:
         cid = _safe_id(character_id)
         path = self.character_dir(cid) / "traits" / "learned.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        _write_json(path, {"traits": dict(traits or {})})
+        _write_json(path, {"traits": _normalize_trait_payload_map(traits)})
 
     def load_rules(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
@@ -382,21 +453,28 @@ class CharacterStorage:
 
     def load_persona_state(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
-        self.ensure_character_specs(cid)
-        payload = _read_json(self.character_spec_dir(cid) / "persona_state.json")
-        return _normalize_persona_state_payload(payload if isinstance(payload, dict) else {})
+        runtime_path = self.persona_state_runtime_path(cid)
+        runtime_payload = _read_json(runtime_path)
+        if isinstance(runtime_payload, dict):
+            normalized = _normalize_persona_state_payload(runtime_payload)
+            if normalized != runtime_payload:
+                _write_json(runtime_path, normalized)
+            return normalized
+
+        seed_payload = _read_json(self.persona_state_spec_path(cid))
+        normalized_seed = _normalize_persona_state_payload(seed_payload if isinstance(seed_payload, dict) else {})
+        _write_json(runtime_path, normalized_seed)
+        return normalized_seed
 
     def save_persona_state(self, character_id: str, payload: dict[str, Any]) -> None:
         cid = _safe_id(character_id)
-        self.ensure_character_specs(cid)
         row = self.load_persona_state(cid)
         row.update(dict(payload or {}))
-        _write_json(self.character_spec_dir(cid) / "persona_state.json", _normalize_persona_state_payload(row))
+        _write_json(self.persona_state_runtime_path(cid), _normalize_persona_state_payload(row))
 
     def load_persona_spec(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
-        self.ensure_character_specs(cid)
-        payload = _read_json(self.character_spec_dir(cid) / "persona_spec.json")
+        payload = _read_json(self.persona_spec_path(cid))
         if not isinstance(payload, dict):
             payload = {}
         base = _default_persona_spec()
@@ -539,7 +617,7 @@ def _default_evolution_rules() -> dict[str, Any]:
                 "apply": [
                     {"trait": "warmth", "op": "add", "value": 0.08},
                     {"trait": "sarcasm", "op": "add", "value": -0.1},
-                    {"set_mood": "romantic_soft"},
+                    {"set_mood": "soft_supportive"},
                 ],
             },
             {
@@ -582,6 +660,7 @@ def _default_persona_state() -> dict[str, Any]:
             "feminine": True,
             "informal_you": True,
         },
+        "relation_state": _default_relation_state(traits),
         "bans": [],
         "learned": {
             "preferences_confirmed": [],
@@ -610,7 +689,7 @@ def _default_persona_spec() -> dict[str, Any]:
             "thoughtful": ["Mood: thoughtful. Show empathy and reasoning before conclusion."],
             "teasing": ["Mood: teasing. Keep playful tone but stay respectful."],
             "ironic": ["Mood: ironic. Keep humor light and non-hostile."],
-            "romantic_soft": ["Mood: romantic_soft. Keep soft and supportive tone."],
+            "soft_supportive": ["Mood: soft_supportive. Keep calm, supportive, and steady tone."],
             "neutral": ["Mood: neutral. Keep balanced and practical tone."],
         },
         "modes": {
@@ -665,6 +744,30 @@ def _read_json(path: Path):
         return None
 
 
+def _default_emotion_state() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "mood": "neutral",
+        "valence": 0.0,
+        "arousal": 0.0,
+        "intensity": 0.0,
+        "trigger": "",
+        "last_update_ts": "",
+        "cooldown_until_ts": "",
+    }
+
+
+def _default_user_addressing() -> dict[str, Any]:
+    return {
+        "canonical_name": "",
+        "allowed_forms": [],
+        "forbidden_forms": [],
+        "allow_diminutives": False,
+        "use_name_by_default": False,
+        "updated_at": "",
+    }
+
+
 def _write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -690,18 +793,28 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    low = float(min(minimum, maximum))
+    high = float(max(minimum, maximum))
+    return max(low, min(high, float(value)))
+
+
+def _to_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
 def _coerce_baseline_map(value: Any) -> dict[str, float]:
     out: dict[str, float] = {}
     if not isinstance(value, dict):
         return out
     for key, raw in value.items():
-        name = str(key or "").strip().lower()
+        name = normalize_trait_name(key)
         if not name:
             continue
-        try:
-            out[name] = float(_clamp01(float(raw)))
-        except Exception:
-            continue
+        out[name] = float(clamp_trait_scalar(name, raw, minimum=0.0, maximum=1.0))
     return out
 
 
@@ -714,8 +827,12 @@ def _normalize_persona_state_payload(value: dict[str, Any] | None) -> dict[str, 
     payload = dict(_default_persona_state())
     payload.update(input_row)
 
-    payload["traits"] = dict(payload.get("traits") or {})
+    payload["traits"] = dict(clamp_trait_map(payload.get("traits")))
     payload["locks"] = dict(payload.get("locks") or {"feminine": True, "informal_you": True})
+    payload["relation_state"] = _normalize_relation_state_payload(
+        payload.get("relation_state"),
+        traits=payload.get("traits"),
+    )
     payload["bans"] = [str(x).strip() for x in list(payload.get("bans") or []) if str(x).strip()]
 
     learned = dict(payload.get("learned") or {})
@@ -733,16 +850,163 @@ def _normalize_persona_state_payload(value: dict[str, Any] | None) -> dict[str, 
 
     # Anchor any newly seen numeric trait to baseline on first sight.
     for key, raw in dict(payload.get("traits") or {}).items():
-        name = str(key or "").strip().lower()
+        name = normalize_trait_name(key)
         if not name or name in baselines:
             continue
-        try:
-            baselines[name] = float(_clamp01(float(raw)))
-        except Exception:
-            continue
+        baselines[name] = float(clamp_trait_scalar(name, raw, minimum=0.0, maximum=1.0))
 
+    next_style_bias: dict[str, float] = {}
+    for key, current in dict(payload.get("traits") or {}).items():
+        name = normalize_trait_name(key)
+        if not name:
+            continue
+        baseline = float(baselines.get(name, clamp_trait_scalar(name, current, minimum=0.0, maximum=1.0)))
+        current_value = float(clamp_trait_scalar(name, current, minimum=0.0, maximum=1.0))
+        diff = current_value - baseline
+        if abs(diff) <= 1e-9:
+            continue
+        next_style_bias[name] = diff
+
+    learned["style_bias"] = next_style_bias
     learned["baseline_traits"] = dict(baselines)
     payload["learned"] = learned
     # Canonical storage keeps baseline only under learned.baseline_traits.
     payload.pop("baseline_traits", None)
     return payload
+
+
+def _normalize_runtime_state_payload(value: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(value or {})
+    mood = str(payload.get("mood") or "neutral").strip().lower() or "neutral"
+    if mood == "romantic_soft":
+        mood = "soft_supportive"
+    payload["mood"] = mood
+    payload["last_update_ts"] = str(payload.get("last_update_ts") or "")
+    payload["active_traits"] = sorted(
+        {
+            str(x).strip().lower()
+            for x in list(payload.get("active_traits") or [])
+            if str(x).strip()
+        }
+    )
+    payload["disabled_traits"] = sorted(
+        {
+            str(x).strip().lower()
+            for x in list(payload.get("disabled_traits") or [])
+            if str(x).strip()
+        }
+    )
+    counters = dict(payload.get("counters") or {})
+    payload["counters"] = {
+        "banter_hits": max(0, int(_to_float(counters.get("banter_hits"), 0))),
+        "comfort_hits": max(0, int(_to_float(counters.get("comfort_hits"), 0))),
+    }
+    payload["last_signals"] = dict(payload.get("last_signals") or {})
+    payload["applied_rules"] = [dict(x) for x in list(payload.get("applied_rules") or []) if isinstance(x, dict)]
+    payload["emotional_state_before"] = dict(payload.get("emotional_state_before") or {})
+    payload["emotional_state_after"] = dict(payload.get("emotional_state_after") or {})
+    payload["persona_feedback_applied"] = [
+        str(x).strip()
+        for x in list(payload.get("persona_feedback_applied") or [])
+        if str(x).strip()
+    ]
+    emotion = str(payload.get("emotion") or "").strip().lower()
+    payload["emotion"] = "" if emotion == "romantic_soft" else emotion
+    return payload
+
+
+def _default_relation_state(traits: dict[str, Any] | None = None) -> dict[str, float]:
+    row = dict(traits or {})
+    warmth = _clamp01(_to_float(row.get("warmth"), 0.58))
+    empathy = _clamp01(_to_float(row.get("empathy"), 0.62))
+    teasing = _clamp01(_to_float(row.get("teasing"), _to_float(row.get("playfulness"), 0.35)))
+    return {
+        "familiarity": float(_clamp01(0.28 + max(0.0, warmth - 0.5) * 0.12 + max(0.0, empathy - 0.5) * 0.08)),
+        "trust": float(_clamp01(0.54 + max(0.0, empathy - 0.5) * 0.16)),
+        "teasing_permission": float(_clamp01(0.08 + max(0.0, teasing - 0.3) * 0.55)),
+        "softness_bias": float(_clamp01((warmth * 0.55) + (empathy * 0.45))),
+    }
+
+
+def _normalize_relation_state_payload(value: dict[str, Any] | None, *, traits: dict[str, Any] | None = None) -> dict[str, float]:
+    payload = dict(_default_relation_state(traits))
+    input_row = dict(value or {})
+    for key in ("familiarity", "trust", "teasing_permission", "softness_bias"):
+        if key not in input_row:
+            continue
+        payload[key] = float(_clamp01(_to_float(input_row.get(key), payload[key])))
+    return payload
+
+
+def _normalize_emotion_state_payload(value: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(_default_emotion_state())
+    payload.update(dict(value or {}))
+    mood = str(payload.get("mood") or "neutral").strip().lower() or "neutral"
+    if mood == "romantic_soft":
+        mood = "soft_supportive"
+    payload["schema_version"] = 1
+    payload["mood"] = mood
+    payload["valence"] = float(_clamp(_to_float(payload.get("valence"), 0.0), -1.0, 1.0))
+    payload["arousal"] = float(_clamp01(_to_float(payload.get("arousal"), 0.0)))
+    payload["intensity"] = float(_clamp01(_to_float(payload.get("intensity"), 0.0)))
+    trigger = normalize_emotion(payload.get("trigger"))
+    payload["trigger"] = "" if trigger == "neutral" and payload["intensity"] <= 0.0 else str(trigger or "")
+    payload["last_update_ts"] = str(payload.get("last_update_ts") or "")
+    payload["cooldown_until_ts"] = str(payload.get("cooldown_until_ts") or "")
+    return payload
+
+
+def _normalize_user_addressing_payload(value: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(_default_user_addressing())
+    payload.update(dict(value or {}))
+    payload["canonical_name"] = _normalize_name_form(payload.get("canonical_name"))
+    payload["allowed_forms"] = _normalize_name_form_list(payload.get("allowed_forms"))
+    payload["forbidden_forms"] = _normalize_name_form_list(payload.get("forbidden_forms"))
+    payload["allow_diminutives"] = bool(payload.get("allow_diminutives", False))
+    payload["use_name_by_default"] = bool(payload.get("use_name_by_default", False))
+    payload["updated_at"] = str(payload.get("updated_at") or "")
+
+    canonical_key = payload["canonical_name"].casefold()
+    if canonical_key:
+        if all(str(x).casefold() != canonical_key for x in payload["allowed_forms"]):
+            payload["allowed_forms"].insert(0, payload["canonical_name"])
+        payload["forbidden_forms"] = [x for x in payload["forbidden_forms"] if str(x).casefold() != canonical_key]
+    return payload
+
+
+def _normalize_name_form(value: Any) -> str:
+    text = str(value or "").strip()
+    text = text.strip(" \t\r\n.,!?;:()[]{}\"'`«»")
+    text = " ".join(text.split())
+    if not text:
+        return ""
+    if len(text) > 40:
+        return ""
+    if any(ch.isdigit() for ch in text):
+        return ""
+    return text
+
+
+def _normalize_name_form_list(value: Any) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in list(value or []):
+        item = _normalize_name_form(row)
+        key = item.casefold()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _normalize_trait_payload_map(value: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if not isinstance(value, dict):
+        return out
+    for raw_name, raw_row in dict(value).items():
+        name = normalize_trait_name(raw_name)
+        if not name:
+            continue
+        out[name] = normalize_trait_record(name, raw_row if isinstance(raw_row, dict) else {})
+    return out

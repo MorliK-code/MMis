@@ -116,6 +116,7 @@ class WebPolicyDecision:
     decision_breakdown: dict[str, float] = field(default_factory=dict)
     local_scope_cap_applied: bool = False
     category_penalty_applied: float = 0.0
+    category_penalty_overridden: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -127,6 +128,7 @@ class WebPolicyDecision:
             "decision_breakdown": {str(k): float(v) for k, v in dict(self.decision_breakdown or {}).items()},
             "local_scope_cap_applied": bool(self.local_scope_cap_applied),
             "category_penalty_applied": float(self.category_penalty_applied),
+            "category_penalty_overridden": bool(self.category_penalty_overridden),
         }
 
 
@@ -139,6 +141,7 @@ class WebQueryPlan:
     preferred_domains: list[str] = field(default_factory=list)
     # Query roles produced by planner: primary / validation / release_notes / etc.
     query_roles: dict[str, list[str]] = field(default_factory=dict)
+    debug: dict[str, Any] = field(default_factory=dict)
 
     def all_queries(self) -> list[str]:
         out: list[str] = []
@@ -159,6 +162,7 @@ class WebQueryPlan:
                 str(k): [str(x or "").strip() for x in list(v or []) if str(x or "").strip()]
                 for k, v in dict(self.query_roles or {}).items()
             },
+            "debug": dict(self.debug or {}),
         }
 
 
@@ -202,6 +206,7 @@ class WebEvidence:
     freshness_tag: str = "unknown"
     key_facts: list[str] = field(default_factory=list)
     conflict_flags: list[str] = field(default_factory=list)
+    audit: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -221,6 +226,7 @@ class WebEvidence:
             "freshness_tag": str(self.freshness_tag),
             "key_facts": [str(x or "").strip() for x in list(self.key_facts or []) if str(x or "").strip()],
             "conflict_flags": [str(x or "").strip() for x in list(self.conflict_flags or []) if str(x or "").strip()],
+            "audit": dict(self.audit or {}),
         }
 
 
@@ -234,6 +240,8 @@ class WebEvidencePack:
     trust_hints: list[str] = field(default_factory=list)
     freshness_summary: str = ""
     conflict_notes: list[str] = field(default_factory=list)
+    source_audit: list[dict[str, Any]] = field(default_factory=list)
+    selection_summary: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -245,6 +253,8 @@ class WebEvidencePack:
             "trust_hints": [str(x or "").strip() for x in list(self.trust_hints or []) if str(x or "").strip()],
             "freshness_summary": str(self.freshness_summary),
             "conflict_notes": [str(x or "").strip() for x in list(self.conflict_notes or []) if str(x or "").strip()],
+            "source_audit": [dict(x or {}) for x in list(self.source_audit or [])],
+            "selection_summary": dict(self.selection_summary or {}),
         }
 
 

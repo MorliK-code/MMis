@@ -34,6 +34,8 @@ class PolicyWeights:
     stakes_high: float = 0.22
     explicit_search_intent: float = 0.24
     force_keyword_boost: float = 0.34
+    mode_on_boost: float = 0.06
+    nlu_external_boost: float = 0.12
     local_scope_penalty: float = 0.50
     local_scope_depth_cap_threshold: float = 0.33
     category_penalty_default: float = 0.36
@@ -94,16 +96,26 @@ class WebPolicyEngine:
         confidence: ConfidenceAssessment,
         freshness: FreshnessAssessment,
         web_mode: str,
+        web_auto_profile: str | None = None,
         internet_enabled: bool,
         user_override: str | None = None,
         policy_context: dict[str, Any] | None = None,
+        **_ignored: Any,
     ) -> WebPolicyDecision:
+        _ = web_auto_profile
         mode_raw = str(web_mode or "auto").strip().lower()
         source = str(query or "").strip().lower()
         context_override = ""
         if isinstance(policy_context, dict):
             context_override = str(policy_context.get("web_override") or "").strip()
         override = _normalize_user_override(user_override or context_override)
+        context = dict(policy_context or {})
+        nlu_intents = _extract_nlu_intents(context)
+        smalltalk_context = _is_smalltalk_context(
+            context=context,
+            classification=classification,
+            nlu_intents=nlu_intents,
+        )
         weights = self._cfg.weights
         thresholds = self._cfg.thresholds
 
@@ -113,15 +125,34 @@ class WebPolicyEngine:
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="user_override_no_web")
         if mode_raw == "off" and override != "web":
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="web_mode_off")
+        if (
+            override != "web"
+            and smalltalk_context
+            and not classification.explicit_search_intent
+            and not classification.requires_freshness
+            and not classification.is_external_fact_question
+        ):
+            return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="smalltalk_context_hard_skip")
 
         force_keyword = _has_any(source, self._cfg.force_search_keywords)
         if (
-            mode_raw != "on"
-            and override != "web"
+            override != "web"
+            and not classification.explicit_search_intent
             and str(classification.primary_category or "").strip().lower() == "chitchat"
+            and not classification.requires_freshness
+            and not classification.is_external_fact_question
         ):
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="chitchat_hard_skip")
         category_penalty = self._category_penalty_for(classification.primary_category)
+        category_override_signal = bool(
+            category_penalty > 0.0
+            and (
+                classification.requires_freshness
+                or classification.is_temporal
+                or freshness.temporal_risk >= 0.55
+                or classification.explicit_search_intent
+            )
+        )
 
         breakdown = {
             "base": float(weights.base),
@@ -134,7 +165,10 @@ class WebPolicyEngine:
             "stakes": float(weights.stakes_high if classification.stakes_level == "high" else (weights.stakes_medium if classification.stakes_level == "medium" else 0.0)),
             "explicit_search_intent": float(weights.explicit_search_intent if classification.explicit_search_intent else 0.0),
             "force_keyword_boost": float(weights.force_keyword_boost if force_keyword else 0.0),
+            "mode_on_boost": float(weights.mode_on_boost if mode_raw == "on" else 0.0),
+            "nlu_external_boost": float(weights.nlu_external_boost if _has_nlu_external_intent(nlu_intents) else 0.0),
             "category_penalty": float(-category_penalty),
+            "category_penalty_overridden": 1.0 if category_override_signal else 0.0,
         }
 
         local_scope_cap_applied = False
@@ -169,7 +203,15 @@ class WebPolicyEngine:
 
         if classification.requires_freshness and mode == WebSearchMode.NO_SEARCH:
             mode = WebSearchMode.VERIFY_ONLY
-        if mode_raw == "on" and mode == WebSearchMode.NO_SEARCH:
+        if (
+            mode_raw == "on"
+            and mode == WebSearchMode.NO_SEARCH
+            and (
+                classification.is_external_fact_question
+                or classification.requires_freshness
+                or _has_nlu_external_intent(nlu_intents)
+            )
+        ):
             mode = WebSearchMode.VERIFY_ONLY
 
         reason = "score_routing"
@@ -177,10 +219,12 @@ class WebPolicyEngine:
             if mode == WebSearchMode.NO_SEARCH:
                 mode = WebSearchMode.VERIFY_ONLY
             reason = "user_override_web"
-        elif mode_raw == "on":
-            reason = "forced_web_mode_on"
+        elif mode_raw == "on" and mode != WebSearchMode.NO_SEARCH:
+            reason = "web_mode_on_prefer"
         elif force_keyword:
             reason = "force_keyword_boost"
+        elif smalltalk_context and mode == WebSearchMode.NO_SEARCH:
+            reason = "smalltalk_context_hard_skip"
         elif classification.requires_freshness:
             reason = "freshness_required"
         elif local_scope_cap_applied and mode == WebSearchMode.NO_SEARCH:
@@ -189,6 +233,7 @@ class WebPolicyEngine:
         budget = self._cfg.budget_by_mode.get(mode) or SearchBudget()
         if override == "web":
             breakdown["user_override_web"] = 1.0
+        category_penalty_overridden = bool(category_override_signal and mode != WebSearchMode.NO_SEARCH)
         return WebPolicyDecision(
             mode=mode,
             should_search=bool(mode != WebSearchMode.NO_SEARCH),
@@ -198,6 +243,7 @@ class WebPolicyEngine:
             decision_breakdown=breakdown,
             local_scope_cap_applied=bool(local_scope_cap_applied),
             category_penalty_applied=float(category_penalty),
+            category_penalty_overridden=category_penalty_overridden,
         )
 
     def _hard_decision(self, *, mode: WebSearchMode, reason: str) -> WebPolicyDecision:
@@ -211,6 +257,33 @@ class WebPolicyEngine:
             decision_breakdown={"hard_gate": 1.0},
             local_scope_cap_applied=False,
             category_penalty_applied=0.0,
+            category_penalty_overridden=False,
+        )
+
+    def upgrade_mode_once(self, decision: WebPolicyDecision) -> WebPolicyDecision:
+        current = decision.mode
+        next_mode = current
+        if current == WebSearchMode.VERIFY_ONLY:
+            next_mode = WebSearchMode.SOFT_SEARCH
+        elif current == WebSearchMode.SOFT_SEARCH:
+            next_mode = WebSearchMode.TARGETED_SEARCH
+        elif current == WebSearchMode.TARGETED_SEARCH:
+            next_mode = WebSearchMode.DEEP_SEARCH
+        if next_mode == current:
+            return decision
+        budget = self._cfg.budget_by_mode.get(next_mode) or decision.budget
+        breakdown = dict(decision.decision_breakdown or {})
+        breakdown["quality_escalation"] = 1.0
+        return WebPolicyDecision(
+            mode=next_mode,
+            should_search=True,
+            web_need_score=max(float(decision.web_need_score), 0.5),
+            reason="quality_escalation",
+            budget=budget,
+            decision_breakdown=breakdown,
+            local_scope_cap_applied=bool(decision.local_scope_cap_applied),
+            category_penalty_applied=float(decision.category_penalty_applied),
+            category_penalty_overridden=bool(decision.category_penalty_overridden),
         )
 
     def _category_penalty_for(self, category: str) -> float:
@@ -255,6 +328,8 @@ def config_from_dict(payload: dict[str, Any] | None) -> WebPolicyConfig:
         stakes_high=_num(weights_src.get("stakes_high"), base.weights.stakes_high),
         explicit_search_intent=_num(weights_src.get("explicit_search_intent"), base.weights.explicit_search_intent),
         force_keyword_boost=_num(weights_src.get("force_keyword_boost"), base.weights.force_keyword_boost),
+        mode_on_boost=_num(weights_src.get("mode_on_boost"), base.weights.mode_on_boost),
+        nlu_external_boost=_num(weights_src.get("nlu_external_boost"), base.weights.nlu_external_boost),
         local_scope_penalty=_num(weights_src.get("local_scope_penalty"), base.weights.local_scope_penalty),
         local_scope_depth_cap_threshold=_num(
             weights_src.get("local_scope_depth_cap_threshold"),
@@ -286,16 +361,29 @@ def config_from_dict(payload: dict[str, Any] | None) -> WebPolicyConfig:
             ),
         )
 
-    never_categories = [
-        str(x or "").strip().lower()
-        for x in list(src.get("never_search_categories") or base.never_search_categories)
-        if str(x or "").strip()
-    ]
+    raw_never = src.get("never_search_categories")
+    never_categories: list[str]
     category_penalties = {
         str(k or "").strip().lower(): max(0.0, float(v))
         for k, v in dict(src.get("category_penalties") or base.category_penalties).items()
         if str(k or "").strip()
     }
+    if isinstance(raw_never, dict):
+        never_categories = [str(k or "").strip().lower() for k in list(raw_never.keys()) if str(k or "").strip()]
+        for key, value in dict(raw_never).items():
+            token = str(key or "").strip().lower()
+            if not token:
+                continue
+            try:
+                category_penalties[token] = max(0.0, float(value))
+            except Exception:
+                pass
+    else:
+        never_categories = [
+            str(x or "").strip().lower()
+            for x in list(raw_never or base.never_search_categories)
+            if str(x or "").strip()
+        ]
     force_keywords = [
         str(x or "").strip().lower()
         for x in list(src.get("force_search_keywords") or base.force_search_keywords)
@@ -348,3 +436,51 @@ def _normalize_user_override(value: Any) -> str:
     if raw in {"no-web", "/no-web", "off", "no_web", "disable_web", "disable-web"}:
         return "no-web"
     return ""
+
+
+def _extract_nlu_intents(context: dict[str, Any]) -> list[str]:
+    raw = context.get("nlu_intents")
+    out: list[str] = []
+    for row in list(raw or []):
+        token = str(row or "").strip().lower()
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def _normalize_meta_intent(context: dict[str, Any]) -> str:
+    direct = str(context.get("intent") or "").strip().lower()
+    if direct:
+        return direct
+    metadata = context.get("metadata")
+    if isinstance(metadata, dict):
+        intent = metadata.get("intent")
+        if isinstance(intent, dict):
+            label = str(intent.get("label") or "").strip().lower()
+            if label:
+                return label
+        label = str(metadata.get("intent") or "").strip().lower()
+        if label:
+            return label
+    return ""
+
+
+def _is_smalltalk_context(
+    *,
+    context: dict[str, Any],
+    classification: QueryClassification,
+    nlu_intents: list[str],
+) -> bool:
+    if "smalltalk" in set(nlu_intents):
+        return True
+    meta_intent = _normalize_meta_intent(context)
+    if meta_intent in {"chat", "smalltalk", "chitchat", "greeting"}:
+        return True
+    if str(classification.primary_category or "").strip().lower() == "chitchat":
+        return True
+    return False
+
+
+def _has_nlu_external_intent(intents: list[str]) -> bool:
+    values = {str(x or "").strip().lower() for x in list(intents or []) if str(x or "").strip()}
+    return bool(values.intersection({"weather_query", "search_query", "coding_question", "finance_query", "news_query"}))
