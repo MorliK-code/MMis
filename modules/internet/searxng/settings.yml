@@ -14,7 +14,7 @@ server:
 search:
   safe_search: 0
   autocomplete: ""
-  default_lang: "all"
+  default_lang: "ru-RU"
   formats:
     - html
     - json

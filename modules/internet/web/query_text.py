@@ -3,9 +3,13 @@ from __future__ import annotations
 import re
 
 
-_COMMAND_PREFIXES = ("/web", "/no-web")
-_WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁёІіЇїҐґ0-9][A-Za-zА-Яа-яЁёІіЇїҐґ0-9._\-]*")
-_LETTER_RE = r"A-Za-zА-Яа-яЁёІіЇїҐґ"
+_QUERY_COMMANDS = {"/web", "/no-web"}
+_COMMAND_ARG_TOKENS = {"on", "off", "auto", "true", "false", "yes", "no", "1", "0", "lock", "unlock"}
+_SINGLE_ARG_COMMANDS = {"/mode", "/model", "/character", "/persona", "/modes"}
+_LEADING_SLASH_COMMAND_RE = re.compile(r"^/(?P<name>[A-Za-z][A-Za-z0-9._-]*)")
+_WORD_RE = re.compile(r"[0-9A-Za-zА-Яа-яЁёІіЇїЄєҐґ][0-9A-Za-zА-Яа-яЁёІіЇїЄєҐґ._-]*")
+_LETTER_RE = r"0-9A-Za-zА-Яа-яЁёІіЇїЄєҐґ"
+
 _LEADING_FILLER_RE = re.compile(
     r"^(?:\s*(?:а|ну|и|но|слушай|слушай-ка|кстати|короче|вообще|ладно|вот|теперь)\s+)+",
     flags=re.I,
@@ -24,23 +28,41 @@ _TRAILING_GENERIC_RE = re.compile(
     flags=re.I,
 )
 _TRAILING_POLITE_RE = re.compile(r"(?:\s+(?:please|pls|пожалуйста))+$", flags=re.I)
+_TRAILING_PREFERENCE_RE = re.compile(
+    r"(?:\s*[,.-]?\s*(?:желательно|по возможности|если можно|if possible|preferably)\b[^?!]*)$",
+    flags=re.I,
+)
 _SEGMENT_SPLIT_RE = re.compile(
-    rf"[?!;\n]+|\.{{2,}}|…+|(?<=[{_LETTER_RE}0-9])\.(?=\s+[{_LETTER_RE}])|(?:\s+[—-]\s+)"
+    rf"[?!;\n]+|\.{{2,}}|…+|(?<=[{_LETTER_RE}])\.(?=\s+[{_LETTER_RE}])|(?:\s+[—-]\s+)"
 )
 _TAIL_SPLIT_RE = re.compile(r"\s*,\s+")
+_QUESTION_START_RE = re.compile(
+    r"\b(?:что|где|когда|какой|какая|какие|сколько|как|почему|what|where|when|which|how|why)\b",
+    flags=re.I,
+)
 _SEARCH_CORE_ANCHOR_RE = re.compile(
     r"\b(?:что|где|когда|какой|какая|какие|сколько|latest|current|today|price|pricing|cost|"
-    r"weather|forecast|temperature|rate|exchange|version|release|news|курс|цена|стоимость|"
-    r"погода|прогноз|температура|версия|релиз|новости|найди|поищи|посмотри|проверь|search|find|check)\b",
+    r"weather|forecast|temperature|rate|exchange|version|release|news|дата|date|"
+    r"курс|цена|стоимость|погода|прогноз|температура|версия|релиз|новости|"
+    r"найди|поищи|посмотри|проверь|search|find|check)\b",
     flags=re.I,
 )
 _QUESTIONISH_RE = re.compile(
     r"\b(?:что|где|когда|какой|какая|какие|сколько|как|почему|latest|current|today|price|"
-    r"weather|forecast|rate|version|news|курс|цена|погода|прогноз|версия|новости)\b",
+    r"weather|forecast|rate|version|news|дата|date|курс|цена|погода|прогноз|версия|новости)\b",
     flags=re.I,
 )
-_QUESTION_START_RE = re.compile(
-    r"\b(?:что|где|когда|какой|какая|какие|сколько|как|почему|what|where|when|which|how|why)\b",
+_LEADING_MODEL_QUERY_WRAPPER_RE = re.compile(
+    r"^(?:(?:а|ну|и|но|ладно|слушай|слушай-ка|короче|вот|теперь|так\s+вот)\s+)*"
+    r"(?:(?:ты|вы)\s+)?"
+    r"(?:(?:же|точно|вообще|там|снова|опять|реально)\s+)*"
+    r"(?:(?:вр[её]шь|ошиб(?:лась|аешься)|неправильно|неверно|смотришь|видишь|"
+    r"можешь\s+увидеть|проверяешь|получаешь|не\s+путаешь)\s+)+",
+    flags=re.I,
+)
+_LEADING_TOOL_STATUS_WRAPPER_RE = re.compile(
+    r"^(?:что\s+)?(?:интернет|web|веб|поиск|search|доступ)\s+"
+    r"(?:(?:есть|работает|будет|появился|включен|включён|доступен)\s+)*",
     flags=re.I,
 )
 _CHATTER_TOKENS = {
@@ -88,6 +110,7 @@ _CANDIDATE_KIND_BONUS = {
     "full": 0.0,
     "segment": 0.6,
     "tail": 1.4,
+    "wrapper_tail": 4.8,
     "search_tail": 3.8,
     "question_clause": 5.2,
     "segment_question_clause": 5.6,
@@ -95,14 +118,13 @@ _CANDIDATE_KIND_BONUS = {
 
 
 def strip_web_command_prefix(text: str) -> str:
-    src = str(text or "").strip()
-    low = src.lower()
-    for token in _COMMAND_PREFIXES:
-        if low == token:
-            return ""
-        if low.startswith(token + " "):
-            return src[len(token) :].strip()
-    return src
+    stripped, _removed = _strip_service_command_prefixes(text)
+    return stripped
+
+
+def strip_service_command_prefix(text: str) -> str:
+    stripped, _removed = _strip_service_command_prefixes(text)
+    return stripped
 
 
 def normalize_search_text(text: str) -> str:
@@ -111,31 +133,42 @@ def normalize_search_text(text: str) -> str:
 
 
 def extract_search_core(text: str) -> str:
-    src = strip_web_command_prefix(text)
+    src, _removed = _strip_service_command_prefixes(text)
     if not src:
         return ""
     cleaned_full = _cleanup_search_text(src)
     return _extract_search_core_from_cleaned(src=src, cleaned_full=cleaned_full)
 
 
-def analyze_search_text(text: str) -> dict[str, str]:
+def analyze_search_text(text: str) -> dict[str, object]:
     original = str(text or "").strip()
-    src = strip_web_command_prefix(text)
+    src, removed_commands = _strip_service_command_prefixes(text)
     if not src:
+        removed_text = str(removed_commands or "").strip()
         return {
             "original_query": original,
             "normalized_query": "",
             "search_core": "",
             "extracted_search_core": "",
+            "removed_wrapper_text": removed_text,
+            "removed_wrapper_fragments": _split_removed_wrapper_fragments(removed_text),
         }
 
     cleaned_full = _cleanup_search_text(src)
     search_core = _extract_search_core_from_cleaned(src=src, cleaned_full=cleaned_full)
+    removed_wrapper_text = _derive_removed_wrapper_text(
+        removed_commands=removed_commands,
+        normalized_query=cleaned_full,
+        search_core=search_core,
+    )
+    removed_wrapper_fragments = _split_removed_wrapper_fragments(removed_wrapper_text)
     return {
         "original_query": original,
         "normalized_query": cleaned_full,
         "search_core": search_core,
         "extracted_search_core": search_core,
+        "removed_wrapper_text": removed_wrapper_text,
+        "removed_wrapper_fragments": removed_wrapper_fragments,
     }
 
 
@@ -144,6 +177,9 @@ def _extract_search_core_from_cleaned(*, src: str, cleaned_full: str) -> str:
     if not full_tokens:
         return ""
     if len(full_tokens) <= 6:
+        wrapper_tail = _strip_non_search_wrapper(cleaned_full)
+        if wrapper_tail and wrapper_tail != cleaned_full:
+            return wrapper_tail
         return cleaned_full
 
     candidates: list[tuple[str, str, int, int, str]] = []
@@ -158,6 +194,10 @@ def _extract_search_core_from_cleaned(*, src: str, cleaned_full: str) -> str:
 
     _push(cleaned_full, src, 0, 0, "full")
 
+    wrapper_tail = _strip_non_search_wrapper(cleaned_full)
+    if wrapper_tail:
+        _push(wrapper_tail, cleaned_full, 0, 1, "wrapper_tail")
+
     full_question_clause = _extract_last_question_clause(cleaned_full)
     if full_question_clause:
         _push(full_question_clause, cleaned_full, 0, 1, "question_clause")
@@ -165,6 +205,10 @@ def _extract_search_core_from_cleaned(*, src: str, cleaned_full: str) -> str:
     segments = _split_segments(src)
     for seg_index, raw_segment in enumerate(segments):
         _push(raw_segment, raw_segment, seg_index, 0, "segment")
+
+        wrapped_segment = _strip_non_search_wrapper(raw_segment)
+        if wrapped_segment:
+            _push(wrapped_segment, raw_segment, seg_index, 1, "wrapper_tail")
 
         question_clause = _extract_last_question_clause(raw_segment)
         if question_clause:
@@ -205,6 +249,7 @@ def _cleanup_search_text(text: str) -> str:
         src = src.rstrip(" ?!.,")
         src = _TRAILING_GENERIC_RE.sub("", src).strip()
         src = _TRAILING_POLITE_RE.sub("", src).strip()
+        src = _TRAILING_PREFERENCE_RE.sub("", src).strip()
     src = re.sub(r"\s+", " ", src).strip(" \t\r\n,;:-")
     return src.rstrip(" ?!.,")
 
@@ -253,6 +298,142 @@ def _extract_last_question_clause(text: str) -> str:
         return ""
     anchor = matches[-1]
     return str(src[anchor.start() :] or "").strip(" \t\r\n,;:-")
+
+
+def _strip_non_search_wrapper(text: str) -> str:
+    src = _cleanup_search_text(text)
+    if not src:
+        return ""
+    prev = None
+    while src and src != prev:
+        prev = src
+        src = _strip_prefix_once(src, _LEADING_MODEL_QUERY_WRAPPER_RE)
+        src = _strip_prefix_once(src, _LEADING_TOOL_STATUS_WRAPPER_RE)
+        if src:
+            clause = _extract_last_question_clause(src)
+            if clause and clause != src and len(_tokenize(clause)) >= 2:
+                src = clause
+        src = _cleanup_search_text(src)
+    return src
+
+
+def _strip_prefix_once(text: str, pattern: re.Pattern[str]) -> str:
+    src = str(text or "").strip()
+    match = pattern.match(src)
+    if not match:
+        return src
+    return str(src[match.end() :] or "").strip(" \t\r\n,;:-")
+
+
+def _strip_service_command_prefixes(text: str) -> tuple[str, str]:
+    src = str(text or "").strip()
+    removed: list[str] = []
+    while src.startswith("/"):
+        match = _LEADING_SLASH_COMMAND_RE.match(src)
+        if not match:
+            break
+        command = "/" + str(match.group("name") or "")
+        end = int(match.end())
+        rest = str(src[end:] or "")
+        rest_lstrip = rest.lstrip()
+        consumed = str(src[:end] or "").strip()
+        token_count = _leading_command_arg_count(command=command, rest=rest_lstrip)
+        if token_count > 0:
+            end = end + _consume_rest_tokens(rest=rest, token_count=token_count)
+            consumed = str(src[:end] or "").strip()
+        removed.append(consumed)
+        src = str(src[end:] or "").strip()
+    return src, " ".join(part for part in removed if part).strip()
+
+
+def _leading_command_arg_count(*, command: str, rest: str) -> int:
+    normalized = str(command or "").strip().lower()
+    if not normalized or not str(rest or "").strip():
+        return 0
+    tokens = [str(x or "").strip() for x in str(rest or "").split() if str(x or "").strip()]
+    if not tokens:
+        return 0
+    head = str(tokens[0] or "").strip().lower()
+    if normalized in _QUERY_COMMANDS:
+        return 0
+    if normalized == "/mode_lock":
+        return 1 if head in _COMMAND_ARG_TOKENS else 0
+    if normalized == "/output":
+        if head == "status":
+            return 1
+        if head in {"parameters", "summary"}:
+            if len(tokens) >= 2 and str(tokens[1] or "").strip().lower() in _COMMAND_ARG_TOKENS:
+                return 2
+            return 1
+        return 0
+    if normalized in _SINGLE_ARG_COMMANDS:
+        return 1
+    return 1 if head in _COMMAND_ARG_TOKENS else 0
+
+
+def _consume_rest_tokens(*, rest: str, token_count: int) -> int:
+    if int(token_count) <= 0:
+        return 0
+    src = str(rest or "")
+    offset = 0
+    remaining = src
+    left = int(token_count)
+    while left > 0 and remaining:
+        stripped = remaining.lstrip()
+        offset += len(remaining) - len(stripped)
+        remaining = stripped
+        if not remaining:
+            break
+        match = re.match(r"\S+", remaining)
+        if not match:
+            break
+        offset += int(match.end())
+        remaining = remaining[int(match.end()) :]
+        left -= 1
+    return offset
+
+
+def _derive_removed_wrapper_text(*, removed_commands: str, normalized_query: str, search_core: str) -> str:
+    parts: list[str] = []
+    commands = str(removed_commands or "").strip()
+    if commands:
+        parts.append(commands)
+    normalized = str(normalized_query or "").strip()
+    extracted = str(search_core or "").strip()
+    if normalized and extracted and normalized != extracted:
+        low = normalized.casefold()
+        needle = extracted.casefold()
+        index = low.find(needle)
+        if index >= 0:
+            prefix = normalized[:index].strip(" \t\r\n,;:-")
+            suffix = normalized[index + len(extracted) :].strip(" \t\r\n,;:-")
+            if prefix:
+                parts.append(prefix)
+            if suffix:
+                parts.append(suffix)
+        else:
+            parts.append(normalized)
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in parts:
+        token = str(item or "").strip()
+        if not token:
+            continue
+        key = token.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(token)
+    return " | ".join(out)
+
+
+def _split_removed_wrapper_fragments(value: str) -> list[str]:
+    out: list[str] = []
+    for part in str(value or "").split("|"):
+        item = str(part or "").strip()
+        if item and item not in out:
+            out.append(item)
+    return out
 
 
 def _candidate_score(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from modules.internet.web.continuity import build_continuity_patch
 from modules.internet.web.query_classifier import classify_query
 from modules.internet.web.query_planner import build_query_plan
 from modules.internet.web.query_text import analyze_search_text, extract_search_core, normalize_search_text
@@ -60,11 +61,75 @@ class WebQueryCoreExtractionTests(unittest.TestCase):
         self.assertEqual(plan.query_roles["primary"], ["какой курс доллара сегодня"])
 
     def test_analyze_search_text_strips_web_command_but_keeps_original(self) -> None:
-        debug = analyze_search_text("/web а найди мне какой курс доллара сегодня?")
+        query = "/web а найди мне какой курс доллара сегодня?"
+        debug = analyze_search_text(query)
 
-        self.assertEqual(debug["original_query"], "/web а найди мне какой курс доллара сегодня?")
+        self.assertEqual(debug["original_query"], query)
         self.assertEqual(debug["normalized_query"], "какой курс доллара сегодня")
         self.assertEqual(debug["extracted_search_core"], "какой курс доллара сегодня")
+
+    def test_strips_service_prefixes_and_reports_removed_wrapper_text(self) -> None:
+        text = "/mode_lock on /web какой курс доллара сегодня?"
+        debug = analyze_search_text(text)
+
+        self.assertEqual(debug["original_query"], text)
+        self.assertEqual(debug["normalized_query"], "какой курс доллара сегодня")
+        self.assertEqual(debug["extracted_search_core"], "какой курс доллара сегодня")
+        self.assertIn("/mode_lock on /web", str(debug.get("removed_wrapper_text") or ""))
+
+    def test_strips_mode_argument_prefix_from_search_core(self) -> None:
+        text = "/mode engineer РЅР°Р№РґРё РІРµСЂСЃРёСЋ python 3.11"
+        debug = analyze_search_text(text)
+
+        self.assertNotIn("/mode", str(debug["normalized_query"]))
+        self.assertNotIn("/mode", str(debug["extracted_search_core"]))
+        self.assertIn("python 3.11", str(debug["normalized_query"]).lower())
+        self.assertIn("python 3.11", str(debug["extracted_search_core"]).lower())
+        self.assertIn("/mode engineer", str(debug.get("removed_wrapper_text") or ""))
+
+    def test_continuity_patch_stores_sanitized_task_queries(self) -> None:
+        patch = build_continuity_patch(
+            state={},
+            query="/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
+            resolved_intent="fx_rate",
+            active_task={
+                "task_id": "task_demo",
+                "query": "/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
+                "base_query": "/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
+                "latest_query": "/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
+            },
+        )
+
+        active = dict(patch.get("web_active_task") or {})
+        self.assertEqual(active.get("query"), "РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ")
+        self.assertEqual(active.get("base_query"), "РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ")
+        self.assertEqual(active.get("latest_query"), "РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ")
+
+    def test_removes_model_argument_wrapper_from_search_core(self) -> None:
+        text = "ты точно смотришь евро-гривны?"
+        debug = analyze_search_text(text)
+
+        self.assertEqual(debug["normalized_query"], "ты точно смотришь евро-гривны")
+        self.assertEqual(debug["extracted_search_core"], "евро-гривны")
+        self.assertIn("ты точно смотришь", str(debug.get("removed_wrapper_text") or ""))
+
+    def test_planner_debug_includes_removed_wrapper_text(self) -> None:
+        query = (
+            "/mode_lock on /web "
+            "ты опять врёшь, теперь ты точно можешь увидеть что интернет есть, "
+            "так вот скажи наконец какой курс доллара сегодня?"
+        )
+        classification = classify_query(query)
+        plan = build_query_plan(
+            query=query,
+            classification=classification,
+            decision=self._decision(),
+        )
+
+        debug = dict(plan.debug or {}).get("query_text") or {}
+        self.assertEqual(debug.get("extracted_search_core"), "какой курс доллара сегодня")
+        self.assertIn("/mode_lock on /web", str(debug.get("removed_wrapper_text") or ""))
+        self.assertEqual(plan.query_roles["primary"], ["какой курс доллара сегодня"])
 
 
 if __name__ == "__main__":

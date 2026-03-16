@@ -13,6 +13,7 @@ from memory.document_memory import ChunkingConfig, DocumentMemory
 from memory.embedding_provider import build_embedding_provider
 from memory.event_store import EventStore
 from memory.fact_extractor import FactExtractor
+from memory.ingest_analyzer import IngestAnalysis, analyze_message_for_memory
 from memory.long_memory import LongMemoryV2
 from memory.memory_debug import BasicMemoryDebugger
 from memory.memory_lifecycle import MemoryLifecycleManager
@@ -33,12 +34,14 @@ from memory.memory_models import (
     LifecycleDecision,
     MemoryRecord,
     MemoryScope,
+    MemorySourceKind,
     MemoryStatus,
     MemoryType,
     Reranker,
     RetrievalQuery,
     RetrievalResult,
 )
+from memory.memory_policy import AssistantWriteDecision, MemoryPolicy
 from memory.retrieval import HybridRetriever
 from memory.reranker import HeuristicReranker
 from memory.memory_scoring import (
@@ -46,6 +49,12 @@ from memory.memory_scoring import (
     ScoreWeights,
     build_message_signal_breakdown,
     build_salience_score,
+)
+from memory.retrieval_projection import (
+    build_memory_search_text,
+    extract_query_entity_keys,
+    extract_query_numeric_keys,
+    merge_projection_keys,
 )
 from memory.vector_store import VectorStore
 from memory.context_builder import ContextBuilderV2
@@ -114,6 +123,7 @@ class MemoryManager:
 
         self._event_store = EventStore(path=self._root / "events_v2.jsonl")
         self._fact_extractor = FactExtractor()
+        self._policy = MemoryPolicy()
         self._lifecycle: MemoryLifecycle = MemoryLifecycleManager(
             stale_after_days=int(getattr(self._cfg, "memory_stale_after_days", 30) or 30),
             archive_after_days=int(getattr(self._cfg, "memory_archive_after_days", 90) or 90),
@@ -215,17 +225,60 @@ class MemoryManager:
             self._cleanup_expired()
 
             text = str(event.text or "").strip()
-            if not text and event.scope != MemoryScope.PRIVATE_RUNTIME:
-                return IngestResult(stored_ids=[])
-
             now_ts = float(event.ts or time.time())
             event_id = f"evt:{uuid.uuid4().hex[:16]}"
             metadata = dict(event.metadata or {})
             namespace = str(event.namespace or "default")
             scope = event.scope
             memory_type = event.memory_type
+            thinking = str(event.thinking or metadata.get("thinking") or "").strip()
+            source_kind = self._policy.resolve_source_kind(
+                role=str(event.role or ""),
+                memory_type=memory_type,
+                metadata=metadata,
+                thinking=thinking,
+            )
+            metadata = self._policy.sanitize_metadata_for_storage(
+                metadata=metadata,
+                source_kind=source_kind,
+                thinking=thinking,
+            )
+            source_fact_records_allowed = self._policy.allow_fact_records_for_source(source_kind=source_kind)
+            metadata["source_fact_records_allowed"] = bool(source_fact_records_allowed)
+            if not source_fact_records_allowed:
+                metadata["source_fact_records_blocked"] = True
+
+            if not text and event.scope != MemoryScope.PRIVATE_RUNTIME:
+                return IngestResult(stored_ids=[])
+
             if memory_type == MemoryType.SUMMARY and scope == MemoryScope.CONVERSATION:
                 scope = MemoryScope.SESSION
+
+            if source_kind == MemorySourceKind.ASSISTANT_THOUGHT and scope != MemoryScope.PRIVATE_RUNTIME:
+                decision = AssistantWriteDecision(
+                    action="skip",
+                    reason="assistant_thought_not_persisted",
+                    allow_fact_records=False,
+                    signals={"source_kind": str(source_kind.value)},
+                )
+                metadata["assistant_write_policy"] = decision.to_dict()
+                metadata["assistant_write_blocked"] = True
+                metadata["assistant_write_reason"] = str(decision.reason or "")
+                self._record_ingest_skip(
+                    event_id=event_id,
+                    now_ts=now_ts,
+                    event=event,
+                    namespace=namespace,
+                    metadata=metadata,
+                    record_id=f"{memory_type.value}:{event_id}",
+                    reason=str(decision.reason or "assistant_thought_not_persisted"),
+                    decision=decision,
+                )
+                return IngestResult(
+                    stored_ids=[],
+                    dropped_ids=[f"{memory_type.value}:{event_id}"],
+                    extracted_facts=[],
+                )
 
             if memory_type == MemoryType.DOCUMENT and scope != MemoryScope.PRIVATE_RUNTIME:
                 source = str(metadata.get("source") or metadata.get("path") or f"event:{event_id}").strip()
@@ -295,20 +348,46 @@ class MemoryManager:
                 return IngestResult(stored_ids=stored_ids)
 
             preview_facts: list[FactRecordV2] = []
+            ingest_analysis: IngestAnalysis | None = None
             if memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY} and scope != MemoryScope.PRIVATE_RUNTIME:
-                preview_facts = self._fact_extractor.extract_v2(
-                    text=text,
+                ingest_analysis = analyze_message_for_memory(
+                    text,
                     metadata={"event_id": event_id, "namespace": namespace, **metadata},
-                    speaker=str(event.role or "user"),
-                    scope=scope,
-                    mode=str(metadata.get("quality_profile") or "BALANCED"),
                 )
+                metadata = self._merge_ingest_analysis_into_metadata(metadata=metadata, analysis=ingest_analysis)
+                if source_fact_records_allowed:
+                    preview_facts = self._fact_extractor.extract_v2(
+                        text=text,
+                        metadata={"event_id": event_id, "namespace": namespace, **metadata},
+                        speaker=str(event.role or "user"),
+                        scope=scope,
+                        mode=str(metadata.get("quality_profile") or "BALANCED"),
+                        analysis=ingest_analysis,
+                    )
                 metadata = self._augment_message_metadata(
                     text=text,
                     metadata=metadata,
                     namespace=namespace,
                     preview_facts=preview_facts,
                 )
+
+            assistant_write_decision = AssistantWriteDecision(reason="not_applicable")
+            if str(event.role or "").strip().lower() == "assistant":
+                assistant_write_decision = self._policy.decide_assistant_message_write(
+                    text=text,
+                    metadata=metadata,
+                    memory_type=memory_type,
+                    requested_scope=scope,
+                )
+                metadata["assistant_write_policy"] = assistant_write_decision.to_dict()
+                metadata["assistant_write_blocked"] = bool(not assistant_write_decision.allow_store)
+                metadata["assistant_write_reason"] = str(assistant_write_decision.reason or "")
+                if assistant_write_decision.target_scope is not None:
+                    scope = assistant_write_decision.target_scope
+                if scope == MemoryScope.TEMPORARY:
+                    metadata.setdefault("ttl_sec", int(self._temporary_ttl_sec))
+                if not assistant_write_decision.allow_fact_records or not source_fact_records_allowed:
+                    metadata["assistant_fact_records_blocked"] = True
 
             level = self._initial_level(memory_type)
             importance = self._importance_score(text=text, metadata=metadata, namespace=namespace)
@@ -335,7 +414,31 @@ class MemoryManager:
             stored_ids: list[str] = []
             promoted_ids: list[str] = []
             extracted_facts: list[FactRecordV2] = []
+            if not assistant_write_decision.allow_store:
+                self._record_ingest_skip(
+                    event_id=event_id,
+                    now_ts=now_ts,
+                    event=event,
+                    namespace=namespace,
+                    metadata=metadata,
+                    record_id=record.id,
+                    reason=str(assistant_write_decision.reason or "assistant_write_policy_skip"),
+                    decision=assistant_write_decision,
+                )
+                return IngestResult(
+                    stored_ids=[],
+                    dropped_ids=[record.id],
+                    extracted_facts=[],
+                )
+
             lifecycle_decision = self._lifecycle.decide(record, now_ts=now_ts)
+            if not assistant_write_decision.allow_long_term:
+                lifecycle_decision = self._without_promotion(
+                    lifecycle_decision,
+                    reason=str(assistant_write_decision.reason or "assistant_write_policy"),
+                    scope=scope,
+                    decision=assistant_write_decision,
+                )
             record = self._attach_lifecycle_debug(
                 record,
                 lifecycle_decision=lifecycle_decision,
@@ -379,9 +482,14 @@ class MemoryManager:
                 self._store.upsert(promoted)
                 promoted_ids.append(promoted.id)
 
-            if scope != MemoryScope.PRIVATE_RUNTIME and preview_facts:
+            writeable_preview_facts = (
+                list(preview_facts)
+                if assistant_write_decision.allow_fact_records and source_fact_records_allowed
+                else []
+            )
+            if scope != MemoryScope.PRIVATE_RUNTIME and writeable_preview_facts:
                 extracted_facts = self._write_fact_records(
-                    facts=preview_facts,
+                    facts=writeable_preview_facts,
                     namespace=namespace,
                     now_ts=now_ts,
                     event_id=event_id,
@@ -397,6 +505,7 @@ class MemoryManager:
                     "latency_ms": float(metadata.get("latency_ms") or 0.0),
                     "payload": {
                         "role": str(event.role or ""),
+                        "source_kind": str(source_kind.value),
                         "scope": scope.value,
                         "memory_type": memory_type.value,
                         "record_id": record.id,
@@ -409,6 +518,7 @@ class MemoryManager:
                             else ""
                         ),
                         "preview_facts_count": int(len(preview_facts)),
+                        "assistant_write_policy": dict(metadata.get("assistant_write_policy") or {}),
                         "request_id": str(metadata.get("request_id") or ""),
                         "turn_id": str(metadata.get("turn_id") or ""),
                         "conversation_id": str(metadata.get("conversation_id") or namespace),
@@ -418,18 +528,22 @@ class MemoryManager:
                 )
             self._save_state()
 
+        assistant_policy = dict(metadata.get("assistant_write_policy") or {})
         log_json(
             LOGGER,
             "memory_v2_ingest",
             summary=(
                 f"type={memory_type.value} scope={scope.value} stored={len(stored_ids)} "
                 f"facts={len(extracted_facts)} promotions={len(promoted_ids)} "
-                f"reason={str(lifecycle_decision.reason or '-')}"
+                f"reason={str(lifecycle_decision.reason or '-')} "
+                f"write_policy={str(assistant_policy.get('action') or 'allow')} "
+                f"write_reason={str(assistant_policy.get('reason') or '-')}"
             ),
             context=self._event_log_context(metadata=metadata, namespace=namespace),
             namespace=namespace,
             scope=scope.value,
             memory_type=memory_type.value,
+            source_kind=str(source_kind.value),
             stored=len(stored_ids),
             promoted=len(promoted_ids),
             facts=len(extracted_facts),
@@ -441,6 +555,9 @@ class MemoryManager:
             promotion_threshold=float(
                 dict(lifecycle_decision.decision_debug or {}).get("composite_threshold") or 0.0
             ),
+            assistant_write_blocked=bool(metadata.get("assistant_write_blocked")),
+            assistant_write_reason=str(metadata.get("assistant_write_reason") or ""),
+            assistant_write_policy=assistant_policy,
         )
         return IngestResult(
             stored_ids=stored_ids,
@@ -452,8 +569,27 @@ class MemoryManager:
         with self._lock:
             self._cleanup_expired()
             scopes = list(query.scopes or self._default_retrieval_scopes())
+            raw_query_text = str(query.query_text or "")
+            search_seed = str(query.search_text or raw_query_text)
+            entity_keys = merge_projection_keys(
+                list(query.entity_keys or []),
+                extract_query_entity_keys(raw_query_text),
+                extract_query_entity_keys(search_seed),
+            )
+            numeric_keys = merge_projection_keys(
+                list(query.numeric_keys or []),
+                extract_query_numeric_keys(raw_query_text),
+                extract_query_numeric_keys(search_seed),
+            )
             normalized_query = RetrievalQuery(
-                query_text=str(query.query_text or ""),
+                query_text=raw_query_text,
+                search_text=build_memory_search_text(
+                    search_seed,
+                    entity_keys=entity_keys,
+                    numeric_keys=numeric_keys,
+                ),
+                entity_keys=entity_keys,
+                numeric_keys=numeric_keys,
                 namespace=str(query.namespace or "default"),
                 scopes=scopes,
                 top_k=max(1, int(query.top_k or self._retrieval_top_k)),
@@ -746,7 +882,25 @@ class MemoryManager:
         if not key:
             return False
         predicate = key.split(".", 1)[1] if "." in key else key
-        return predicate in {"preference", "identity_name", "environment", "issue_status"}
+        return predicate in {
+            "preference",
+            "identity_name",
+            "identity_age_years",
+            "project_name",
+            "environment",
+            "environment_os",
+            "environment_tool",
+            "environment_runtime_python",
+            "environment_llm_model",
+            "environment_gpu_model",
+            "environment_cpu_model",
+            "environment_gpu_vram_size",
+            "environment_gpu_vram_gb",
+            "environment_ram_size",
+            "environment_ram_gb",
+            "environment_memory_gb",
+            "issue_status",
+        }
 
     def _promote_record(self, record: MemoryRecord, *, target: MemoryLevel, now_ts: float) -> MemoryRecord:
         return MemoryRecord(
@@ -907,6 +1061,51 @@ class MemoryManager:
             value = 0.65
         return max(0.0, min(1.0, value))
 
+    @staticmethod
+    def _merge_ingest_analysis_into_metadata(
+        *,
+        metadata: dict[str, Any],
+        analysis: IngestAnalysis | None,
+    ) -> dict[str, Any]:
+        out = dict(metadata or {})
+        if analysis is None:
+            return out
+
+        def _merge_tags(existing: Any, incoming: list[str]) -> list[str]:
+            seen: set[str] = set()
+            tags: list[str] = []
+            existing_items = (
+                list(existing)
+                if isinstance(existing, (list, tuple, set))
+                else ([existing] if str(existing or "").strip() else [])
+            )
+            for raw in [*existing_items, *list(incoming or [])]:
+                token = str(raw or "").strip().lower()
+                if not token or token in seen:
+                    continue
+                seen.add(token)
+                tags.append(token)
+            return tags
+
+        emotion_payload = analysis.emotion.to_dict() if analysis.emotion is not None else {}
+        emotion_view = {**dict(emotion_payload or {})}
+        if emotion_view and "label" not in emotion_view:
+            emotion_view["label"] = str(emotion_view.get("primary") or "")
+        out["analysis_version"] = "memory_ingest_v3"
+        out["normalized_text"] = str(analysis.normalized_text or "")
+        out["canonical_text"] = str(analysis.canonical_text or "")
+        out["search_text"] = str(analysis.search_text or "")
+        out["memory_views"] = dict(analysis.memory_views or {})
+        out["memory_entities"] = [item.to_dict() for item in list(analysis.entities or [])]
+        out["numeric_facts"] = [item.to_dict() for item in list(analysis.numeric_facts or [])]
+        out["stable_facts"] = [item.to_dict() for item in list(analysis.stable_facts or [])]
+        out["emotion_profile"] = emotion_view
+        if emotion_view:
+            out["emotion"] = emotion_view
+        out["tags"] = _merge_tags(out.get("tags"), list(analysis.tags or []))
+        out["memory_analysis"] = analysis.to_dict()
+        return out
+
     def _augment_message_metadata(
         self,
         *,
@@ -1063,6 +1262,87 @@ class MemoryManager:
             "turn_id": str(row.get("turn_id") or "").strip(),
             "conversation_id": str(row.get("conversation_id") or namespace or "").strip(),
         }
+
+    def _record_ingest_skip(
+        self,
+        *,
+        event_id: str,
+        now_ts: float,
+        event: MemoryEvent,
+        namespace: str,
+        metadata: dict[str, Any],
+        record_id: str,
+        reason: str,
+        decision: AssistantWriteDecision,
+    ) -> None:
+        self._event_store.append(
+            {
+                "event_id": event_id,
+                "ts": now_ts,
+                "type": "memory_ingest_skipped_v2",
+                "trace_id": str(metadata.get("trace_id") or ""),
+                "model": str(metadata.get("model") or ""),
+                "latency_ms": float(metadata.get("latency_ms") or 0.0),
+                "payload": {
+                    "role": str(event.role or ""),
+                    "source_kind": str(metadata.get("source_kind") or ""),
+                    "scope": str(event.scope.value),
+                    "effective_scope": str((decision.target_scope or event.scope).value),
+                    "memory_type": str(event.memory_type.value),
+                    "record_id": str(record_id or ""),
+                    "namespace": str(namespace or "default"),
+                    "reason": str(reason or ""),
+                    "assistant_write_policy": decision.to_dict(),
+                    "request_id": str(metadata.get("request_id") or ""),
+                    "turn_id": str(metadata.get("turn_id") or ""),
+                    "conversation_id": str(metadata.get("conversation_id") or namespace),
+                },
+                "tags": [str(event.scope.value), str(event.memory_type.value), "skipped"],
+            }
+        )
+        log_json(
+            LOGGER,
+            "memory_v2_ingest_skipped",
+            summary=(
+                f"type={event.memory_type.value} scope={event.scope.value} "
+                f"reason={str(reason or 'skipped')} "
+                f"factual_mode={str(dict(decision.signals or {}).get('factual_mode') or '-')} "
+                f"confidence={float(dict(decision.signals or {}).get('final_factual_confidence') or 0.0):.3f}"
+            ),
+            context=self._event_log_context(metadata=metadata, namespace=namespace),
+            namespace=namespace,
+            scope=str(event.scope.value),
+            memory_type=str(event.memory_type.value),
+            source_kind=str(metadata.get("source_kind") or ""),
+            reason=str(reason or ""),
+            factual_mode=str(dict(decision.signals or {}).get("factual_mode") or ""),
+            final_factual_confidence=float(dict(decision.signals or {}).get("final_factual_confidence") or 0.0),
+            conflict_severity=float(dict(decision.signals or {}).get("conflict_severity") or 0.0),
+            assistant_write_policy=decision.to_dict(),
+        )
+
+    @staticmethod
+    def _without_promotion(
+        lifecycle_decision: LifecycleDecision,
+        *,
+        reason: str,
+        scope: MemoryScope,
+        decision: AssistantWriteDecision,
+    ) -> LifecycleDecision:
+        debug_payload = dict(lifecycle_decision.decision_debug or {})
+        debug_payload["promotion_disabled_by_write_policy"] = True
+        debug_payload["assistant_write_policy"] = decision.to_dict()
+        debug_payload["effective_scope"] = str(scope.value)
+        return LifecycleDecision(
+            promote_to=None,
+            mark_status=lifecycle_decision.mark_status,
+            archive=bool(lifecycle_decision.archive),
+            reason=str(reason or lifecycle_decision.reason or ""),
+            route="assistant_write_policy",
+            next_version=lifecycle_decision.next_version,
+            chain_parent_id=lifecycle_decision.chain_parent_id,
+            decision_debug=debug_payload,
+        )
 
     def _importance_score(self, *, text: str, metadata: dict[str, Any], namespace: str) -> float:
         explicit = metadata.get("importance")

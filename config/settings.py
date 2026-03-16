@@ -827,6 +827,23 @@ def _default_config_tree() -> dict[str, Any]:
                     "deep_search": 2,
                     "backoff_ms": 250,
                 },
+                "search_policy": {
+                    "default_locale": "ru-RU",
+                    "locale_by_category": {
+                        "finance": "uk-UA",
+                        "weather": "uk-UA",
+                        "news": "uk-UA",
+                        "docs": "en-US",
+                        "version": "en-US",
+                        "generic": "ru-RU",
+                    },
+                    "region_locale_overrides": {
+                        "ua": "uk-UA",
+                        "ru": "ru-RU",
+                    },
+                    "engine_manual_states": {},
+                    "suspended_engines": [],
+                },
                 "continuation": {
                     "ttl_minutes": 20,
                     "max_user_turns": 6,
@@ -2164,6 +2181,35 @@ def _validate_web_v2_settings(payload: dict[str, Any] | None) -> list[str]:
         else:
             if backoff_ms < 0:
                 errors.append("internet.web_v2.retry_policy.backoff_ms must be >= 0")
+
+    search_policy = _as_dict(cfg.get("search_policy"))
+    default_locale = search_policy.get("default_locale")
+    if default_locale is not None and not str(default_locale or "").strip():
+        errors.append("internet.web_v2.search_policy.default_locale must be a non-empty string")
+    for key in ("locale_by_category", "region_locale_overrides", "engine_manual_states"):
+        value = search_policy.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            errors.append(f"internet.web_v2.search_policy.{key} must be a dict")
+            continue
+        for inner_key, inner_value in value.items():
+            if not str(inner_key or "").strip():
+                errors.append(f"internet.web_v2.search_policy.{key} contains an empty key")
+            if not str(inner_value or "").strip():
+                errors.append(f"internet.web_v2.search_policy.{key}[{inner_key!r}] must be a non-empty string")
+            if key == "engine_manual_states" and str(inner_value or "").strip().lower() not in {"healthy", "degraded", "blocked", "suspended"}:
+                errors.append(
+                    f"internet.web_v2.search_policy.engine_manual_states[{inner_key!r}] must be one of ['blocked', 'degraded', 'healthy', 'suspended']"
+                )
+    suspended_engines = search_policy.get("suspended_engines")
+    if suspended_engines is not None:
+        if not isinstance(suspended_engines, list):
+            errors.append("internet.web_v2.search_policy.suspended_engines must be a list of strings")
+        else:
+            for idx, item in enumerate(suspended_engines):
+                if not str(item or "").strip():
+                    errors.append(f"internet.web_v2.search_policy.suspended_engines[{idx}] must be a non-empty string")
 
     for key in ("force_search_keywords", "preferred_domains", "blocked_domains", "trusted_allowlist", "risky_domains", "degraded_domains"):
         value = cfg.get(key)

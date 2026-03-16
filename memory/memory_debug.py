@@ -123,6 +123,7 @@ def _why_selected_from_breakdown(breakdown: dict[str, Any]) -> list[str]:
         "importance_score": float(breakdown.get("importance_score") or 0.0),
         "confidence_score": float(breakdown.get("confidence_score") or 0.0),
         "entity_overlap_score": float(breakdown.get("entity_overlap_score") or 0.0),
+        "numeric_overlap_score": float(breakdown.get("numeric_overlap_score") or 0.0),
         "exact_match_boost": float(breakdown.get("exact_match_boost") or 0.0),
         "scope_match_score": float(breakdown.get("scope_match_score") or 0.0),
     }

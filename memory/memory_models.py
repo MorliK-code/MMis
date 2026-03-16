@@ -48,6 +48,14 @@ class MemoryType(str, Enum):
     RUNTIME_STATE = "runtime_state"
 
 
+class MemorySourceKind(str, Enum):
+    USER = "user"
+    ASSISTANT_REPLY = "assistant_reply"
+    ASSISTANT_THOUGHT = "assistant_thought"
+    TOOL_RESULT = "tool_result"
+    SYSTEM_DECISION = "system_decision"
+
+
 @dataclass(frozen=True)
 class MemoryRecord:
     id: str
@@ -270,6 +278,7 @@ class ScoreBreakdown:
     importance_score: float = 0.0
     confidence_score: float = 0.0
     entity_overlap_score: float = 0.0
+    numeric_overlap_score: float = 0.0
     exact_match_boost: float = 0.0
     scope_match_score: float = 0.0
     final_score: float = 0.0
@@ -282,6 +291,7 @@ class ScoreBreakdown:
             "importance_score": float(self.importance_score),
             "confidence_score": float(self.confidence_score),
             "entity_overlap_score": float(self.entity_overlap_score),
+            "numeric_overlap_score": float(self.numeric_overlap_score),
             "exact_match_boost": float(self.exact_match_boost),
             "scope_match_score": float(self.scope_match_score),
             "final_score": float(self.final_score),
@@ -291,6 +301,9 @@ class ScoreBreakdown:
 @dataclass(frozen=True)
 class RetrievalQuery:
     query_text: str
+    search_text: str = ""
+    entity_keys: list[str] = field(default_factory=list)
+    numeric_keys: list[str] = field(default_factory=list)
     namespace: str = "default"
     scopes: list[MemoryScope] = field(default_factory=list)
     top_k: int = 8
@@ -327,6 +340,9 @@ class RetrievalResult:
         return {
             "query": {
                 "query_text": self.query.query_text,
+                "search_text": self.query.search_text,
+                "entity_keys": list(self.query.entity_keys or []),
+                "numeric_keys": list(self.query.numeric_keys or []),
                 "namespace": self.query.namespace,
                 "scopes": [str(x.value) for x in list(self.query.scopes or [])],
                 "top_k": int(self.query.top_k),

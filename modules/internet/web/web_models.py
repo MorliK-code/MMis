@@ -44,12 +44,14 @@ class QueryClassification:
     is_local_project_question: bool
     is_external_fact_question: bool
     is_ambiguous: bool
+    is_correction_challenge: bool
     requires_freshness: bool
     stakes_level: str
     expected_search_need: str
     explicit_search_intent: bool
     temporal_markers: list[str] = field(default_factory=list)
     category_hits: list[str] = field(default_factory=list)
+    challenge_markers: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,12 +61,14 @@ class QueryClassification:
             "is_local_project_question": bool(self.is_local_project_question),
             "is_external_fact_question": bool(self.is_external_fact_question),
             "is_ambiguous": bool(self.is_ambiguous),
+            "is_correction_challenge": bool(self.is_correction_challenge),
             "requires_freshness": bool(self.requires_freshness),
             "stakes_level": str(self.stakes_level),
             "expected_search_need": str(self.expected_search_need),
             "explicit_search_intent": bool(self.explicit_search_intent),
             "temporal_markers": list(self.temporal_markers),
             "category_hits": list(self.category_hits),
+            "challenge_markers": list(self.challenge_markers),
         }
 
 

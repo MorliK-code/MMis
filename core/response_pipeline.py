@@ -32,6 +32,7 @@ from memory.memory_models import ContextBuildRequest, MemoryScope
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
 from modules.studio.studio_generator import StudioGenerator
+from modules.internet.web.query_text import strip_service_command_prefix
 from modules.internet.web.result_processor import format_postprocess_citation_suffix
 from prompt_engine import PromptEngine
 from utils.datetime_local import now_local_ts, parse_time_to_epoch
@@ -460,7 +461,7 @@ class MemoryRetrieveStage(PipelineStage):
         self._cfg = load_config()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        if ctx.route not in {"chat", "command"}:
+        if ctx.route != "chat":
             ctx.logs.append("stage=memory_retrieve skipped(route)")
             return ctx
         query = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
@@ -651,19 +652,10 @@ class PromptBuildStage(PipelineStage):
         prompt_state["context_tags"] = merged_tags
         if ctx.plan:
             prompt_state["plan"] = ctx.plan
-        memory_blocks = {}
-        if ctx.memory_context:
-            prompt_state["memory_context"] = dict(ctx.memory_context)
-            memory_blocks = _as_dict(ctx.memory_context.get("blocks"))
-            summary_hint = str(_pick_value(memory_blocks.get("session_summary"), memory_blocks.get("working_memory"), ""))
-            if summary_hint:
-                prompt_state["long_summary"] = summary_hint
-                prompt_state["dialog_summary"] = summary_hint
-            tool_hint = str(memory_blocks.get("active_tool_state") or "").strip()
-            if tool_hint:
-                prompt_state["last_tool_result"] = tool_hint
-        if ctx.memory_context:
-            selected = list(_as_list(ctx.memory_context.get("selected")))
+        memory_context_for_prompt = _as_dict(ctx.memory_context)
+        memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
+        if memory_context_for_prompt:
+            selected = list(_as_list(memory_context_for_prompt.get("selected")))
             if selected:
                 ctx.retrieved_memories = selected
         if bool(ctx.meta.get("think", False)):
@@ -677,9 +669,25 @@ class PromptBuildStage(PipelineStage):
             ctx.policies["rules"] = rules
 
         web_intent = str(ctx.tags.get("web_query_intent") or "").strip().lower()
+        web_category = str(
+            _pick_value(
+                ctx.meta.get("web_primary_category"),
+                ctx.tags.get("web_primary_category"),
+                _as_dict(ctx.meta.get("web_query_classification")).get("primary_category"),
+                "",
+            )
+            or ""
+        ).strip().lower()
         web_used = str(ctx.tags.get("web_used") or "").strip().lower() == "true"
         web_fresh_missing = str(ctx.tags.get("web_fresh_missing") or "").strip().lower() == "true"
         web_response_style = str(ctx.tags.get("web_response_style") or "").strip().lower()
+        web_evidence_quality = _as_dict(
+            _pick_value(
+                ctx.meta.get("web_evidence_quality"),
+                ctx.state.get("web_evidence_quality"),
+                {},
+            )
+        )
         web_evidence_context = _as_dict(
             _pick_value(
                 ctx.meta.get("web_evidence_context"),
@@ -687,22 +695,64 @@ class PromptBuildStage(PipelineStage):
                 {},
             )
         )
+        factual_response_mode = _resolve_web_factual_response_mode(
+            web_intent=web_intent,
+            web_category=web_category,
+            web_evidence_context=web_evidence_context,
+            quality=web_evidence_quality,
+        )
+        if factual_response_mode:
+            ctx.meta["factual_response_mode"] = factual_response_mode
+            ctx.tags["factual_response_mode"] = factual_response_mode
+            if web_evidence_context:
+                web_evidence_context = dict(web_evidence_context)
+                web_evidence_context.setdefault("factual_response_mode", factual_response_mode)
+                ctx.meta["web_evidence_context"] = dict(web_evidence_context)
         if web_used and web_evidence_context:
             prompt_state["web_evidence_context"] = dict(web_evidence_context)
         retrieved_for_prompt = list(_as_list(ctx.retrieved_memories))
-        if bool(intent_alignment.get("applied")) and resolved_intent in {"fx_rate", "weather", "news_release"}:
+        context_isolation_debug: dict[str, Any] = {}
+        if web_used and factual_response_mode:
+            memory_context_for_prompt, retrieved_for_prompt, context_isolation_debug = _isolate_factual_prompt_context(
+                memory_context=memory_context_for_prompt,
+                retrieved_memories=retrieved_for_prompt,
+                web_intent=factual_response_mode,
+            )
+            if context_isolation_debug:
+                ctx.meta["prompt_context_isolation"] = dict(context_isolation_debug)
+                ctx.logs.append(
+                    "stage=prompt_build factual_context_isolation "
+                    f"intent={factual_response_mode} kept_blocks={len(list(_as_list(context_isolation_debug.get('included_memory_blocks'))))} "
+                    f"dropped_blocks={len(list(_as_list(context_isolation_debug.get('dropped_memory_blocks'))))} "
+                    f"kept_memories={int(_to_int(context_isolation_debug.get('included_retrieved_memories'), 0) or 0)} "
+                    f"dropped_memories={len(list(_as_list(context_isolation_debug.get('dropped_retrieved_memories'))))}"
+                )
+                emitter = ctx.meta.get("emit_web_trace_event")
+                if callable(emitter):
+                    emitter("factual_context_isolation", dict(context_isolation_debug))
+        if memory_context_for_prompt:
+            prompt_state["memory_context"] = dict(memory_context_for_prompt)
+            memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
+        else:
+            prompt_state.pop("memory_context", None)
+            memory_blocks = {}
+        prompt_state.pop("long_summary", None)
+        prompt_state.pop("dialog_summary", None)
+        prompt_state.pop("last_tool_result", None)
+        summary_hint = str(_pick_value(memory_blocks.get("session_summary"), memory_blocks.get("working_memory"), ""))
+        if summary_hint:
+            prompt_state["long_summary"] = summary_hint
+            prompt_state["dialog_summary"] = summary_hint
+        tool_hint = str(memory_blocks.get("active_tool_state") or "").strip()
+        if tool_hint:
+            prompt_state["last_tool_result"] = tool_hint
+        if bool(intent_alignment.get("applied")) and factual_response_mode:
             _append_policy_rule(
                 ctx.policies,
-                f"This turn is a factual {resolved_intent} request aligned from web classification, not open-ended chat. Keep the answer direct and evidence-led.",
+                f"This turn is a factual {factual_response_mode} request aligned from web classification, not open-ended chat. Keep the answer direct and evidence-led.",
             )
 
-        if web_used and web_intent in {"fx_rate", "weather", "news_release"}:
-            filtered, dropped = _filter_retrieved_memories_for_time_sensitive_web(retrieved_for_prompt)
-            retrieved_for_prompt = filtered
-            if dropped > 0:
-                ctx.logs.append(
-                    f"stage=prompt_build web_memory_filter=applied intent={web_intent} dropped={dropped} kept={len(filtered)}"
-                )
+        if web_used and factual_response_mode:
             _append_policy_rule(
                 ctx.policies,
                 "For time-sensitive web answers, respond directly with facts and avoid rhetorical openers like 'Ах, ты опять...' or similar chatter.",
@@ -710,6 +760,38 @@ class PromptBuildStage(PipelineStage):
             _append_policy_rule(
                 ctx.policies,
                 "Use fetched web evidence and include source domain and fetch/publish time; if sources disagree, report a range.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                f"For this {factual_response_mode} answer, ignore unrelated memory, tool fragments, and stale cross-category context. Use only category-matching WEB_EVIDENCE and matching factual context.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "For web-backed factual answers, prefer compact evidence-led wording over conversational speculation or storytelling.",
+            )
+
+        if web_used and factual_response_mode in {"price", "historical_factual", "latest_factual", "weather"}:
+            _append_policy_rule(
+                ctx.policies,
+                "For factual web-backed answers, state only the value, date, range, or conclusion that is directly supported by WEB_EVIDENCE, then name the source.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "Do not fill evidence gaps from memory, priors, or style. If the exact factual claim is not reliably supported, say that it could not be reliably confirmed.",
+            )
+
+        if web_used and factual_response_mode == "fx_rate":
+            _append_policy_rule(
+                ctx.policies,
+                "For FX answers, use a compact factual format: one short line per confirmed pair, then rate type, then source.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "For FX answers, do not answer in free-form chatty prose. Do not guess, average, or merge incompatible rate types. Only state values directly supported by WEB_EVIDENCE.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "If the exact FX value is not reliably confirmed, explicitly say that the exact value could not be reliably confirmed instead of inventing a number.",
             )
 
         if web_used:
@@ -721,6 +803,15 @@ class PromptBuildStage(PipelineStage):
                 ctx.policies,
                 "Live web lookup already executed for this turn. Do not claim lack of internet/web access or say that you cannot check the data; use WEB_EVIDENCE as the factual source.",
             )
+        if web_used and factual_response_mode and bool(web_evidence_context.get("cautious_synthesis")):
+            _append_policy_rule(
+                ctx.policies,
+                "WEB_EVIDENCE for this turn is weak or conflicting. Do not invent an exact number/date from memory or priors. If the precise value is not consistently supported, explicitly say that the exact value could not be reliably confirmed.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "For numeric or date answers under cautious synthesis, prefer a careful confirmation-failure statement over a confident exact claim.",
+            )
 
         if web_fresh_missing:
             _append_policy_rule(
@@ -731,7 +822,7 @@ class PromptBuildStage(PipelineStage):
             tags_map = _as_dict(prompt_state.get("context_tags"))
             tags_map["web_guardrail"] = "fresh_missing_no_fabrication"
             prompt_state["context_tags"] = tags_map
-        elif web_used and web_intent in {"fx_rate", "weather"}:
+        elif web_used and factual_response_mode in {"fx_rate", "weather"}:
             _append_policy_rule(
                 ctx.policies,
                 "When answering FX/weather requests, rely on fetched web evidence, include source domain and timestamp, and report a range if sources disagree.",
@@ -739,6 +830,10 @@ class PromptBuildStage(PipelineStage):
             ctx.tags["web_guardrail"] = "cite_source_and_time"
             tags_map = _as_dict(prompt_state.get("context_tags"))
             tags_map["web_guardrail"] = "cite_source_and_time"
+            prompt_state["context_tags"] = tags_map
+        if factual_response_mode:
+            tags_map = _as_dict(prompt_state.get("context_tags"))
+            tags_map["factual_response_mode"] = factual_response_mode
             prompt_state["context_tags"] = tags_map
         if web_response_style:
             tags_map = _as_dict(prompt_state.get("context_tags"))
@@ -764,6 +859,7 @@ class PromptBuildStage(PipelineStage):
                 ctx.policies,
                 "Treat short follow-up as continuation of active task unless the user explicitly switches topic.",
             )
+        ctx.retrieved_memories = list(retrieved_for_prompt)
         ctx.prompt_pack = self.character_runtime.build(
             state=prompt_state,
             user_msg=ctx.clean_user_msg,
@@ -771,10 +867,10 @@ class PromptBuildStage(PipelineStage):
             traits=ctx.traits,
             policies=ctx.policies,
         )
-        if ctx.memory_context:
+        if memory_context_for_prompt:
             ctx.prompt_pack = _apply_memory_context_to_prompt_pack(
                 ctx.prompt_pack,
-                memory_context=ctx.memory_context,
+                memory_context=memory_context_for_prompt,
                 selected_memories=retrieved_for_prompt,
             )
         ctx.prompt_pack = _apply_web_evidence_to_prompt_pack(
@@ -793,6 +889,7 @@ class PromptBuildStage(PipelineStage):
                     "domains": domains,
                     "citations": len(list(_as_list(web_evidence_context.get("compact_citations")))),
                     "conflicting_sources": bool(web_evidence_context.get("conflicting_sources")),
+                    "context_isolation": dict(context_isolation_debug or {}),
                 },
             )
         ctx.logs.append("stage=prompt_build")
@@ -2062,13 +2159,25 @@ class GenerateStage(PipelineStage):
                 prompt_state["context_tags"] = merged_tags
                 if ctx.plan:
                     prompt_state["plan"] = ctx.plan
-                if ctx.memory_context:
-                    prompt_state["memory_context"] = dict(ctx.memory_context)
-                    context_blocks = _as_dict(ctx.memory_context.get("blocks"))
-                    summary_hint = str(_pick_value(context_blocks.get("session_summary"), context_blocks.get("working_memory"), ""))
-                    if summary_hint:
-                        prompt_state["long_summary"] = summary_hint
-                        prompt_state["dialog_summary"] = summary_hint
+                web_intent = str(ctx.tags.get("web_query_intent") or "").strip().lower()
+                web_category = str(
+                    _pick_value(
+                        ctx.meta.get("web_primary_category"),
+                        ctx.tags.get("web_primary_category"),
+                        _as_dict(ctx.meta.get("web_query_classification")).get("primary_category"),
+                        "",
+                    )
+                    or ""
+                ).strip().lower()
+                memory_context_for_prompt = _as_dict(ctx.memory_context)
+                retrieved_for_prompt = list(_as_list(ctx.retrieved_memories))
+                web_evidence_quality = _as_dict(
+                    _pick_value(
+                        ctx.meta.get("web_evidence_quality"),
+                        ctx.state.get("web_evidence_quality"),
+                        {},
+                    )
+                )
                 web_evidence_context = _as_dict(
                     _pick_value(
                         ctx.meta.get("web_evidence_context"),
@@ -2080,19 +2189,47 @@ class GenerateStage(PipelineStage):
                     _pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False),
                     default=False,
                 ):
+                    factual_response_mode = _resolve_web_factual_response_mode(
+                        web_intent=web_intent,
+                        web_category=web_category,
+                        web_evidence_context=web_evidence_context,
+                        quality=web_evidence_quality,
+                    )
+                    if factual_response_mode:
+                        ctx.meta["factual_response_mode"] = factual_response_mode
+                        ctx.tags["factual_response_mode"] = factual_response_mode
+                        web_evidence_context = dict(web_evidence_context)
+                        web_evidence_context.setdefault("factual_response_mode", factual_response_mode)
+                        ctx.meta["web_evidence_context"] = dict(web_evidence_context)
                     prompt_state["web_evidence_context"] = dict(web_evidence_context)
+                    if factual_response_mode:
+                        memory_context_for_prompt, retrieved_for_prompt, context_isolation_debug = _isolate_factual_prompt_context(
+                            memory_context=memory_context_for_prompt,
+                            retrieved_memories=retrieved_for_prompt,
+                            web_intent=factual_response_mode,
+                        )
+                        if context_isolation_debug:
+                            ctx.meta["prompt_context_isolation"] = dict(context_isolation_debug)
+                if memory_context_for_prompt:
+                    prompt_state["memory_context"] = dict(memory_context_for_prompt)
+                    context_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
+                    summary_hint = str(_pick_value(context_blocks.get("session_summary"), context_blocks.get("working_memory"), ""))
+                    if summary_hint:
+                        prompt_state["long_summary"] = summary_hint
+                        prompt_state["dialog_summary"] = summary_hint
+                ctx.retrieved_memories = list(retrieved_for_prompt)
                 ctx.prompt_pack = self.character_runtime.build(
                     state=prompt_state,
                     user_msg=ctx.clean_user_msg,
-                    retrieved_memories=ctx.retrieved_memories,
+                    retrieved_memories=retrieved_for_prompt,
                     traits=ctx.traits,
                     policies=ctx.policies,
                 )
-                if ctx.memory_context:
+                if memory_context_for_prompt:
                     ctx.prompt_pack = _apply_memory_context_to_prompt_pack(
                         ctx.prompt_pack,
-                        memory_context=ctx.memory_context,
-                        selected_memories=list(_as_list(ctx.retrieved_memories)),
+                        memory_context=memory_context_for_prompt,
+                        selected_memories=retrieved_for_prompt,
                     )
                 ctx.prompt_pack = _apply_web_evidence_to_prompt_pack(
                     ctx.prompt_pack,
@@ -2228,6 +2365,45 @@ class PostprocessStage(PipelineStage):
                 text = web_sync_fixed
                 ctx.logs.append(f"stage=postprocess web_tool_sync=applied intent={web_intent}")
 
+            web_cautious_fixed, web_cautious_changed = _apply_web_factual_caution_guard(
+                text,
+                meta=_as_dict(ctx.meta),
+                web_evidence_context=_as_dict(
+                    _pick_value(
+                        ctx.meta.get("web_evidence_context"),
+                        ctx.state.get("web_evidence_context"),
+                        {},
+                    )
+                ),
+                web_intent=web_intent,
+            )
+            if web_cautious_changed:
+                text = web_cautious_fixed
+                ctx.logs.append(f"stage=postprocess web_factual_caution=applied intent={web_intent}")
+
+            web_fx_fixed, web_fx_changed, web_fx_debug = _apply_web_fx_response_guard(
+                text,
+                meta=_as_dict(ctx.meta),
+                web_evidence_context=_as_dict(
+                    _pick_value(
+                        ctx.meta.get("web_evidence_context"),
+                        ctx.state.get("web_evidence_context"),
+                        {},
+                    )
+                ),
+                web_intent=web_intent,
+            )
+            if web_fx_debug:
+                ctx.meta["fx_response_format_debug"] = dict(web_fx_debug)
+            if web_fx_changed:
+                text = web_fx_fixed
+                ctx.meta["web_skip_citations"] = True
+                ctx.logs.append(
+                    "stage=postprocess web_fx_format=applied "
+                    f"pairs={int(web_fx_debug.get('pair_count', 0) or 0)} "
+                    f"cautious={str(bool(web_fx_debug.get('cautious'))).lower()}"
+                )
+
             temporal_fixed, temporal_changed = _apply_temporal_consistency_guard(
                 text=text,
                 user_text=ctx.clean_user_msg,
@@ -2260,6 +2436,48 @@ class PostprocessStage(PipelineStage):
                     classification=SimpleNamespace(query_type=str(classification.get("query_type") or "")),
                 )
                 ctx.logs.append(f"stage=postprocess citations=applied count={len(compact_citations)}")
+
+            factual_response_mode = str(
+                _pick_value(
+                    ctx.meta.get("factual_response_mode"),
+                    ctx.tags.get("factual_response_mode"),
+                    "",
+                )
+                or ""
+            ).strip().lower()
+            if web_used and factual_response_mode:
+                quality = _as_dict(
+                    _pick_value(
+                        ctx.meta.get("web_evidence_quality"),
+                        ctx.state.get("web_evidence_quality"),
+                        {},
+                    )
+                )
+                cautious_answer = bool(
+                    _pick_value(
+                        ctx.meta.get("web_cautious_synthesis"),
+                        quality.get("cautious_synthesis"),
+                        False,
+                    )
+                )
+                _emit_turn_summary(
+                    ctx,
+                    "factual_response_summary",
+                    summary=(
+                        f"mode={factual_response_mode} web_used={str(bool(web_used)).lower()} "
+                        f"quality={float(_to_float(quality.get('score'), 0.0) or 0.0):.3f} "
+                        f"conflict={float(_to_float(quality.get('conflict_severity'), 0.0) or 0.0):.3f} "
+                        f"confidence={float(_to_float(quality.get('final_factual_confidence'), 0.0) or 0.0):.3f} "
+                        f"cautious={str(cautious_answer).lower()}"
+                    ),
+                    factual_mode=str(factual_response_mode),
+                    web_used=bool(web_used),
+                    evidence_quality=float(_to_float(quality.get("score"), 0.0) or 0.0),
+                    conflict_severity=float(_to_float(quality.get("conflict_severity"), 0.0) or 0.0),
+                    final_factual_confidence=float(_to_float(quality.get("final_factual_confidence"), 0.0) or 0.0),
+                    cautious_answer=bool(cautious_answer),
+                    context_isolation_applied=bool(ctx.meta.get("prompt_context_isolation")),
+                )
 
         updated_address_terms = _update_address_terms_after_response(ctx=ctx, text=text)
         if updated_address_terms is not None:
@@ -2824,7 +3042,7 @@ class ResponsePipeline:
         web_mode = _resolve_web_mode(ctx.meta, ctx.state)
         ctx.meta.setdefault("web_mode", web_mode)
         force_web = _is_forced_web_request(ctx.user_msg)
-        input_preview = _text_preview(ctx.user_msg, 120)
+        input_preview = _text_preview(_loggable_user_input(ctx.user_msg, route=ctx.route), 120)
 
         stage_profile = self._resolve_stage_profile(ctx.profile)
         ctx.meta["stage_profile"] = stage_profile
@@ -2842,7 +3060,7 @@ class ResponsePipeline:
         ctx.logs.append(
             "stage=web_trace start "
             f"trace={trace_id} request={request_id or '-'} route={ctx.route} web_mode={web_mode} "
-            f"force={int(bool(force_web))} input_len={len(str(ctx.user_msg or '').strip())} "
+            f"force={int(bool(force_web))} input_len={len(str(_loggable_user_input(ctx.user_msg, route=ctx.route) or '').strip())} "
             f"input_preview={input_preview}"
         )
         self._emit_web_trace_event(
@@ -2850,7 +3068,7 @@ class ResponsePipeline:
             event="web_trace_start",
             payload={
                 "force_web": bool(force_web),
-                "input_len": len(str(ctx.user_msg or "").strip()),
+                "input_len": len(str(_loggable_user_input(ctx.user_msg, route=ctx.route) or "").strip()),
                 "input_preview": input_preview,
                 "active_profile": str(ctx.profile or ""),
                 "mode": str(web_mode or "auto"),
@@ -3018,7 +3236,7 @@ class ResponsePipeline:
             "trace_context": dict(trace_context),
             "compact_summary_path": str(compact_path),
             "input": {
-                "raw_text": str(ctx.user_msg or ""),
+                "raw_text": _loggable_user_input(ctx.user_msg, route=ctx.route),
                 "clean_text": str(ctx.clean_user_msg or ""),
                 "web_mode": str(ctx.meta.get("web_mode") or ctx.state.get("web_mode") or "auto"),
                 "start": dict(start_payload),
@@ -3918,6 +4136,137 @@ _WEB_NOISY_CHATTER_RE = re.compile(
     r"^\s*(?:ах|ой|ну)\b.*\b(?:опять|снова|шутк|новост|что посмотреть)\b",
     flags=re.IGNORECASE,
 )
+_FACTUAL_CONTEXT_MARKERS = {
+    "fx_rate": (
+        "курс",
+        "exchange rate",
+        "currency",
+        "forex",
+        "usd",
+        "eur",
+        "uah",
+        "gbp",
+        "доллар",
+        "евро",
+        "гривн",
+        "грн",
+        "валют",
+        "nbu",
+        "cash",
+        "банк",
+        "котиров",
+        "обмен",
+    ),
+    "price": (
+        "price",
+        "pricing",
+        "cost",
+        "costs",
+        "стоимость",
+        "цена",
+        "стоит",
+        "sale price",
+        "retail",
+        "shop",
+        "магазин",
+        "товар",
+        "product",
+        "buy now",
+        "auction",
+    ),
+    "historical_factual": (
+        "historical",
+        "history",
+        "archive",
+        "архив",
+        "истор",
+        "в 20",
+        "в 19",
+        "год",
+        "году",
+        "earlier",
+        "previously",
+        "раньше",
+        "ранее",
+        "дата",
+    ),
+    "latest_factual": (
+        "latest",
+        "current",
+        "recent",
+        "today",
+        "на сегодня",
+        "сегодня",
+        "точная дата",
+        "точное значение",
+        "confirmed",
+        "mention",
+        "mentioned",
+        "упомин",
+        "последн",
+        "когда",
+        "дата",
+        "событие",
+    ),
+    "weather": (
+        "weather",
+        "forecast",
+        "temperature",
+        "rain",
+        "snow",
+        "wind",
+        "umbrella",
+        "погод",
+        "прогноз",
+        "температур",
+        "дожд",
+        "снег",
+        "ветер",
+        "зонтик",
+        "градус",
+    ),
+    "news_release": (
+        "news",
+        "release",
+        "version",
+        "changelog",
+        "docs",
+        "documentation",
+        "mentioned",
+        "latest",
+        "новост",
+        "релиз",
+        "верси",
+        "документац",
+        "упомин",
+        "дата",
+    ),
+}
+_FACTUAL_CONTEXT_BLOCK_KEYS = {
+    "working_memory",
+    "session_summary",
+    "retrieved_semantic",
+    "retrieved_episodic",
+    "retrieved_docs",
+    "active_tool_state",
+    "unresolved_items",
+    "conversation_tail",
+}
+_FX_VALUE_RE = re.compile(r"\b\d+(?:[\.,]\d+)?\b")
+_FX_PAIR_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bUSD\s*/\s*UAH\b", re.IGNORECASE), "USD/UAH"),
+    (re.compile(r"\bEUR\s*/\s*UAH\b", re.IGNORECASE), "EUR/UAH"),
+    (re.compile(r"\bGBP\s*/\s*UAH\b", re.IGNORECASE), "GBP/UAH"),
+    (re.compile(r"\bUSD\b.*\bUAH\b|\bUAH\b.*\bUSD\b", re.IGNORECASE), "USD/UAH"),
+    (re.compile(r"\bEUR\b.*\bUAH\b|\bUAH\b.*\bEUR\b", re.IGNORECASE), "EUR/UAH"),
+    (re.compile(r"\bGBP\b.*\bUAH\b|\bUAH\b.*\bGBP\b", re.IGNORECASE), "GBP/UAH"),
+    (re.compile("\u0434\u043e\u043b\u043b\u0430\u0440.*(?:\u0433\u0440\u043d|\u0433\u0440\u0438\u0432)|(?:\u0433\u0440\u043d|\u0433\u0440\u0438\u0432).*\u0434\u043e\u043b\u043b\u0430\u0440", re.IGNORECASE), "USD/UAH"),
+    (re.compile("\u0435\u0432\u0440\u043e.*(?:\u0433\u0440\u043d|\u0433\u0440\u0438\u0432)|(?:\u0433\u0440\u043d|\u0433\u0440\u0438\u0432).*\u0435\u0432\u0440\u043e", re.IGNORECASE), "EUR/UAH"),
+    (re.compile("\u0444\u0443\u043d\u0442.*(?:\u0433\u0440\u043d|\u0433\u0440\u0438\u0432)|(?:\u0433\u0440\u043d|\u0433\u0440\u0438\u0432).*\u0444\u0443\u043d\u0442", re.IGNORECASE), "GBP/UAH"),
+    (re.compile(r"\b(?:dollar|usd)\b", re.IGNORECASE), "USD/UAH"),
+    (re.compile(r"\b(?:euro|eur)\b", re.IGNORECASE), "EUR/UAH"),
+    (re.compile(r"\b(?:pound|gbp)\b", re.IGNORECASE), "GBP/UAH"),
+)
 _WEB_STYLE_REPLACEMENTS = (
     re.compile(r"^\s*ах,\s*ты\s+(?:опять|снова)\b[^.!?\n]*[.!?]\s*", flags=re.IGNORECASE),
     re.compile(r"^\s*ах,\s*ты\b[^.!?\n]*[.!?]\s*", flags=re.IGNORECASE),
@@ -3966,17 +4315,27 @@ def _enforce_response_hygiene(text: str) -> str:
     return _normalize_text(cleaned)
 
 
-def _filter_retrieved_memories_for_time_sensitive_web(items: list[Any]) -> tuple[list[Any], int]:
+def _filter_retrieved_memories_for_time_sensitive_web(
+    items: list[Any],
+    *,
+    target_category: str = "",
+) -> tuple[list[Any], int, list[dict[str, Any]]]:
     if not items:
-        return [], 0
+        return [], 0, []
     kept: list[Any] = []
     dropped = 0
+    dropped_rows: list[dict[str, Any]] = []
+    target = str(target_category or "").strip().lower()
     for item in list(items):
         row = item if isinstance(item, dict) else {}
-        text = _normalize_text(_pick_value(row.get("text"), row.get("content"), ""))
-        source = str(_pick_value(row.get("source"), _as_dict(row.get("metadata")).get("source"), "") or "").strip().lower()
-        topic = str(_pick_value(row.get("topic"), _as_dict(row.get("metadata")).get("topic"), "") or "").strip().lower()
-        low = text.lower()
+        metadata = _as_dict(row.get("metadata"))
+        source = str(_pick_value(row.get("source"), metadata.get("source"), "") or "").strip().lower()
+        topic = str(_pick_value(row.get("topic"), metadata.get("topic"), "") or "").strip().lower()
+        text = _normalize_text(_pick_value(row.get("text"), row.get("content"), row.get("summary"), ""))
+        title = _normalize_text(_pick_value(row.get("title"), metadata.get("title"), ""))
+        compound = _normalize_text(" ".join(part for part in (topic, source, title, text) if part))
+        detected_category = _detect_factual_context_category(compound)
+        low = compound.lower()
         is_web_evidence = bool(
             topic.startswith("web:")
             or source in {"web", "search", "internet"}
@@ -3987,11 +4346,180 @@ def _filter_retrieved_memories_for_time_sensitive_web(items: list[Any]) -> tuple
         is_noisy_block = any(marker in low for marker in _WEB_NOISY_MEMORY_MARKERS)
         is_noisy_chatter = bool(_WEB_NOISY_CHATTER_RE.search(low))
         is_chat_like_source = source in {"message", "short", "summary", "chat", "history"}
+
+        drop_reason = ""
         if not is_web_evidence and (is_noisy_block or (is_chat_like_source and is_noisy_chatter)):
+            drop_reason = "noisy_memory_fragment"
+        elif target and detected_category and detected_category != target:
+            drop_reason = f"cross_category:{detected_category}"
+        elif target and not detected_category and not is_web_evidence:
+            drop_reason = "unmatched_context_fragment"
+
+        if drop_reason:
             dropped += 1
+            dropped_rows.append(
+                {
+                    "source": source,
+                    "topic": topic,
+                    "detected_category": detected_category,
+                    "reason": drop_reason,
+                    "preview": _preview_text(text or title or compound, 140),
+                }
+            )
             continue
         kept.append(item)
-    return kept, dropped
+    return kept, dropped, dropped_rows
+
+
+def _isolate_factual_prompt_context(
+    *,
+    memory_context: dict[str, Any] | None,
+    retrieved_memories: list[Any],
+    web_intent: str,
+) -> tuple[dict[str, Any], list[Any], dict[str, Any]]:
+    target = _normalize_factual_context_target(web_intent)
+    row = dict(_as_dict(memory_context))
+    if target not in {"fx_rate", "weather", "news_release", "price", "historical_factual", "latest_factual"}:
+        return row, list(retrieved_memories or []), {}
+
+    filtered_memories, dropped_count, dropped_memories = _filter_retrieved_memories_for_time_sensitive_web(
+        list(retrieved_memories or []),
+        target_category=target,
+    )
+    blocks = _as_dict(row.get("blocks"))
+    filtered_blocks: dict[str, Any] = {}
+    included_blocks: list[str] = []
+    dropped_blocks: list[dict[str, Any]] = []
+    for key, value in dict(blocks or {}).items():
+        name = str(key or "").strip()
+        text = _normalize_text(value)
+        if not name or not text:
+            continue
+        if name in {"system_core", "user_message"}:
+            filtered_blocks[name] = value
+            included_blocks.append(name)
+            continue
+        if name not in _FACTUAL_CONTEXT_BLOCK_KEYS:
+            filtered_blocks[name] = value
+            included_blocks.append(name)
+            continue
+        detected_category = _detect_factual_context_category(text)
+        if detected_category == target:
+            filtered_blocks[name] = value
+            included_blocks.append(name)
+            continue
+        dropped_blocks.append(
+            {
+                "block": name,
+                "detected_category": detected_category,
+                "reason": "cross_category_contamination" if detected_category else "unmatched_context_fragment",
+                "preview": _preview_text(text, 160),
+            }
+        )
+
+    row["blocks"] = filtered_blocks
+    row["selected"] = [dict(x) for x in list(filtered_memories) if isinstance(x, dict)]
+    debug = {
+        "target_category": target,
+        "included_evidence_blocks": ["WEB_EVIDENCE"] + [f"MEMORY:{name}" for name in included_blocks if name in _FACTUAL_CONTEXT_BLOCK_KEYS],
+        "included_memory_blocks": included_blocks,
+        "dropped_memory_blocks": dropped_blocks,
+        "included_retrieved_memories": len(list(filtered_memories or [])),
+        "dropped_retrieved_memories": dropped_memories,
+        "strict_context_isolation": True,
+    }
+    return row, filtered_memories, debug
+
+
+def _normalize_factual_context_target(value: str) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"fx_rate", "finance"}:
+        return "fx_rate"
+    if token in {"weather", "weather_factual"}:
+        return "weather"
+    if token in {"news_release", "version", "release"}:
+        return "news_release"
+    if token in {"price", "pricing"}:
+        return "price"
+    if token in {"historical", "historical_factual", "history"}:
+        return "historical_factual"
+    if token in {"latest", "latest_factual", "external", "news", "generic_factual"}:
+        return "latest_factual"
+    return ""
+
+
+def _resolve_web_factual_response_mode(
+    *,
+    web_intent: str = "",
+    web_category: str = "",
+    web_evidence_context: dict[str, Any] | None = None,
+    quality: dict[str, Any] | None = None,
+) -> str:
+    intent = str(web_intent or "").strip().lower()
+    category = str(web_category or "").strip().lower()
+    context = _as_dict(web_evidence_context)
+    quality_row = _as_dict(quality)
+    numeric_profile = str(
+        _pick_value(
+            context.get("numeric_profile"),
+            quality_row.get("numeric_profile"),
+            "",
+        )
+        or ""
+    ).strip().lower()
+
+    if intent == "fx_rate" or category == "finance" or numeric_profile == "fx_rate":
+        return "fx_rate"
+    if intent == "weather" or category == "weather" or numeric_profile == "weather":
+        return "weather"
+    if category == "price" or numeric_profile == "price":
+        return "price"
+    if numeric_profile == "historical":
+        return "historical_factual"
+    if category == "version" or intent == "news_release":
+        return "latest_factual"
+    if category in {"external", "news"}:
+        return "latest_factual"
+    return ""
+
+
+def _detect_factual_context_category(text: str) -> str:
+    low = _normalize_text(text).lower()
+    if not low:
+        return ""
+    scores: dict[str, int] = {}
+    for category, markers in dict(_FACTUAL_CONTEXT_MARKERS).items():
+        score = 0
+        for marker in list(markers or []):
+            token = str(marker or "").strip().lower()
+            if token and token in low:
+                score += 1
+        scores[category] = score
+    best_category = ""
+    best_score = 0
+    for category, score in scores.items():
+        if score > best_score:
+            best_category = category
+            best_score = score
+    if best_score <= 0:
+        return ""
+    competing = [cat for cat, score in scores.items() if cat != best_category and score >= best_score]
+    if competing:
+        competing = [
+            cat
+            for cat in competing
+            if not (cat == "latest_factual" and best_category in {"fx_rate", "price", "weather", "historical_factual"})
+        ]
+    if competing:
+        return ""
+    return best_category
+
+
+def _preview_text(value: Any, limit: int = 140) -> str:
+    text = _normalize_text(value)
+    if len(text) <= max(1, int(limit)):
+        return text
+    return text[: max(1, int(limit)) - 1].rstrip() + "…"
 
 
 def _apply_time_sensitive_web_failsafe(
@@ -4003,9 +4531,9 @@ def _apply_time_sensitive_web_failsafe(
     src = _normalize_text(text)
     if not src:
         return ""
-    intent = str(web_intent or "").strip().lower()
+    intent = _normalize_factual_context_target(web_intent)
     style = str(web_response_style or "").strip().lower()
-    if intent not in {"fx_rate", "weather", "news_release"}:
+    if intent not in {"fx_rate", "weather", "news_release", "price", "historical_factual", "latest_factual"}:
         return src
     if style != "factual_direct":
         return src
@@ -4066,6 +4594,337 @@ def _apply_web_tool_sync_guard(
     return cleaned, True
 
 
+def _apply_web_factual_caution_guard(
+    text: str,
+    *,
+    meta: dict[str, Any] | None = None,
+    web_evidence_context: dict[str, Any] | None = None,
+    web_intent: str = "",
+) -> tuple[str, bool]:
+    src = _normalize_text(text)
+    meta_map = _as_dict(meta)
+    context = _as_dict(web_evidence_context)
+    if not src or not _to_bool(meta_map.get("web_used"), default=False) or not context:
+        return src, False
+
+    quality = _as_dict(meta_map.get("web_evidence_quality"))
+    web_category = str(
+        _pick_value(
+            meta_map.get("web_primary_category"),
+            meta_map.get("web_category"),
+            "",
+        )
+        or ""
+    ).strip().lower()
+    numeric_profile = str(
+        _pick_value(
+            context.get("numeric_profile"),
+            quality.get("numeric_profile"),
+            "",
+        )
+        or ""
+    ).strip().lower()
+    factual_mode = _resolve_web_factual_response_mode(
+        web_intent=_pick_value(
+            meta_map.get("factual_response_mode"),
+            context.get("factual_response_mode"),
+            web_intent,
+        ),
+        web_category=web_category,
+        web_evidence_context=context,
+        quality=quality,
+    )
+    final_confidence = float(
+        _to_float(
+            _pick_value(
+                context.get("final_factual_confidence"),
+                quality.get("final_factual_confidence"),
+                0.0,
+            ),
+            0.0,
+        )
+        or 0.0
+    )
+    conflict_severity = float(
+        _to_float(
+            _pick_value(
+                context.get("conflict_severity"),
+                quality.get("conflict_severity"),
+                0.0,
+            ),
+            0.0,
+        )
+        or 0.0
+    )
+    cautious = bool(
+        _pick_value(
+            context.get("cautious_synthesis"),
+            quality.get("cautious_synthesis"),
+            False,
+        )
+    )
+    selected_page_type = str(
+        _pick_value(
+            context.get("selected_result_factual_page_type"),
+            quality.get("selected_result_factual_page_type"),
+            "",
+        )
+        or ""
+    ).strip().lower()
+    unresolved_type_mismatch = bool(
+        list(_as_list(context.get("type_mismatch_notes")))
+        and not selected_page_type
+    )
+    strict_numeric = bool(
+        numeric_profile in {"fx_rate", "price", "historical"}
+        or factual_mode in {"fx_rate", "price", "historical_factual", "latest_factual", "weather"}
+        or str(web_intent or "").strip().lower() in {"fx_rate", "weather"}
+        or web_category in {"finance", "price", "external", "weather", "news"}
+    )
+    if not strict_numeric:
+        return src, False
+    if not cautious and not unresolved_type_mismatch and conflict_severity < 0.55 and final_confidence >= 0.64:
+        return src, False
+    if not _looks_overconfident_numeric_claim(src):
+        return src, False
+
+    fallback = _build_web_cautious_fallback(
+        context=context,
+        conflict_severity=conflict_severity,
+        final_confidence=final_confidence,
+    )
+    if fallback:
+        return fallback, True
+    return src, False
+
+
+def _apply_web_fx_response_guard(
+    text: str,
+    *,
+    meta: dict[str, Any] | None = None,
+    web_evidence_context: dict[str, Any] | None = None,
+    web_intent: str = "",
+) -> tuple[str, bool, dict[str, Any]]:
+    src = _normalize_text(text)
+    meta_map = _as_dict(meta)
+    context = _as_dict(web_evidence_context)
+    if not src or not _to_bool(meta_map.get("web_used"), default=False):
+        return src, False, {}
+    if str(web_intent or "").strip().lower() != "fx_rate":
+        return src, False, {}
+    if not context:
+        return src, False, {}
+
+    formatted, debug = _build_web_fx_compact_response(context=context)
+    if not formatted:
+        return src, False, debug
+    if _normalize_text(formatted) == src:
+        return src, False, debug
+    return formatted, True, debug
+
+
+def _build_web_fx_compact_response(*, context: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    query = str(context.get("query") or "").strip()
+    key_facts = [str(x).strip() for x in _as_list(context.get("key_facts")) if str(x).strip()]
+    summary = str(context.get("summary") or "").strip()
+    citations = [str(x).strip() for x in _as_list(context.get("compact_citations")) if str(x).strip()]
+    selected_rate_type = str(context.get("selected_rate_type") or context.get("requested_rate_type") or "").strip().lower()
+    cautious = _to_bool(context.get("cautious_synthesis"), default=False)
+    confidence = float(_to_float(context.get("final_factual_confidence"), 0.0) or 0.0)
+    conflict_reason = str(context.get("conflict_reason") or "").strip().lower()
+
+    fact_rows = _extract_fx_fact_rows(query=query, key_facts=key_facts)
+    requested_pairs = _fx_requested_pairs(query)
+    if not fact_rows and summary:
+        fact_rows = _extract_fx_fact_rows(query=query, key_facts=[summary])
+    source_label = citations[0] if citations else str(context.get("selected_result_domain") or "").strip()
+    type_label = _humanize_fx_rate_type(selected_rate_type)
+    cautious_needed = bool(cautious or confidence < 0.64 or conflict_reason in {"true_numeric_conflict", "rate_type_mismatch"})
+
+    lines: list[str] = []
+    if fact_rows:
+        for row in fact_rows[:2]:
+            pair = str(row.get("pair") or "").strip() or "\u041a\u0443\u0440\u0441"
+            value = str(row.get("value") or "").strip()
+            if cautious_needed:
+                note = "\u0442\u043e\u0447\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043d\u0430\u0434\u0435\u0436\u043d\u043e \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e"
+                if conflict_reason == "true_numeric_conflict":
+                    note = "\u0442\u043e\u0447\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043d\u0430\u0434\u0435\u0436\u043d\u043e \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e; \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438 \u0440\u0430\u0441\u0445\u043e\u0434\u044f\u0442\u0441\u044f"
+                lines.append(f"{pair}: {note}")
+            elif value:
+                lines.append(f"{pair}: {value}")
+    elif cautious_needed and requested_pairs:
+        for pair in requested_pairs[:2]:
+            note = "\u0442\u043e\u0447\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043d\u0430\u0434\u0435\u0436\u043d\u043e \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e"
+            if conflict_reason == "true_numeric_conflict":
+                note = "\u0442\u043e\u0447\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043d\u0430\u0434\u0435\u0436\u043d\u043e \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e; \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u0438 \u0440\u0430\u0441\u0445\u043e\u0434\u044f\u0442\u0441\u044f"
+            lines.append(f"{pair}: {note}")
+    else:
+        if cautious_needed:
+            lines.append("\u0422\u043e\u0447\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043a\u0443\u0440\u0441\u0430 \u043d\u0430\u0434\u0435\u0436\u043d\u043e \u043d\u0435 \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e.")
+        elif summary:
+            lines.append(summary)
+
+    if not lines:
+        return "", {
+            "applied": False,
+            "reason": "no_fx_fact_basis",
+        }
+
+    if type_label:
+        lines.append(f"\u0422\u0438\u043f \u043a\u0443\u0440\u0441\u0430: {type_label}")
+    if source_label:
+        lines.append(f"\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a: {source_label}")
+
+    debug = {
+        "applied": True,
+        "reason": "fx_compact_format",
+        "pair_count": int(len(fact_rows)),
+        "pairs": [str(row.get("pair") or "").strip() for row in fact_rows[:2] if str(row.get("pair") or "").strip()],
+        "cautious": bool(cautious_needed),
+        "selected_rate_type": str(selected_rate_type or ""),
+        "source": str(source_label or ""),
+        "confidence": round(float(confidence), 4),
+    }
+    return "\n".join([line for line in lines if str(line).strip()]), debug
+
+
+def _extract_fx_fact_rows(*, query: str, key_facts: list[str]) -> list[dict[str, str]]:
+    requested_pairs = _fx_requested_pairs(query)
+    rows: list[dict[str, str]] = []
+    seen_pairs: set[str] = set()
+    for fact in list(key_facts or []):
+        pair = _detect_fx_pair(fact)
+        if not pair:
+            continue
+        if requested_pairs and pair not in requested_pairs:
+            continue
+        if pair in seen_pairs:
+            continue
+        value = _extract_fx_value_text(fact)
+        if not value:
+            continue
+        rows.append({"pair": pair, "value": value, "fact": fact})
+        seen_pairs.add(pair)
+    if rows:
+        return rows
+    for fact in list(key_facts or []):
+        pair = _detect_fx_pair(fact) or (requested_pairs[0] if requested_pairs else "")
+        value = _extract_fx_value_text(fact)
+        if not value:
+            continue
+        if pair and pair not in seen_pairs:
+            rows.append({"pair": pair, "value": value, "fact": fact})
+            seen_pairs.add(pair)
+        if len(rows) >= 2:
+            break
+    return rows
+
+
+def _fx_requested_pairs(query: str) -> list[str]:
+    low = str(query or "").strip().lower()
+    pairs: list[str] = []
+    if any(token in low for token in ("usd", "dollar", "\u0434\u043e\u043b\u043b\u0430\u0440", "\u0434\u043e\u043b\u043b\u0430\u0440\u0430", "\u0431\u0430\u043a\u0441")):
+        pairs.append("USD/UAH")
+    if any(token in low for token in ("eur", "euro", "\u0435\u0432\u0440\u043e")):
+        pairs.append("EUR/UAH")
+    if any(token in low for token in ("gbp", "pound", "\u0444\u0443\u043d\u0442")):
+        pairs.append("GBP/UAH")
+    out: list[str] = []
+    seen: set[str] = set()
+    for pair in pairs:
+        if pair not in seen:
+            out.append(pair)
+            seen.add(pair)
+    return out
+
+
+def _detect_fx_pair(text: str) -> str:
+    src = str(text or "").strip()
+    if not src:
+        return ""
+    for rx, label in _FX_PAIR_PATTERNS:
+        if rx.search(src):
+            return label
+    return ""
+
+
+def _extract_fx_value_text(text: str) -> str:
+    src = str(text or "").strip()
+    if not src:
+        return ""
+    matches = list(_FX_VALUE_RE.finditer(src))
+    if not matches:
+        return ""
+    preferred: list[str] = []
+    fallback: list[str] = []
+    low = src.lower()
+    for match in matches:
+        raw = str(match.group(0) or "").strip()
+        normalized = raw.replace(",", ".").strip()
+        if not normalized:
+            continue
+        try:
+            numeric_value = float(normalized)
+        except Exception:
+            continue
+        if len(raw) == 4 and 1900.0 <= numeric_value <= 2100.0:
+            continue
+        window_start = max(0, match.start() - 12)
+        window_end = min(len(low), match.end() + 12)
+        window = low[window_start:window_end]
+        if any(token in window for token in ("uah", "\u0433\u0440\u043d", "\u0433\u0440\u0438\u0432")):
+            preferred.append(normalized)
+            continue
+        if "." in normalized and numeric_value >= 1.0:
+            preferred.append(normalized)
+            continue
+        if numeric_value >= 1.0:
+            fallback.append(normalized)
+    value = preferred[0] if preferred else (fallback[0] if fallback else "")
+    if not value:
+        return ""
+    unit = "UAH"
+    if "\u0433\u0440\u043d" in low or "uah" in low:
+        unit = "UAH"
+    return f"{value} {unit}"
+
+
+def _humanize_fx_rate_type(rate_type: str) -> str:
+    token = str(rate_type or "").strip().lower()
+    mapping = {
+        "cash_rate": "\u043d\u0430\u043b\u0438\u0447\u043d\u044b\u0439",
+        "nbu_rate": "\u041d\u0411\u0423",
+        "bank_rate": "\u0431\u0430\u043d\u043a\u043e\u0432\u0441\u043a\u0438\u0439",
+        "currency_overview": "\u0440\u044b\u043d\u043e\u0447\u043d\u044b\u0439 \u043e\u0431\u0437\u043e\u0440",
+        "currency_index": "\u0432\u0430\u043b\u044e\u0442\u043d\u044b\u0439 \u0438\u043d\u0434\u0435\u043a\u0441",
+        "historical_rate": "\u0438\u0441\u0442\u043e\u0440\u0438\u0447\u0435\u0441\u043a\u0438\u0439",
+    }
+    return str(mapping.get(token, token.replace("_", " ")) or "").strip()
+
+
+def _build_web_cautious_fallback(
+    *,
+    context: dict[str, Any],
+    conflict_severity: float,
+    final_confidence: float,
+) -> str:
+    citations = [str(x).strip() for x in _as_list(context.get("compact_citations")) if str(x).strip()]
+    conflict_notes = [str(x).strip() for x in _as_list(context.get("conflict_notes")) if str(x).strip()]
+    if conflict_severity >= 0.55 or conflict_notes:
+        reason = "источники расходятся"
+    elif final_confidence < 0.50:
+        reason = "доступные источники слишком слабые или неполные"
+    else:
+        reason = "точное значение не подтверждается достаточно надежно"
+    if citations:
+        return (
+            f"Не удалось надежно подтвердить точное значение по текущим веб-источникам: {reason}. "
+            f"Лучше перепроверить по {citations[0]}."
+        )
+    return f"Не удалось надежно подтвердить точное значение по текущим веб-источникам: {reason}."
+
+
 def _build_web_tool_sync_fallback(*, context: dict[str, Any], web_intent: str = "") -> str:
     summary = str(context.get("summary") or "").strip()
     if summary:
@@ -4116,6 +4975,32 @@ def _looks_like_false_web_limitation(text: str) -> bool:
         "news",
     )
     return any(marker in low for marker in deny_markers) and any(marker in low for marker in web_markers)
+
+
+def _looks_overconfident_numeric_claim(text: str) -> bool:
+    low = _normalize_text(text).lower()
+    if not low:
+        return False
+    if not re.search(r"\b\d+(?:[.,]\d+)?\b", low) and not re.search(r"\b(?:19|20)\d{2}\b", low):
+        return False
+    uncertainty_markers = (
+        "не удалось",
+        "не могу надежно",
+        "не получилось подтвердить",
+        "источники расходятся",
+        "примерно",
+        "около",
+        "похоже",
+        "возможно",
+        "диапазон",
+        "range",
+        "could not reliably confirm",
+        "sources disagree",
+        "not reliably confirmed",
+    )
+    if any(marker in low for marker in uncertainty_markers):
+        return False
+    return True
 
 
 def _strip_service_markers(text: str) -> str:
@@ -5255,6 +6140,14 @@ def _text_preview(value: str, max_chars: int = 120) -> str:
     if len(src) <= n:
         return src
     return src[: n - 3].rstrip() + "..."
+
+
+def _loggable_user_input(value: Any, *, route: str) -> str:
+    text = str(value or "")
+    if str(route or "").strip().lower() != "command":
+        return text
+    cleaned = strip_service_command_prefix(text)
+    return str(cleaned or "").strip()
 
 
 def _turn_log_context(ctx: PipelineContext) -> dict[str, Any]:

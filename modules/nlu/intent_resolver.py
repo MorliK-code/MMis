@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .normalizer import canonicalize_tokens, normalize_text, token_variants, tokenize_text
 from .types import Concept, Intent, Segment
@@ -178,6 +179,8 @@ class IntentResolver:
         "\u0432\u0438\u0434\u044e\u0445\u0443": "gpu",
         "\u0431\u0430\u043a\u0441": "currency",
         "\u0431\u0430\u043a\u0441\u044b": "currency",
+        "\u0433\u0440\u043d": "currency",
+        "\u0433\u0440\u0438\u0432\u043d\u0430": "currency",
         "\u044d\u043c\u0431\u0435\u0434\u044b": "embeddings",
     }
 
@@ -331,10 +334,14 @@ class IntentResolver:
 
     def _score_finance_query(self, feature: _SegmentFeatures) -> tuple[float, list[str]]:
         concept_score, reasons = self._score_currency_concept(feature)
-        if concept_score < 0.38:
+        query_context_score, query_context_reasons = self._currency_query_context_score(feature)
+        if max(concept_score, query_context_score) < 0.38:
             return 0.0, []
 
         score = concept_score * 0.6
+        if query_context_score > 0.0:
+            score += 0.12 + (0.18 * query_context_score)
+            reasons.extend(query_context_reasons)
         if feature.is_question_like:
             score += 0.24
             reasons.append("question")
@@ -454,7 +461,14 @@ class IntentResolver:
         return self._score_generic_concept(feature, self._GPU_EXACT, self._GPU_STEMS, base=0.5)
 
     def _score_currency_concept(self, feature: _SegmentFeatures) -> tuple[float, list[str]]:
-        return self._score_generic_concept(feature, self._FINANCE_EXACT, self._FINANCE_STEMS, base=0.48)
+        score, reasons = self._score_generic_concept(feature, self._FINANCE_EXACT, self._FINANCE_STEMS, base=0.48)
+        query_context_score, query_context_reasons = self._currency_query_context_score(feature)
+        if score <= 0.0 and query_context_score <= 0.0:
+            return 0.0, []
+        if query_context_score > 0.0:
+            score = max(score, 0.40 + (0.24 * query_context_score))
+            reasons.extend(query_context_reasons)
+        return self._clamp(score), reasons
 
     def _score_news_concept(self, feature: _SegmentFeatures) -> tuple[float, list[str]]:
         return self._score_generic_concept(feature, self._NEWS_EXACT, self._NEWS_STEMS, base=0.48)
@@ -507,6 +521,37 @@ class IntentResolver:
         if feature.is_question_like and any(form.startswith("\u0437\u043e\u043d\u0442") for form in forms):
             return 0.22
         return 0.0
+
+    def _currency_query_context_score(self, feature: _SegmentFeatures) -> tuple[float, list[str]]:
+        text = f"{feature.normalized_text} {feature.canonical_text}".strip().lower()
+        if not text:
+            return 0.0, []
+
+        score = 0.0
+        reasons: list[str] = []
+        if re.search(r"(?<!\w)(?:usd|eur|uah|gbp|btc|eth|доллар\w*|евро\w*|гривн\w*|грн|бакс\w*)(?!\w)", text):
+            score += 0.28
+            reasons.append("currency_token")
+        if re.search(r"(?<!\w)(?:курс\w*|валют\w*|обмен\w*|котировк\w*)(?!\w)", text):
+            score += 0.26
+            reasons.append("rate_marker")
+        if re.search(
+            r"(?<!\w)(?:usd|eur|uah|gbp|доллар\w*|евро\w*|гривн\w*|грн|бакс\w*)\s*(?:/|в|к|to)\s*"
+            r"(?:usd|eur|uah|gbp|доллар\w*|евро\w*|гривн\w*|грн)(?!\w)",
+            text,
+        ):
+            score += 0.34
+            reasons.append("currency_pair")
+        if re.search(
+            r"(?<!\w)(?:что\s+по|how\s+about)\s+(?:usd|eur|uah|доллар\w*|евро\w*|гривн\w*|грн|бакс\w*)(?!\w)",
+            text,
+        ):
+            score += 0.30
+            reasons.append("colloquial_fx")
+        if feature.is_short and score > 0.0:
+            score += 0.08
+            reasons.append("short_query")
+        return self._clamp(score), reasons
 
     def _match_forms(
         self,

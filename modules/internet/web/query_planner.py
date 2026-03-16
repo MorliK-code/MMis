@@ -264,6 +264,15 @@ _FINANCE_MARKERS = (
     "stocks",
     "ticker",
 )
+_PRICE_MARKERS = (
+    "price",
+    "pricing",
+    "cost",
+    "quote",
+    "цена",
+    "стоимость",
+    "стоит",
+)
 _WEATHER_MARKERS = (
     "weather",
     "forecast",
@@ -300,6 +309,23 @@ _NEWS_MARKERS = (
     "сообщали",
     "последний раз",
 )
+_HISTORICAL_MARKERS = (
+    "historical",
+    "history",
+    "timeline",
+    "archive",
+    "exact date",
+    "what date",
+    "when exactly",
+    "дата",
+    "точную дату",
+    "точная дата",
+    "истор",
+    "архив",
+    "хронолог",
+    "когда именно",
+    "в каком году",
+)
 _TEMPORAL_TERMS = (
     "today",
     "tomorrow",
@@ -335,6 +361,7 @@ _DOCS_DOMAIN_HINTS = ("docs.", "developer.", "readthedocs", "github.com", "gitla
 _FINANCE_DOMAIN_HINTS = ("bank.", "bank.gov", "minfin", "finance.", "forex", "fx", "kurs", "invest", "marketwatch")
 _WEATHER_DOMAIN_HINTS = ("weather", "meteo", "forecast", "sinoptik", "accuweather", "gismeteo")
 _NEWS_DOMAIN_HINTS = ("news", "reuters", "apnews", "bbc", "ukrinform", "cnn", "nytimes", "wsj")
+_HISTORICAL_DOMAIN_HINTS = ("wikipedia", "britannica", "history", "archive", "museum", ".gov", ".edu", "reuters", "apnews", "bbc")
 
 
 def build_query_plan(
@@ -346,7 +373,12 @@ def build_query_plan(
     geo_hint: str = "",
 ) -> WebQueryPlan:
     query_debug = analyze_search_text(query)
-    text = str(query_debug.get("extracted_search_core") or query_debug.get("normalized_query") or "").strip()
+    text = str(
+        query_debug.get("extracted_search_core")
+        or query_debug.get("search_core")
+        or query_debug.get("normalized_query")
+        or ""
+    ).strip()
     if not text:
         return WebQueryPlan(mode=decision.mode, debug={"query_text": query_debug})
 
@@ -354,7 +386,8 @@ def build_query_plan(
     now_year = str(dt.datetime.now(dt.timezone.utc).year)
     category = str(classification.primary_category or "").strip().lower()
     strategy = _query_strategy(text=text, classification=classification)
-    domains = _normalize_domains(preferred_domains, strategy=strategy)
+    region_bias = _planner_region_bias(text=text, strategy=strategy)
+    domains = _normalize_domains(preferred_domains, strategy=strategy, region_bias=region_bias)
     category_hint = _category_hint(strategy=strategy, category=category)
     entity = _extract_primary_entity(text)
     focus_terms = _extract_focus_terms(text, entity=entity)
@@ -425,7 +458,7 @@ def build_query_plan(
             fallback_queries=[],
             preferred_domains=domains,
             query_roles=query_roles,
-            debug={"query_text": query_debug, "strategy": strategy, "category": category},
+            debug={"query_text": query_debug, "strategy": strategy, "category": category, "region_bias": region_bias},
         )
 
     bounded = prioritized[:budget_queries]
@@ -455,7 +488,7 @@ def build_query_plan(
         fallback_queries=fallback,
         preferred_domains=domains,
         query_roles=query_roles,
-        debug={"query_text": query_debug, "strategy": strategy, "category": category},
+        debug={"query_text": query_debug, "strategy": strategy, "category": category, "region_bias": region_bias},
     )
 def _query_strategy(*, text: str, classification: QueryClassification) -> str:
     if _uses_docs_strategy(text=text, classification=classification):
@@ -464,8 +497,12 @@ def _query_strategy(*, text: str, classification: QueryClassification) -> str:
     low = str(text or "").strip().lower()
     if category == "weather" or any(marker in low for marker in _WEATHER_MARKERS):
         return "weather"
+    if category == "price" or any(marker in low for marker in _PRICE_MARKERS):
+        return "price"
     if category == "finance" or any(marker in low for marker in _FINANCE_MARKERS):
         return "finance"
+    if category == "external" and any(marker in low for marker in _HISTORICAL_MARKERS):
+        return "historical"
     if category == "news" or any(marker in low for marker in _NEWS_MARKERS):
         return "news"
     return "generic"
@@ -488,7 +525,16 @@ def _build_primary_query(*, strategy: str, text: str, geo_tail: str) -> str:
     if strategy == "weather":
         return _join_parts(text, geo_tail)
     if strategy == "finance":
+        finance_queries = _finance_primary_queries(text=text, geo_tail=geo_tail)
+        if finance_queries:
+            return finance_queries[0]
         return _join_parts(text, geo_tail)
+    if strategy == "price":
+        target = _extract_primary_entity(text) or text
+        return _join_parts(target, "price", _extract_temporal_focus(text), geo_tail)
+    if strategy == "historical":
+        target = _extract_primary_entity(text) or text
+        return _join_parts(target, "history", _extract_temporal_focus(text), geo_tail)
     return _join_parts(text, geo_tail)
 
 
@@ -606,12 +652,14 @@ def _build_validation_queries(
         )
 
     if strategy == "finance":
-        subject = _extract_finance_subject(text) or target
+        return _finance_validation_queries(text=text, geo_tail=geo_tail)
+
+    if strategy == "price":
         time_tail = _extract_temporal_focus(text)
         return _dedupe_keep_order(
             [
-                _join_parts(subject, "exchange rate", time_tail, geo_tail),
-                _join_parts(f"\"{subject}\"", "rate", time_tail, geo_tail),
+                _join_parts(target, "price", time_tail, geo_tail),
+                _join_parts(f"\"{target}\"", "pricing", time_tail, geo_tail),
             ]
         )
 
@@ -629,6 +677,15 @@ def _build_validation_queries(
             [
                 _join_parts(f"\"{target}\"", "latest mention"),
                 _join_parts(target, "recent news", geo_tail),
+            ]
+        )
+
+    if strategy == "historical":
+        return _dedupe_keep_order(
+            [
+                _join_parts(f"\"{target}\"", "exact date"),
+                _join_parts(target, "history timeline"),
+                _join_parts(target, "archive", geo_tail),
             ]
         )
 
@@ -657,10 +714,16 @@ def _build_exact_entity_query(
         return _join_parts(f"\"{target}\"", category_hint or (focus_terms[0] if focus_terms else "official"))
 
     if strategy == "finance":
-        subject = _extract_finance_subject(text) or target
+        pairs = _extract_finance_pairs(text)
+        subject = _extract_finance_subject(text) or (pairs[0] if pairs else target)
         if not subject:
             return ""
         return _join_parts(f"\"{subject}\"", "exchange rate")
+
+    if strategy == "price":
+        if not target:
+            return ""
+        return _join_parts(f"\"{target}\"", "price")
 
     if strategy == "weather":
         if geo_tail:
@@ -673,6 +736,11 @@ def _build_exact_entity_query(
         if not target:
             return ""
         return _join_parts(f"\"{target}\"")
+
+    if strategy == "historical":
+        if not target:
+            return ""
+        return _join_parts(f"\"{target}\"", "history")
 
     if not target:
         return ""
@@ -708,6 +776,15 @@ def _build_fallback_queries(
             ]
         )
 
+    if strategy == "price":
+        return _dedupe_keep_order(
+            [
+                _join_parts(target, "price", geo_tail),
+                _join_parts(target, "cost", geo_tail),
+                _join_parts(text, geo_tail),
+            ]
+        )
+
     if strategy == "weather":
         time_tail = _extract_temporal_focus(text)
         return _dedupe_keep_order(
@@ -727,6 +804,15 @@ def _build_fallback_queries(
             ]
         )
 
+    if strategy == "historical":
+        return _dedupe_keep_order(
+            [
+                _join_parts(target, "history", geo_tail),
+                _join_parts(target, "timeline", geo_tail),
+                _join_parts(target, "archive", geo_tail),
+            ]
+        )
+
     return _dedupe_keep_order(
         [
             _join_parts(target, category_hint, geo_tail),
@@ -737,6 +823,9 @@ def _build_fallback_queries(
 
 
 def _extract_finance_subject(text: str) -> str:
+    pairs = _extract_finance_pairs(text)
+    if pairs:
+        return pairs[0]
     codes: list[str] = []
     for token in _WORD_RE.findall(str(text or "").lower()):
         code = _CURRENCY_ALIASES.get(str(token or "").strip().lower())
@@ -747,6 +836,56 @@ def _extract_finance_subject(text: str) -> str:
     if codes:
         return codes[0]
     return ""
+
+
+def _extract_finance_pairs(text: str) -> list[str]:
+    low = str(text or "").strip().lower()
+    codes: list[str] = []
+    for token in _WORD_RE.findall(low):
+        code = _CURRENCY_ALIASES.get(str(token or "").strip().lower())
+        if code and code not in codes:
+            codes.append(code)
+    out: list[str] = []
+    has_uah_context = any(token in low for token in ("грн", "грив", "uah"))
+    for code in list(codes):
+        if code != "UAH" and has_uah_context:
+            pair = f"{code}/UAH"
+            if pair not in out:
+                out.append(pair)
+    if not out and len(codes) >= 2:
+        out.append(f"{codes[0]}/{codes[1]}")
+    return out[:3]
+
+
+def _finance_validation_queries(*, text: str, geo_tail: str) -> list[str]:
+    time_tail = _extract_temporal_focus(text)
+    pairs = _extract_finance_pairs(text)
+    if pairs:
+        queries: list[str] = []
+        for pair in list(pairs):
+            base, _, quote = pair.partition("/")
+            queries.append(_join_parts(pair, "exchange rate", time_tail, geo_tail))
+            queries.append(_join_parts(base, quote, "rate", time_tail, geo_tail))
+        return _dedupe_keep_order(queries)
+    subject = _extract_finance_subject(text) or text
+    return _dedupe_keep_order(
+        [
+            _join_parts(subject, "exchange rate", time_tail, geo_tail),
+            _join_parts(f"\"{subject}\"", "rate", time_tail, geo_tail),
+        ]
+    )
+
+
+def _finance_primary_queries(*, text: str, geo_tail: str) -> list[str]:
+    time_tail = _extract_temporal_focus(text)
+    pairs = _extract_finance_pairs(text)
+    if pairs:
+        out: list[str] = []
+        for pair in list(pairs):
+            base, _, quote = pair.partition("/")
+            out.append(_join_parts(base, quote, "exchange rate", time_tail, geo_tail))
+        return _dedupe_keep_order(out)
+    return []
 
 
 def _extract_temporal_focus(text: str) -> str:
@@ -764,7 +903,7 @@ def _extract_primary_product(text: str) -> str:
     return " ".join(tokens[:4]).strip()
 
 
-def _normalize_domains(domains: list[str] | None, *, strategy: str = "") -> list[str]:
+def _normalize_domains(domains: list[str] | None, *, strategy: str = "", region_bias: str = "") -> list[str]:
     out: list[str] = []
     for row in list(domains or []):
         item = str(row or "").strip().lower()
@@ -774,21 +913,43 @@ def _normalize_domains(domains: list[str] | None, *, strategy: str = "") -> list
             item = item[4:]
         if item not in out:
             out.append(item)
-    return _filter_domains_for_strategy(out, strategy=strategy)
+    return _filter_domains_for_strategy(out, strategy=strategy, region_bias=region_bias)
 
 
-def _filter_domains_for_strategy(domains: list[str], *, strategy: str) -> list[str]:
+def _filter_domains_for_strategy(domains: list[str], *, strategy: str, region_bias: str = "") -> list[str]:
     if not domains:
         return []
     if strategy == "docs":
-        return list(domains)
+        return _sort_domains_for_region_bias(list(domains), region_bias=region_bias)
     if strategy == "finance":
-        return [domain for domain in domains if _matches_domain_hints(domain, _FINANCE_DOMAIN_HINTS)]
+        return _sort_domains_for_region_bias(
+            [domain for domain in domains if _matches_domain_hints(domain, _FINANCE_DOMAIN_HINTS)],
+            region_bias=region_bias,
+        )
+    if strategy == "price":
+        return _sort_domains_for_region_bias(
+            [domain for domain in domains if _matches_domain_hints(domain, _FINANCE_DOMAIN_HINTS + _NEWS_DOMAIN_HINTS)],
+            region_bias=region_bias,
+        )
     if strategy == "weather":
-        return [domain for domain in domains if _matches_domain_hints(domain, _WEATHER_DOMAIN_HINTS)]
+        return _sort_domains_for_region_bias(
+            [domain for domain in domains if _matches_domain_hints(domain, _WEATHER_DOMAIN_HINTS)],
+            region_bias=region_bias,
+        )
     if strategy == "news":
-        return [domain for domain in domains if _matches_domain_hints(domain, _NEWS_DOMAIN_HINTS)]
-    return [domain for domain in domains if not _matches_domain_hints(domain, _DOCS_DOMAIN_HINTS)]
+        return _sort_domains_for_region_bias(
+            [domain for domain in domains if _matches_domain_hints(domain, _NEWS_DOMAIN_HINTS)],
+            region_bias=region_bias,
+        )
+    if strategy == "historical":
+        return _sort_domains_for_region_bias(
+            [domain for domain in domains if _matches_domain_hints(domain, _HISTORICAL_DOMAIN_HINTS)],
+            region_bias=region_bias,
+        )
+    return _sort_domains_for_region_bias(
+        [domain for domain in domains if not _matches_domain_hints(domain, _DOCS_DOMAIN_HINTS)],
+        region_bias=region_bias,
+    )
 
 
 def _matches_domain_hints(domain: str, hints: tuple[str, ...]) -> bool:
@@ -805,10 +966,14 @@ def _category_hint(*, strategy: str, category: str) -> str:
         return "documentation"
     if strategy == "finance":
         return "exchange rate"
+    if strategy == "price":
+        return "price"
     if strategy == "weather":
         return "forecast"
     if strategy == "news":
         return "news"
+    if strategy == "historical":
+        return "history"
     value = str(category or "").strip().lower()
     mapping = {
         "price": "price",
@@ -854,6 +1019,31 @@ def _should_bias_geo(*, text: str, classification: QueryClassification, geo_hint
     if classification.is_external_fact_question and classification.requires_freshness:
         return True
     return False
+
+
+def _planner_region_bias(*, text: str, strategy: str) -> str:
+    low = str(text or "").strip().lower()
+    if strategy == "finance" and any(token in low for token in ("uah", "грн", "грив")):
+        return "ua"
+    if strategy == "weather" and any(token in low for token in ("kyiv", "kiev", "ukraine", "киев", "київ", "украин", "україн")):
+        return "ua"
+    return ""
+
+
+def _sort_domains_for_region_bias(domains: list[str], *, region_bias: str) -> list[str]:
+    bias = str(region_bias or "").strip().lower()
+    if bias != "ua":
+        return list(domains or [])
+
+    def _key(domain: str) -> tuple[int, str]:
+        host = str(domain or "").strip().lower()
+        if host.endswith(".ua") or host.endswith(".com.ua"):
+            return (0, host)
+        if host.endswith(".ru") or host.endswith(".su"):
+            return (2, host)
+        return (1, host)
+
+    return sorted([str(x or "").strip().lower() for x in list(domains or []) if str(x or "").strip()], key=_key)
 
 
 def _role_order_for_mode(mode: WebSearchMode) -> list[str]:

@@ -138,6 +138,8 @@ def _is_stable_candidate(item, *, stability: str) -> bool:
     tier = str(getattr(item, "trust_tier", "") or "").strip().lower()
     if stability in {"prices", "news", "market_compare"}:
         return False
+    if not _is_memory_safe_candidate(item):
+        return False
     return tier in {
         "official_docs",
         "official_repo",
@@ -150,6 +152,17 @@ def _is_stable_candidate(item, *, stability: str) -> bool:
 
 def _is_temporary_candidate(*, stability: str) -> bool:
     return stability in {"prices", "news", "market_compare"}
+
+
+def _is_memory_safe_candidate(item) -> bool:
+    audit = dict(getattr(item, "audit", {}) or {})
+    if list(getattr(item, "conflict_flags", []) or []):
+        return False
+    if float(audit.get("numeric_conflict_severity") or 0.0) >= 0.55:
+        return False
+    if float(getattr(item, "quality_score", 0.0) or 0.0) < 0.42:
+        return False
+    return True
 
 
 def _build_stable_write(
@@ -262,9 +275,9 @@ def _stable_confidence(item) -> float:
 
 def _stability_category(primary_category: str) -> str:
     value = str(primary_category or "").strip().lower()
-    if value in {"price"}:
+    if value in {"price", "finance", "weather"}:
         return "prices"
-    if value in {"news"}:
+    if value in {"news", "external"}:
         return "news"
     if value in {"version"}:
         return "versions"

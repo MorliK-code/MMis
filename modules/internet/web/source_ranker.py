@@ -6,6 +6,15 @@ from typing import Any
 
 from modules.internet.search import SearchResult
 from modules.internet.web.domain_reputation import DomainTrustPolicy
+from modules.internet.web.numeric_facts import (
+    currency_page_type_priority,
+    detect_currency_page_type,
+    detect_factual_page_type,
+    detect_numeric_time_scope,
+    detect_requested_currency_rate_type,
+    infer_numeric_profile,
+)
+from modules.internet.web.topical_relevance import assess_source_topical_relevance
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,7 @@ _DOCS_DOMAIN_HINTS = ("docs.", "developer.", "readthedocs", "github.com", "gitla
 _FINANCE_DOMAIN_HINTS = ("bank.", "bank.gov", "minfin", "finance.", "forex", "fx", "kurs", "invest", "marketwatch")
 _WEATHER_DOMAIN_HINTS = ("weather", "meteo", "forecast", "sinoptik", "accuweather", "gismeteo")
 _NEWS_DOMAIN_HINTS = ("news", "reuters", "apnews", "bbc", "ukrinform", "cnn", "nytimes", "wsj")
+_HISTORICAL_DOMAIN_HINTS = ("wikipedia", "britannica", "history", "archive", "museum", ".gov", ".edu", "reuters", "apnews")
 
 _MID_TRUST_TIERS = {"community_verified", "learned_mid", "policy_preferred"}
 _OPEN_WEB_TIERS = {"general_web", "forum_discussion"}
@@ -81,6 +91,7 @@ def rank_sources(
     reputation_stats: dict[str, dict[str, Any]] | None = None,
     query_intent: str = "generic",
     query_category: str = "",
+    query_text: str = "",
     geo_hint: str = "",
     limit_hint: int = 0,
 ) -> list[RankedSource]:
@@ -110,6 +121,7 @@ def rank_sources(
             reputation_scores=reputation,
             reputation_stats=reputation_stats,
             query_category=query_category,
+            query_text=query_text,
             geo_hint=geo_hint,
         )
         if bool(audit.get("blocked_hit")):
@@ -126,6 +138,10 @@ def rank_sources(
         quality_score = float(audit.get("quality_score") or 0.0)
         geo_score = float(audit.get("geo_bonus") or 0.0)
         category_bonus = float(audit.get("category_bonus") or 0.0)
+        topical_bonus = float(audit.get("topical_bonus") or 0.0)
+        currency_page_bonus = float(audit.get("currency_page_bonus") or 0.0)
+        factual_page_bonus = float(audit.get("factual_page_bonus") or 0.0)
+        direct_answer_bonus = float(audit.get("direct_answer_bonus") or 0.0)
 
         base_score = max(0.0, float(item.score or 0.0))
         total_score = (
@@ -137,6 +153,10 @@ def rank_sources(
             + reputation_bonus
             + geo_score
             + category_bonus
+            + topical_bonus
+            + currency_page_bonus
+            + factual_page_bonus
+            + direct_answer_bonus
         )
         preferred_bonus = float(audit.get("preferred_bonus") or 0.0)
         audit["ranking_score_total"] = round(float(total_score), 6)
@@ -154,6 +174,10 @@ def rank_sources(
             "v2_quality_bonus": round(float(quality_score), 6),
             "v2_geo_bonus": round(float(geo_score), 6),
             "v2_category_bonus": round(float(category_bonus), 6),
+            "v2_topical_bonus": round(float(topical_bonus), 6),
+            "v2_currency_page_bonus": round(float(currency_page_bonus), 6),
+            "v2_factual_page_bonus": round(float(factual_page_bonus), 6),
+            "v2_direct_answer_bonus": round(float(direct_answer_bonus), 6),
         }
         row = SearchResult(
             title=item.title,
@@ -206,6 +230,7 @@ def build_source_audit_entry(
     reputation_scores: dict[str, float] | None = None,
     reputation_stats: dict[str, dict[str, Any]] | None = None,
     query_category: str = "",
+    query_text: str = "",
     geo_hint: str = "",
 ) -> dict[str, Any]:
     preferred = [str(x or "").strip().lower() for x in list(preferred_domains or []) if str(x or "").strip()]
@@ -249,6 +274,29 @@ def build_source_audit_entry(
     source_quality_score = _quality_score(item=item)
     geo_bonus = _geo_bonus(domain=domain, geo_hint=geo_hint)
     category_bonus = _category_bonus(domain=domain, query_category=query_category)
+    topical = assess_source_topical_relevance(
+        domain=domain,
+        url=url,
+        title=title,
+        snippet=str(item.snippet or "").strip(),
+        query_category=query_category,
+        query_text=query_text,
+    )
+    currency_page_type, requested_rate_type, currency_page_bonus = _currency_page_adjustment(
+        url=url,
+        title=title,
+        snippet=str(item.snippet or "").strip(),
+        query_category=query_category,
+        query_text=query_text,
+    )
+    factual_page_type, factual_page_bonus, direct_answer_score, direct_answer_bonus = _factual_page_adjustment(
+        url=url,
+        title=title,
+        snippet=str(item.snippet or "").strip(),
+        query_category=query_category,
+        query_text=query_text,
+    )
+    topical_bonus = float(topical.bonus) - min(0.30, 0.34 * float(topical.penalty))
     policy_state = str(trust_assessment.policy_state or "neutral")
     preferred_bonus = policy_bonus if policy_state == "preferred" else 0.0
     rep_stats = _reputation_stats_for(domain=domain, reputation_stats=reputation_stats)
@@ -284,6 +332,20 @@ def build_source_audit_entry(
         "reputation_stats": dict(rep_stats),
         "geo_bonus": float(geo_bonus),
         "category_bonus": float(category_bonus),
+        "topical_profile": str(topical.profile),
+        "page_type": str(topical.page_type),
+        "topical_relevance_score": float(topical.score),
+        "topical_bonus": float(topical_bonus),
+        "topical_allow_selection": bool(topical.allow_selection),
+        "topical_reasons": [str(x or "").strip() for x in list(topical.reasons or []) if str(x or "").strip()],
+        "topical_flags": [str(x or "").strip() for x in list(topical.flags or []) if str(x or "").strip()],
+        "currency_page_type": str(currency_page_type or ""),
+        "currency_requested_rate_type": str(requested_rate_type or ""),
+        "currency_page_bonus": float(currency_page_bonus),
+        "factual_page_type": str(factual_page_type or ""),
+        "factual_page_bonus": float(factual_page_bonus),
+        "direct_answer_score": float(direct_answer_score),
+        "direct_answer_bonus": float(direct_answer_bonus),
     }
 
 
@@ -609,6 +671,12 @@ def _category_bonus(*, domain: str, query_category: str) -> float:
         if _matches_any_hint(host, _DOCS_DOMAIN_HINTS + _WEATHER_DOMAIN_HINTS):
             return -0.12
         return 0.0
+    if category == "price":
+        if _matches_any_hint(host, _FINANCE_DOMAIN_HINTS + _NEWS_DOMAIN_HINTS):
+            return 0.06
+        if _matches_any_hint(host, _DOCS_DOMAIN_HINTS + _WEATHER_DOMAIN_HINTS):
+            return -0.12
+        return 0.0
     if category == "weather":
         if _matches_any_hint(host, _WEATHER_DOMAIN_HINTS):
             return 0.08
@@ -621,7 +689,103 @@ def _category_bonus(*, domain: str, query_category: str) -> float:
         if _matches_any_hint(host, _DOCS_DOMAIN_HINTS):
             return -0.08
         return 0.0
+    if category == "external":
+        if _matches_any_hint(host, _HISTORICAL_DOMAIN_HINTS + _NEWS_DOMAIN_HINTS):
+            return 0.05
+        if _matches_any_hint(host, _DOCS_DOMAIN_HINTS):
+            return -0.08
+        return 0.0
     return 0.0
+
+
+def _currency_page_adjustment(*, url: str, title: str, snippet: str, query_category: str, query_text: str) -> tuple[str, str, float]:
+    if str(query_category or "").strip().lower() != "finance":
+        return ("", "", 0.0)
+    page_type = detect_currency_page_type(url=url, title=title, snippet=snippet)
+    requested = detect_requested_currency_rate_type(query_text)
+    time_scope = detect_numeric_time_scope(query_text, profile="fx_rate")
+    priority = currency_page_type_priority(
+        page_type=page_type,
+        requested_rate_type=requested,
+        query_time_scope=time_scope,
+    )
+    if requested and page_type == requested:
+        return (page_type, requested, 0.08)
+    if requested and page_type and page_type != requested:
+        return (page_type, requested, -0.10)
+    if time_scope == "current" and page_type == "historical_rate":
+        return (page_type, requested, -0.12)
+    if page_type == "currency_overview":
+        return (page_type, requested, 0.06 * priority)
+    if page_type in {"cash_rate", "bank_rate", "nbu_rate"}:
+        return (page_type, requested, 0.05 * priority)
+    if page_type == "currency_index":
+        return (page_type, requested, -0.02)
+    if page_type == "currency_page":
+        return (page_type, requested, 0.01)
+    return (page_type, requested, 0.0)
+
+
+def _factual_page_adjustment(*, url: str, title: str, snippet: str, query_category: str, query_text: str) -> tuple[str, float, float, float]:
+    profile = infer_numeric_profile(query_category=query_category, query_text=query_text)
+    if profile == "generic":
+        return ("", 0.0, 0.0, 0.0)
+    page_type = detect_factual_page_type(
+        url=url,
+        title=title,
+        snippet=snippet,
+        query_category=query_category,
+        query_text=query_text,
+    )
+    page_bonus = 0.0
+    direct_answer_score = 0.0
+    low = " ".join(part for part in (str(title or "").strip(), str(snippet or "").strip()) if part).lower()
+    if profile == "fx_rate":
+        if page_type in {"cash_rate", "official_rate", "nbu_rate", "bank_rate", "overview_page"}:
+            page_bonus += 0.05
+            direct_answer_score += 0.58
+        elif page_type == "index_or_aggregate":
+            page_bonus -= 0.03
+            direct_answer_score += 0.22
+        elif page_type == "historical_rate":
+            page_bonus -= 0.08
+        elif page_type == "news_or_analysis":
+            page_bonus -= 0.06
+            direct_answer_score += 0.12
+        if any(token in low for token in ("usd/uah", "eur/uah", "exchange rate", "official rate", "cash rate")):
+            direct_answer_score += 0.24
+    elif profile == "historical":
+        if page_type in {"historical_rate", "generic_reference"}:
+            page_bonus += 0.05
+            direct_answer_score += 0.52
+        elif page_type == "news_or_analysis":
+            page_bonus -= 0.02
+            direct_answer_score += 0.18
+        if any(token in low for token in ("timeline", "history", "historical", "date", "founded", "treaty")):
+            direct_answer_score += 0.20
+    elif profile == "weather":
+        if page_type == "overview_page":
+            page_bonus += 0.05
+            direct_answer_score += 0.54
+        elif page_type == "news_or_analysis":
+            page_bonus -= 0.04
+            direct_answer_score += 0.14
+        elif page_type == "historical_rate":
+            page_bonus -= 0.03
+        if any(token in low for token in ("temperature", "forecast", "degrees", "weather")):
+            direct_answer_score += 0.22
+    elif profile == "price":
+        if page_type in {"overview_page", "official_rate", "generic_reference"}:
+            page_bonus += 0.04
+            direct_answer_score += 0.44
+        elif page_type == "news_or_analysis":
+            page_bonus -= 0.03
+            direct_answer_score += 0.16
+        if any(token in low for token in ("price", "cost", "pricing")):
+            direct_answer_score += 0.22
+    direct_answer_score = _clamp(direct_answer_score, 0.0, 1.0)
+    direct_answer_bonus = direct_answer_score * 0.04
+    return (page_type, page_bonus, direct_answer_score, direct_answer_bonus)
 
 
 def _matches_any_hint(domain: str, hints: tuple[str, ...]) -> bool:

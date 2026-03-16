@@ -4,6 +4,14 @@ from memory.auto_migration import run_auto_migration
 from memory.document_memory import DocumentMemory
 from memory.embedding_provider import build_embedding_provider
 from memory.fact_extractor import FactExtractor
+from memory.ingest_analyzer import (
+    EntityItem,
+    IngestAnalysis,
+    IngestEmotion,
+    NumericFact,
+    StableFact,
+    analyze_message_for_memory,
+)
 from memory.long_memory import LongMemoryV2
 from memory.memory_manager import MemoryManager
 from memory.memory_policy import MemoryPolicy
@@ -65,5 +73,11 @@ __all__ = [
     "LongMemoryV2",
     "MemoryPolicy",
     "build_embedding_provider",
+    "EntityItem",
+    "NumericFact",
+    "StableFact",
+    "IngestEmotion",
+    "IngestAnalysis",
+    "analyze_message_for_memory",
     "run_auto_migration",
 ]

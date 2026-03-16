@@ -28,15 +28,18 @@ class HybridRetriever:
     stale_after_days: int = 30
     weights: ScoreWeights = field(default_factory=ScoreWeights)
     lexical_score_hook: LexicalScoreHook | None = None
+    min_candidate_score: float = 0.28
+    min_memory_admit_score: float = 0.38
 
     def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
         namespace = str(query.namespace or "default")
         scopes = list(query.scopes or [])
         top_k = max(1, int(query.top_k))
         filters = dict(query.metadata_filters or {})
+        query_text = str(query.search_text or query.query_text or "").strip()
 
         semantic_hits = self.store.semantic_search(
-            query_text=query.query_text,
+            query_text=query_text,
             top_k=max(1, int(top_k * 3)),
             namespace=namespace,
             scopes=scopes,
@@ -44,7 +47,7 @@ class HybridRetriever:
             metadata_filters=filters,
         )
         lexical_hits = self.store.lexical_search(
-            query_text=query.query_text,
+            query_text=query_text,
             top_k=max(1, int(top_k * 3)),
             namespace=namespace,
             scopes=scopes,
@@ -73,6 +76,8 @@ class HybridRetriever:
             candidates.append(RetrievalCandidate(record=record, score_breakdown=breakdown, source="hybrid"))
 
         candidates.sort(key=lambda x: float(x.final_score), reverse=True)
+        candidates = self._collapse_candidates(candidates)
+        candidates = self._apply_thresholds(candidates)
         return RetrievalResult(
             query=query,
             candidates=candidates[: top_k],
@@ -113,3 +118,32 @@ class HybridRetriever:
             reverse=True,
         )
         return out
+
+    @staticmethod
+    def _collapse_key(record: MemoryRecord) -> str:
+        meta = dict(record.metadata or {})
+        canonical_key = str(meta.get("canonical_key") or "").strip().lower()
+        if canonical_key:
+            return f"canonical:{canonical_key}"
+        if record.parent_id and record.chunk_index is not None:
+            return f"chunk:{record.parent_id}:{int(record.chunk_index)}"
+        if record.source_event_id and record.memory_type.value not in {"document", "document_chunk"}:
+            return f"event:{record.source_event_id}"
+        return f"id:{record.id}"
+
+    def _collapse_candidates(self, candidates: list[RetrievalCandidate]) -> list[RetrievalCandidate]:
+        out: list[RetrievalCandidate] = []
+        seen: set[str] = set()
+        for candidate in list(candidates or []):
+            key = self._collapse_key(candidate.record)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(candidate)
+        return out
+
+    def _apply_thresholds(self, candidates: list[RetrievalCandidate]) -> list[RetrievalCandidate]:
+        admitted = [x for x in list(candidates or []) if float(x.final_score) >= float(self.min_memory_admit_score)]
+        if admitted:
+            return admitted
+        return [x for x in list(candidates or []) if float(x.final_score) >= float(self.min_candidate_score)]

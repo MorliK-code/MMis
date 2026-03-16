@@ -36,6 +36,7 @@ class PolicyWeights:
     force_keyword_boost: float = 0.34
     mode_on_boost: float = 0.06
     nlu_external_boost: float = 0.12
+    correction_challenge_boost: float = 0.28
     local_scope_penalty: float = 0.50
     local_scope_depth_cap_threshold: float = 0.33
     category_penalty_default: float = 0.36
@@ -128,6 +129,7 @@ class WebPolicyEngine:
         if (
             override != "web"
             and smalltalk_context
+            and not classification.is_correction_challenge
             and not classification.explicit_search_intent
             and not classification.requires_freshness
             and not classification.is_external_fact_question
@@ -135,9 +137,11 @@ class WebPolicyEngine:
             return self._hard_decision(mode=WebSearchMode.NO_SEARCH, reason="smalltalk_context_hard_skip")
 
         force_keyword = _has_any(source, self._cfg.force_search_keywords)
+        clear_fx_request = _is_clear_fx_request(classification)
         if (
             override != "web"
             and not classification.explicit_search_intent
+            and not classification.is_correction_challenge
             and str(classification.primary_category or "").strip().lower() == "chitchat"
             and not classification.requires_freshness
             and not classification.is_external_fact_question
@@ -167,6 +171,10 @@ class WebPolicyEngine:
             "force_keyword_boost": float(weights.force_keyword_boost if force_keyword else 0.0),
             "mode_on_boost": float(weights.mode_on_boost if mode_raw == "on" else 0.0),
             "nlu_external_boost": float(weights.nlu_external_boost if _has_nlu_external_intent(nlu_intents) else 0.0),
+            "correction_challenge_boost": float(
+                weights.correction_challenge_boost if classification.is_correction_challenge else 0.0
+            ),
+            "clear_fx_request": 1.0 if clear_fx_request else 0.0,
             "category_penalty": float(-category_penalty),
             "category_penalty_overridden": 1.0 if category_override_signal else 0.0,
         }
@@ -203,6 +211,16 @@ class WebPolicyEngine:
 
         if classification.requires_freshness and mode == WebSearchMode.NO_SEARCH:
             mode = WebSearchMode.VERIFY_ONLY
+        fx_floor_applied = False
+        if clear_fx_request:
+            min_mode = _minimum_currency_mode(classification)
+            if _mode_rank(mode) < _mode_rank(min_mode):
+                mode = min_mode
+                fx_floor_applied = True
+        if classification.is_correction_challenge:
+            min_mode = _minimum_recheck_mode(classification)
+            if _mode_rank(mode) < _mode_rank(min_mode):
+                mode = min_mode
         if (
             mode_raw == "on"
             and mode == WebSearchMode.NO_SEARCH
@@ -223,6 +241,10 @@ class WebPolicyEngine:
             reason = "web_mode_on_prefer"
         elif force_keyword:
             reason = "force_keyword_boost"
+        elif classification.is_correction_challenge:
+            reason = "factual_challenge_recheck"
+        elif fx_floor_applied:
+            reason = "clear_fx_query_floor"
         elif smalltalk_context and mode == WebSearchMode.NO_SEARCH:
             reason = "smalltalk_context_hard_skip"
         elif classification.requires_freshness:
@@ -330,6 +352,10 @@ def config_from_dict(payload: dict[str, Any] | None) -> WebPolicyConfig:
         force_keyword_boost=_num(weights_src.get("force_keyword_boost"), base.weights.force_keyword_boost),
         mode_on_boost=_num(weights_src.get("mode_on_boost"), base.weights.mode_on_boost),
         nlu_external_boost=_num(weights_src.get("nlu_external_boost"), base.weights.nlu_external_boost),
+        correction_challenge_boost=_num(
+            weights_src.get("correction_challenge_boost"),
+            base.weights.correction_challenge_boost,
+        ),
         local_scope_penalty=_num(weights_src.get("local_scope_penalty"), base.weights.local_scope_penalty),
         local_scope_depth_cap_threshold=_num(
             weights_src.get("local_scope_depth_cap_threshold"),
@@ -411,6 +437,64 @@ def _mode_from_score(*, score: float, thresholds: PolicyThresholds) -> WebSearch
     if value <= thresholds.targeted_max:
         return WebSearchMode.TARGETED_SEARCH
     return WebSearchMode.DEEP_SEARCH
+
+
+def _minimum_recheck_mode(classification: QueryClassification) -> WebSearchMode:
+    category = str(classification.primary_category or "").strip().lower()
+    if category in {"finance", "price", "weather", "news"}:
+        return WebSearchMode.TARGETED_SEARCH
+    if bool(getattr(classification, "requires_freshness", False)):
+        return WebSearchMode.TARGETED_SEARCH
+    hits = {str(x or "").strip().lower() for x in list(getattr(classification, "category_hits", []) or [])}
+    if any("date" in hit or "\u0434\u0430\u0442" in hit for hit in hits):
+        return WebSearchMode.TARGETED_SEARCH
+    return WebSearchMode.VERIFY_ONLY
+
+
+def _minimum_currency_mode(classification: QueryClassification) -> WebSearchMode:
+    if bool(getattr(classification, "requires_freshness", False) or getattr(classification, "is_temporal", False)):
+        return WebSearchMode.TARGETED_SEARCH
+    return WebSearchMode.VERIFY_ONLY
+
+
+def _is_clear_fx_request(classification: QueryClassification) -> bool:
+    category = str(getattr(classification, "primary_category", "") or "").strip().lower()
+    if category != "finance":
+        return False
+    hits = {
+        str(x or "").strip().lower()
+        for x in list(getattr(classification, "category_hits", []) or [])
+        if str(x or "").strip()
+    }
+    if any(
+        token in hits
+        for token in {
+            "usd",
+            "eur",
+            "uah",
+            "доллар",
+            "евро",
+            "гривна",
+            "грн",
+            "валюта",
+            "currency_pair",
+            "colloquial_fx",
+            "exchange rate",
+        }
+    ):
+        return True
+    return bool(getattr(classification, "is_external_fact_question", False))
+
+
+def _mode_rank(mode: WebSearchMode) -> int:
+    order = {
+        WebSearchMode.NO_SEARCH: 0,
+        WebSearchMode.VERIFY_ONLY: 1,
+        WebSearchMode.SOFT_SEARCH: 2,
+        WebSearchMode.TARGETED_SEARCH: 3,
+        WebSearchMode.DEEP_SEARCH: 4,
+    }
+    return int(order.get(mode, 0))
 
 
 def _has_any(text: str, items: list[str]) -> bool:

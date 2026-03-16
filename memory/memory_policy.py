@@ -1,9 +1,44 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import re
+from dataclasses import dataclass, field, replace
+from typing import Any
 
 from modules.nlu.normalizer import normalize_text
 from modules.nlu.types import Fact
+from memory.memory_models import MemoryScope, MemorySourceKind, MemoryType
+
+
+@dataclass(frozen=True)
+class AssistantWriteDecision:
+    action: str = "allow"
+    reason: str = ""
+    target_scope: MemoryScope | None = None
+    allow_fact_records: bool = True
+    signals: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def allow_store(self) -> bool:
+        return str(self.action or "").strip().lower() != "skip"
+
+    @property
+    def allow_long_term(self) -> bool:
+        return self.allow_store and self.target_scope not in {MemoryScope.TEMPORARY, MemoryScope.PRIVATE_RUNTIME}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": str(self.action or "").strip().lower() or "allow",
+            "reason": str(self.reason or "").strip(),
+            "target_scope": (
+                str(self.target_scope.value)
+                if isinstance(self.target_scope, MemoryScope)
+                else (str(self.target_scope or "").strip() or "")
+            ),
+            "allow_store": bool(self.allow_store),
+            "allow_long_term": bool(self.allow_long_term),
+            "allow_fact_records": bool(self.allow_fact_records),
+            "signals": dict(self.signals or {}),
+        }
 
 
 class MemoryPolicy:
@@ -65,6 +100,82 @@ class MemoryPolicy:
         "unknown",
         "none",
     }
+    _ASSISTANT_FACTUAL_WEB_INTENTS = {"fx_rate", "weather", "news_release"}
+    _ASSISTANT_FACTUAL_WEB_CATEGORIES = {"finance", "price", "weather", "news", "version", "external"}
+    _ASSISTANT_FACTUAL_MODES = {
+        "fx_rate",
+        "price",
+        "historical_factual",
+        "latest_factual",
+        "weather",
+    }
+    _CURRENCY_MARKERS = {
+        "курс",
+        "валют",
+        "usd",
+        "eur",
+        "uah",
+        "грн",
+        "доллар",
+        "евро",
+        "exchange rate",
+        "forex",
+        "межбанк",
+        "cash",
+        "buy",
+        "sell",
+    }
+    _PRICE_MARKERS = {
+        "price",
+        "cost",
+        "стоим",
+        "цена",
+        "стоит",
+        "buy now",
+        "auction",
+    }
+    _ATTRIBUTION_MARKERS = {
+        "по данным",
+        "согласно",
+        "according to",
+        "reported by",
+        "source:",
+        "sources:",
+        "данные",
+    }
+    _HISTORICAL_MARKERS = {
+        "в 20",
+        "в 19",
+        "год",
+        "году",
+        "историчес",
+        "historical",
+        "history",
+        "last year",
+        "earlier",
+        "ранее",
+    }
+    _VOLATILE_MARKERS = {
+        "сегодня",
+        "today",
+        "сейчас",
+        "now",
+        "завтра",
+        "tomorrow",
+        "актуаль",
+        "latest",
+        "последн",
+        "current",
+    }
+
+    def __init__(
+        self,
+        *,
+        assistant_factual_min_quality: float = 0.62,
+        assistant_factual_min_confidence: float = 0.72,
+    ):
+        self._assistant_factual_min_quality = max(0.0, min(1.0, float(assistant_factual_min_quality)))
+        self._assistant_factual_min_confidence = max(0.0, min(1.0, float(assistant_factual_min_confidence)))
 
     def select_facts_for_long_term(
         self,
@@ -135,6 +246,150 @@ class MemoryPolicy:
             )
 
         return list(dedup.values())
+
+    def decide_assistant_message_write(
+        self,
+        *,
+        text: str,
+        metadata: dict[str, Any],
+        memory_type: MemoryType,
+        requested_scope: MemoryScope,
+    ) -> AssistantWriteDecision:
+        if memory_type != MemoryType.MESSAGE:
+            return AssistantWriteDecision(reason="non_message_memory")
+        if requested_scope in {MemoryScope.PRIVATE_RUNTIME, MemoryScope.TEMPORARY}:
+            return AssistantWriteDecision(reason="runtime_scope_bypass")
+
+        signals = self._assistant_factual_signals(text=text, metadata=metadata)
+        if not bool(signals.get("risky_factual_claim")):
+            return AssistantWriteDecision(reason="not_risky_factual_claim", signals=signals)
+
+        if bool(signals.get("requires_web_verification")) and not bool(signals.get("web_used")):
+            return AssistantWriteDecision(
+                action="skip",
+                reason="assistant_factual_unverified_no_web",
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        if bool(signals.get("has_conflict")):
+            return AssistantWriteDecision(
+                action="skip",
+                reason="assistant_factual_conflicted_evidence",
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        if float(signals.get("conflict_severity") or 0.0) >= 0.55:
+            return AssistantWriteDecision(
+                action="skip",
+                reason="assistant_factual_high_conflict_severity",
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        if bool(signals.get("unresolved_type_mismatch")) and bool(signals.get("strict_evidence_category")):
+            return AssistantWriteDecision(
+                action="skip",
+                reason="assistant_factual_type_mismatch_unresolved",
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        if bool(signals.get("cautious_synthesis")) and bool(signals.get("strict_evidence_category")):
+            return AssistantWriteDecision(
+                action="skip",
+                reason="assistant_factual_cautious_synthesis",
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        quality_score = float(signals.get("quality_score") or 0.0)
+        if bool(signals.get("requires_web_verification")) and quality_score < self._assistant_factual_min_quality:
+            return AssistantWriteDecision(
+                action="skip",
+                reason="assistant_factual_low_evidence_quality",
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        if bool(signals.get("strict_evidence_category")) and float(signals.get("final_factual_confidence") or 0.0) < self._assistant_factual_min_confidence:
+            return AssistantWriteDecision(
+                action="skip",
+                reason="assistant_factual_low_final_confidence",
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        if bool(signals.get("volatile_fact")):
+            return AssistantWriteDecision(
+                action="temporary_only",
+                reason="assistant_factual_temporary_only",
+                target_scope=MemoryScope.TEMPORARY,
+                allow_fact_records=False,
+                signals=signals,
+            )
+
+        return AssistantWriteDecision(
+            action="allow",
+            reason="assistant_factual_verified",
+            target_scope=requested_scope,
+            allow_fact_records=False,
+            signals=signals,
+        )
+
+    @staticmethod
+    def resolve_source_kind(
+        *,
+        role: str,
+        memory_type: MemoryType,
+        metadata: dict[str, Any] | None = None,
+        thinking: str = "",
+    ) -> MemorySourceKind:
+        meta = dict(metadata or {})
+        explicit = str(meta.get("source_kind") or "").strip().lower()
+        valid = {item.value: item for item in MemorySourceKind}
+        if explicit in valid:
+            return valid[explicit]
+
+        role_norm = str(role or "").strip().lower()
+        source_norm = str(meta.get("source") or "").strip().lower()
+        thinking_norm = str(thinking or meta.get("thinking") or "").strip()
+
+        if memory_type == MemoryType.TOOL_RESULT or role_norm == "tool":
+            return MemorySourceKind.TOOL_RESULT
+        if role_norm in {"user", "human"}:
+            return MemorySourceKind.USER
+        if role_norm in {"assistant", "ai", "bot"}:
+            if source_norm in {"assistant_thought", "thinking", "reasoning"} and thinking_norm:
+                return MemorySourceKind.ASSISTANT_THOUGHT
+            if explicit == MemorySourceKind.ASSISTANT_THOUGHT.value:
+                return MemorySourceKind.ASSISTANT_THOUGHT
+            return MemorySourceKind.ASSISTANT_REPLY
+        if role_norm == "system":
+            if source_norm in {"web_v2", "tool", "tool_result", "search_tool", "web_tool"}:
+                return MemorySourceKind.TOOL_RESULT
+            return MemorySourceKind.SYSTEM_DECISION
+        return MemorySourceKind.USER
+
+    @staticmethod
+    def sanitize_metadata_for_storage(
+        *,
+        metadata: dict[str, Any] | None,
+        source_kind: MemorySourceKind,
+        thinking: str = "",
+    ) -> dict[str, Any]:
+        out = dict(metadata or {})
+        hidden = str(thinking or out.get("thinking") or "").strip()
+        out.pop("thinking", None)
+        out["source_kind"] = str(source_kind.value)
+        if source_kind in {MemorySourceKind.ASSISTANT_REPLY, MemorySourceKind.ASSISTANT_THOUGHT} and hidden:
+            out["assistant_thinking_stripped"] = True
+        return out
+
+    @staticmethod
+    def allow_fact_records_for_source(*, source_kind: MemorySourceKind) -> bool:
+        return source_kind not in {MemorySourceKind.ASSISTANT_REPLY, MemorySourceKind.ASSISTANT_THOUGHT}
 
     def _is_allowed_key(self, key: str) -> bool:
         key_norm = self._norm_key(key)
@@ -210,3 +465,238 @@ class MemoryPolicy:
         clean = str(value or "").strip()
         return clean
 
+    def _assistant_factual_signals(self, *, text: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        raw_text = str(text or "").strip()
+        low_text = raw_text.lower()
+        norm_text = normalize_text(raw_text)
+        web_intent = self._norm_value(
+            metadata.get("web_query_intent")
+            or metadata.get("web_intent")
+            or metadata.get("resolved_intent")
+        )
+        factual_mode = self._norm_value(
+            metadata.get("web_factual_mode")
+            or metadata.get("factual_response_mode")
+            or self._nested(metadata, "web_evidence_quality", "factual_mode")
+        )
+        web_category = self._norm_value(
+            metadata.get("web_primary_category")
+            or metadata.get("primary_category")
+            or metadata.get("category")
+        )
+        web_used = self._boolish(metadata.get("web_used"))
+        quality_score = self._coerce_float(
+            metadata.get("web_evidence_quality_score"),
+            default=self._coerce_float(self._nested(metadata, "web_evidence_quality", "score"), default=0.0),
+        )
+        final_factual_confidence = self._coerce_float(
+            metadata.get("web_final_factual_confidence"),
+            default=self._coerce_float(
+                self._nested(metadata, "web_evidence_quality", "final_factual_confidence"),
+                default=quality_score,
+            ),
+        )
+        conflict_severity = self._coerce_float(
+            metadata.get("web_conflict_severity"),
+            default=self._coerce_float(self._nested(metadata, "web_evidence_quality", "conflict_severity"), default=0.0),
+        )
+        selected_avg_quality = self._coerce_float(
+            metadata.get("web_selected_avg_quality"),
+            default=self._coerce_float(self._nested(metadata, "web_evidence_quality", "selected_avg_quality"), default=quality_score),
+        )
+        cautious_synthesis = self._boolish(
+            metadata.get("web_cautious_synthesis")
+            if metadata.get("web_cautious_synthesis") is not None
+            else self._nested(metadata, "web_evidence_quality", "cautious_synthesis")
+        )
+        selected_page_type = self._norm_value(
+            metadata.get("web_selected_result_factual_page_type")
+            or self._nested(metadata, "web_evidence_quality", "selected_result_factual_page_type")
+        )
+        conflict_flags = self._collect_conflict_flags(metadata)
+        has_source_conflict = "source_conflict" in conflict_flags
+        has_numeric_conflict = "numeric_conflict" in conflict_flags
+        has_quality_issue = "low_evidence_quality" in conflict_flags
+        type_mismatch_notes = [
+            str(x).strip()
+            for x in list(
+                metadata.get("web_type_mismatch_notes")
+                or self._nested(metadata, "web_evidence_quality", "type_mismatch_notes")
+                or []
+            )
+            if str(x).strip()
+        ]
+        true_conflict_notes = [
+            str(x).strip()
+            for x in list(
+                metadata.get("web_true_conflict_notes")
+                or self._nested(metadata, "web_evidence_quality", "true_conflict_notes")
+                or []
+            )
+            if str(x).strip()
+        ]
+        unresolved_type_mismatch = bool(type_mismatch_notes and not selected_page_type)
+
+        currency_hit = self._contains_any(low_text, self._CURRENCY_MARKERS)
+        price_hit = self._contains_any(low_text, self._PRICE_MARKERS) or bool(re.search(r"[$€₴]\s*\d", raw_text))
+        attribution_hit = self._contains_any(low_text, self._ATTRIBUTION_MARKERS)
+        historical_hit = bool(re.search(r"\b(?:19|20)\d{2}\b", raw_text)) and (
+            self._contains_any(low_text, self._HISTORICAL_MARKERS) or attribution_hit
+        )
+        volatile_hit = self._contains_any(low_text, self._VOLATILE_MARKERS)
+        web_factual_hit = (
+            factual_mode in self._ASSISTANT_FACTUAL_MODES
+            or web_intent in self._ASSISTANT_FACTUAL_WEB_INTENTS
+            or web_category in self._ASSISTANT_FACTUAL_WEB_CATEGORIES
+        )
+        numeric_hit = bool(re.search(r"\b\d+(?:[.,]\d+)?\b", raw_text))
+
+        risky_factual_claim = bool(
+            web_factual_hit
+            or currency_hit
+            or price_hit
+            or attribution_hit
+            or historical_hit
+        )
+        requires_web_verification = bool(
+            web_factual_hit
+            or factual_mode in self._ASSISTANT_FACTUAL_MODES
+            or unresolved_type_mismatch
+            or currency_hit
+            or price_hit
+            or attribution_hit
+            or historical_hit
+            or (numeric_hit and volatile_hit)
+        )
+        volatile_fact = bool(
+            factual_mode in {"fx_rate", "price", "latest_factual", "weather"}
+            or web_intent in {"fx_rate", "weather", "news_release"}
+            or currency_hit
+            or price_hit
+            or (web_category in {"finance", "price", "weather", "news"} and (volatile_hit or numeric_hit))
+        )
+        strict_numeric_category = bool(
+            web_category in {"finance", "price", "external"}
+            and (numeric_hit or currency_hit or price_hit or historical_hit)
+        )
+        strict_evidence_category = bool(
+            factual_mode in self._ASSISTANT_FACTUAL_MODES
+            or strict_numeric_category
+            or (
+                web_category in {"finance", "price", "weather", "news", "external", "version"}
+                and (numeric_hit or currency_hit or price_hit or historical_hit or volatile_hit)
+            )
+        )
+        marker_hits: list[str] = []
+        if web_factual_hit:
+            marker_hits.append("web_factual")
+        if factual_mode:
+            marker_hits.append(f"factual_mode:{factual_mode}")
+        if currency_hit:
+            marker_hits.append("currency")
+        if price_hit:
+            marker_hits.append("price")
+        if attribution_hit:
+            marker_hits.append("attribution")
+        if historical_hit:
+            marker_hits.append("historical")
+        if volatile_hit:
+            marker_hits.append("volatile")
+        if numeric_hit:
+            marker_hits.append("numeric")
+        if has_quality_issue:
+            marker_hits.append("low_quality")
+        if cautious_synthesis:
+            marker_hits.append("cautious_synthesis")
+        if strict_numeric_category:
+            marker_hits.append("strict_numeric")
+        if strict_evidence_category:
+            marker_hits.append("strict_evidence")
+        if unresolved_type_mismatch:
+            marker_hits.append("type_mismatch_unresolved")
+
+        return {
+            "web_used": bool(web_used),
+            "web_intent": str(web_intent or ""),
+            "factual_mode": str(factual_mode or ""),
+            "web_primary_category": str(web_category or ""),
+            "quality_score": float(max(0.0, min(1.0, quality_score))),
+            "quality_min_required": float(self._assistant_factual_min_quality),
+            "final_factual_confidence": float(max(0.0, min(1.0, final_factual_confidence))),
+            "confidence_min_required": float(self._assistant_factual_min_confidence),
+            "conflict_severity": float(max(0.0, min(1.0, conflict_severity))),
+            "selected_avg_quality": float(max(0.0, min(1.0, selected_avg_quality))),
+            "cautious_synthesis": bool(cautious_synthesis),
+            "conflict_flags": list(conflict_flags),
+            "source_conflict": bool(has_source_conflict),
+            "numeric_conflict": bool(has_numeric_conflict),
+            "has_conflict": bool(has_source_conflict or has_numeric_conflict),
+            "selected_result_factual_page_type": str(selected_page_type or ""),
+            "type_mismatch_notes": type_mismatch_notes[:6],
+            "true_conflict_notes": true_conflict_notes[:6],
+            "unresolved_type_mismatch": bool(unresolved_type_mismatch),
+            "risky_factual_claim": bool(risky_factual_claim),
+            "requires_web_verification": bool(requires_web_verification),
+            "volatile_fact": bool(volatile_fact),
+            "strict_numeric_category": bool(strict_numeric_category),
+            "strict_evidence_category": bool(strict_evidence_category),
+            "marker_hits": marker_hits,
+            "text_len": int(len(norm_text)),
+        }
+
+    @staticmethod
+    def _contains_any(text: str, markers: set[str]) -> bool:
+        src = str(text or "").strip().lower()
+        if not src:
+            return False
+        return any(marker in src for marker in markers)
+
+    @staticmethod
+    def _coerce_float(value: Any, *, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    @staticmethod
+    def _nested(row: dict[str, Any], key: str, nested_key: str) -> Any:
+        payload = row.get(key)
+        if isinstance(payload, dict):
+            return payload.get(nested_key)
+        return None
+
+    @classmethod
+    def _collect_conflict_flags(cls, metadata: dict[str, Any]) -> list[str]:
+        out: list[str] = []
+        for key in ("web_conflict_flags", "conflict_flags"):
+            value = metadata.get(key)
+            if isinstance(value, (list, tuple, set)):
+                for row in value:
+                    item = str(row or "").strip().lower()
+                    if item and item not in out:
+                        out.append(item)
+        if cls._boolish(metadata.get("web_conflicting_sources")):
+            out.append("source_conflict")
+        notes = metadata.get("web_conflict_notes")
+        if isinstance(notes, (list, tuple, set)):
+            for row in notes:
+                note = str(row or "").strip().lower()
+                if not note:
+                    continue
+                if "numeric_conflict" in note and "numeric_conflict" not in out:
+                    out.append("numeric_conflict")
+                if "source_conflict" in note and "source_conflict" not in out:
+                    out.append("source_conflict")
+        quality = metadata.get("web_evidence_quality")
+        if isinstance(quality, dict) and cls._boolish(quality.get("has_conflict")) and "source_conflict" not in out:
+            out.append("source_conflict")
+        if cls._boolish(metadata.get("web_low_evidence_quality")) and "low_evidence_quality" not in out:
+            out.append("low_evidence_quality")
+        return out
+
+    @staticmethod
+    def _boolish(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        return text in {"1", "true", "yes", "on"}

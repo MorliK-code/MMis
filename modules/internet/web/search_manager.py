@@ -7,6 +7,7 @@ from typing import Any
 
 from modules.internet.search import SearchClient, SearchResult
 from modules.internet.scraper import WebScraper
+from modules.internet.web.search_policy import build_search_context, compute_search_confidence
 from modules.internet.web.web_models import FreshnessAssessment, QueryClassification, WebPolicyDecision, WebQueryPlan, WebSearchMode
 
 
@@ -24,6 +25,8 @@ class SearchExecutionResult:
     query_runs: list[dict[str, Any]] = None  # type: ignore[assignment]
     fetch_summary: dict[str, Any] = None  # type: ignore[assignment]
     warnings: list[str] = None  # type: ignore[assignment]
+    search_debug: dict[str, Any] = None  # type: ignore[assignment]
+    search_context: dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "scout_queries_used", list(self.scout_queries_used or []))
@@ -31,6 +34,8 @@ class SearchExecutionResult:
         object.__setattr__(self, "query_runs", [dict(x or {}) for x in list(self.query_runs or []) if isinstance(x, dict)])
         object.__setattr__(self, "fetch_summary", dict(self.fetch_summary or {}))
         object.__setattr__(self, "warnings", [str(x or "").strip() for x in list(self.warnings or []) if str(x or "").strip()])
+        object.__setattr__(self, "search_debug", dict(self.search_debug or {}))
+        object.__setattr__(self, "search_context", dict(self.search_context or {}))
 
 
 @dataclass(frozen=True)
@@ -51,11 +56,13 @@ class SearchManager:
         scraper: WebScraper,
         cooldown_seconds: int = 45,
         retry_policy: dict[str, Any] | None = None,
+        search_policy: dict[str, Any] | None = None,
     ):
         self._search = search_client
         self._scraper = scraper
         self._cooldown_seconds = max(0, int(cooldown_seconds))
         self._retry_policy = dict(retry_policy or {})
+        self._search_policy = dict(search_policy or {})
         self._topic_last_ts: dict[str, float] = {}
 
     def execute(
@@ -82,6 +89,8 @@ class SearchManager:
                 query_runs=[],
                 fetch_summary={},
                 warnings=[],
+                search_debug={},
+                search_context={},
             )
 
         policy = self._policy_for_mode(mode=decision.mode, decision=decision)
@@ -90,6 +99,14 @@ class SearchManager:
         recency_days = _recency_days(intent=intent, freshness=freshness)
         domain_filter = _domain_filter_for_intent(intent=intent, preferred_domains=preferred_domains, geo_hint=geo_hint)
         topic_key = _topic_key(plan=plan, classification=classification)
+        search_seed_query = str(((plan.query_roles or {}).get("primary") or plan.scout_queries or plan.all_queries() or [""])[0] or "").strip()
+        search_context = build_search_context(
+            query_text=search_seed_query,
+            query_category=str(getattr(classification, "primary_category", "") or ""),
+            query_intent=intent,
+            geo_hint=geo_hint,
+            policy=self._search_policy,
+        )
 
         cooldown_applied = False
         now = time.time()
@@ -133,8 +150,10 @@ class SearchManager:
             domain_filter=domain_filter,
             volatile=bool(freshness.needs_refresh),
             query_intent=intent,
+            query_category=str(getattr(classification, "primary_category", "") or ""),
             retries=policy.retries,
             stage_label="scout",
+            search_context=search_context,
         )
         scout_used.extend(used)
         queries_used.extend(used)
@@ -166,8 +185,10 @@ class SearchManager:
                 domain_filter=domain_filter,
                 volatile=True if decision.mode in {WebSearchMode.TARGETED_SEARCH, WebSearchMode.DEEP_SEARCH} else bool(freshness.needs_refresh),
                 query_intent=intent,
+                query_category=str(getattr(classification, "primary_category", "") or ""),
                 retries=policy.retries,
                 stage_label="focused",
+                search_context=search_context,
             )
             focused_used.extend(used)
             queries_used.extend(used)
@@ -193,6 +214,10 @@ class SearchManager:
             warnings.append(f"fetch_fallbacks:{int(fetch_summary.get('snippet_fallback_count') or 0)}")
         if int(fetch_summary.get("failed_fetches") or 0) > 0:
             warnings.append(f"fetch_failures:{int(fetch_summary.get('failed_fetches') or 0)}")
+        search_debug = _aggregate_search_debug(query_runs=query_runs, results=collected, search_context=search_context)
+        degraded_engines = [engine for engine, state in dict(search_debug.get("engine_health") or {}).items() if state in {"degraded", "blocked", "suspended"}]
+        if degraded_engines:
+            warnings.append("engine_health:" + ",".join(sorted(degraded_engines)[:4]))
 
         return SearchExecutionResult(
             results=collected[: max(1, candidate_limit)],
@@ -207,6 +232,8 @@ class SearchManager:
             query_runs=query_runs,
             fetch_summary=fetch_summary,
             warnings=warnings,
+            search_debug=search_debug,
+            search_context=search_context,
         )
 
     def _run_query_batch(
@@ -221,8 +248,10 @@ class SearchManager:
         domain_filter: list[str],
         volatile: bool,
         query_intent: str,
+        query_category: str,
         retries: int,
         stage_label: str,
+        search_context: dict[str, Any],
     ) -> tuple[list[str], int, int, list[dict[str, Any]]]:
         used: list[str] = []
         retries_used = 0
@@ -240,14 +269,16 @@ class SearchManager:
                 base=domain_filter,
                 site_domain=_extract_site_domain(query_text),
             )
-            rows, attempts, failed = self._search_with_retry(
+            rows, attempts, failed, row_debug = self._search_with_retry(
                 query=query_text,
                 recency_days=recency_days,
                 domain_filter=dynamic_filter,
                 k=_per_query_k(source_limit),
                 volatile=volatile,
                 query_intent=query_intent,
+                query_category=query_category,
                 retries=retries,
+                search_context=search_context,
             )
             retries_used += max(0, attempts - 1)
             if failed:
@@ -260,11 +291,24 @@ class SearchManager:
                     "attempts": int(attempts),
                     "failed": bool(failed),
                     "result_count": int(len(list(rows or []))),
+                    "raw_result_count": int(row_debug.get("raw_result_count") or len(list(rows or []))),
+                    "reported_result_count": row_debug.get("reported_result_count"),
+                    "usable_results_count": int(row_debug.get("usable_results_count") or len(list(rows or []))),
+                    "engine_success_count": int(row_debug.get("engine_success_count") or 0),
+                    "engine_failure_count": int(row_debug.get("engine_failure_count") or 0),
+                    "engine_health": dict(row_debug.get("engine_health") or {}),
+                    "effective_success": bool(row_debug.get("effective_success", bool(rows))),
+                    "effective_search_confidence": float(row_debug.get("effective_search_confidence") or 0.0),
+                    "success_reason": str(row_debug.get("effective_success_reason") or ("results_present" if rows else "empty_results")),
                     "domain_filter": list(dynamic_filter),
                     "recency_days": recency_days,
                     "volatile": bool(volatile),
                     "site_filter": str(_extract_site_domain(query_text) or ""),
+                    "query_locale": str(row_debug.get("query_locale") or search_context.get("query_locale") or ""),
+                    "region_bias": str(row_debug.get("region_bias") or search_context.get("region_bias") or ""),
                     "top_domains": _top_domains(rows, limit=4),
+                    "engines_succeeded": [str(x or "").strip().lower() for x in list(row_debug.get("engines_succeeded") or []) if str(x or "").strip()][:6],
+                    "engines_failed": [dict(x or {}) for x in list(row_debug.get("engines_failed") or []) if isinstance(x, dict)][:6],
                 }
             )
             for item in list(rows or []):
@@ -286,30 +330,67 @@ class SearchManager:
         k: int,
         volatile: bool,
         query_intent: str,
+        query_category: str,
         retries: int,
-    ) -> tuple[list[SearchResult], int, bool]:
+        search_context: dict[str, Any],
+    ) -> tuple[list[SearchResult], int, bool, dict[str, Any]]:
         attempts = max(1, int(retries) + 1)
         backoff_ms = max(50, int(self._retry_policy.get("backoff_ms") or 250))
         last_error: Exception | None = None
+        last_debug: dict[str, Any] = {}
         for idx in range(attempts):
             try:
-                rows = self._search.search(
-                    query,
-                    recency_days=recency_days,
-                    domain_filter=domain_filter or None,
-                    k=max(1, int(k)),
-                    volatile=bool(volatile),
-                    query_intent=query_intent,
-                )
-                return (list(rows or []), idx + 1, False)
+                if hasattr(self._search, "search_with_meta"):
+                    rows, debug = self._search.search_with_meta(
+                        query,
+                        recency_days=recency_days,
+                        domain_filter=domain_filter or None,
+                        k=max(1, int(k)),
+                        volatile=bool(volatile),
+                        query_intent=query_intent,
+                        query_category=query_category,
+                        query_locale=str(search_context.get("query_locale") or ""),
+                        region_bias=str(search_context.get("region_bias") or ""),
+                        engine_manual_states=dict(search_context.get("engine_manual_states") or {}),
+                        suspended_engines=list(search_context.get("suspended_engines") or []),
+                    )
+                else:
+                    rows = self._search.search(
+                        query,
+                        recency_days=recency_days,
+                        domain_filter=domain_filter or None,
+                        k=max(1, int(k)),
+                        volatile=bool(volatile),
+                        query_intent=query_intent,
+                    )
+                    debug = _search_debug_from_rows(list(rows or []))
+                last_debug = dict(debug or {})
+                return (list(rows or []), idx + 1, False, last_debug)
             except Exception as exc:
                 last_error = exc
                 if idx + 1 >= attempts:
                     break
                 time.sleep(float(backoff_ms) / 1000.0 * float(idx + 1))
         if last_error is not None:
-            return ([], attempts, True)
-        return ([], 1, False)
+            return (
+                [],
+                attempts,
+                True,
+                {
+                    "raw_result_count": 0,
+                    "usable_results_count": 0,
+                    "reported_result_count": None,
+                    "engine_success_count": 0,
+                    "engine_failure_count": 1,
+                    "engine_health": {},
+                    "effective_success": False,
+                    "effective_success_reason": f"search_error:{type(last_error).__name__}",
+                    "effective_search_confidence": 0.0,
+                    "query_locale": str(search_context.get("query_locale") or ""),
+                    "region_bias": str(search_context.get("region_bias") or ""),
+                },
+            )
+        return ([], 1, False, last_debug)
 
     def _fetch_pages(self, *, rows: list[SearchResult], max_fetches: int) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
         fetched_at = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -492,6 +573,112 @@ def _top_domains(rows: list[SearchResult], *, limit: int) -> list[str]:
     return out
 
 
+def _search_debug_from_rows(rows: list[SearchResult]) -> dict[str, Any]:
+    if not rows:
+        return {
+            "raw_result_count": 0,
+            "raw_results_count": 0,
+            "usable_results_count": 0,
+            "reported_result_count": None,
+            "reported_number_of_results": None,
+            "engine_success_count": 0,
+            "engine_failure_count": 0,
+            "engine_health": {},
+            "effective_success": False,
+            "effective_success_reason": "empty_results",
+            "effective_search_confidence": 0.0,
+        }
+    raw = dict(getattr(rows[0], "raw", {}) or {})
+    raw_result_count = int(_coerce_int(raw.get("raw_result_count"), len(list(rows or []))) or 0)
+    reported = _coerce_int(raw.get("reported_result_count"), None)
+    usable = int(_coerce_int(raw.get("usable_results_count"), len(list(rows or []))) or len(list(rows or [])))
+    confidence = float(raw.get("effective_search_confidence") or 0.0)
+    if confidence <= 0.0:
+        confidence = compute_search_confidence(
+            raw_results_count=raw_result_count,
+            usable_results_count=usable,
+            top_scores=[float(getattr(item, "score", 0.0) or 0.0) for item in list(rows or [])[:3]],
+            engine_health=dict(raw.get("engine_health") or {}),
+        )
+    return {
+        "raw_result_count": raw_result_count,
+        "raw_results_count": int(_coerce_int(raw.get("raw_results_count"), raw_result_count) or raw_result_count),
+        "usable_results_count": usable,
+        "reported_result_count": reported,
+        "reported_number_of_results": _coerce_int(raw.get("reported_number_of_results"), reported),
+        "engine_success_count": int(_coerce_int(raw.get("engine_success_count"), 0) or 0),
+        "engine_failure_count": int(_coerce_int(raw.get("engine_failure_count"), 0) or 0),
+        "engine_health": dict(raw.get("engine_health") or {}),
+        "engines_succeeded": [str(x or "").strip().lower() for x in list(raw.get("engines_succeeded") or []) if str(x or "").strip()],
+        "engines_failed": [dict(x or {}) for x in list(raw.get("engines_failed") or []) if isinstance(x, dict)],
+        "effective_success": bool(usable > 0 or raw_result_count > 0),
+        "effective_success_reason": str(raw.get("effective_success_reason") or "results_present"),
+        "effective_search_confidence": float(max(0.0, min(1.0, confidence))),
+        "query_locale": str(raw.get("query_locale") or ""),
+        "region_bias": str(raw.get("region_bias") or ""),
+    }
+
+
+def _aggregate_search_debug(*, query_runs: list[dict[str, Any]], results: list[SearchResult], search_context: dict[str, Any]) -> dict[str, Any]:
+    runs = [dict(x or {}) for x in list(query_runs or []) if isinstance(x, dict)]
+    raw_result_count = int(sum(int(_coerce_int(row.get("raw_result_count"), 0) or 0) for row in runs))
+    usable_results_count = int(len(list(results or [])))
+    reported_values = [_coerce_int(row.get("reported_result_count"), None) for row in runs if row.get("reported_result_count") is not None]
+    effective_success = bool(results) or any(bool(row.get("effective_success")) for row in runs)
+    if effective_success:
+        first_success = next((row for row in runs if bool(row.get("effective_success"))), {})
+        success_reason = str(first_success.get("success_reason") or ("results_present" if results else "empty_results"))
+    elif any(bool(row.get("failed")) for row in runs):
+        success_reason = "search_failed"
+    else:
+        success_reason = "empty_results"
+    engine_health: dict[str, str] = {}
+    engines_failed: list[dict[str, Any]] = []
+    engines_succeeded: list[str] = []
+    for row in runs:
+        for engine, state in dict(row.get("engine_health") or {}).items():
+            token = str(engine or "").strip().lower()
+            if not token:
+                continue
+            if token not in engine_health or engine_health.get(token) != "blocked":
+                engine_health[token] = str(state or "").strip().lower()
+        for engine in list(row.get("engines_succeeded") or []):
+            token = str(engine or "").strip().lower()
+            if token and token not in engines_succeeded:
+                engines_succeeded.append(token)
+        for failure in list(row.get("engines_failed") or []):
+            item = dict(failure or {})
+            token = str(item.get("engine") or "").strip().lower()
+            if token and not any(str(existing.get("engine") or "").strip().lower() == token for existing in engines_failed):
+                engines_failed.append(item)
+    effective_search_confidence = compute_search_confidence(
+        raw_results_count=raw_result_count,
+        usable_results_count=usable_results_count,
+        top_scores=[float(getattr(item, "score", 0.0) or 0.0) for item in list(results or [])[:3]],
+        engine_health=engine_health,
+    )
+    return {
+        "raw_result_count": raw_result_count,
+        "raw_results_count": raw_result_count,
+        "usable_results_count": usable_results_count,
+        "reported_result_count": reported_values[0] if reported_values else None,
+        "reported_number_of_results": reported_values[0] if reported_values else None,
+        "effective_success": bool(effective_success),
+        "effective_success_reason": str(success_reason or ""),
+        "effective_search_confidence": float(max(0.0, min(1.0, effective_search_confidence))),
+        "queries_with_results": int(sum(1 for row in runs if bool(row.get("effective_success")))),
+        "engine_success_count": int(sum(1 for state in engine_health.values() if state == "healthy")),
+        "engine_failure_count": int(sum(1 for state in engine_health.values() if state in {"degraded", "blocked", "suspended"})),
+        "engine_health": dict(engine_health),
+        "engines_succeeded": list(engines_succeeded),
+        "engines_failed": list(engines_failed),
+        "query_locale": str(search_context.get("query_locale") or ""),
+        "region_bias": str(search_context.get("region_bias") or ""),
+        "region_bias_reasons": [str(x or "").strip() for x in list(search_context.get("reasons") or []) if str(x or "").strip()],
+        "top_domains": _top_domains(results, limit=6),
+    }
+
+
 def _merge_domain_filters(*, base: list[str], site_domain: str) -> list[str]:
     out: list[str] = []
     for row in list(base or []):
@@ -530,7 +717,9 @@ def _recency_days(*, intent: str, freshness: FreshnessAssessment) -> int | None:
 
 def _compat_query_intent(*, query: str, classification: QueryClassification) -> str:
     text = str(query or "").strip().lower()
-    if any(token in text for token in ("курс", "usd", "eur", "uah", "exchange rate", "forex")):
+    if str(getattr(classification, "primary_category", "") or "").strip().lower() == "finance":
+        return "fx_rate"
+    if any(token in text for token in ("курс", "usd", "eur", "uah", "exchange rate", "forex", "доллар", "евро", "гривн", "грн", "валют", "бакс")):
         return "fx_rate"
     if any(token in text for token in ("weather", "forecast", "погод", "температур")):
         return "weather"
@@ -547,3 +736,12 @@ def _domain_filter_for_intent(*, intent: str, preferred_domains: list[str] | Non
     # via geo-biased query planning and ranking bonuses.
     _ = (intent, preferred_domains, geo_hint)
     return []
+
+
+def _coerce_int(value: Any, default: int | None = 0) -> int | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return int(value)
+    except Exception:
+        return default

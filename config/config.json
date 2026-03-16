@@ -16,7 +16,7 @@
   },
   "llm": {
     "provider": "ollama",
-    "model_name": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+    "model_name": "qwen3:8b",
     "model_fallbacks": [],
     "thinking_enabled": true,
     "json_mode_enabled": false,
@@ -117,7 +117,7 @@
         "ollama": {
           "num_thread": 6,
           "num_ctx": 8192,
-          "num_gpu": 9999,
+          "num_gpu": 28,
           "num_batch": 128,
           "keep_alive": "5m"
         },
@@ -349,6 +349,23 @@
         "targeted_search": 2,
         "deep_search": 2,
         "backoff_ms": 250
+      },
+      "search_policy": {
+        "default_locale": "ru-RU",
+        "locale_by_category": {
+          "finance": "uk-UA",
+          "weather": "uk-UA",
+          "news": "uk-UA",
+          "docs": "en-US",
+          "version": "en-US",
+          "generic": "ru-RU"
+        },
+        "region_locale_overrides": {
+          "ua": "uk-UA",
+          "ru": "ru-RU"
+        },
+        "engine_manual_states": {},
+        "suspended_engines": []
       },
       "continuation": {
         "ttl_minutes": 20,
@@ -622,7 +639,7 @@
       "timeout_sec": 2.5,
       "stream_timeout_sec": 600.0,
       "store_turn": true,
-      "show_thinking": true,
+      "show_thinking": false,
       "thinking_first": true,
       "auto_start_api": true,
       "auto_start_ollama": true,

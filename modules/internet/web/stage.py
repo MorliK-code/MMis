@@ -14,9 +14,10 @@ from modules.internet.web.confidence import assess_confidence
 from modules.internet.web.continuity import ContinuityConfig, build_continuity_patch, resolve_continuation
 from modules.internet.web.domain_reputation import DomainReputationStore, DomainTrustPolicy
 from modules.internet.web.freshness import assess_freshness
+from modules.internet.web.numeric_facts import infer_numeric_profile, requires_strict_numeric_evidence
 from modules.internet.web.query_classifier import classify_query
 from modules.internet.web.query_planner import build_query_plan
-from modules.internet.web.query_text import normalize_search_text
+from modules.internet.web.query_text import normalize_search_text, strip_service_command_prefix
 from modules.internet.web.result_processor import build_evidence_pack
 from modules.internet.web.search_manager import SearchExecutionResult, SearchManager
 from modules.internet.web.source_ranker import build_source_audit_entry, rank_sources
@@ -168,6 +169,7 @@ class WebStageV2:
             scraper=self._scraper,
             cooldown_seconds=_to_int(web_v2_cfg.get("cooldown_seconds"), 45),
             retry_policy=_as_dict(web_v2_cfg.get("retry_policy")),
+            search_policy=_as_dict(web_v2_cfg.get("search_policy")),
         )
 
         self._trust_policy = DomainTrustPolicy.from_config(web_v2_cfg)
@@ -232,6 +234,25 @@ class WebStageV2:
             _emit_trace_event(ctx, "web_retrieve_skip", {"reason": "empty_text"})
             return ctx
 
+        if str(getattr(ctx, "route", "") or "").strip().lower() == "command":
+            _set_web_flags(
+                ctx,
+                web_query_intent="generic",
+                web_search_mode=WebSearchMode.NO_SEARCH.value,
+                fresh_required=False,
+                fresh_missing=False,
+                web_used=False,
+            )
+            ctx.logs.append(f"stage=web_retrieve skipped(command_route) trace={trace}")
+            log_json(LOGGER, "web_retrieve_skip", context=_stage_log_context(ctx), trace_id=trace, reason="command_route")
+            _emit_web_summary(
+                ctx,
+                summary="used=false reason=command_route",
+                payload=_build_skip_web_trace_summary(query="", mode=str(mode or ""), reason="command_route"),
+            )
+            _emit_trace_event(ctx, "web_retrieve_skip", {"reason": "command_route"})
+            return ctx
+
         user_override = _resolve_user_override(
             text=text,
             meta=_as_dict(getattr(ctx, "meta", {})),
@@ -284,7 +305,11 @@ class WebStageV2:
         )
 
         ctx_tags = _as_dict(getattr(ctx, "tags", {}))
-        classification = classify_query(effective_query, metadata_tags=_as_list(ctx_tags.get("metadata_tags")))
+        classification = classify_query(
+            effective_query,
+            metadata_tags=_as_list(ctx_tags.get("metadata_tags")),
+            original_text=query,
+        )
         nlu_intents = _extract_nlu_intents_from_query(
             query=effective_query,
             segmenter=self._nlu_segmenter,
@@ -332,7 +357,7 @@ class WebStageV2:
             web_items=web_items,
             ttl_days=_as_dict(_as_dict(getattr(self._app, "web_v2", {})).get("ttl_days") or _as_dict(getattr(self._app, "web_v2", {})).get("ttl")),
         )
-        compat_intent = _compat_query_intent(effective_query)
+        compat_intent = _compat_query_intent(effective_query, classification=classification)
 
         _emit_trace_event(ctx, "web_classification", classification.to_dict())
         _emit_trace_event(ctx, "web_confidence_assessment", confidence.to_dict())
@@ -398,6 +423,7 @@ class WebStageV2:
             ctx.meta["web_trust_policy"] = effective_trust_policy.to_dict()
             ctx.meta["web_geo_hint_debug"] = dict(geo_decision)
             ctx.meta["web_intent_alignment"] = dict(intent_alignment)
+            ctx.meta["web_correction_challenge"] = bool(getattr(classification, "is_correction_challenge", False))
             if geo_hint:
                 ctx.meta["geo_hint"] = str(geo_hint)
 
@@ -651,23 +677,35 @@ class WebStageV2:
         trace_query = _trace_query_text(query=effective_query, plan=plan)
 
         if isinstance(getattr(ctx, "meta", None), dict):
+            plan_debug = _as_dict(getattr(plan, "debug", {}) or {})
+            query_debug = _as_dict(plan_debug.get("query_text"))
+            search_debug = _as_dict(getattr(executed, "search_debug", {}) or {})
+            search_context = _as_dict(getattr(executed, "search_context", {}) or {})
             ctx.meta["web_result_count"] = int(len(ranked))
             ctx.meta["web_result_domains"] = list(domains)
             ctx.meta["web_domain_reputation"] = dict(domain_reputation)
             ctx.meta["web_evidence_quality"] = dict(quality)
             ctx.meta["web_source_audit"] = list(source_audit)
             ctx.meta["web_trace_query"] = str(trace_query)
+            ctx.meta["web_search_core"] = str(query_debug.get("extracted_search_core") or query_debug.get("search_core") or "")
+            ctx.meta["web_removed_wrapper_text"] = str(query_debug.get("removed_wrapper_text") or "")
+            ctx.meta["web_planner_category"] = str(plan_debug.get("strategy") or "")
+            ctx.meta["web_search_debug"] = dict(search_debug)
+            ctx.meta["web_search_context"] = dict(search_context)
 
         plan_payload = plan.to_dict()
         if geo_hint:
             plan_payload["geo_hint"] = str(geo_hint)
         _emit_trace_event(ctx, "web_query_plan", plan_payload)
+        query_debug = _as_dict(_as_dict(getattr(plan, "debug", {}) or {}).get("query_text"))
         _emit_trace_event(
             ctx,
             "web_search_request",
             {
                 "query": str(trace_query),
                 "effective_query": str(effective_query),
+                "search_core": str(query_debug.get("extracted_search_core") or query_debug.get("search_core") or ""),
+                "removed_wrapper_text": str(query_debug.get("removed_wrapper_text") or ""),
                 "mode": str(decision.mode.value),
                 "queries": plan.all_queries(),
                 "query_roles": dict(plan.query_roles or {}),
@@ -679,7 +717,11 @@ class WebStageV2:
         ctx.logs.append(
             "stage=web_retrieve search_done "
             f"trace={trace} results={len(ranked)} domains={','.join(domains) if domains else '-'} "
-            f"quality={quality_score:.3f} escalated={int(bool(escalated))}"
+            f"quality={quality_score:.3f} escalated={int(bool(escalated))} "
+            f"search_success={int(bool(_as_dict(getattr(executed, 'search_debug', {}) or {}).get('effective_success', bool(getattr(executed, 'results', [])))))} "
+            f"reason={str(_as_dict(getattr(executed, 'search_debug', {}) or {}).get('effective_success_reason') or '-')} "
+            f"confidence={float(_to_float(_as_dict(getattr(executed, 'search_debug', {}) or {}).get('effective_search_confidence'), 0.0) or 0.0):.3f} "
+            f"region_bias={str(_as_dict(getattr(executed, 'search_debug', {}) or {}).get('region_bias') or '-')}"
         )
         _emit_trace_event(
             ctx,
@@ -695,6 +737,21 @@ class WebStageV2:
                 "retries_used": int(getattr(executed, "retries_used", 0) or 0),
                 "cooldown_applied": bool(getattr(executed, "cooldown_applied", False)),
                 "result_count": len(ranked),
+                "raw_result_count": int(_to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("raw_result_count"), len(list(getattr(executed, "results", []) or []))) or 0),
+                "raw_results_count": int(_to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("raw_results_count"), len(list(getattr(executed, "results", []) or []))) or len(list(getattr(executed, "results", []) or []))),
+                "reported_result_count": _to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("reported_result_count"), None),
+                "reported_number_of_results": _to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("reported_number_of_results"), None),
+                "usable_results_count": int(_to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("usable_results_count"), len(list(getattr(executed, "results", []) or []))) or len(list(getattr(executed, "results", []) or []))),
+                "effective_search_success": bool(_as_dict(getattr(executed, "search_debug", {}) or {}).get("effective_success", bool(getattr(executed, "results", [])))),
+                "effective_search_success_reason": str(_as_dict(getattr(executed, "search_debug", {}) or {}).get("effective_success_reason") or ("results_present" if getattr(executed, "results", []) else "empty_results")),
+                "effective_search_confidence": float(_to_float(_as_dict(getattr(executed, "search_debug", {}) or {}).get("effective_search_confidence"), 0.0) or 0.0),
+                "engine_success_count": int(_to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("engine_success_count"), 0) or 0),
+                "engine_failure_count": int(_to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("engine_failure_count"), 0) or 0),
+                "engine_health": dict(_as_dict(getattr(executed, "search_debug", {}) or {}).get("engine_health") or {}),
+                "query_locale": str(_as_dict(getattr(executed, "search_debug", {}) or {}).get("query_locale") or ""),
+                "region_bias": str(_as_dict(getattr(executed, "search_debug", {}) or {}).get("region_bias") or ""),
+                "region_bias_reasons": [str(x or "").strip() for x in list(_as_dict(getattr(executed, "search_debug", {}) or {}).get("region_bias_reasons") or []) if str(x or "").strip()][:4],
+                "search_debug": dict(getattr(executed, "search_debug", {}) or {}),
                 "domains": list(domains),
                 "geo_hint": str(geo_hint or ""),
                 "domain_reputation": dict(domain_reputation),
@@ -726,6 +783,26 @@ class WebStageV2:
                     }
                     for idx, row in enumerate(list(ranked)[:5])
                 ],
+            },
+        )
+        _emit_trace_event(
+            ctx,
+            "web_search_summary",
+            {
+                "query": str(trace_query),
+                "category": str(getattr(classification, "primary_category", "") or ""),
+                "planner_category": str(_as_dict(getattr(plan, "debug", {}) or {}).get("strategy") or ""),
+                "search_core": str(query_debug.get("extracted_search_core") or query_debug.get("search_core") or ""),
+                "region_bias": str(_as_dict(getattr(executed, "search_debug", {}) or {}).get("region_bias") or ""),
+                "query_locale": str(_as_dict(getattr(executed, "search_debug", {}) or {}).get("query_locale") or ""),
+                "engine_health": dict(_as_dict(getattr(executed, "search_debug", {}) or {}).get("engine_health") or {}),
+                "engines_failed": list(_as_dict(getattr(executed, "search_debug", {}) or {}).get("engines_failed") or [])[:6],
+                "raw_results_count": int(_to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("raw_result_count"), 0) or 0),
+                "usable_results_count": int(_to_int(_as_dict(getattr(executed, "search_debug", {}) or {}).get("usable_results_count"), len(list(getattr(executed, "results", []) or []))) or len(list(getattr(executed, "results", []) or []))),
+                "effective_search_success": bool(_as_dict(getattr(executed, "search_debug", {}) or {}).get("effective_success", bool(getattr(executed, "results", [])))),
+                "effective_search_confidence": float(_to_float(_as_dict(getattr(executed, "search_debug", {}) or {}).get("effective_search_confidence"), 0.0) or 0.0),
+                "top_domains": [str(x or "").strip().lower() for x in list(_as_dict(getattr(executed, "search_debug", {}) or {}).get("top_domains") or domains) if str(x or "").strip()][:6],
+                "warnings": list(getattr(executed, "warnings", []) or [])[:8],
             },
         )
         _emit_trace_event(
@@ -779,6 +856,12 @@ class WebStageV2:
                 "key_facts": int(len(list(evidence.key_facts or []))),
                 "conflicting_sources": bool(evidence.conflicting_sources),
                 "conflict_notes": list(evidence.conflict_notes or []),
+                "numeric_candidates_selected": int(quality.get("numeric_candidates_selected") or 0),
+                "numeric_candidates_rejected": int(quality.get("numeric_candidates_rejected") or 0),
+                "conflict_severity": float(_to_float(quality.get("conflict_severity"), 0.0) or 0.0),
+                "evidence_strength": float(_to_float(quality.get("evidence_strength"), 0.0) or 0.0),
+                "final_factual_confidence": float(_to_float(quality.get("final_factual_confidence"), 0.0) or 0.0),
+                "factual_basis": dict(quality.get("factual_basis") or {}),
                 "selection_summary": dict(getattr(evidence, "selection_summary", {}) or {}),
             },
         )
@@ -908,6 +991,15 @@ class WebStageV2:
             ctx.meta["web_citations"] = list(_adaptive_citations(evidence.compact_citations, classification, max_fact=self._citation_max_fact, max_compare=self._citation_max_compare))
             ctx.meta["web_evidence_pack"] = evidence.to_dict()
             ctx.meta["web_evidence_context"] = dict(web_evidence_context)
+            ctx.meta["web_synthesis_caution"] = {
+                "cautious": bool(quality.get("cautious_synthesis")),
+                "selected_avg_quality": float(_to_float(quality.get("selected_avg_quality"), 0.0) or 0.0),
+                "topical_filtered_sources": int(quality.get("topical_filtered_sources") or 0),
+                "has_conflict": bool(quality.get("has_conflict")),
+                "conflict_severity": float(_to_float(quality.get("conflict_severity"), 0.0) or 0.0),
+                "evidence_strength": float(_to_float(quality.get("evidence_strength"), 0.0) or 0.0),
+                "final_factual_confidence": float(_to_float(quality.get("final_factual_confidence"), 0.0) or 0.0),
+            }
             ctx.meta["web_prompt_items"] = list(prompt_items)
             ctx.meta["web_key_facts"] = list(evidence.key_facts or [])
             ctx.meta["web_trust_hints"] = list(evidence.trust_hints or [])
@@ -1046,6 +1138,7 @@ def _execute_search_cycle(
             reputation_scores=reputation_scores,
             reputation_stats=reputation_stats,
             query_category=str(getattr(classification, "primary_category", "") or ""),
+            query_text=str(query),
             geo_hint=geo_hint,
         )
         for row in list(executed.results or [])
@@ -1058,6 +1151,7 @@ def _execute_search_cycle(
         reputation_stats=reputation_stats,
         query_intent=compat_intent,
         query_category=str(getattr(classification, "primary_category", "") or ""),
+        query_text=str(query),
         geo_hint=geo_hint,
         limit_hint=int(getattr(decision.budget, "max_sources", 0) or 0),
     )
@@ -1071,6 +1165,7 @@ def _execute_search_cycle(
         fetched_pages=executed.fetched_pages,
         decision=decision,
         classification=classification,
+        query_text=str(query),
     )
     source_audit = _merge_source_audit(pre_rank_audit=pre_rank_audit, pack_audit=list(getattr(evidence, "source_audit", []) or []))
     bridge = memory_bridge.build(
@@ -1079,18 +1174,21 @@ def _execute_search_cycle(
         classification=classification,
     )
     prompt_items = list(bridge.prompt_items or [])
+    quality = _assess_evidence_quality(
+        ranked=ranked,
+        evidence=evidence,
+        freshness=freshness,
+        classification=classification,
+        source_audit=source_audit,
+        query_text=str(query),
+    )
     web_evidence_context = _build_web_evidence_context(
         evidence=evidence,
         prompt_items=prompt_items,
         mode=str(decision.mode.value),
         query=str(query),
         source_audit=source_audit,
-    )
-    quality = _assess_evidence_quality(
-        ranked=ranked,
-        evidence=evidence,
-        freshness=freshness,
-        classification=classification,
+        quality=quality,
     )
     return {
         "plan": plan,
@@ -1113,27 +1211,90 @@ def _assess_evidence_quality(
     evidence,
     freshness,
     classification,
+    source_audit: list[dict[str, Any]] | None = None,
+    query_text: str = "",
 ) -> dict[str, Any]:
-    rows = list(ranked or [])
-    usable_results = int(sum(1 for row in rows if str(getattr(row.item, "url", "") or "").strip()))
-    unique_domains = int(len({str(getattr(row.item, "source", "") or "").strip().lower() for row in rows if str(getattr(row.item, "source", "") or "").strip()}))
+    items = list(getattr(evidence, "items", []) or [])
+    audits = [dict(x or {}) for x in list(source_audit or []) if isinstance(x, dict)]
+    selected_audits = [audit for audit in audits if bool(audit.get("selected_for_evidence"))]
+    selection_summary = dict(getattr(evidence, "selection_summary", {}) or {})
+    query_category = str(getattr(classification, "primary_category", "") or "")
+    numeric_profile = infer_numeric_profile(
+        query_category=query_category,
+        query_text=query_text,
+    )
+    strict_numeric = requires_strict_numeric_evidence(
+        query_category=query_category,
+        query_text=query_text,
+    )
+    numeric_selected = int(
+        sum(len(list(audit.get("numeric_candidates_selected") or [])) for audit in selected_audits)
+    )
+    numeric_rejected = int(
+        sum(len(list(audit.get("numeric_candidates_rejected") or [])) for audit in selected_audits)
+    )
+    usable_results = int(len(items))
+    unique_domains = int(len({str(getattr(item, "domain", "") or "").strip().lower() for item in items if str(getattr(item, "domain", "") or "").strip()}))
     trusted_count = int(
         sum(
             1
-            for row in rows
-            if str(getattr(row, "trust_tier", "") or "").strip().lower()
+            for item in items
+            if str(getattr(item, "trust_tier", "") or "").strip().lower()
             not in {"general_web", "forum_discussion", "blog_random", "unknown", "degraded_source", "policy_risky", "policy_degraded"}
         )
     )
+    selected_avg_quality = float(
+        sum(float(audit.get("quality_score") or 0.0) for audit in selected_audits) / max(1, len(selected_audits))
+        if selected_audits
+        else 0.0
+    )
+    weak_selected = int(sum(1 for audit in selected_audits if float(audit.get("quality_score") or 0.0) < 0.28))
+    topical_filtered = int(
+        sum(
+            1
+            for audit in audits
+            if str(audit.get("filtered_out_reason") or "").strip().lower() in {"topical_mismatch", "unsupported_source_type", "missing_relevant_numeric"}
+        )
+    )
+    conflict_severity = _conflict_severity(evidence=evidence, source_audit=audits)
+    conflict_notes = [str(x or "").strip() for x in list(getattr(evidence, "conflict_notes", []) or []) if str(x or "").strip()]
+    rejected_type_mismatch = bool(
+        any(
+            str(audit.get("filtered_out_reason") or "").strip().lower() in {"rate_type_mismatch", "historical_rate_mismatch"}
+            for audit in selected_audits + audits
+        )
+    )
+    type_mismatch_only = bool(
+        any(note.startswith("rate_type_mismatch:") for note in conflict_notes)
+        and not bool(getattr(evidence, "conflicting_sources", False))
+    )
+    if rejected_type_mismatch and not bool(getattr(evidence, "conflicting_sources", False)):
+        type_mismatch_only = True
     consensus_score = 0.0
     if usable_results > 0:
-        consensus_score += 0.35
-    if unique_domains >= 2:
         consensus_score += 0.25
+    if unique_domains >= 2:
+        consensus_score += 0.20
     if trusted_count >= 1:
         consensus_score += 0.20
-    if not bool(getattr(evidence, "conflicting_sources", False)):
+    if selected_avg_quality >= 0.48:
         consensus_score += 0.20
+    elif selected_avg_quality >= 0.34:
+        consensus_score += 0.10
+    if not bool(getattr(evidence, "conflicting_sources", False)):
+        consensus_score += 0.15
+    if weak_selected > 0 and selected_avg_quality < 0.30:
+        consensus_score -= 0.10
+    if topical_filtered > 0 and usable_results <= 1:
+        consensus_score -= 0.08
+    if strict_numeric and numeric_selected > 0:
+        consensus_score += min(0.20, 0.08 + (0.04 * numeric_selected))
+    elif strict_numeric:
+        consensus_score -= 0.20
+    if conflict_severity >= 0.85:
+        consensus_score -= 0.32
+    elif conflict_severity >= 0.55:
+        consensus_score -= 0.18
     freshness_ok = bool(
         (not bool(getattr(classification, "requires_freshness", False)))
         or usable_results > 0
@@ -1141,6 +1302,51 @@ def _assess_evidence_quality(
     if not freshness_ok:
         consensus_score *= 0.6
     score = max(0.0, min(1.0, consensus_score))
+    evidence_strength = score
+    if strict_numeric:
+        evidence_strength = max(
+            0.0,
+            min(
+                1.0,
+                (0.26 * min(1.0, usable_results / 2.0))
+                + (0.18 * min(1.0, unique_domains / 2.0))
+                + (0.18 * min(1.0, trusted_count / 2.0))
+                + (0.22 * selected_avg_quality)
+                + (0.16 * min(1.0, numeric_selected / 2.0))
+                - (0.24 * conflict_severity),
+            ),
+        )
+    final_factual_confidence = evidence_strength
+    if strict_numeric:
+        if conflict_severity >= 0.85:
+            final_factual_confidence *= 0.28
+        elif conflict_severity >= 0.55:
+            final_factual_confidence *= 0.52
+        elif conflict_severity > 0.0:
+            final_factual_confidence *= 0.74
+        if type_mismatch_only:
+            final_factual_confidence *= 0.82
+        if numeric_selected == 0:
+            final_factual_confidence *= 0.40
+        if selected_avg_quality < 0.34:
+            final_factual_confidence *= 0.72
+    final_factual_confidence = max(0.0, min(1.0, final_factual_confidence))
+    cautious_synthesis = bool(
+        bool(getattr(evidence, "conflicting_sources", False))
+        or usable_results == 0
+        or selected_avg_quality < 0.32
+        or weak_selected > 0
+        or type_mismatch_only
+        or (strict_numeric and (numeric_selected == 0 or conflict_severity >= 0.55 or final_factual_confidence < 0.64))
+    )
+    conflict_reason = ""
+    if bool(getattr(evidence, "conflicting_sources", False)) and conflict_severity >= 0.55:
+        conflict_reason = "true_numeric_conflict"
+    elif type_mismatch_only:
+        conflict_reason = "rate_type_mismatch"
+    elif cautious_synthesis and strict_numeric:
+        conflict_reason = "weak_numeric_evidence"
+    factual_basis = dict(selection_summary.get("factual_basis") or {})
     return {
         "usable_results": int(usable_results),
         "unique_domains": int(unique_domains),
@@ -1149,8 +1355,46 @@ def _assess_evidence_quality(
         "freshness_ok": bool(freshness_ok),
         "score": round(float(score), 4),
         "has_conflict": bool(getattr(evidence, "conflicting_sources", False)),
+        "selected_avg_quality": round(float(selected_avg_quality), 4),
+        "weak_selected_sources": int(weak_selected),
+        "topical_filtered_sources": int(topical_filtered),
+        "numeric_profile": str(numeric_profile),
+        "strict_numeric": bool(strict_numeric),
+        "numeric_candidates_selected": int(numeric_selected),
+        "numeric_candidates_rejected": int(numeric_rejected),
+        "selected_rate_type": str(selection_summary.get("currency_selected_rate_type") or ""),
+        "requested_rate_type": str(selection_summary.get("currency_requested_rate_type") or ""),
+        "selected_page_types": [str(x or "").strip() for x in list(selection_summary.get("currency_page_types_selected") or []) if str(x or "").strip()],
+        "selected_result_url": str(selection_summary.get("primary_selected_url") or ""),
+        "selected_result_domain": str(selection_summary.get("primary_selected_domain") or ""),
+        "selected_result_page_type": str(selection_summary.get("primary_selected_page_type") or ""),
+        "selected_result_factual_page_type": str(selection_summary.get("primary_selected_factual_page_type") or ""),
+        "conflict_severity": round(float(conflict_severity), 4),
+        "conflict_reason": str(conflict_reason or ""),
+        "true_conflict_notes": [str(x or "").strip() for x in list(selection_summary.get("true_conflict_notes") or []) if str(x or "").strip()][:6],
+        "type_mismatch_notes": [str(x or "").strip() for x in list(selection_summary.get("type_mismatch_notes") or []) if str(x or "").strip()][:6],
+        "evidence_strength": round(float(evidence_strength), 4),
+        "final_factual_confidence": round(float(final_factual_confidence), 4),
+        "cautious_synthesis": bool(cautious_synthesis),
         "temporal_risk": round(float(getattr(freshness, "temporal_risk", 0.0) or 0.0), 4),
+        "factual_basis": factual_basis,
     }
+
+
+def _conflict_severity(*, evidence, source_audit: list[dict[str, Any]]) -> float:
+    max_audit = 0.0
+    for audit in list(source_audit or []):
+        try:
+            max_audit = max(max_audit, float(audit.get("numeric_conflict_severity") or 0.0))
+        except Exception:
+            continue
+    for note in list(getattr(evidence, "conflict_notes", []) or []):
+        text = str(note or "").strip().lower()
+        if "numeric_conflict_high" in text:
+            max_audit = max(max_audit, 0.92)
+        elif "numeric_conflict_medium" in text:
+            max_audit = max(max_audit, 0.60)
+    return max(0.0, min(1.0, max_audit))
 
 
 def _merge_source_audit(
@@ -1280,14 +1524,7 @@ def _resolve_web_mode(meta: dict[str, Any], state: dict[str, Any]) -> str:
 
 
 def _strip_web_prefix(text: str) -> str:
-    src = str(text or "").strip()
-    low = src.lower()
-    for token in ("/web", "/no-web"):
-        if low == token:
-            return ""
-        if low.startswith(token + " "):
-            return src[len(token) :].strip()
-    return src
+    return strip_service_command_prefix(text)
 
 
 def _resolve_user_override(*, text: str, meta: dict[str, Any], state: dict[str, Any]) -> str:
@@ -1313,9 +1550,12 @@ def _normalize_override_token(value: Any) -> str:
     return ""
 
 
-def _compat_query_intent(query: str) -> str:
+def _compat_query_intent(query: str, *, classification=None) -> str:
     low = str(query or "").strip().lower()
-    if any(token in low for token in ("usd", "uah", "eur", "forex", "курс", "exchange rate")):
+    category = str(getattr(classification, "primary_category", "") or "").strip().lower()
+    if category == "finance":
+        return "fx_rate"
+    if any(token in low for token in ("usd", "uah", "eur", "forex", "курс", "exchange rate", "доллар", "евро", "гривн", "грн", "валют", "бакс")):
         return "fx_rate"
     if any(token in low for token in ("weather", "forecast", "погод", "температур")):
         return "weather"
@@ -1496,6 +1736,7 @@ def _build_web_evidence_context(
     mode: str,
     query: str,
     source_audit: list[dict[str, Any]] | None = None,
+    quality: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     compact_citations = [str(x or "").strip() for x in list(getattr(evidence, "compact_citations", []) or []) if str(x or "").strip()]
     key_facts = [str(x or "").strip() for x in list(getattr(evidence, "key_facts", []) or []) if str(x or "").strip()]
@@ -1504,6 +1745,18 @@ def _build_web_evidence_context(
     summary = str(getattr(evidence, "summary", "") or "").strip()
     freshness_summary = str(getattr(evidence, "freshness_summary", "") or "").strip()
     conflicting_sources = bool(getattr(evidence, "conflicting_sources", False))
+    quality_row = _as_dict(quality)
+    caution_reasons: list[str] = []
+    if conflicting_sources:
+        caution_reasons.append("source_conflict")
+    if bool(quality_row.get("cautious_synthesis")):
+        caution_reasons.append("weak_evidence")
+    if float(quality_row.get("conflict_severity") or 0.0) >= 0.55:
+        caution_reasons.append("numeric_conflict")
+    if str(quality_row.get("conflict_reason") or "").strip() == "rate_type_mismatch":
+        caution_reasons.append("rate_type_mismatch")
+    if int(quality_row.get("topical_filtered_sources") or 0) > 0:
+        caution_reasons.append("topical_filtering")
 
     source_rows: list[dict[str, Any]] = []
     for row in list(prompt_items or []):
@@ -1532,6 +1785,24 @@ def _build_web_evidence_context(
         "trust_hints": trust_hints,
         "conflicting_sources": conflicting_sources,
         "conflict_notes": conflict_notes,
+        "numeric_profile": str(quality_row.get("numeric_profile") or ""),
+        "numeric_candidates_selected": int(quality_row.get("numeric_candidates_selected") or 0),
+        "numeric_candidates_rejected": int(quality_row.get("numeric_candidates_rejected") or 0),
+        "selected_rate_type": str(quality_row.get("selected_rate_type") or ""),
+        "requested_rate_type": str(quality_row.get("requested_rate_type") or ""),
+        "selected_result_url": str(quality_row.get("selected_result_url") or ""),
+        "selected_result_domain": str(quality_row.get("selected_result_domain") or ""),
+        "selected_result_page_type": str(quality_row.get("selected_result_page_type") or ""),
+        "selected_result_factual_page_type": str(quality_row.get("selected_result_factual_page_type") or ""),
+        "conflict_severity": float(_to_float(quality_row.get("conflict_severity"), 0.0) or 0.0),
+        "conflict_reason": str(quality_row.get("conflict_reason") or ""),
+        "true_conflict_notes": [str(x or "").strip() for x in list(quality_row.get("true_conflict_notes") or []) if str(x or "").strip()][:6],
+        "type_mismatch_notes": [str(x or "").strip() for x in list(quality_row.get("type_mismatch_notes") or []) if str(x or "").strip()][:6],
+        "evidence_strength": float(_to_float(quality_row.get("evidence_strength"), 0.0) or 0.0),
+        "final_factual_confidence": float(_to_float(quality_row.get("final_factual_confidence"), 0.0) or 0.0),
+        "cautious_synthesis": bool(quality_row.get("cautious_synthesis")),
+        "caution_reasons": caution_reasons,
+        "factual_basis": dict(quality_row.get("factual_basis") or {}),
         "sources": source_rows,
         "source_audit": audit_rows,
         "prompt_block": _render_web_evidence_block(
@@ -1544,6 +1815,16 @@ def _build_web_evidence_context(
             conflicting_sources=conflicting_sources,
             conflict_notes=conflict_notes,
             sources=source_rows,
+            numeric_profile=str(quality_row.get("numeric_profile") or ""),
+            numeric_candidates_selected=int(quality_row.get("numeric_candidates_selected") or 0),
+            selected_rate_type=str(quality_row.get("selected_rate_type") or ""),
+            requested_rate_type=str(quality_row.get("requested_rate_type") or ""),
+            selected_result_page_type=str(quality_row.get("selected_result_page_type") or ""),
+            conflict_severity=float(_to_float(quality_row.get("conflict_severity"), 0.0) or 0.0),
+            conflict_reason=str(quality_row.get("conflict_reason") or ""),
+            final_factual_confidence=float(_to_float(quality_row.get("final_factual_confidence"), 0.0) or 0.0),
+            cautious_synthesis=bool(quality_row.get("cautious_synthesis")),
+            caution_reasons=caution_reasons,
         ),
     }
 
@@ -1559,6 +1840,16 @@ def _render_web_evidence_block(
     conflicting_sources: bool,
     conflict_notes: list[str],
     sources: list[dict[str, Any]],
+    numeric_profile: str,
+    numeric_candidates_selected: int,
+    selected_rate_type: str,
+    requested_rate_type: str,
+    selected_result_page_type: str,
+    conflict_severity: float,
+    conflict_reason: str,
+    final_factual_confidence: float,
+    cautious_synthesis: bool,
+    caution_reasons: list[str],
 ) -> str:
     lines: list[str] = []
     status_block = (
@@ -1590,10 +1881,36 @@ def _render_web_evidence_block(
             lines.append(f"  - {hint}")
 
     lines.append(f"- source_conflicts: {'yes' if conflicting_sources else 'no'}")
+    if numeric_profile:
+        lines.append(f"- numeric_profile: {numeric_profile}")
+    if numeric_candidates_selected > 0:
+        lines.append(f"- numeric_candidates_selected: {int(numeric_candidates_selected)}")
+    if requested_rate_type:
+        lines.append(f"- requested_rate_type: {requested_rate_type}")
+    if selected_rate_type:
+        lines.append(f"- selected_rate_type: {selected_rate_type}")
+    if selected_result_page_type and selected_result_page_type != selected_rate_type:
+        lines.append(f"- selected_page_type: {selected_result_page_type}")
+    if conflict_severity > 0.0:
+        lines.append(f"- conflict_severity: {float(conflict_severity):.3f}")
+    if conflict_reason:
+        lines.append(f"- conflict_reason: {conflict_reason}")
+    if final_factual_confidence > 0.0:
+        lines.append(f"- final_factual_confidence: {float(final_factual_confidence):.3f}")
     if conflicting_sources and conflict_notes:
         lines.append("- conflict_notes:")
         for note in list(conflict_notes)[:4]:
             lines.append(f"  - {note}")
+    if any(str(note or "").startswith("rate_type_mismatch:") for note in list(conflict_notes or [])):
+        lines.append("- synthesis_rule: do not mix cash, NBU, bank, index or historical rates as if they were the same value.")
+    if cautious_synthesis:
+        lines.append("- synthesis_guidance: cautious")
+        lines.append("- synthesis_rule: if evidence is weak or conflicting, present uncertainty and avoid overconfident exact claims.")
+        lines.append("- synthesis_rule: for numeric/date answers, do not assert an exact value unless WEB_EVIDENCE supports it consistently.")
+        if caution_reasons:
+            lines.append("- caution_reasons:")
+            for reason in list(caution_reasons)[:4]:
+                lines.append(f"  - {reason}")
 
     if sources:
         lines.append("- sources:")
@@ -1745,7 +2062,17 @@ def _compact_query_runs(rows: list[dict[str, Any]], *, limit: int = 8) -> list[d
                 "stage": str(item.get("stage") or "").strip(),
                 "attempts": int(_to_int(item.get("attempts"), 0)),
                 "result_count": int(_to_int(item.get("result_count"), 0)),
+                "raw_result_count": int(_to_int(item.get("raw_result_count"), 0)),
+                "reported_result_count": _to_int(item.get("reported_result_count"), None),
+                "usable_results_count": int(_to_int(item.get("usable_results_count"), 0)),
+                "effective_success": bool(item.get("effective_success")),
+                "effective_search_confidence": float(_to_float(item.get("effective_search_confidence"), 0.0) or 0.0),
+                "success_reason": str(item.get("success_reason") or ""),
                 "failed": bool(item.get("failed")),
+                "engine_success_count": int(_to_int(item.get("engine_success_count"), 0)),
+                "engine_failure_count": int(_to_int(item.get("engine_failure_count"), 0)),
+                "query_locale": str(item.get("query_locale") or "").strip(),
+                "region_bias": str(item.get("region_bias") or "").strip(),
                 "top_domains": [str(x or "").strip().lower() for x in list(item.get("top_domains") or []) if str(x or "").strip()][:4],
             }
         )
@@ -1771,8 +2098,11 @@ def _build_compact_web_trace_summary(
     compat_intent: str,
     intent_alignment: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    plan_debug = _as_dict(getattr(plan, "debug", {}) or {})
+    query_debug = _as_dict(plan_debug.get("query_text"))
     selection_summary = _as_dict(getattr(evidence, "selection_summary", {}) or {})
     fetch_summary = _as_dict(getattr(executed, "fetch_summary", {}) or {})
+    search_debug = _as_dict(getattr(executed, "search_debug", {}) or {})
     query_runs = [dict(x or {}) for x in list(getattr(executed, "query_runs", []) or []) if isinstance(x, dict)]
     blocked = int(sum(1 for row in list(source_audit or []) if bool(_as_dict(row).get("blocked_hit"))))
     risky = int(sum(1 for row in list(source_audit or []) if bool(_as_dict(row).get("risky_hit"))))
@@ -1787,6 +2117,8 @@ def _build_compact_web_trace_summary(
         issues.append("fresh_data_missing")
     if bool(getattr(evidence, "conflicting_sources", False)):
         issues.append("source_conflict")
+    if bool(quality.get("cautious_synthesis")):
+        warnings.append("cautious_synthesis")
     if bool(getattr(executed, "cooldown_applied", False)):
         warnings.append("cooldown_applied")
     warnings.extend([str(x or "").strip() for x in list(getattr(executed, "warnings", []) or []) if str(x or "").strip()])
@@ -1796,6 +2128,7 @@ def _build_compact_web_trace_summary(
         "status": "ok",
         "query": str(query or "").strip(),
         "effective_query": str(effective_query or "").strip(),
+        "search_core": str(query_debug.get("extracted_search_core") or query_debug.get("search_core") or "").strip(),
         "geo_hint": str(geo_hint or "").strip(),
         "resolved_intent": str(compat_intent or "").strip(),
         "intent_alignment": {
@@ -1809,6 +2142,22 @@ def _build_compact_web_trace_summary(
         "result_count": int(len(list(getattr(executed, "results", []) or []))),
         "fetched": int(fetch_summary.get("attempted") or 0),
         "quality_score": float(_to_float(quality.get("score"), 0.0) or 0.0),
+        "search": {
+            "raw_result_count": int(_to_int(search_debug.get("raw_result_count"), 0) or 0),
+            "raw_results_count": int(_to_int(search_debug.get("raw_results_count"), 0) or 0),
+            "reported_result_count": _to_int(search_debug.get("reported_result_count"), None),
+            "reported_number_of_results": _to_int(search_debug.get("reported_number_of_results"), None),
+            "usable_results_count": int(_to_int(search_debug.get("usable_results_count"), len(list(getattr(executed, "results", []) or []))) or len(list(getattr(executed, "results", []) or []))),
+            "engine_success_count": int(_to_int(search_debug.get("engine_success_count"), 0) or 0),
+            "engine_failure_count": int(_to_int(search_debug.get("engine_failure_count"), 0) or 0),
+            "engine_health": dict(search_debug.get("engine_health") or {}),
+            "effective_success": bool(search_debug.get("effective_success", bool(getattr(executed, "results", [])))),
+            "effective_success_reason": str(search_debug.get("effective_success_reason") or ("results_present" if getattr(executed, "results", []) else "empty_results")),
+            "effective_search_confidence": float(_to_float(search_debug.get("effective_search_confidence"), 0.0) or 0.0),
+            "query_locale": str(search_debug.get("query_locale") or ""),
+            "region_bias": str(search_debug.get("region_bias") or ""),
+            "region_bias_reasons": [str(x or "").strip() for x in list(search_debug.get("region_bias_reasons") or []) if str(x or "").strip()][:4],
+        },
         "policy": {
             "mode": str(getattr(decision.mode, "value", decision.mode) or "").strip(),
             "reason": str(getattr(decision, "reason", "") or "").strip(),
@@ -1816,6 +2165,7 @@ def _build_compact_web_trace_summary(
             "decision_score": float(_to_float(getattr(decision, "web_need_score", 0.0), 0.0)),
             "query_type": str(getattr(classification, "query_type", "") or "").strip(),
             "primary_category": str(getattr(classification, "primary_category", "") or "").strip(),
+            "planner_category": str(plan_debug.get("strategy") or "").strip(),
             "requires_freshness": bool(getattr(classification, "requires_freshness", False)),
             "fresh_missing": bool(fresh_missing),
             "clarify_needed": bool(clarify_needed),
@@ -1868,6 +2218,16 @@ def _build_compact_web_trace_summary(
             "freshness_summary": str(getattr(evidence, "freshness_summary", "") or "").strip(),
             "conflicting_sources": bool(getattr(evidence, "conflicting_sources", False)),
             "quality_score": float(_to_float(quality.get("score"), 0.0) or 0.0),
+            "selected_avg_quality": float(_to_float(quality.get("selected_avg_quality"), 0.0) or 0.0),
+            "numeric_candidates_selected": int(quality.get("numeric_candidates_selected") or 0),
+            "numeric_candidates_rejected": int(quality.get("numeric_candidates_rejected") or 0),
+            "selected_rate_type": str(quality.get("selected_rate_type") or ""),
+            "selected_result_page_type": str(quality.get("selected_result_page_type") or ""),
+            "conflict_severity": float(_to_float(quality.get("conflict_severity"), 0.0) or 0.0),
+            "conflict_reason": str(quality.get("conflict_reason") or ""),
+            "evidence_strength": float(_to_float(quality.get("evidence_strength"), 0.0) or 0.0),
+            "final_factual_confidence": float(_to_float(quality.get("final_factual_confidence"), 0.0) or 0.0),
+            "cautious_synthesis": bool(quality.get("cautious_synthesis")),
         },
         "issues": _issue_list(issues),
         "warnings": _issue_list(warnings),

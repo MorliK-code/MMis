@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 
 from memory.memory_models import MemoryRecord, MemoryScope, RetrievalQuery, ScoreBreakdown
+from memory.retrieval_projection import build_memory_views, record_search_text
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z\u0400-\u04ff0-9_]+")
@@ -21,6 +22,7 @@ class ScoreWeights:
     importance_score: float = 0.09
     confidence_score: float = 0.08
     entity_overlap_score: float = 0.07
+    numeric_overlap_score: float = 0.07
     exact_match_boost: float = 0.04
     scope_match_score: float = 0.03
 
@@ -539,14 +541,28 @@ def build_salience_score(
     )
 
 
-def entity_overlap_score(query: str, text: str) -> float:
-    q = _tokens(query)
-    t = _tokens(text)
-    if not q or not t:
+def metadata_entity_overlap(query_keys: list[str], record: MemoryRecord) -> float:
+    q = {str(x).strip().lower() for x in list(query_keys or []) if str(x).strip()}
+    if not q:
         return 0.0
-    inter = len(q.intersection(t))
-    denom = max(1, len(q))
-    return _clamp01(inter / denom)
+    views = build_memory_views(record.text, metadata=record.metadata)
+    record_keys = {str(x).strip().lower() for x in list(views.get("entity_keys") or []) if str(x).strip()}
+    if not record_keys:
+        return 0.0
+    inter = len(q.intersection(record_keys))
+    return _clamp01(inter / max(1, len(q)))
+
+
+def metadata_numeric_overlap(query_keys: list[str], record: MemoryRecord) -> float:
+    q = {str(x).strip().lower() for x in list(query_keys or []) if str(x).strip()}
+    if not q:
+        return 0.0
+    views = build_memory_views(record.text, metadata=record.metadata)
+    record_keys = {str(x).strip().lower() for x in list(views.get("numeric_keys") or []) if str(x).strip()}
+    if not record_keys:
+        return 0.0
+    inter = len(q.intersection(record_keys))
+    return _clamp01(inter / max(1, len(q)))
 
 
 def recency_score(*, updated_at: float, now_ts: float, stale_after_days: int = 30) -> float:
@@ -555,7 +571,7 @@ def recency_score(*, updated_at: float, now_ts: float, stale_after_days: int = 3
     return _clamp01(math.exp(-math.log(2.0) * age_sec / half_life))
 
 
-def exact_match_boost(query: str, text: str) -> float:
+def _text_exact_match_score(query: str, text: str) -> float:
     q = str(query or "").strip().lower()
     if not q:
         return 0.0
@@ -567,6 +583,13 @@ def exact_match_boost(query: str, text: str) -> float:
     if q in t:
         return 0.65
     return 0.0
+
+
+def exact_match_boost(query: RetrievalQuery, record: MemoryRecord, *, entity_overlap: float, numeric_overlap: float) -> float:
+    query_text = str(query.search_text or query.query_text or "")
+    text_score = _text_exact_match_score(query_text, record_search_text(record.text, metadata=record.metadata))
+    structured_score = 1.0 if entity_overlap >= 0.99 or numeric_overlap >= 0.99 else 0.0
+    return max(text_score, structured_score)
 
 
 def scope_match_score(record_scope: MemoryScope, query: RetrievalQuery) -> float:
@@ -593,8 +616,9 @@ def build_score_breakdown(
     rec = recency_score(updated_at=record.updated_at, now_ts=now, stale_after_days=stale_after_days)
     imp = _clamp01(record.importance)
     conf = _clamp01(record.confidence)
-    ent = entity_overlap_score(query.query_text, record.text)
-    exact = exact_match_boost(query.query_text, record.text)
+    ent = metadata_entity_overlap(query.entity_keys, record)
+    num = metadata_numeric_overlap(query.numeric_keys, record)
+    exact = exact_match_boost(query, record, entity_overlap=ent, numeric_overlap=num)
     scope = scope_match_score(record.scope, query)
 
     final = (
@@ -604,6 +628,7 @@ def build_score_breakdown(
         + (w.importance_score * imp)
         + (w.confidence_score * conf)
         + (w.entity_overlap_score * ent)
+        + (w.numeric_overlap_score * num)
         + (w.exact_match_boost * exact)
         + (w.scope_match_score * scope)
     )
@@ -615,6 +640,7 @@ def build_score_breakdown(
         importance_score=imp,
         confidence_score=conf,
         entity_overlap_score=ent,
+        numeric_overlap_score=num,
         exact_match_boost=exact,
         scope_match_score=scope,
         final_score=_clamp01(final),

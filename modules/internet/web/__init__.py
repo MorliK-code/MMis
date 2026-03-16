@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from modules.internet.web.stage import WebStageConfig, WebStageV2
 from modules.internet.web.web_models import (
     ConfidenceAssessment,
     FreshnessAssessment,
@@ -30,3 +29,11 @@ __all__ = [
     "WebEvidence",
     "WebEvidencePack",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"WebStageV2", "WebStageConfig"}:
+        from modules.internet.web.stage import WebStageConfig, WebStageV2
+
+        return {"WebStageV2": WebStageV2, "WebStageConfig": WebStageConfig}[name]
+    raise AttributeError(name)

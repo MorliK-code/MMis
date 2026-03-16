@@ -371,6 +371,7 @@ class Brain:
                                 scope=MemoryScope.SESSION,
                                 memory_type=MemoryType.SUMMARY,
                                 metadata={
+                                    "source_kind": "system_decision",
                                     "source": "rolling_summary",
                                     "importance": 0.6,
                                     "confidence": 0.7,
@@ -414,6 +415,7 @@ class Brain:
                     metadata = dict(_as_dict(row.get("metadata")) or {})
                     if not str(metadata.get("source") or "").strip():
                         metadata["source"] = "web_v2"
+                    metadata.setdefault("source_kind", "tool_result")
                     write_type = str(row.get("write_type") or "").strip().lower()
                     if write_type:
                         metadata.setdefault("web_v2_write_type", write_type)
@@ -440,7 +442,7 @@ class Brain:
                         except Exception:
                             pass
                     try:
-                        self.memory_manager.ingest_event(
+                        ingest_result = self.memory_manager.ingest_event(
                             MemoryEvent(
                                 role="system",
                                 text=text,
@@ -597,6 +599,7 @@ class Brain:
                     scope=MemoryScope.CONVERSATION,
                     memory_type=MemoryType.MESSAGE,
                     metadata={
+                        "source_kind": "user",
                         **dict(user_meta or {}),
                         "trace_id": trace_id,
                         "request_id": request_id,
@@ -653,6 +656,7 @@ class Brain:
                 latency_ms=answer_ms,
                 personality_id=personality_id,
             )
+            assistant_meta.update(self._assistant_memory_web_meta(meta))
             if persona_snapshot:
                 assistant_meta["persona_snapshot"] = dict(persona_snapshot)
             ingest_result = self.memory_manager.ingest_event(
@@ -662,9 +666,10 @@ class Brain:
                     namespace=(conversation_id or "default"),
                     scope=MemoryScope.CONVERSATION,
                     memory_type=MemoryType.MESSAGE,
+                    thinking=str(result.thinking or ""),
                     metadata={
+                        "source_kind": "assistant_reply",
                         **dict(assistant_meta or {}),
-                        "thinking": str(result.thinking or ""),
                         "trace_id": trace_id,
                         "request_id": request_id,
                         "source": source,
@@ -695,6 +700,7 @@ class Brain:
         intent_summary = _as_dict(turn_summaries.get("intent_summary"))
         intent_alignment_summary = _as_dict(turn_summaries.get("intent_alignment_summary"))
         web_summary = _as_dict(turn_summaries.get("web_summary"))
+        factual_summary = _as_dict(turn_summaries.get("factual_response_summary"))
         web_issues = [str(x).strip() for x in list(web_summary.get("issues") or []) if str(x).strip()]
         web_warnings = [str(x).strip() for x in list(web_summary.get("warnings") or []) if str(x).strip()]
         warnings = [str(x).strip() for x in list(meta.get("turn_log_warnings") or []) if str(x).strip()]
@@ -714,6 +720,7 @@ class Brain:
             "queued_conversation_summaries": int(planned_write_summary.get("queued_conversation_summaries") or 0),
             "attempted_writes": int(combined.get("attempted_writes") or 0),
             "stored_records": int(combined.get("stored_records") or 0),
+            "blocked_writes": int(combined.get("blocked_writes") or 0),
             "facts_extracted": int(combined.get("facts_extracted") or 0),
             "promotions": int(combined.get("promotions") or 0),
             "user_turns_written": int(combined.get("user_turns_written") or 0),
@@ -724,6 +731,7 @@ class Brain:
         }
         memory_summary_text = (
             f"queued={memory_payload['queued_ops']} written={memory_payload['attempted_writes']} "
+            f"blocked={memory_payload['blocked_writes']} "
             f"facts={memory_payload['facts_extracted']} promotions={memory_payload['promotions']}"
         )
         result.logs.append(
@@ -778,9 +786,19 @@ class Brain:
             "web_result_count": int(web_summary.get("result_count") or 0),
             "web_sources_scanned": int(_as_dict(web_summary.get("sources")).get("scanned") or 0),
             "web_sources_selected": int(_as_dict(web_summary.get("sources")).get("selected") or 0),
+            "factual_mode_used": str(
+                factual_summary.get("factual_mode")
+                or meta.get("factual_response_mode")
+                or ""
+            ),
+            "evidence_quality": float(factual_summary.get("evidence_quality") or 0.0),
+            "conflict_severity": float(factual_summary.get("conflict_severity") or 0.0),
+            "final_factual_confidence": float(factual_summary.get("final_factual_confidence") or 0.0),
+            "cautious_answer": bool(factual_summary.get("cautious_answer")),
             "memory_hits": int(memory_hits),
             "facts_extracted": int(combined.get("facts_extracted") or 0),
             "promotions": int(combined.get("promotions") or 0),
+            "memory_write_blocked": bool(int(combined.get("blocked_writes") or 0) > 0),
             "issues": list(issues),
             "warnings": list(warnings),
             "status": str(result.status or "ok"),
@@ -788,9 +806,11 @@ class Brain:
         final_summary_text = (
             f"intent={final_payload['final_intent'] or '-'} "
             f"web_used={str(bool(final_payload['web_used'])).lower()} "
+            f"factual_mode={final_payload['factual_mode_used'] or '-'} "
             f"memory_hits={final_payload['memory_hits']} "
             f"facts={final_payload['facts_extracted']} "
             f"promotions={final_payload['promotions']} "
+            f"blocked={int(bool(final_payload['memory_write_blocked']))} "
             f"warnings={len(warnings)}"
         )
         result.logs.append(
@@ -811,6 +831,7 @@ class Brain:
                 intent_summary=intent_summary,
                 intent_alignment_summary=intent_alignment_summary,
                 web_summary=web_summary,
+                factual_summary=factual_summary,
                 memory_hits=memory_hits,
                 facts_extracted=int(combined.get("facts_extracted") or 0),
                 promotions=int(combined.get("promotions") or 0),
@@ -825,6 +846,7 @@ class Brain:
         return {
             "attempted_writes": 0,
             "stored_records": 0,
+            "blocked_writes": 0,
             "facts_extracted": 0,
             "promotions": 0,
             "user_turns_written": 0,
@@ -849,19 +871,25 @@ class Brain:
         summary["attempted_writes"] = int(summary.get("attempted_writes") or 0) + 1
         stored_ids = list(getattr(ingest_result, "stored_ids", []) or [])
         promoted_ids = list(getattr(ingest_result, "promoted_ids", []) or [])
+        dropped_ids = list(getattr(ingest_result, "dropped_ids", []) or [])
         extracted_facts = list(getattr(ingest_result, "extracted_facts", []) or [])
         summary["stored_records"] = int(summary.get("stored_records") or 0) + len(stored_ids)
+        summary["blocked_writes"] = int(summary.get("blocked_writes") or 0) + len(dropped_ids)
         summary["facts_extracted"] = int(summary.get("facts_extracted") or 0) + len(extracted_facts)
         summary["promotions"] = int(summary.get("promotions") or 0) + len(promoted_ids)
         key = str(bucket or "").strip().lower()
         if key == "user_turn":
-            summary["user_turns_written"] = int(summary.get("user_turns_written") or 0) + 1
+            if stored_ids:
+                summary["user_turns_written"] = int(summary.get("user_turns_written") or 0) + 1
         elif key == "assistant_turn":
-            summary["assistant_turns_written"] = int(summary.get("assistant_turns_written") or 0) + 1
+            if stored_ids:
+                summary["assistant_turns_written"] = int(summary.get("assistant_turns_written") or 0) + 1
         elif key == "conversation_summary":
-            summary["conversation_summaries_written"] = int(summary.get("conversation_summaries_written") or 0) + 1
+            if stored_ids:
+                summary["conversation_summaries_written"] = int(summary.get("conversation_summaries_written") or 0) + 1
         elif key == "web_memory_write":
-            summary["web_memory_items_written"] = int(summary.get("web_memory_items_written") or 0) + 1
+            if stored_ids:
+                summary["web_memory_items_written"] = int(summary.get("web_memory_items_written") or 0) + 1
 
     @staticmethod
     def _merge_memory_write_summaries(*parts: dict[str, Any]) -> dict[str, Any]:
@@ -871,6 +899,7 @@ class Brain:
             for key in (
                 "attempted_writes",
                 "stored_records",
+                "blocked_writes",
                 "facts_extracted",
                 "promotions",
                 "user_turns_written",
@@ -1084,6 +1113,141 @@ class Brain:
         }
 
     @staticmethod
+    def _assistant_memory_web_meta(meta: dict[str, Any]) -> dict[str, Any]:
+        row = _as_dict(meta)
+        summaries = _as_dict(row.get("turn_log_summaries"))
+        web_summary = _as_dict(summaries.get("web_summary"))
+        evidence_quality = _as_dict(row.get("web_evidence_quality"))
+        web_context = _as_dict(row.get("web_evidence_context"))
+        source_block = _as_dict(web_summary.get("sources"))
+        evidence_block = _as_dict(web_summary.get("evidence"))
+        policy_block = _as_dict(web_summary.get("policy"))
+        issues = [str(x).strip() for x in list(web_summary.get("issues") or []) if str(x).strip()]
+        conflict_notes = [
+            str(x).strip()
+            for x in list(web_context.get("conflict_notes") or [])
+            if str(x).strip()
+        ]
+        conflict_flags: list[str] = []
+        if bool(web_context.get("conflicting_sources")) or "source_conflict" in issues:
+            conflict_flags.append("source_conflict")
+        if any("numeric_conflict" in note.lower() for note in conflict_notes):
+            conflict_flags.append("numeric_conflict")
+        if "low_evidence_quality" in issues:
+            conflict_flags.append("low_evidence_quality")
+        return {
+            "web_used": bool(
+                web_summary.get("web_used")
+                if web_summary.get("web_used") is not None
+                else row.get("web_used")
+            ),
+            "web_factual_mode": str(
+                row.get("factual_response_mode")
+                or web_context.get("factual_response_mode")
+                or ""
+            ).strip(),
+            "web_query_intent": str(
+                row.get("web_query_intent")
+                or web_summary.get("resolved_intent")
+                or ""
+            ).strip(),
+            "web_search_mode": str(
+                row.get("web_search_mode")
+                or web_summary.get("mode")
+                or ""
+            ).strip(),
+            "web_primary_category": str(
+                policy_block.get("primary_category")
+                or ""
+            ).strip(),
+            "web_evidence_quality_score": float(evidence_quality.get("score") or web_summary.get("quality_score") or 0.0),
+            "web_evidence_quality": {
+                "score": float(evidence_quality.get("score") or web_summary.get("quality_score") or 0.0),
+                "usable_results": int(evidence_quality.get("usable_results") or 0),
+                "unique_domains": int(evidence_quality.get("unique_domains") or 0),
+                "trusted_count": int(evidence_quality.get("trusted_count") or 0),
+                "has_conflict": bool(
+                    evidence_quality.get("has_conflict")
+                    if evidence_quality.get("has_conflict") is not None
+                    else web_context.get("conflicting_sources")
+                ),
+                "selected_avg_quality": float(evidence_quality.get("selected_avg_quality") or 0.0),
+                "topical_filtered_sources": int(evidence_quality.get("topical_filtered_sources") or 0),
+                "conflict_severity": float(evidence_quality.get("conflict_severity") or 0.0),
+                "evidence_strength": float(evidence_quality.get("evidence_strength") or 0.0),
+                "final_factual_confidence": float(evidence_quality.get("final_factual_confidence") or 0.0),
+                "cautious_synthesis": bool(evidence_quality.get("cautious_synthesis")),
+                "factual_mode": str(
+                    row.get("factual_response_mode")
+                    or web_context.get("factual_response_mode")
+                    or ""
+                ).strip(),
+                "selected_result_factual_page_type": str(
+                    evidence_quality.get("selected_result_factual_page_type")
+                    or web_context.get("selected_result_factual_page_type")
+                    or ""
+                ).strip(),
+                "true_conflict_notes": [
+                    str(x).strip()
+                    for x in list(
+                        evidence_quality.get("true_conflict_notes")
+                        or web_context.get("true_conflict_notes")
+                        or []
+                    )
+                    if str(x).strip()
+                ][:6],
+                "type_mismatch_notes": [
+                    str(x).strip()
+                    for x in list(
+                        evidence_quality.get("type_mismatch_notes")
+                        or web_context.get("type_mismatch_notes")
+                        or []
+                    )
+                    if str(x).strip()
+                ][:6],
+            },
+            "web_sources_scanned": int(source_block.get("scanned") or 0),
+            "web_sources_selected": int(source_block.get("selected") or 0),
+            "web_evidence_count": int(evidence_block.get("count") or 0),
+            "web_conflicting_sources": bool(web_context.get("conflicting_sources")),
+            "web_conflict_flags": conflict_flags,
+            "web_conflict_notes": conflict_notes[:6],
+            "web_low_evidence_quality": bool("low_evidence_quality" in issues),
+            "web_selected_avg_quality": float(evidence_quality.get("selected_avg_quality") or 0.0),
+            "web_topical_filtered_sources": int(evidence_quality.get("topical_filtered_sources") or 0),
+            "web_conflict_severity": float(evidence_quality.get("conflict_severity") or 0.0),
+            "web_evidence_strength": float(evidence_quality.get("evidence_strength") or 0.0),
+            "web_final_factual_confidence": float(evidence_quality.get("final_factual_confidence") or 0.0),
+            "web_cautious_synthesis": bool(evidence_quality.get("cautious_synthesis")),
+            "web_selected_result_factual_page_type": str(
+                evidence_quality.get("selected_result_factual_page_type")
+                or web_context.get("selected_result_factual_page_type")
+                or ""
+            ).strip(),
+            "web_true_conflict_notes": [
+                str(x).strip()
+                for x in list(
+                    evidence_quality.get("true_conflict_notes")
+                    or web_context.get("true_conflict_notes")
+                    or []
+                )
+                if str(x).strip()
+            ][:6],
+            "web_type_mismatch_notes": [
+                str(x).strip()
+                for x in list(
+                    evidence_quality.get("type_mismatch_notes")
+                    or web_context.get("type_mismatch_notes")
+                    or []
+                )
+                if str(x).strip()
+            ][:6],
+            "web_factual_basis": dict(web_context.get("factual_basis") or {}),
+            "web_numeric_candidates_selected": int(evidence_quality.get("numeric_candidates_selected") or 0),
+            "web_numeric_candidates_rejected": int(evidence_quality.get("numeric_candidates_rejected") or 0),
+        }
+
+    @staticmethod
     def _turn_meta_from_ops(ops: list[dict[str, Any]], op_name: str) -> dict[str, Any]:
         target = str(op_name or "").strip().lower()
         for row in list(ops or []):
@@ -1176,6 +1340,7 @@ def _human_turn_summary_lines(
     intent_summary: dict[str, Any],
     intent_alignment_summary: dict[str, Any],
     web_summary: dict[str, Any],
+    factual_summary: dict[str, Any] | None = None,
     memory_hits: int,
     facts_extracted: int,
     promotions: int,
@@ -1208,6 +1373,10 @@ def _human_turn_summary_lines(
     selected = int(web_sources.get("selected") or 0)
     evidence_count = int(evidence.get("count") or 0)
     quality_score = float(evidence.get("quality_score") or 0.0)
+    factual_row = _as_dict(factual_summary)
+    factual_mode = str(factual_row.get("factual_mode") or "").strip()
+    factual_conf = float(factual_row.get("final_factual_confidence") or 0.0)
+    factual_cautious = bool(factual_row.get("cautious_answer"))
     issue_text = ", ".join(str(x).strip() for x in list(issues or []) if str(x).strip()) or "none"
     warning_text = ", ".join(str(x).strip() for x in list(warnings or []) if str(x).strip()) or "none"
     return [
@@ -1223,6 +1392,11 @@ def _human_turn_summary_lines(
         (
             f"web: used={'yes' if web_used else 'no'} mode={mode} "
             f"sources={scanned}/{selected} evidence={evidence_count} quality={quality_score:.3f}"
+            + (
+                f" factual_mode={factual_mode} confidence={factual_conf:.3f} cautious={'yes' if factual_cautious else 'no'}"
+                if factual_mode
+                else ""
+            )
         ),
         f"memory: hits={int(memory_hits)} facts={int(facts_extracted)} promotions={int(promotions)}",
         f"issues: {issue_text}",

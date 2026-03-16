@@ -5,6 +5,7 @@ import re
 import time
 from typing import Any
 
+from memory.ingest_analyzer import EntityItem, IngestAnalysis, NumericFact, StableFact
 from memory.memory_models import FactRecordV2, MemoryScope, MemoryStatus
 
 
@@ -151,6 +152,7 @@ class FactExtractor:
         speaker: str,
         scope: MemoryScope = MemoryScope.CONVERSATION,
         mode: str = MODE_BALANCED,
+        analysis: IngestAnalysis | None = None,
     ) -> list[FactRecordV2]:
         src = self._normalize_text(text)
         if not src:
@@ -165,6 +167,33 @@ class FactExtractor:
 
         segments = self._segments(src)
         rows: list[FactRecordV2] = []
+        rows.extend(
+            self._analysis_facts(
+                analysis=analysis,
+                subject=subject,
+                scope=scope,
+                event_id=event_id,
+                namespace=namespace,
+            )
+        )
+        rows.extend(
+            self._facts_from_entities(
+                analysis=analysis,
+                subject=subject,
+                scope=scope,
+                event_id=event_id,
+                namespace=namespace,
+            )
+        )
+        rows.extend(
+            self._facts_from_numeric(
+                analysis=analysis,
+                subject=subject,
+                scope=scope,
+                event_id=event_id,
+                namespace=namespace,
+            )
+        )
         rows.extend(self._identity_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
         rows.extend(self._project_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
         rows.extend(self._environment_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
@@ -220,6 +249,226 @@ class FactExtractor:
         if role in {"user", "human"}:
             return "user"
         return "other"
+
+    def _analysis_facts(
+        self,
+        *,
+        analysis: IngestAnalysis | None,
+        subject: str,
+        scope: MemoryScope,
+        event_id: str,
+        namespace: str,
+    ) -> list[FactRecordV2]:
+        if analysis is None:
+            return []
+        out: list[FactRecordV2] = []
+        evidence = str(analysis.raw_text or analysis.search_text or analysis.canonical_text or "").strip()
+        for item in list(analysis.stable_facts or []):
+            if not isinstance(item, StableFact):
+                continue
+            predicate = self._analysis_predicate(item)
+            if not predicate:
+                continue
+            value = self._analysis_value(predicate=predicate, value=item.value)
+            if value in {"", None}:
+                continue
+            relation = str(item.relation or item.subject or "structured").strip().lower()
+            importance = 0.82 if relation in {"identity", "project"} else 0.74
+            metadata_extra = {
+                "analysis_source": "ingest_analyzer",
+                "stable_subject": str(item.subject or "").strip().lower(),
+                "stable_predicate": str(item.predicate or "").strip().lower(),
+                "structured": True,
+            }
+            self._append_fact(
+                out,
+                subject=subject,
+                predicate=predicate,
+                value=value,
+                scope=scope,
+                confidence=max(0.72, min(1.0, float(item.confidence))),
+                importance=importance,
+                evidence=evidence,
+                event_id=event_id,
+                relation=relation,
+                namespace=namespace,
+                allow_numeric=True,
+                metadata_extra=metadata_extra,
+            )
+        return out
+
+    def _facts_from_entities(
+        self,
+        *,
+        analysis: IngestAnalysis | None,
+        subject: str,
+        scope: MemoryScope,
+        event_id: str,
+        namespace: str,
+    ) -> list[FactRecordV2]:
+        if analysis is None:
+            return []
+        out: list[FactRecordV2] = []
+        evidence = str(analysis.raw_text or analysis.search_text or analysis.canonical_text or "").strip()
+        mapping: dict[str, tuple[str, float, float, str]] = {
+            "gpu_model": ("environment_gpu_model", 0.86, 0.78, "environment"),
+            "cpu_model": ("environment_cpu_model", 0.84, 0.76, "environment"),
+            "python_version": ("environment_runtime_python", 0.90, 0.80, "environment"),
+            "os_name": ("environment_os", 0.82, 0.74, "environment"),
+            "project_name": ("project_name", 0.84, 0.84, "project"),
+            "person_name": ("identity_name", 0.90, 0.86, "identity"),
+        }
+        for item in list(analysis.entities or []):
+            if not isinstance(item, EntityItem):
+                continue
+            entity_type = str(item.type or "").strip().lower()
+            target = mapping.get(entity_type)
+            value = str(item.canonical or "").strip()
+            if target is None or not value:
+                continue
+            row = self._make_fact(
+                subject=subject,
+                predicate=target[0],
+                value=self._analysis_value(predicate=target[0], value=value),
+                confidence=max(target[1], float(item.confidence or 0.0)),
+                importance=target[2],
+                scope=scope,
+                evidence=evidence,
+                event_id=event_id,
+                relation=target[3],
+                namespace=namespace,
+                metadata_extra={
+                    "analysis_source": "ingest_analyzer",
+                    "structured": True,
+                    "structured_source": "entities",
+                    "entity_type": entity_type,
+                },
+            )
+            if row is not None:
+                out.append(row)
+        return out
+
+    def _facts_from_numeric(
+        self,
+        *,
+        analysis: IngestAnalysis | None,
+        subject: str,
+        scope: MemoryScope,
+        event_id: str,
+        namespace: str,
+    ) -> list[FactRecordV2]:
+        if analysis is None:
+            return []
+        out: list[FactRecordV2] = []
+        evidence = str(analysis.raw_text or analysis.search_text or analysis.canonical_text or "").strip()
+        mapping: dict[str, tuple[str, float, float, str]] = {
+            "age_years": ("identity_age_years", 0.93, 0.88, "identity"),
+            "vram_gb": ("environment_gpu_vram_gb", 0.90, 0.80, "environment"),
+            "ram_gb": ("environment_ram_gb", 0.89, 0.78, "environment"),
+            "memory_gb": ("environment_memory_gb", 0.78, 0.70, "environment"),
+        }
+        for item in list(analysis.numeric_facts or []):
+            if not isinstance(item, NumericFact):
+                continue
+            kind = str(item.kind or "").strip().lower()
+            target = mapping.get(kind)
+            if target is None:
+                continue
+            row = self._make_fact(
+                subject=subject,
+                predicate=target[0],
+                value=item.value,
+                confidence=target[1],
+                importance=target[2],
+                scope=scope,
+                evidence=evidence,
+                event_id=event_id,
+                relation=target[3],
+                namespace=namespace,
+                allow_numeric=True,
+                metadata_extra={
+                    "analysis_source": "ingest_analyzer",
+                    "structured": True,
+                    "structured_source": "numeric_facts",
+                    "numeric_kind": kind,
+                },
+            )
+            if row is not None:
+                out.append(row)
+        return out
+
+    @staticmethod
+    def _analysis_predicate(item: StableFact) -> str:
+        subject = str(item.subject or "").strip().lower()
+        predicate = str(item.predicate or "").strip().lower()
+        mapping = {
+            ("identity", "name"): "identity_name",
+            ("identity", "age_years"): "identity_age_years",
+            ("project", "name"): "project_name",
+            ("environment", "os_name"): "environment_os",
+            ("environment", "tool_name"): "environment_tool",
+            ("environment", "python_version"): "environment_runtime_python",
+            ("environment", "llm_model"): "environment_llm_model",
+            ("hardware", "gpu_model"): "environment_gpu_model",
+            ("hardware", "cpu_model"): "environment_cpu_model",
+            ("hardware", "gpu_vram_size"): "environment_gpu_vram_size",
+            ("hardware", "gpu_vram_gb"): "environment_gpu_vram_gb",
+            ("hardware", "ram_size"): "environment_ram_size",
+            ("hardware", "ram_gb"): "environment_ram_gb",
+            ("hardware", "memory_gb"): "environment_memory_gb",
+        }
+        value = mapping.get((subject, predicate))
+        if value:
+            return value
+        if subject and predicate:
+            return f"{subject}_{predicate}"
+        return predicate
+
+    @staticmethod
+    def _analysis_value(*, predicate: str, value: Any) -> Any:
+        pred = str(predicate or "").strip().lower()
+        raw = str(value or "").strip()
+        if not raw:
+            return value
+        if pred == "environment_runtime_python":
+            return raw if raw.lower().startswith("python ") else f"python {raw}"
+        if pred in {"environment_os", "environment_tool"}:
+            return raw.lower()
+        return value
+
+    def _make_fact(
+        self,
+        *,
+        subject: str,
+        predicate: str,
+        value: Any,
+        confidence: float,
+        importance: float,
+        scope: MemoryScope,
+        evidence: str,
+        event_id: str,
+        relation: str,
+        namespace: str,
+        allow_numeric: bool = False,
+        metadata_extra: dict[str, Any] | None = None,
+    ) -> FactRecordV2 | None:
+        rows: list[FactRecordV2] = []
+        self._append_fact(
+            rows,
+            subject=subject,
+            predicate=predicate,
+            value=value,
+            scope=scope,
+            confidence=confidence,
+            importance=importance,
+            evidence=evidence,
+            event_id=event_id,
+            relation=relation,
+            namespace=namespace,
+            allow_numeric=allow_numeric,
+            metadata_extra=metadata_extra,
+        )
+        return rows[0] if rows else None
 
     @staticmethod
     def _mk(
@@ -377,6 +626,14 @@ class FactExtractor:
             return ""
         return _SPACE_RE.sub(" ", re.sub(r"[\W_]+", " ", src)).strip()
 
+    @staticmethod
+    def _subject_allows_fact(*, subject: str, predicate: str) -> bool:
+        owner = str(subject or "").strip().lower()
+        pred = str(predicate or "").strip().lower()
+        if owner != "user" and (pred.startswith("environment_") or pred.startswith("identity_")):
+            return False
+        return True
+
     def _append_fact(
         self,
         out: list[FactRecordV2],
@@ -392,25 +649,58 @@ class FactExtractor:
         relation: str,
         namespace: str,
         valid_to: float | None = None,
+        allow_numeric: bool = False,
+        metadata_extra: dict[str, Any] | None = None,
     ) -> None:
-        cleaned = self._clean_value(str(value or ""))
-        if not self._is_informative(cleaned, min_chars=2):
+        if not self._subject_allows_fact(subject=subject, predicate=predicate):
             return
-        out.append(
-            self._mk(
-                subject=subject,
-                predicate=predicate,
-                value=cleaned,
-                scope=scope,
-                confidence=confidence,
-                importance=importance,
-                evidence=evidence,
-                event_id=event_id,
-                relation=relation,
-                valid_to=valid_to,
-                namespace=namespace,
-            )
+        cleaned = self._clean_value(str(value or ""))
+        if allow_numeric:
+            if not cleaned or re.fullmatch(r"[\W_]+", cleaned):
+                return
+        elif not self._is_informative(cleaned, min_chars=2):
+            return
+        row = self._mk(
+            subject=subject,
+            predicate=predicate,
+            value=cleaned,
+            scope=scope,
+            confidence=confidence,
+            importance=importance,
+            evidence=evidence,
+            event_id=event_id,
+            relation=relation,
+            valid_to=valid_to,
+            namespace=namespace,
         )
+        if metadata_extra:
+            row = FactRecordV2(
+                subject=row.subject,
+                predicate=row.predicate,
+                value=row.value,
+                scope=row.scope,
+                confidence=row.confidence,
+                importance=row.importance,
+                evidence=row.evidence,
+                source_event_id=row.source_event_id,
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
+                status=row.status,
+                canonical_key=row.canonical_key,
+                relation=row.relation,
+                id=row.id,
+                text=row.text,
+                memory_type=row.memory_type,
+                level=row.level,
+                namespace=row.namespace,
+                metadata={**dict(row.metadata or {}), **dict(metadata_extra or {})},
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+                parent_id=row.parent_id,
+                chunk_index=row.chunk_index,
+                version=row.version,
+            )
+        out.append(row)
 
     def _extract_pattern_facts(
         self,
@@ -462,7 +752,10 @@ class FactExtractor:
             return out
         rules = [
             {
-                "pattern": re.compile(r"\b(?:my name is|i am|i'm)\s+([A-Za-zА-Яа-яЁёІіЇїЄєҐґ][A-Za-zА-Яа-яЁёІіЇїЄєҐґ' -]{1,40})", re.I),
+                "pattern": re.compile(
+                    r"\b(?:my name is)\s+([A-Za-zА-Яа-яЁёІіЇїЄєҐґ][A-Za-zА-Яа-яЁёІіЇїЄєҐґ' -]{1,40})",
+                    re.I,
+                ),
                 "predicate": "identity_name",
                 "relation": "identity",
                 "confidence": 0.88,
@@ -582,6 +875,8 @@ class FactExtractor:
         self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
+        if subject != "user":
+            return out
         candidate_segments = [segment for segment in list(segments or []) if self._has_any(segment, _ENVIRONMENT_CUES)]
         if not candidate_segments:
             return out
@@ -900,16 +1195,25 @@ class FactExtractor:
         return out
 
     @staticmethod
-    def _dedupe_v2(rows: list[FactRecordV2]) -> list[FactRecordV2]:
+    def _dedupe_fact_records(rows: list[FactRecordV2]) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         seen: set[tuple[str, str, str]] = set()
         for row in list(rows or []):
-            key = (str(row.subject), str(row.predicate), str(row.value))
+            normalized_value = _SPACE_RE.sub(" ", str(row.value or "").strip().lower())
+            key = (
+                str(row.subject or "").strip().lower(),
+                str(row.predicate or "").strip().lower(),
+                normalized_value,
+            )
             if key in seen:
                 continue
             seen.add(key)
             out.append(row)
         return out
+
+    @staticmethod
+    def _dedupe_v2(rows: list[FactRecordV2]) -> list[FactRecordV2]:
+        return FactExtractor._dedupe_fact_records(rows)
 
 def extract_facts(text: str) -> dict[str, Any]:
     rows = FactExtractor().extract_v2(text=text, metadata={}, speaker="user", scope=MemoryScope.CONVERSATION)

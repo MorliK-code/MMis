@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from modules.internet.web.query_text import normalize_search_text, strip_service_command_prefix
+
 
 _WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁёІіЇїЄєҐґ0-9_]+")
 _FOLLOWUP_STACK_RE = re.compile(r"\s*;\s*follow-?up:\s*", flags=re.I)
@@ -74,7 +76,7 @@ def resolve_continuation(
     now_utc: dt.datetime | None = None,
 ) -> ContinuationResolution:
     cfg = config or ContinuityConfig()
-    source = str(query or "").strip()
+    source = _sanitize_task_query(query)
     if not source:
         return ContinuationResolution(used=False, resolved_query="")
 
@@ -138,26 +140,27 @@ def build_continuity_patch(
     now = now_utc or dt.datetime.now(dt.timezone.utc)
     now_iso = now.isoformat()
     task = _as_dict(active_task)
+    cleaned_query = _sanitize_task_query(query)
 
     if not task:
         payload_key = "|".join(
             [
-                str(query or "").strip().lower(),
+                str(cleaned_query or "").strip().lower(),
                 str(resolved_intent or "").strip().lower(),
                 str(resolved_location or "").strip().lower(),
             ]
         )
         task = {
             "task_id": f"task_{hashlib.sha1(payload_key.encode('utf-8', errors='ignore')).hexdigest()[:12]}",
-            "query": str(query or "").strip(),
+            "query": str(cleaned_query or "").strip(),
             "resolved_intent": str(resolved_intent or "").strip().lower(),
             "resolved_concepts": [str(x or "").strip().lower() for x in list(resolved_concepts or []) if str(x or "").strip()],
             "resolved_location": str(resolved_location or "").strip(),
             "turn_timestamp": now_iso,
         }
 
-    base_query = _task_base_query(active_task=task, fallback_query=query)
-    latest_query = str(task.get("latest_query") or query or "").strip()
+    base_query = _task_base_query(active_task=task, fallback_query=cleaned_query)
+    latest_query = _sanitize_task_query(task.get("latest_query") or cleaned_query or "")
     if not latest_query:
         latest_query = base_query
     if base_query:
@@ -194,10 +197,10 @@ def _merge_query(*, base_query: str, followup_query: str) -> str:
 
 
 def _task_base_query(*, active_task: dict[str, Any], fallback_query: str = "") -> str:
-    base = str(active_task.get("base_query") or "").strip()
+    base = _sanitize_task_query(active_task.get("base_query") or "")
     if base:
         return base
-    query = str(active_task.get("query") or fallback_query or "").strip()
+    query = _sanitize_task_query(active_task.get("query") or fallback_query or "")
     if not query:
         return ""
     parts = [str(x or "").strip() for x in _FOLLOWUP_STACK_RE.split(query) if str(x or "").strip()]
@@ -205,12 +208,18 @@ def _task_base_query(*, active_task: dict[str, Any], fallback_query: str = "") -
 
 
 def _normalize_followup_query(value: str) -> str:
-    src = str(value or "").strip()
+    src = _sanitize_task_query(value)
     if not src:
         return ""
     src = _FOLLOWUP_LEADING_RE.sub("", src).strip()
     src = src.strip(" \t\r\n,;:-")
     return src.rstrip(" ?!.")
+
+
+def _sanitize_task_query(value: Any) -> str:
+    raw = strip_service_command_prefix(str(value or ""))
+    cleaned = normalize_search_text(raw)
+    return str(cleaned or raw or "").strip()
 
 
 def _is_followup_phrase(text: str, markers: tuple[str, ...]) -> bool:

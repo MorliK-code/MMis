@@ -18,9 +18,43 @@ from memory.memory_models import (
     MemoryStatus,
     VectorIndexBackend,
 )
+from memory.retrieval_projection import ensure_memory_views, record_search_text
 
 
 EMBED_VERSION = "memory_v2"
+
+
+def _record_search_text(record: MemoryRecord) -> str:
+    return record_search_text(record.text, metadata=record.metadata)
+
+
+def _with_memory_views(record: MemoryRecord) -> MemoryRecord:
+    metadata = ensure_memory_views(record.text, metadata=record.metadata)
+    if metadata == dict(record.metadata or {}):
+        return record
+    return MemoryRecord(
+        id=record.id,
+        text=record.text,
+        memory_type=record.memory_type,
+        level=record.level,
+        scope=record.scope,
+        namespace=record.namespace,
+        metadata=metadata,
+        embedding=(list(record.embedding) if isinstance(record.embedding, list) else record.embedding),
+        importance=record.importance,
+        confidence=record.confidence,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        expires_at=record.expires_at,
+        status=record.status,
+        version=record.version,
+        parent_id=record.parent_id,
+        chunk_index=record.chunk_index,
+        source_event_id=record.source_event_id,
+        embedding_model=record.embedding_model,
+        embedding_fingerprint=record.embedding_fingerprint,
+        embedding_version=record.embedding_version,
+    )
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -254,11 +288,11 @@ class ChromaVectorBackend(VectorIndexBackend):
             try:
                 payload = json.loads(payload_raw)
                 if isinstance(payload, dict):
-                    return MemoryRecord.from_dict(payload)
+                    return _with_memory_views(MemoryRecord.from_dict(payload))
             except Exception:
                 return None
         try:
-            return MemoryRecord.from_dict(dict(value))
+            return _with_memory_views(MemoryRecord.from_dict(dict(value)))
         except Exception:
             return None
 
@@ -402,6 +436,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                 CREATE TABLE IF NOT EXISTS lexical_records (
                     id TEXT PRIMARY KEY,
                     text TEXT NOT NULL,
+                    search_text TEXT NOT NULL,
                     namespace TEXT NOT NULL,
                     scope TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -421,6 +456,14 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                 )
                 """
             )
+            columns = {
+                str(row[1] or "").strip().lower()
+                for row in self._conn.execute("PRAGMA table_info(lexical_records)").fetchall()
+            }
+            if "search_text" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE lexical_records ADD COLUMN search_text TEXT NOT NULL DEFAULT ''"
+                )
             self._conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS lexical_fts USING fts5(id UNINDEXED, text)")
             self._conn.commit()
 
@@ -429,25 +472,32 @@ class SQLiteFTSBackend(LexicalIndexBackend):
             data = {
                 "id": row[0],
                 "text": row[1],
-                "namespace": row[2],
-                "scope": row[3],
-                "status": row[4],
-                "memory_type": row[5],
-                "metadata_json": row[6],
-                "importance": row[7],
-                "confidence": row[8],
-                "created_at": row[9],
-                "updated_at": row[10],
-                "expires_at": row[11],
-                "parent_id": row[12],
-                "chunk_index": row[13],
-                "version": row[14],
-                "embedding_model": row[15],
-                "embedding_fingerprint": row[16],
-                "embedding_version": row[17],
+                "search_text": row[2],
+                "namespace": row[3],
+                "scope": row[4],
+                "status": row[5],
+                "memory_type": row[6],
+                "metadata_json": row[7],
+                "importance": row[8],
+                "confidence": row[9],
+                "created_at": row[10],
+                "updated_at": row[11],
+                "expires_at": row[12],
+                "parent_id": row[13],
+                "chunk_index": row[14],
+                "version": row[15],
+                "embedding_model": row[16],
+                "embedding_fingerprint": row[17],
+                "embedding_version": row[18],
             }
         else:
             data = dict(row)
+        metadata = json.loads(str(data.get("metadata_json") or "{}"))
+        if str(data.get("search_text") or "").strip():
+            metadata = ensure_memory_views(str(data.get("text") or ""), metadata=metadata)
+            views = dict(metadata.get("memory_views") or {})
+            views["search_text"] = str(data.get("search_text") or "").strip()
+            metadata["memory_views"] = views
         return MemoryRecord.from_dict(
             {
                 "id": str(data.get("id") or ""),
@@ -456,7 +506,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                 "scope": str(data.get("scope") or MemoryScope.CONVERSATION.value),
                 "status": str(data.get("status") or MemoryStatus.ACTIVE.value),
                 "memory_type": str(data.get("memory_type") or "message"),
-                "metadata": json.loads(str(data.get("metadata_json") or "{}")),
+                "metadata": metadata,
                 "importance": float(data.get("importance") or 0.5),
                 "confidence": float(data.get("confidence") or 0.5),
                 "created_at": float(data.get("created_at") or 0.0),
@@ -480,23 +530,26 @@ class SQLiteFTSBackend(LexicalIndexBackend):
             return
         with self._lock:
             for record in rows:
+                metadata = ensure_memory_views(record.text, metadata=record.metadata)
+                search_text = record_search_text(record.text, metadata=metadata)
                 self._conn.execute(
                     """
                     INSERT OR REPLACE INTO lexical_records (
-                        id, text, namespace, scope, status, memory_type, metadata_json,
+                        id, text, search_text, namespace, scope, status, memory_type, metadata_json,
                         importance, confidence, created_at, updated_at, expires_at,
                         parent_id, chunk_index, version, embedding_model,
                         embedding_fingerprint, embedding_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.id,
                         record.text,
+                        search_text,
                         record.namespace,
                         record.scope.value,
                         record.status.value,
                         record.memory_type.value,
-                        json.dumps(record.metadata or {}, ensure_ascii=False),
+                        json.dumps(metadata, ensure_ascii=False),
                         float(record.importance),
                         float(record.confidence),
                         float(record.created_at),
@@ -511,7 +564,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                     ),
                 )
                 self._conn.execute("DELETE FROM lexical_fts WHERE id=?", (record.id,))
-                self._conn.execute("INSERT INTO lexical_fts(id, text) VALUES (?, ?)", (record.id, record.text))
+                self._conn.execute("INSERT INTO lexical_fts(id, text) VALUES (?, ?)", (record.id, search_text))
             self._conn.commit()
 
     def delete(self, record_id: str) -> bool:
@@ -528,12 +581,12 @@ class SQLiteFTSBackend(LexicalIndexBackend):
         tokens = [x.strip() for x in re.split(r"\s+", str(query or "").strip()) if x.strip()]
         if not tokens:
             return []
-        where = " OR ".join(["text LIKE ?"] * len(tokens))
+        where = " OR ".join(["search_text LIKE ?"] * len(tokens))
         params = tuple([f"%{x}%" for x in tokens] + [max(1, int(limit))])
         with self._lock:
             rows = self._conn.execute(
                 f"""
-                SELECT id, text, namespace, scope, status, memory_type, metadata_json,
+                SELECT id, text, search_text, namespace, scope, status, memory_type, metadata_json,
                        importance, confidence, created_at, updated_at, expires_at,
                        parent_id, chunk_index, version, embedding_model,
                        embedding_fingerprint, embedding_version
@@ -546,7 +599,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
         out: list[tuple[MemoryRecord, float]] = []
         for row in rows:
             record = self._to_record(row)
-            text_low = str(record.text or "").lower()
+            text_low = _record_search_text(record).lower()
             overlap = sum(1 for token in tokens if token.lower() in text_low)
             score = min(1.0, 0.2 + (0.8 * (float(overlap) / float(max(1, len(tokens))))))
             out.append((record, score))
@@ -568,7 +621,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
         limit = max(1, int(top_k * 4))
         try:
             sql = """
-                    SELECT r.id, r.text, r.namespace, r.scope, r.status, r.memory_type, r.metadata_json,
+                    SELECT r.id, r.text, r.search_text, r.namespace, r.scope, r.status, r.memory_type, r.metadata_json,
                            r.importance, r.confidence, r.created_at, r.updated_at, r.expires_at,
                            r.parent_id, r.chunk_index, r.version, r.embedding_model,
                            r.embedding_fingerprint, r.embedding_version,
@@ -588,7 +641,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                         rows = self._conn.execute(sql, (relaxed, limit)).fetchall()
             scored: list[tuple[MemoryRecord, float]] = []
             for row in rows:
-                record = self._to_record(row[:18])
+                record = self._to_record(row[:19])
                 if record.namespace != str(namespace):
                     continue
                 if record.scope == MemoryScope.PRIVATE_RUNTIME:
@@ -599,7 +652,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
                     continue
                 if not _matches_filters(record, metadata_filters):
                     continue
-                rank = float(row[18] or 0.0)
+                rank = float(row[19] or 0.0)
                 lexical_score = 1.0 / (1.0 + max(0.0, rank))
                 scored.append((record, lexical_score))
         except Exception:
@@ -614,7 +667,7 @@ class SQLiteFTSBackend(LexicalIndexBackend):
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT id, text, namespace, scope, status, memory_type, metadata_json,
+                SELECT id, text, search_text, namespace, scope, status, memory_type, metadata_json,
                        importance, confidence, created_at, updated_at, expires_at,
                        parent_id, chunk_index, version, embedding_model,
                        embedding_fingerprint, embedding_version
@@ -682,13 +735,17 @@ class VectorStore:
             return
         rows = list(payload.get("records") or []) if isinstance(payload, dict) else []
         loaded: dict[str, MemoryRecord] = {}
+        changed = False
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            record = MemoryRecord.from_dict(row)
+            record = _with_memory_views(MemoryRecord.from_dict(row))
             if record.id:
                 loaded[record.id] = record
+            changed = changed or dict(record.metadata or {}) != dict(row.get("metadata") or {})
         self._records = loaded
+        if changed and loaded:
+            self._save_records()
 
     def _save_records(self) -> None:
         rows = [x.to_dict() for x in self._records.values()]
@@ -757,8 +814,10 @@ class VectorStore:
         fingerprint = str(self.embedding_provider.model_fingerprint())
         version = str(getattr(self.embedding_provider, "embedding_version", EMBED_VERSION) or EMBED_VERSION)
         embedding = list(record.embedding or [])
+        metadata = ensure_memory_views(record.text, metadata=record.metadata)
+        search_text = record_search_text(record.text, metadata=metadata)
         if not embedding and record.scope != MemoryScope.PRIVATE_RUNTIME and (force_embed or not self.reindex_required):
-            embedding = list(self.embedding_provider.embed(record.text))
+            embedding = list(self.embedding_provider.embed(search_text))
         return MemoryRecord(
             id=record.id,
             text=record.text,
@@ -766,7 +825,7 @@ class VectorStore:
             level=record.level,
             scope=record.scope,
             namespace=record.namespace,
-            metadata=dict(record.metadata or {}),
+            metadata=metadata,
             embedding=embedding,
             importance=record.importance,
             confidence=record.confidence,
