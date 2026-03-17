@@ -684,7 +684,7 @@ def _resolve_config(
         "default_verbosity_level": 0.46,
         "technical_max_sarcasm": 0.08,
         "terms_enabled": True,
-        "terms_list": ["милашка"],
+        "terms_list": [""],
         "terms_cooldown_turns": 6,
         "terms_cooldown_seconds": 900,
         "terms_max_per_session": 3,
@@ -733,7 +733,7 @@ def _resolve_config(
         "default_verbosity_level": _clamp01(_cfg_float(merged.get("default_verbosity_level"), 0.46)),
         "technical_max_sarcasm": _clamp01(_cfg_float(merged.get("technical_max_sarcasm"), 0.08)),
         "terms_enabled": _cfg_bool(merged.get("terms_enabled"), True),
-        "terms_list": _cfg_list(merged.get("terms_list"), fallback=["милашка"]),
+        "terms_list": _cfg_list(merged.get("terms_list"), fallback=[""]),
         "terms_cooldown_turns": _cfg_int(merged.get("terms_cooldown_turns"), 6, minimum=1),
         "terms_cooldown_seconds": _cfg_int(merged.get("terms_cooldown_seconds"), 900, minimum=1),
         "terms_max_per_session": _cfg_int(merged.get("terms_max_per_session"), 3, minimum=0),
@@ -856,7 +856,7 @@ def _ensure_data_policy_file(path: Path, defaults: dict[str, Any]) -> None:
         f"DEFAULT_VERBOSITY_LEVEL = {float(defaults.get('default_verbosity_level', 0.46))}\n"
         f"TECHNICAL_MAX_SARCASM = {float(defaults.get('technical_max_sarcasm', 0.08))}\n\n"
         f"TERMS_ENABLED = {bool(defaults.get('terms_enabled', True))}\n"
-        f"TERMS_LIST = {repr(list(defaults.get('terms_list') or ['милашка']))}\n"
+        f"TERMS_LIST = {repr(list(defaults.get('terms_list') or ['']))}\n"
         f"TERMS_COOLDOWN_TURNS = {int(defaults.get('terms_cooldown_turns', 6))}\n"
         f"TERMS_COOLDOWN_SECONDS = {int(defaults.get('terms_cooldown_seconds', 900))}\n"
         f"TERMS_MAX_PER_SESSION = {int(defaults.get('terms_max_per_session', 3))}\n"

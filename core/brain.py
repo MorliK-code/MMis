@@ -972,7 +972,7 @@ class Brain:
             "tags": tags,
             "has_code": bool(meta.get("has_code", False)),
             "has_link": bool(meta.get("has_link", False)),
-            "entities": dict(data.get("entities") or {}),
+            "runtime_entities": dict(data.get("runtime_entities") or data.get("entities") or {}),
             "meta": data,
         }
         try:

@@ -4,18 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from memory.memory_models import MemoryLevel, MemoryScope, RetrievalCandidate, RetrievalQuery
+from memory.memory_models import MemoryLevel, MemoryScope, MemoryType, RetrievalCandidate, RetrievalQuery
 
 
 def _level_bonus(level: MemoryLevel) -> float:
-    if level == MemoryLevel.L0_WORKING:
-        return 0.12
-    if level == MemoryLevel.L1_SESSION:
-        return 0.08
     if level == MemoryLevel.L3_SEMANTIC:
+        return 0.14
+    if level == MemoryLevel.L0_WORKING:
+        return 0.08
+    if level == MemoryLevel.L1_SESSION:
         return 0.06
     if level == MemoryLevel.L4_DOCUMENT:
         return 0.02
+    return 0.0
+
+
+def _type_bonus(memory_type: MemoryType) -> float:
+    if memory_type == MemoryType.FACT:
+        return 0.18
     return 0.0
 
 
@@ -45,6 +51,7 @@ class HeuristicReranker:
         for item in rows:
             prefix = str(item.record.id or "").split(":", 1)[0]
             bonus = _level_bonus(item.record.level)
+            bonus += _type_bonus(item.record.memory_type)
             bonus += _scope_bonus(item.record.scope)
             penalty = self.diversity_penalty if prefix in seen_prefix else 0.0
             score = float(item.final_score) + float(bonus) - float(penalty)

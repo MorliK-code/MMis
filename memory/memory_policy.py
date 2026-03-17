@@ -6,7 +6,7 @@ from typing import Any
 
 from modules.nlu.normalizer import normalize_text
 from modules.nlu.types import Fact
-from memory.memory_models import MemoryScope, MemorySourceKind, MemoryType
+from memory.memory_models import FactRecordV2, MemoryRecord, MemoryScope, MemorySourceKind, MemoryType
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,26 @@ class AssistantWriteDecision:
             "allow_store": bool(self.allow_store),
             "allow_long_term": bool(self.allow_long_term),
             "allow_fact_records": bool(self.allow_fact_records),
+            "signals": dict(self.signals or {}),
+        }
+
+
+@dataclass(frozen=True)
+class FactWriteDecision:
+    action: str = "allow"
+    reason: str = ""
+    group: str = ""
+    allow_write: bool = True
+    allow_supersede: bool = False
+    signals: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": str(self.action or "").strip().lower() or "allow",
+            "reason": str(self.reason or "").strip(),
+            "group": str(self.group or "").strip(),
+            "allow_write": bool(self.allow_write),
+            "allow_supersede": bool(self.allow_supersede),
             "signals": dict(self.signals or {}),
         }
 
@@ -167,6 +187,83 @@ class MemoryPolicy:
         "последн",
         "current",
     }
+    _ASSISTANT_MEMORY_MISS_MARKERS = {
+        "не помню",
+        "не могу вспомнить",
+        "не вижу в памяти",
+        "не вижу в истории",
+        "не вижу точного факта",
+        "не вижу точной модели",
+        "не уверен",
+        "don't remember",
+        "do not remember",
+        "can't remember",
+        "cannot remember",
+        "can't see it in memory",
+        "cannot see it in memory",
+        "i can't see it in memory",
+        "i cannot see it in memory",
+    }
+    _ASSISTANT_SELF_CHECK_MARKERS = {
+        "проверь сам",
+        "можешь проверить",
+        "можно проверить",
+        "посмотри сам",
+        "чтобы узнать",
+        "как посмотреть",
+        "проверь через",
+        "you can check",
+        "check it yourself",
+        "to check",
+        "run this command",
+        "use this command",
+    }
+    _ASSISTANT_HELP_COMMAND_PATTERNS: tuple[re.Pattern[str], ...] = (
+        re.compile(r"\bpython\s+--version\b", re.I),
+        re.compile(r"\bwinver\b", re.I),
+        re.compile(r"\bwmic\b", re.I),
+        re.compile(r"\bdxdiag\b", re.I),
+        re.compile(r"\blspci\b", re.I),
+        re.compile(r"\blshw\b", re.I),
+        re.compile(r"\bdevice manager\b", re.I),
+        re.compile(r"\bдиспетчер устройств\b", re.I),
+    )
+
+    _SINGLETON_GROUPS: dict[str, set[str]] = {
+        "identity_name": {"identity_name"},
+        "identity_age": {"identity_age_years"},
+        "project_name": {"project_name"},
+        "environment_os": {"environment_os"},
+        "environment_python": {"environment_runtime_python"},
+        "environment_llm_model": {"environment_llm_model"},
+        "environment_gpu_model": {"environment_gpu_model"},
+        "environment_cpu_model": {"environment_cpu_model"},
+        "environment_gpu_vram": {"environment_gpu_vram_size", "environment_gpu_vram_gb"},
+        "environment_ram": {"environment_ram_size", "environment_ram_gb", "environment_memory_gb"},
+        "issue_status": {"issue_status"},
+    }
+    _ASSISTANT_DENY_PREDICATES = {
+        "identity_name",
+        "identity_age_years",
+        "environment_os",
+        "environment_tool",
+        "environment_runtime_python",
+        "environment_llm_model",
+        "environment_gpu_model",
+        "environment_cpu_model",
+        "environment_gpu_vram_size",
+        "environment_gpu_vram_gb",
+        "environment_ram_size",
+        "environment_ram_gb",
+        "environment_memory_gb",
+        "project_name",
+    }
+    _ASSISTANT_ALLOW_PREDICATES = {
+        "decision",
+        "task",
+        "task_goal",
+        "agreed_plan",
+    }
 
     def __init__(
         self,
@@ -261,6 +358,18 @@ class MemoryPolicy:
             return AssistantWriteDecision(reason="runtime_scope_bypass")
 
         signals = self._assistant_factual_signals(text=text, metadata=metadata)
+        signals = self._merge_signal_maps(
+            signals,
+            self._assistant_memory_help_signals(text=text, metadata=metadata),
+        )
+        if bool(signals.get("memory_help_noise")):
+            return AssistantWriteDecision(
+                action="temporary_only",
+                reason="assistant_memory_miss_help_temporary_only",
+                target_scope=MemoryScope.TEMPORARY,
+                allow_fact_records=False,
+                signals=signals,
+            )
         if not bool(signals.get("risky_factual_claim")):
             return AssistantWriteDecision(reason="not_risky_factual_claim", signals=signals)
 
@@ -338,6 +447,113 @@ class MemoryPolicy:
             signals=signals,
         )
 
+    @classmethod
+    def fact_group(cls, predicate: str) -> str:
+        pred = str(predicate or "").strip().lower()
+        for group_name, members in cls._SINGLETON_GROUPS.items():
+            if pred in members:
+                return group_name
+        return pred
+
+    @classmethod
+    def is_singleton_group(cls, group: str) -> bool:
+        return str(group or "").strip().lower() in cls._SINGLETON_GROUPS
+
+    @classmethod
+    def is_singleton_predicate(cls, predicate: str) -> bool:
+        return cls.is_singleton_group(cls.fact_group(predicate))
+
+    def decide_fact_write(
+        self,
+        *,
+        fact: FactRecordV2,
+        source_role: str,
+        existing_record: MemoryRecord | None = None,
+    ) -> FactWriteDecision:
+        predicate = str(getattr(fact, "predicate", "") or "").strip().lower()
+        subject = str(getattr(fact, "subject", "") or "").strip().lower()
+        source_role_norm = str(source_role or "").strip().lower()
+        group = self.fact_group(predicate)
+
+        if source_role_norm == "assistant":
+            if predicate not in self._ASSISTANT_ALLOW_PREDICATES:
+                return FactWriteDecision(
+                    action="skip",
+                    reason="assistant_fact_predicate_not_allowlisted",
+                    group=group,
+                    allow_write=False,
+                    allow_supersede=False,
+                    signals={"predicate": predicate, "subject": subject},
+                )
+            if predicate in self._ASSISTANT_DENY_PREDICATES:
+                return FactWriteDecision(
+                    action="skip",
+                    reason="assistant_fact_predicate_denied",
+                    group=group,
+                    allow_write=False,
+                    allow_supersede=False,
+                    signals={"predicate": predicate, "subject": subject},
+                )
+
+        if existing_record is None:
+            return FactWriteDecision(
+                action="allow",
+                reason="new_fact",
+                group=group,
+                allow_write=True,
+                allow_supersede=False,
+            )
+
+        old_fact = dict(dict(existing_record.metadata or {}).get("fact") or {})
+        old_predicate = str(old_fact.get("predicate") or "").strip().lower()
+        old_group = self.fact_group(old_predicate)
+
+        if old_group != group:
+            return FactWriteDecision(
+                action="parallel",
+                reason="different_groups",
+                group=group,
+                allow_write=True,
+                allow_supersede=False,
+            )
+
+        old_conf = self._coerce_float(
+            old_fact.get("confidence"),
+            default=self._coerce_float(existing_record.confidence, default=0.0),
+        )
+        new_conf = self._coerce_float(getattr(fact, "confidence", 0.0), default=0.0)
+        old_value = self._norm_value(old_fact.get("value"))
+        new_value = self._norm_value(getattr(fact, "value", ""))
+
+        if old_value and new_value and old_value == new_value:
+            return FactWriteDecision(
+                action="keep_existing",
+                reason="same_value",
+                group=group,
+                allow_write=False,
+                allow_supersede=False,
+                signals={"old_conf": old_conf, "new_conf": new_conf},
+            )
+
+        if new_conf >= old_conf:
+            return FactWriteDecision(
+                action="supersede",
+                reason="same_group_higher_or_equal_confidence",
+                group=group,
+                allow_write=True,
+                allow_supersede=True,
+                signals={"old_conf": old_conf, "new_conf": new_conf},
+            )
+
+        return FactWriteDecision(
+            action="keep_existing",
+            reason="same_group_lower_confidence",
+            group=group,
+            allow_write=False,
+            allow_supersede=False,
+            signals={"old_conf": old_conf, "new_conf": new_conf},
+        )
+
     @staticmethod
     def resolve_source_kind(
         *,
@@ -381,6 +597,10 @@ class MemoryPolicy:
     ) -> dict[str, Any]:
         out = dict(metadata or {})
         hidden = str(thinking or out.get("thinking") or "").strip()
+        legacy_entities = out.pop("entities", None)
+        if legacy_entities and "runtime_entities" not in out:
+            out["runtime_entities"] = legacy_entities
+            out["legacy_runtime_entities_stripped"] = True
         out.pop("thinking", None)
         out["source_kind"] = str(source_kind.value)
         if source_kind in {MemorySourceKind.ASSISTANT_REPLY, MemorySourceKind.ASSISTANT_THOUGHT} and hidden:
@@ -389,7 +609,22 @@ class MemoryPolicy:
 
     @staticmethod
     def allow_fact_records_for_source(*, source_kind: MemorySourceKind) -> bool:
-        return source_kind not in {MemorySourceKind.ASSISTANT_REPLY, MemorySourceKind.ASSISTANT_THOUGHT}
+        return source_kind != MemorySourceKind.ASSISTANT_THOUGHT
+
+    def is_fact_allowed_for_source(
+        self,
+        *,
+        predicate: str,
+        source_role: str,
+        source_kind: MemorySourceKind,
+    ) -> bool:
+        role_norm = str(source_role or "").strip().lower()
+        pred = str(predicate or "").strip().lower()
+        if source_kind == MemorySourceKind.ASSISTANT_THOUGHT:
+            return False
+        if role_norm == "assistant":
+            return pred in self._ASSISTANT_ALLOW_PREDICATES
+        return True
 
     def _is_allowed_key(self, key: str) -> bool:
         key_norm = self._norm_key(key)
@@ -643,6 +878,69 @@ class MemoryPolicy:
             "marker_hits": marker_hits,
             "text_len": int(len(norm_text)),
         }
+
+    def _assistant_memory_help_signals(self, *, text: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        raw_text = str(text or "").strip()
+        low_text = normalize_text(raw_text).lower()
+        factual_mode = self._norm_value(
+            metadata.get("factual_response_mode")
+            or metadata.get("web_factual_mode")
+        )
+        recall_mode = self._norm_value(metadata.get("memory_recall_mode"))
+        miss_hit = self._contains_any(low_text, self._ASSISTANT_MEMORY_MISS_MARKERS)
+        self_check_hit = self._contains_any(low_text, self._ASSISTANT_SELF_CHECK_MARKERS)
+        command_markers = [
+            pattern.pattern
+            for pattern in self._ASSISTANT_HELP_COMMAND_PATTERNS
+            if pattern.search(raw_text)
+        ]
+        helper_command_hit = bool(command_markers)
+        memory_help_noise = bool(
+            miss_hit
+            or (self_check_hit and helper_command_hit)
+            or (
+                recall_mode in {"exact_fact_recall", "self_memory_exact"}
+                and (self_check_hit or helper_command_hit)
+            )
+        )
+        marker_hits: list[str] = []
+        if miss_hit:
+            marker_hits.append("memory_miss")
+        if self_check_hit:
+            marker_hits.append("manual_check")
+        if helper_command_hit:
+            marker_hits.append("helper_command")
+        if factual_mode:
+            marker_hits.append(f"factual_mode:{factual_mode}")
+        if recall_mode:
+            marker_hits.append(f"recall_mode:{recall_mode}")
+        return {
+            "assistant_reply_kind": "memory_miss_help" if memory_help_noise else "",
+            "memory_help_noise": bool(memory_help_noise),
+            "memory_miss_signal": bool(miss_hit),
+            "manual_check_signal": bool(self_check_hit),
+            "helper_command_signal": bool(helper_command_hit),
+            "helper_commands": command_markers[:6],
+            "marker_hits": marker_hits,
+        }
+
+    @staticmethod
+    def _merge_signal_maps(*items: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        marker_hits: list[str] = []
+        for item in items:
+            row = dict(item or {})
+            for key, value in row.items():
+                if key == "marker_hits":
+                    continue
+                out[key] = value
+            for token in list(row.get("marker_hits") or []):
+                value = str(token or "").strip()
+                if value and value not in marker_hits:
+                    marker_hits.append(value)
+        if marker_hits:
+            out["marker_hits"] = marker_hits
+        return out
 
     @staticmethod
     def _contains_any(text: str, markers: set[str]) -> bool:

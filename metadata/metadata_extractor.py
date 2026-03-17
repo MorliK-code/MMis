@@ -12,8 +12,6 @@ from typing import Any
 from core.spec_registry import load_spec
 from metadata.entity_extractor import (
     extract_entities as extract_catalog_entities,
-    flatten_entity_tags,
-    infer_topics_from_entities,
 )
 from metadata.emotion_detector import EmotionResult, detect as detect_emotion
 from metadata.intent_classifier import IntentResult, classify as classify_intent
@@ -111,12 +109,14 @@ class Metadata:
     intent: IntentMeta
     emotion: EmotionMeta
     tags: list[str] = field(default_factory=list)
-    entities: dict[str, Any] = field(default_factory=dict)
+    runtime_entities: dict[str, Any] = field(default_factory=dict)
     safety_flags: dict[str, Any] = field(default_factory=dict)
     meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["runtime_entities"] = dict(payload.get("runtime_entities") or {})
+        return payload
 
 
 class MetadataExtractor:
@@ -250,12 +250,6 @@ class MetadataExtractor:
         lang_from_tags = _lang_from_tags(tags)
         if lang_value == "unknown" and lang_from_tags != "unknown":
             lang_value = lang_from_tags
-        entity_topic_tags = infer_topics_from_entities(entities)
-        entity_tags = flatten_entity_tags(entities)
-        for item in [*entity_topic_tags, *entity_tags]:
-            token = str(item or "").strip().lower()
-            if token and token not in tags:
-                tags.append(token)
         if f"intent_{intent.label}" not in tags:
             tags.append(f"intent_{intent.label}")
         if f"emotion_{emotion.label}" not in tags:
@@ -290,7 +284,7 @@ class MetadataExtractor:
                 scores=dict(emotion.scores),
             ),
             tags=tags,
-            entities=entities,
+            runtime_entities=entities,
             safety_flags=safety_flags,
             meta=meta_payload,
         )
@@ -451,7 +445,7 @@ def extract(text: str, state, last_messages=None) -> Metadata:
             scores=dict(item.emotion.scores),
         ),
         tags=list(item.tags),
-        entities=dict(item.entities),
+        runtime_entities=dict(item.runtime_entities),
         safety_flags=dict(item.safety_flags),
         meta=meta,
     )
@@ -567,7 +561,7 @@ def _soft_filter_tags(*, tags: list[str], allowed_tags: set[str], enabled: bool 
             continue
         if (
             tag in allowed_tags
-            or tag.startswith(("lang_", "intent_", "emotion_", "topic_", "mode_hint_", "is_", "tone_", "needs_", "entity_"))
+            or tag.startswith(("lang_", "intent_", "emotion_", "topic_", "mode_hint_", "is_", "tone_", "needs_"))
             or tag in STRUCTURAL_TAGS
         ):
             out.append(tag)
@@ -670,7 +664,7 @@ def _metadata_from_dict(payload: dict[str, Any]) -> Metadata | None:
                 scores={str(k): float(v) for k, v in dict(emotion_row.get("scores") or {}).items()},
             ),
             tags=_dedupe(tags),
-            entities=dict(payload.get("entities") or {}),
+            runtime_entities=dict(payload.get("runtime_entities") or payload.get("entities") or {}),
             safety_flags=dict(payload.get("safety_flags") or {}),
             meta=dict(payload.get("meta") or {}),
         )

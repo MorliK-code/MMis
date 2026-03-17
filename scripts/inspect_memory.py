@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 from memory.memory_manager import MemoryManager
 from memory.memory_models import MemoryRecord, MemoryStatus, MemoryType
+from memory.retrieval_projection import build_memory_views
 
 
 def _configure_stdout() -> None:
@@ -79,9 +80,41 @@ def _memory_views(record: MemoryRecord) -> dict[str, Any]:
     return dict(dict(record.metadata or {}).get("memory_views") or {})
 
 
+def _recomputed_memory_views(record: MemoryRecord) -> dict[str, Any]:
+    meta = dict(record.metadata or {})
+    recompute_meta = {**meta, "memory_views": {}}
+    return dict(build_memory_views(str(record.text or ""), metadata=recompute_meta) or {})
+
+
+def _views_debug(record: MemoryRecord) -> dict[str, Any]:
+    stored = _memory_views(record)
+    recomputed = _recomputed_memory_views(record)
+    stored_has_keys = bool(list(stored.get("entity_keys") or []) or list(stored.get("numeric_keys") or []))
+    recomputed_has_keys = bool(list(recomputed.get("entity_keys") or []) or list(recomputed.get("numeric_keys") or []))
+    if stored_has_keys:
+        status = "stored_has_keys"
+    elif recomputed_has_keys:
+        status = "recomputed_has_keys_only"
+    else:
+        status = "no_structured_keys"
+    return {
+        "status": status,
+        "stored": stored,
+        "recomputed": recomputed,
+    }
+
+
+def _effective_memory_views(record: MemoryRecord) -> dict[str, Any]:
+    debug = _views_debug(record)
+    if str(debug.get("status") or "") == "recomputed_has_keys_only":
+        return dict(debug.get("recomputed") or {})
+    return _memory_views(record)
+
+
 def _record_payload(record: MemoryRecord, *, include_full_metadata: bool, include_embedding: bool) -> dict[str, Any]:
     meta = dict(record.metadata or {})
-    views = _memory_views(record)
+    views_debug = _views_debug(record)
+    views = _effective_memory_views(record)
     payload: dict[str, Any] = {
         "id": str(record.id),
         "memory_type": str(record.memory_type.value),
@@ -99,6 +132,12 @@ def _record_payload(record: MemoryRecord, *, include_full_metadata: bool, includ
         "entity_keys": list(views.get("entity_keys") or []),
         "numeric_keys": list(views.get("numeric_keys") or []),
         "tags": list(meta.get("tags") or []) if isinstance(meta.get("tags"), list) else meta.get("tags"),
+        "memory_tags": (
+            list(meta.get("memory_tags") or [])
+            if isinstance(meta.get("memory_tags"), list)
+            else meta.get("memory_tags")
+        ),
+        "memory_views_debug": views_debug,
     }
     if include_embedding:
         embedding = list(record.embedding or [])
@@ -183,6 +222,16 @@ def _print_human(records: list[MemoryRecord], *, include_full_metadata: bool, in
             print("numeric_keys:", json.dumps(payload["numeric_keys"], ensure_ascii=False))
         if payload["tags"]:
             print("tags:", json.dumps(payload["tags"], ensure_ascii=False))
+        if payload["memory_tags"]:
+            print("memory_tags:", json.dumps(payload["memory_tags"], ensure_ascii=False))
+        views_debug = dict(payload.get("memory_views_debug") or {})
+        if views_debug:
+            print("memory_views_status:", str(views_debug.get("status") or ""))
+            recomputed = dict(views_debug.get("recomputed") or {})
+            if not payload["entity_keys"] and list(recomputed.get("entity_keys") or []):
+                print("recomputed_entity_keys:", json.dumps(list(recomputed.get("entity_keys") or []), ensure_ascii=False))
+            if not payload["numeric_keys"] and list(recomputed.get("numeric_keys") or []):
+                print("recomputed_numeric_keys:", json.dumps(list(recomputed.get("numeric_keys") or []), ensure_ascii=False))
         if include_embedding:
             print(
                 "embedding:",

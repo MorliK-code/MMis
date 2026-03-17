@@ -7,6 +7,8 @@ from threading import RLock
 from types import SimpleNamespace
 
 from core.brain import Brain
+from metadata.metadata_extractor import extract_message_metadata
+from memory.ingest_analyzer import analyze_message_for_memory
 from memory.memory_manager import MemoryManager
 from memory.memory_models import (
     FactRecordV2,
@@ -14,6 +16,7 @@ from memory.memory_models import (
     MemoryEvent,
     MemoryLevel,
     MemoryScope,
+    MemorySourceKind,
     MemoryStatus,
     MemoryType,
 )
@@ -46,6 +49,22 @@ class _FakeFactExtractor:
     def extract_v2(self, *, text, metadata, speaker, scope, mode, analysis=None):
         if not str(text or "").strip():
             return []
+        speaker_norm = str(speaker or "").strip().lower()
+        if speaker_norm == "assistant":
+            return [
+                FactRecordV2(
+                    subject="assistant",
+                    predicate="environment_os",
+                    value="windows",
+                    scope=scope,
+                    confidence=0.88,
+                    importance=0.62,
+                    evidence=str(text or ""),
+                    source_event_id=str(metadata.get("event_id") or ""),
+                    canonical_key="assistant.environment_os",
+                    relation="environment",
+                )
+            ]
         return [
             FactRecordV2(
                 subject=str(speaker or "assistant"),
@@ -305,6 +324,28 @@ class MemoryWritePolicyTests(unittest.TestCase):
         self.assertTrue(bool(stored.metadata.get("assistant_fact_records_blocked")))
         self.assertNotIn("thinking", stored.metadata)
 
+    def test_assistant_memory_miss_help_reply_is_temporary_only(self) -> None:
+        manager = self._manager()
+
+        result = manager.ingest_event(
+            MemoryEvent(
+                role="assistant",
+                text="Не помню точную модель. Проверь сам через winver или python --version.",
+                namespace="conv-memory-help",
+                scope=MemoryScope.CONVERSATION,
+                memory_type=MemoryType.MESSAGE,
+                metadata={"memory_recall_mode": "exact_fact_recall"},
+            )
+        )
+
+        self.assertEqual(len(result.stored_ids), 1)
+        self.assertEqual(result.promoted_ids, [])
+        stored = manager._store.records[0]
+        self.assertEqual(stored.scope, MemoryScope.TEMPORARY)
+        self.assertEqual(stored.metadata["assistant_write_policy"]["reason"], "assistant_memory_miss_help_temporary_only")
+        self.assertEqual(stored.metadata["assistant_reply_kind"], "memory_miss_help")
+        self.assertTrue(bool(stored.metadata.get("assistant_memory_help_noise")))
+
     def test_explicit_assistant_thought_event_is_skipped(self) -> None:
         manager = self._manager()
 
@@ -326,6 +367,194 @@ class MemoryWritePolicyTests(unittest.TestCase):
             manager._event_store.entries[-1]["payload"]["reason"],
             "assistant_thought_not_persisted",
         )
+
+    def test_direct_fact_write_policy_denies_assistant_environment_fact(self) -> None:
+        manager = self._manager()
+
+        written = manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="assistant",
+                    predicate="environment_os",
+                    value="windows",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.9,
+                    importance=0.7,
+                    evidence="you are on windows",
+                    source_event_id="evt:assistant-direct",
+                    canonical_key="assistant.environment_os",
+                    relation="environment",
+                    metadata={"source_role": "assistant", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-direct-fact",
+            now_ts=1.0,
+            event_id="evt:assistant-direct",
+            source_role="assistant",
+            source_kind="assistant_reply",
+        )
+
+        self.assertEqual(written, [])
+        self.assertEqual(
+            [row for row in manager._store.records if getattr(row, "memory_type", None) == MemoryType.FACT],
+            [],
+        )
+
+    def test_direct_fact_write_policy_allows_assistant_decision_fact(self) -> None:
+        manager = self._manager()
+
+        written = manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="assistant",
+                    predicate="decision",
+                    value="store_search_text_and_canonical_text",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.9,
+                    importance=0.82,
+                    evidence="we will store search_text and canonical_text",
+                    source_event_id="evt:assistant-decision",
+                    canonical_key="assistant.decision",
+                    relation="decision",
+                    metadata={"source_role": "assistant", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-direct-decision",
+            now_ts=1.0,
+            event_id="evt:assistant-decision",
+            source_role="assistant",
+            source_kind="assistant_reply",
+        )
+
+        self.assertEqual(len(written), 1)
+        fact_rows = [row for row in manager._store.records if getattr(row, "memory_type", None) == MemoryType.FACT]
+        self.assertEqual(len(fact_rows), 1)
+        stored_fact = dict(dict(fact_rows[0].metadata or {}).get("fact") or {})
+        self.assertEqual(str(stored_fact.get("predicate") or ""), "decision")
+        self.assertEqual(str(stored_fact.get("value") or ""), "store_search_text_and_canonical_text")
+
+    def test_direct_fact_write_policy_supersedes_same_group_ram_fact(self) -> None:
+        manager = self._manager()
+
+        first = manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="environment_memory_gb",
+                    value="16",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.78,
+                    importance=0.7,
+                    evidence="i have 16 gb memory",
+                    source_event_id="evt:ram-1",
+                    canonical_key="user.environment_memory_gb",
+                    relation="environment",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-direct-ram",
+            now_ts=1.0,
+            event_id="evt:ram-1",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+        second = manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="environment_ram_gb",
+                    value="32",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.89,
+                    importance=0.78,
+                    evidence="i have 32 gb ram",
+                    source_event_id="evt:ram-2",
+                    canonical_key="user.environment_ram_gb",
+                    relation="environment",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-direct-ram",
+            now_ts=2.0,
+            event_id="evt:ram-2",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        latest_by_id = {}
+        for row in manager._store.records:
+            if getattr(row, "memory_type", None) == MemoryType.FACT:
+                latest_by_id[str(getattr(row, "id", ""))] = row
+        final_rows = list(latest_by_id.values())
+        active_facts = [row for row in final_rows if getattr(row, "status", None) == MemoryStatus.ACTIVE]
+        superseded_facts = [row for row in final_rows if getattr(row, "status", None) == MemoryStatus.SUPERSEDED]
+        self.assertEqual(len(active_facts), 1)
+        self.assertEqual(len(superseded_facts), 1)
+        self.assertEqual(
+            str(dict(dict(active_facts[0].metadata or {}).get("fact") or {}).get("predicate") or ""),
+            "environment_ram_gb",
+        )
+        self.assertEqual(
+            str(dict(dict(superseded_facts[0].metadata or {}).get("fact") or {}).get("predicate") or ""),
+            "environment_memory_gb",
+        )
+
+    def test_ingest_analysis_tags_are_stored_separately_from_runtime_tags(self) -> None:
+        manager = self._manager()
+        analysis = analyze_message_for_memory("I use RTX 3050 Ti with 4 GB VRAM.")
+
+        merged = manager._merge_ingest_analysis_into_metadata(
+            metadata={"tags": ["intent_chat", "lang_en"], "memory_tags": ["old_memory_tag"]},
+            analysis=analysis,
+        )
+
+        self.assertEqual(merged["tags"], ["intent_chat", "lang_en"])
+        self.assertIn("old_memory_tag", list(merged.get("memory_tags") or []))
+        self.assertIn("topic_hardware", list(merged.get("memory_tags") or []))
+        self.assertIn("entity_gpu_model_rtx_3050_ti", list(merged.get("memory_tags") or []))
+
+    def test_sanitize_metadata_moves_legacy_entities_to_runtime_entities(self) -> None:
+        policy = MemoryPolicy()
+
+        sanitized = policy.sanitize_metadata_for_storage(
+            metadata={
+                "entities": {"software": ["Python"], "os": ["Windows"]},
+                "tags": ["intent_chat"],
+            },
+            source_kind=MemorySourceKind.USER,
+        )
+
+        self.assertNotIn("entities", sanitized)
+        self.assertEqual(
+            sanitized.get("runtime_entities"),
+            {"software": ["Python"], "os": ["Windows"]},
+        )
+        self.assertTrue(bool(sanitized.get("legacy_runtime_entities_stripped")))
+
+    def test_brain_flatten_turn_metadata_uses_runtime_entities_not_entities(self) -> None:
+        flattened = Brain._flatten_turn_metadata(
+            {
+                "lang": "en",
+                "intent": {"label": "chat", "conf": 0.5},
+                "emotion": {"label": "neutral"},
+                "tags": ["topic_python"],
+                "entities": {"software": ["Python"]},
+                "meta": {},
+            }
+        )
+
+        self.assertNotIn("entities", flattened)
+        self.assertEqual(flattened.get("runtime_entities"), {"software": ["Python"]})
+
+    def test_metadata_extractor_uses_runtime_entities_and_no_entity_tags(self) -> None:
+        payload = extract_message_metadata("I use Python on Windows with Docker.", state={})
+
+        self.assertIn("runtime_entities", payload)
+        self.assertNotIn("entities", payload)
+        tags = [str(x).strip().lower() for x in list(payload.get("tags") or []) if str(x).strip()]
+        self.assertFalse(any(tag.startswith("entity_") for tag in tags))
 
     def test_brain_extracts_compact_web_verification_meta_for_assistant_write_policy(self) -> None:
         payload = Brain._assistant_memory_web_meta(

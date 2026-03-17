@@ -14,10 +14,14 @@ from memory.memory_models import (
     IngestResult,
     LifecycleDecision,
     MemoryEvent,
+    MemoryLevel,
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
     MemoryType,
+    RetrievalCandidate,
+    RetrievalQuery,
+    ScoreBreakdown,
 )
 from memory.memory_policy import MemoryPolicy
 from memory.memory_scoring import SalienceWeights
@@ -294,16 +298,17 @@ def test_replay_singleton_python_fact_supersedes_previous_version() -> None:
     assert len(superseded) == 1
 
 
-def test_replay_documents_ram_group_supersede_gap_between_memory_and_ram_predicates() -> None:
+def test_replay_supersedes_ram_group_across_memory_and_ram_predicates() -> None:
     manager = _manager()
 
     _ingest_turn(manager, text="I have 16 GB memory.", namespace="ram-gap")
     _ingest_turn(manager, text="I have 32 GB RAM.", namespace="ram-gap")
 
-    # Current behavior keeps both because singleton handling is predicate-level, not group-level.
-    assert _fact_values(manager, namespace="ram-gap", predicate="environment_memory_gb") == ["16"]
+    assert _fact_values(manager, namespace="ram-gap", predicate="environment_memory_gb") == []
     assert _fact_values(manager, namespace="ram-gap", predicate="environment_ram_gb") == ["32"]
-    assert len(_fact_rows(manager, namespace="ram-gap", status=MemoryStatus.ACTIVE)) >= 2
+    superseded = _fact_rows(manager, namespace="ram-gap", predicate="environment_memory_gb", status=MemoryStatus.SUPERSEDED)
+    assert [str(dict(dict(row.metadata or {}).get("fact") or {}).get("value")) for row in superseded] == ["16"]
+    assert len(_fact_rows(manager, namespace="ram-gap", status=MemoryStatus.ACTIVE)) >= 1
 
 
 def test_replay_does_not_store_assistant_environment_restatement() -> None:
@@ -320,6 +325,515 @@ def test_replay_does_not_store_assistant_environment_restatement() -> None:
     assert _fact_values(manager, namespace="assistant-noise", predicate="environment_os") == []
     assert _fact_values(manager, namespace="assistant-noise", predicate="environment_runtime_python") == []
     assert _fact_values(manager, namespace="assistant-noise", predicate="environment_gpu_model") == []
+
+
+def test_fact_expectation_check_prefers_exact_gpu_fact_over_message_similarity() -> None:
+    manager = _manager()
+    manager._store.upsert(
+        MemoryRecord(
+            id="msg:gpu-only",
+            text="у меня видяха rtx 3050 ti",
+            memory_type=MemoryType.MESSAGE,
+            level=MemoryLevel.L0_WORKING,
+            scope=MemoryScope.CONVERSATION,
+            namespace="fact-check",
+            metadata={"memory_views": {"search_text": "gpu rtx 3050 ti"}},
+        )
+    )
+
+    row = manager._build_fact_expectation_check(
+        query_text="какая у меня видюха?",
+        namespace="fact-check",
+    )
+
+    assert row["exact_fact_required"] is True
+    assert row["expected_predicates"] == ["environment_gpu_model"]
+    assert row["found_predicates"] == []
+    assert row["missing_predicates"] == ["environment_gpu_model"]
+    assert row["should_answer_cautiously"] is True
+
+
+def test_fact_expectation_check_finds_exact_python_fact() -> None:
+    manager = _manager()
+    _ingest_turn(manager, text="я сижу на python 3.11", namespace="fact-check-python")
+
+    row = manager._build_fact_expectation_check(
+        query_text="напомни, какой у меня python",
+        namespace="fact-check-python",
+    )
+
+    assert row["expected_predicates"] == ["environment_runtime_python"]
+    assert row["missing_predicates"] == []
+    assert row["found_predicates"] == ["environment_runtime_python"]
+    values = [str(item.get("value") or "") for item in list(row["found_facts"]["environment_runtime_python"] or [])]
+    assert "python 3.11" in values
+
+
+def test_fact_expectation_check_matches_live_gpu_wording() -> None:
+    manager = _manager()
+
+    row = manager._build_fact_expectation_check(
+        query_text="помнишь, что у меня за карточка?",
+        namespace="fact-check-gpu-live",
+    )
+
+    assert row["expected_predicates"] == ["environment_gpu_model"]
+    assert row["missing_predicates"] == ["environment_gpu_model"]
+
+
+def test_fact_expectation_check_matches_live_python_wording() -> None:
+    manager = _manager()
+
+    row = manager._build_fact_expectation_check(
+        query_text="помнишь мой питон?",
+        namespace="fact-check-python-live",
+    )
+
+    assert row["expected_predicates"] == ["environment_runtime_python"]
+    assert row["missing_predicates"] == ["environment_runtime_python"]
+
+
+def test_fact_expectation_check_matches_colloquial_python_wording_with_paiton() -> None:
+    manager = _manager()
+
+    row = manager._build_fact_expectation_check(
+        query_text="напомни мой пайтон",
+        namespace="fact-check-python-paiton",
+    )
+
+    assert row["expected_predicates"] == ["environment_runtime_python"]
+    assert row["missing_predicates"] == ["environment_runtime_python"]
+
+
+def test_fact_expectation_check_matches_live_os_wording() -> None:
+    manager = _manager()
+
+    row = manager._build_fact_expectation_check(
+        query_text="что у меня за винда?",
+        namespace="fact-check-os-live",
+    )
+
+    assert row["expected_predicates"] == ["environment_os"]
+    assert row["missing_predicates"] == ["environment_os"]
+
+
+def test_fact_expectation_check_matches_colloquial_os_wording_with_systema() -> None:
+    manager = _manager()
+
+    row = manager._build_fact_expectation_check(
+        query_text="что у меня за система, версия винды?",
+        namespace="fact-check-os-systema",
+    )
+
+    assert row["expected_predicates"] == ["environment_os"]
+    assert row["missing_predicates"] == ["environment_os"]
+
+
+def test_fact_expectation_check_matches_live_ram_wording() -> None:
+    manager = _manager()
+
+    row = manager._build_fact_expectation_check(
+        query_text="помнишь мою оперативку?",
+        namespace="fact-check-ram-live",
+    )
+
+    assert row["expected_predicates"] == ["environment_ram_gb", "environment_memory_gb"]
+    assert row["missing_predicates"] == ["environment_ram_gb", "environment_memory_gb"]
+
+
+def test_fact_expectation_check_falls_back_to_relevant_predicates_for_exact_recall() -> None:
+    manager = _manager()
+
+    row = manager._build_fact_expectation_check(
+        query_text="что там у меня по питону?",
+        namespace="fact-check-python-fallback",
+    )
+
+    assert row["expected_predicates"] == ["environment_runtime_python"]
+    assert row["missing_predicates"] == ["environment_runtime_python"]
+    assert "self_fact_fallback" in list(row["intents"] or [])
+
+
+def test_fact_expectation_prioritizes_exact_fact_before_message_hits() -> None:
+    manager = _manager()
+    _ingest_turn(manager, text="у меня rtx 3050 ti", namespace="fact-order")
+    message_record = MemoryRecord(
+        id="msg:gpu-chat",
+        text="кажется, мы обсуждали мою видеокарту раньше",
+        memory_type=MemoryType.MESSAGE,
+        level=MemoryLevel.L2_EPISODIC,
+        scope=MemoryScope.CONVERSATION,
+        namespace="fact-order",
+    )
+    candidate = RetrievalCandidate(
+        record=message_record,
+        score_breakdown=ScoreBreakdown(final_score=0.95),
+        source="hybrid",
+    )
+
+    fact_expectation = manager._build_fact_expectation_check(
+        query_text="какая у меня видюха?",
+        namespace="fact-order",
+    )
+    ordered = manager._prioritize_retrieval_candidates_for_fact_expectation(
+        query=RetrievalQuery(query_text="какая у меня видюха?", namespace="fact-order", top_k=8),
+        candidates=[candidate],
+        exact_fact_candidates=manager._exact_fact_candidates_for_expectation(
+            query=RetrievalQuery(query_text="какая у меня видюха?", namespace="fact-order", top_k=8),
+            namespace="fact-order",
+            fact_expectation=fact_expectation,
+        ),
+        fact_expectation=fact_expectation,
+    )
+
+    assert ordered
+    assert ordered[0].record.memory_type == MemoryType.FACT
+    first_fact = dict(dict(ordered[0].record.metadata or {}).get("fact") or {})
+    assert str(first_fact.get("predicate") or "") == "environment_gpu_model"
+
+
+def test_self_fact_recall_uses_exact_facts_without_message_fallback_when_found() -> None:
+    manager = _manager()
+    _ingest_turn(manager, text="у меня rtx 3050 ti", namespace="self-recall")
+    message_candidate = RetrievalCandidate(
+        record=MemoryRecord(
+            id="msg:self-recall",
+            text="мы вроде обсуждали мою видеокарту раньше",
+            memory_type=MemoryType.MESSAGE,
+            level=MemoryLevel.L2_EPISODIC,
+            scope=MemoryScope.CONVERSATION,
+            namespace="self-recall",
+        ),
+        score_breakdown=ScoreBreakdown(final_score=0.99),
+        source="hybrid",
+    )
+    fact_expectation = manager._build_fact_expectation_check(
+        query_text="какая у меня видюха?",
+        namespace="self-recall",
+    )
+    exact_fact_candidates = manager._exact_fact_candidates_for_expectation(
+        query=RetrievalQuery(query_text="какая у меня видюха?", namespace="self-recall", top_k=8),
+        namespace="self-recall",
+        fact_expectation=fact_expectation,
+    )
+    prioritized = manager._prioritize_retrieval_candidates_for_fact_expectation(
+        query=RetrievalQuery(query_text="какая у меня видюха?", namespace="self-recall", top_k=8),
+        candidates=[message_candidate],
+        exact_fact_candidates=exact_fact_candidates,
+        fact_expectation=fact_expectation,
+    )
+    selected = manager._select_candidates_for_self_fact_recall(
+        fallback_candidates=prioritized,
+        exact_fact_candidates=exact_fact_candidates,
+        fact_expectation=fact_expectation,
+    )
+
+    assert selected
+    assert all(item.record.memory_type == MemoryType.FACT for item in selected)
+    assert not any(str(item.record.id or "") == "msg:self-recall" for item in selected)
+
+
+def test_self_fact_recall_falls_back_to_message_retrieval_when_exact_fact_missing() -> None:
+    manager = _manager()
+    message_candidate = RetrievalCandidate(
+        record=MemoryRecord(
+            id="msg:self-recall-missing",
+            text="я вроде упоминал свою видеокарту",
+            memory_type=MemoryType.MESSAGE,
+            level=MemoryLevel.L2_EPISODIC,
+            scope=MemoryScope.CONVERSATION,
+            namespace="self-recall-missing",
+        ),
+        score_breakdown=ScoreBreakdown(final_score=0.81),
+        source="hybrid",
+    )
+    fact_expectation = manager._build_fact_expectation_check(
+        query_text="какая у меня видюха?",
+        namespace="self-recall-missing",
+    )
+    exact_fact_candidates = manager._exact_fact_candidates_for_expectation(
+        query=RetrievalQuery(query_text="какая у меня видюха?", namespace="self-recall-missing", top_k=8),
+        namespace="self-recall-missing",
+        fact_expectation=fact_expectation,
+    )
+    selected = manager._select_candidates_for_self_fact_recall(
+        fallback_candidates=[message_candidate],
+        exact_fact_candidates=exact_fact_candidates,
+        fact_expectation=fact_expectation,
+    )
+
+    assert exact_fact_candidates == []
+    assert len(selected) == 1
+    assert str(selected[0].record.id or "") == "msg:self-recall-missing"
+
+
+def test_self_fact_recall_missing_exact_fact_filters_unrelated_fact_candidates() -> None:
+    manager = _manager()
+    message_candidate = RetrievalCandidate(
+        record=MemoryRecord(
+            id="msg:ram-fallback",
+            text="you mentioned 32 gb ram before",
+            memory_type=MemoryType.MESSAGE,
+            level=MemoryLevel.L2_EPISODIC,
+            scope=MemoryScope.CONVERSATION,
+            namespace="self-recall-ram-filter",
+        ),
+        score_breakdown=ScoreBreakdown(final_score=0.71),
+        source="hybrid",
+    )
+    unrelated_fact = RetrievalCandidate(
+        record=MemoryRecord(
+            id="fact:name",
+            text="user.identity_name=Pasha",
+            memory_type=MemoryType.FACT,
+            level=MemoryLevel.L3_SEMANTIC,
+            scope=MemoryScope.CONVERSATION,
+            namespace="self-recall-ram-filter",
+            metadata={"fact": {"predicate": "identity_name", "subject": "user", "value": "Pasha"}},
+            status=MemoryStatus.ACTIVE,
+        ),
+        score_breakdown=ScoreBreakdown(final_score=0.95),
+        source="fact_channel",
+    )
+    working_fact = RetrievalCandidate(
+        record=MemoryRecord(
+            id="fact:ram-working",
+            text="user.environment_ram_gb=4",
+            memory_type=MemoryType.FACT,
+            level=MemoryLevel.L0_WORKING,
+            scope=MemoryScope.CONVERSATION,
+            namespace="self-recall-ram-filter",
+            metadata={"fact": {"predicate": "environment_ram_gb", "subject": "user", "value": "4"}},
+            status=MemoryStatus.ACTIVE,
+        ),
+        score_breakdown=ScoreBreakdown(final_score=0.96),
+        source="fact_channel",
+    )
+
+    selected = manager._select_candidates_for_self_fact_recall(
+        fallback_candidates=[unrelated_fact, working_fact, message_candidate],
+        exact_fact_candidates=[],
+        fact_expectation={
+            "expected_predicates": ["environment_ram_gb", "environment_memory_gb"],
+            "found_predicates": [],
+        },
+    )
+
+    assert len(selected) == 1
+    assert str(selected[0].record.id or "") == "msg:ram-fallback"
+
+
+def test_self_facts_context_can_be_built_from_live_gpu_rule_match() -> None:
+    manager = _manager()
+    _ingest_turn(manager, text="у меня rtx 3050 ti", namespace="self-facts-soft")
+    fact_rows = _fact_rows(manager, namespace="self-facts-soft", predicate="environment_gpu_model", status=MemoryStatus.ACTIVE)
+    candidates = [
+        RetrievalCandidate(
+            record=row,
+            score_breakdown=ScoreBreakdown(final_score=0.92),
+            source="fact_channel",
+        )
+        for row in list(fact_rows or [])
+    ]
+
+    fact_expectation = manager._build_fact_expectation_check(
+        query_text="подскажи мою карточку",
+        namespace="self-facts-soft",
+    )
+    self_facts = manager._build_self_facts_context(
+        query_text="подскажи мою карточку",
+        selected_candidates=list(candidates or []),
+        fact_expectation=fact_expectation,
+    )
+
+    assert fact_expectation["expected_predicates"] == ["environment_gpu_model"]
+    assert "environment_gpu_model" in list(self_facts.get("found_predicates") or [])
+    values = [str(item.get("value") or "") for item in list(dict(self_facts.get("found_facts") or {}).get("environment_gpu_model") or [])]
+    assert "RTX 3050 Ti" in values
+
+
+def test_self_facts_context_does_not_attach_unrelated_user_facts_for_generic_query() -> None:
+    manager = _manager()
+    _ingest_turn(manager, text="у меня rtx 3050 ti", namespace="self-facts-always")
+    fact_rows = _fact_rows(manager, namespace="self-facts-always", predicate="environment_gpu_model", status=MemoryStatus.ACTIVE)
+    candidates = [
+        RetrievalCandidate(
+            record=row,
+            score_breakdown=ScoreBreakdown(final_score=0.88),
+            source="fact_channel",
+        )
+        for row in list(fact_rows or [])
+    ]
+
+    self_facts = manager._build_self_facts_context(
+        query_text="what should we fix next",
+        selected_candidates=list(candidates or []),
+        fact_expectation={},
+    )
+
+    assert self_facts == {}
+
+
+def test_self_facts_context_filters_to_ram_predicates_for_ozu_query() -> None:
+    manager = _manager()
+    _ingest_turn(manager, text="my name is Pasha", namespace="self-facts-ram-filter")
+    _ingest_turn(manager, text="i have rtx 3050 ti", namespace="self-facts-ram-filter")
+    fact_rows = list(_fact_rows(manager, namespace="self-facts-ram-filter", predicate="identity_name", status=MemoryStatus.ACTIVE))
+    fact_rows.extend(_fact_rows(manager, namespace="self-facts-ram-filter", predicate="environment_gpu_model", status=MemoryStatus.ACTIVE))
+    candidates = [
+        RetrievalCandidate(
+            record=row,
+            score_breakdown=ScoreBreakdown(final_score=0.91),
+            source="fact_channel",
+        )
+        for row in list(fact_rows or [])
+    ]
+
+    fact_expectation = manager._build_fact_expectation_check(
+        query_text="what is my ram",
+        namespace="self-facts-ram-filter",
+    )
+    self_facts = manager._build_self_facts_context(
+        query_text="what is my ram",
+        selected_candidates=list(candidates or []),
+        fact_expectation=fact_expectation,
+    )
+
+    assert fact_expectation["expected_predicates"] == ["environment_ram_gb", "environment_memory_gb"]
+    assert fact_expectation["found_predicates"] == []
+    assert self_facts == {}
+
+
+def test_memory_recall_mode_detects_exact_fact_recall() -> None:
+    manager = _manager()
+
+    mode = manager._classify_memory_recall_mode(query_text="какая у меня видеокарта?")
+
+    assert mode == "exact_fact_recall"
+
+
+def test_memory_recall_mode_detects_contextual_recall() -> None:
+    manager = _manager()
+
+    mode = manager._classify_memory_recall_mode(query_text="что мы обсуждали про память?")
+
+    assert mode == "contextual_recall"
+
+
+def test_contextual_recall_prioritizes_messages_and_decision_facts_over_other_facts() -> None:
+    manager = _manager()
+    candidates = [
+        RetrievalCandidate(
+            record=MemoryRecord(
+                id="fact:gpu",
+                text="user.environment_gpu_model=RTX 3050 Ti",
+                memory_type=MemoryType.FACT,
+                level=MemoryLevel.L3_SEMANTIC,
+                scope=MemoryScope.CONVERSATION,
+                namespace="contextual-recall",
+                metadata={"fact": {"predicate": "environment_gpu_model", "subject": "user", "value": "RTX 3050 Ti"}},
+                status=MemoryStatus.ACTIVE,
+            ),
+            score_breakdown=ScoreBreakdown(final_score=0.98),
+            source="fact_channel",
+        ),
+        RetrievalCandidate(
+            record=MemoryRecord(
+                id="fact:decision",
+                text="assistant.decision=store_search_text_and_canonical_text",
+                memory_type=MemoryType.FACT,
+                level=MemoryLevel.L3_SEMANTIC,
+                scope=MemoryScope.CONVERSATION,
+                namespace="contextual-recall",
+                metadata={"fact": {"predicate": "decision", "subject": "assistant", "value": "store_search_text_and_canonical_text"}},
+                status=MemoryStatus.ACTIVE,
+            ),
+            score_breakdown=ScoreBreakdown(final_score=0.72),
+            source="fact_channel",
+        ),
+        RetrievalCandidate(
+            record=MemoryRecord(
+                id="msg:discussion",
+                text="мы обсуждали, что сначала доделываем память, потом веб",
+                memory_type=MemoryType.MESSAGE,
+                level=MemoryLevel.L2_EPISODIC,
+                scope=MemoryScope.CONVERSATION,
+                namespace="contextual-recall",
+            ),
+            score_breakdown=ScoreBreakdown(final_score=0.70),
+            source="message_channel",
+        ),
+    ]
+
+    ordered = manager._prioritize_contextual_recall_candidates(
+        query_text="что мы обсуждали про память?",
+        candidates=candidates,
+    )
+
+    assert [str(item.record.id or "") for item in ordered[:3]] == [
+        "msg:discussion",
+        "fact:decision",
+        "fact:gpu",
+    ]
+
+
+def test_render_memory_recall_mode_contextual_includes_context_rule() -> None:
+    manager = _manager()
+
+    block = manager._render_memory_recall_mode("contextual_recall")
+
+    assert "mode: contextual_recall" in block
+    assert "messages, summaries, and decision/task facts" in block
+
+
+def test_self_facts_context_uses_exact_ram_fact_for_ozu_query() -> None:
+    manager = _manager()
+    _ingest_turn(manager, text="i have 32 gb ram", namespace="self-facts-ram-hit")
+    fact_rows = _fact_rows(manager, namespace="self-facts-ram-hit", predicate="environment_ram_gb", status=MemoryStatus.ACTIVE)
+    candidates = [
+        RetrievalCandidate(
+            record=row,
+            score_breakdown=ScoreBreakdown(final_score=0.89),
+            source="fact_channel",
+        )
+        for row in list(fact_rows or [])
+    ]
+
+    fact_expectation = manager._build_fact_expectation_check(
+        query_text="what is my ram",
+        namespace="self-facts-ram-hit",
+    )
+    self_facts = manager._build_self_facts_context(
+        query_text="what is my ram",
+        selected_candidates=list(candidates or []),
+        fact_expectation=fact_expectation,
+    )
+
+    assert "environment_ram_gb" in list(self_facts.get("found_predicates") or [])
+    values = [str(item.get("value") or "") for item in list(dict(self_facts.get("found_facts") or {}).get("environment_ram_gb") or [])]
+    assert "32" in values
+
+
+def test_render_self_facts_includes_strict_response_rules() -> None:
+    manager = _manager()
+
+    block = manager._render_self_facts(
+        {
+            "found_predicates": ["environment_gpu_model"],
+            "found_facts": {
+                "environment_gpu_model": [
+                    {"value": "RTX 3050 Ti"},
+                ]
+            },
+        }
+    )
+
+    assert "- trust_level: exact_active_self_facts" in block
+    assert "- response_rule: answer directly from these facts." in block
+    assert "- response_rule: do not suggest ways to check manually." in block
+    assert "- response_rule: do not say you cannot see it in memory." in block
+    assert "- response_rule: ignore weaker ordinary memory snippets if they conflict." in block
+    assert "- environment_gpu_model: RTX 3050 Ti" in block
 
 
 def test_identity_name_and_age_ru() -> None:
@@ -481,3 +995,25 @@ def test_single_message_no_duplicate_age_fact() -> None:
 
     age_facts = [item for item in list(facts or []) if str(item.predicate or "") == "identity_age_years"]
     assert len(age_facts) == 1
+def test_decision_fact_canonicalizes_store_search_and_canonical_text() -> None:
+    _analysis, facts = _extract("Ok, we will store search_text and canonical_text")
+
+    assert _has_fact(facts, "decision", "store_search_text_and_canonical_text")
+
+
+def test_decision_fact_canonicalizes_do_not_store_assistant_thoughts() -> None:
+    _analysis, facts = _extract("Договорились не сохранять мысли ассистента")
+
+    assert _has_fact(facts, "decision", "do_not_store_assistant_thoughts")
+
+
+def test_agreed_plan_fact_canonicalizes_memory_before_web() -> None:
+    _analysis, facts = _extract("Сначала доделываем память, потом веб")
+
+    assert _has_fact(facts, "agreed_plan", "finish_memory_before_web")
+
+
+def test_task_goal_fact_canonicalizes_next_write_policy() -> None:
+    _analysis, facts = _extract("Следующим делом делаем write policy")
+
+    assert _has_fact(facts, "task_goal", "next_write_policy")

@@ -1951,6 +1951,27 @@ def _set_web_flags(
         ctx.meta["web_fresh_missing"] = bool(fresh_missing)
         ctx.meta["web_used"] = bool(web_used)
         ctx.meta["web_response_style"] = str(tags.get("web_response_style") or "default")
+        if not bool(web_used):
+            for key in (
+                "web_evidence_context",
+                "web_evidence_quality",
+                "web_source_audit",
+                "web_citations",
+                "web_evidence_pack",
+                "web_synthesis_caution",
+                "web_result_count",
+                "web_result_domains",
+                "web_domain_reputation",
+                "web_fetched",
+            ):
+                ctx.meta.pop(key, None)
+    if isinstance(getattr(ctx, "state", None), dict) and not bool(web_used):
+        for key in (
+            "web_evidence_context",
+            "web_evidence_quality",
+            "web_last_used",
+        ):
+            ctx.state.pop(key, None)
 
 
 def _emit_trace_event(ctx, event: str, payload: dict[str, Any]) -> None:

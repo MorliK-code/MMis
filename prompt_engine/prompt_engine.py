@@ -47,6 +47,13 @@ class PromptEngine:
         blocks = dict(getattr(prompt_pack, "blocks", {}) or {})
         memory_context = _as_dict(state_map.get("memory_context"))
         memory_blocks = _as_dict(memory_context.get("blocks"))
+        context_tags = _as_dict(state_map.get("context_tags"))
+        factual_response_mode = str(context_tags.get("factual_response_mode") or "").strip().lower()
+        self_memory_exact = (
+            str(context_tags.get("self_memory_exact") or "").strip().lower() in {"true", "1", "yes"}
+            or factual_response_mode == "self_memory_exact"
+        )
+        self_facts = str(memory_blocks.get("self_facts") or "").strip()
         self._system_spec = load_spec("system", required=False)
         prompt_toggles = _as_dict(self._system_spec.get("prompt_toggles"))
         state_toggles = _as_dict(state_map.get("prompt_toggles"))
@@ -153,6 +160,9 @@ class PromptEngine:
             )
             or ""
         )
+        if self_facts and self_memory_exact:
+            recent_chat_block = ""
+            long_summary_block = ""
         user_block = str(_pick_first(memory_blocks.get("user_message"), blocks.get("user_message"), "") or "")
         verbosity_level = _resolve_verbosity_level(state_map=state_map, blocks=blocks)
         verbosity_limits = self.budget_manager.apply_verbosity(verbosity_level)
@@ -450,6 +460,11 @@ class PromptEngine:
         if not memory_blocks:
             return str(blocks.get("retrieved_memories") or "")
         order = [
+            ("MEMORY_RECALL_MODE", "memory_recall_mode"),
+            ("SELF_FACTS", "self_facts"),
+            ("FACT_EXPECTATION_CHECK", "fact_expectation_check"),
+            ("EXACT_FACT_EVIDENCE", "exact_fact_evidence"),
+            ("SUPPORTING_MESSAGE", "supporting_message"),
             ("WORKING_MEMORY", "working_memory"),
             ("SESSION_SUMMARY", "session_summary"),
             ("SEMANTIC_FACTS", "retrieved_semantic"),
@@ -474,6 +489,11 @@ class PromptEngine:
         state_map: dict[str, Any],
     ) -> str:
         context_tags = _as_dict(state_map.get("context_tags"))
+        self_facts = str(memory_blocks.get("self_facts") or "").strip()
+        factual_response_mode = str(context_tags.get("factual_response_mode") or "").strip().lower()
+        self_memory_exact = str(context_tags.get("self_memory_exact") or "").strip().lower() in {"true", "1", "yes"}
+        if self_facts and (self_memory_exact or factual_response_mode == "self_memory_exact"):
+            return ""
         web_used = str(context_tags.get("web_used") or "").strip().lower() in {"true", "1", "yes"}
         web_intent = str(context_tags.get("web_query_intent") or "").strip().lower() or "generic"
         status_block = ""
@@ -490,12 +510,15 @@ class PromptEngine:
         direct_candidates = [
             str(memory_blocks.get("web_evidence") or "").strip(),
             str(blocks.get("web_evidence") or "").strip(),
-            str(_as_dict(state_map.get("web_evidence_context")).get("prompt_block") or "").strip(),
         ]
+        if web_used:
+            direct_candidates.append(str(_as_dict(state_map.get("web_evidence_context")).get("prompt_block") or "").strip())
         for item in direct_candidates:
             if item:
                 return _join_non_empty([status_block, item])
 
+        if not web_used:
+            return ""
         context = _as_dict(state_map.get("web_evidence_context"))
         if not context:
             return ""

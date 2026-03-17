@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from memory.fact_extractor import FactExtractor
+from memory.contextual_resolver import resolve_anchor_context
 from memory.entity_resolver import resolve_entities
 from memory.ingest_analyzer import analyze_message_for_memory
 from memory.memory_manager import MemoryManager
@@ -10,7 +11,7 @@ from memory.numeric_extractor import extract_numeric_facts
 
 def test_analyze_message_for_memory_builds_structured_output() -> None:
     analysis = analyze_message_for_memory(
-        "У меня RTX 3050 Ti, 4 GB VRAM, Python 3.11, проект MMis на Windows через Ollama."
+        "I use RTX 3050 Ti, 4 GB VRAM, Python 3.11, project MMis on Windows via Ollama."
     )
 
     entity_types = {item.type for item in analysis.entities}
@@ -34,8 +35,116 @@ def test_analyze_message_for_memory_builds_structured_output() -> None:
     assert analysis.emotion is not None
 
 
+def test_analyze_message_for_memory_builds_domain_anchors_before_facts() -> None:
+    analysis = analyze_message_for_memory(
+        "i am 21 years old and i have 32 gb ram, also 3050ti with 4gb memory"
+    )
+
+    anchor_kinds = {item.kind for item in analysis.anchors}
+
+    assert "person_age_candidate" in anchor_kinds
+    assert "ram_candidate" in anchor_kinds
+    assert "gpu_model_candidate" in anchor_kinds
+    assert "memory_size_candidate" in anchor_kinds
+    assert any(item.kind == "gpu_model_candidate" and "3050" in str(item.normalized) for item in analysis.anchors)
+
+
+def test_contextual_resolver_interprets_memory_size_as_vram_near_gpu() -> None:
+    analysis = analyze_message_for_memory("3050ti with 4gb memory")
+
+    resolution = dict(analysis.contextual_resolution or {})
+    memory_kind_by_surface = dict(resolution.get("memory_kind_by_surface") or {})
+
+    assert memory_kind_by_surface.get("4gb memory") == "vram"
+    assert any(item.kind == "vram_gb" and str(item.value) == "4" for item in analysis.numeric_facts)
+
+
+def test_contextual_resolver_marks_python_number_as_runtime_version() -> None:
+    anchors = analyze_message_for_memory("python 3.11").anchors
+    resolution = resolve_anchor_context("python 3.11", anchors=anchors)
+
+    assert dict(resolution.version_kind_by_surface).get("python 3.11") == "runtime_python"
+
+
+def test_contextual_resolver_marks_colloquial_python_and_os_mentions_present() -> None:
+    analysis = analyze_message_for_memory("напомни мой пайтон и что у меня за система, версия винды")
+
+    anchor_kinds = {item.kind for item in analysis.anchors}
+    signals = dict(dict(analysis.contextual_resolution or {}).get("signals") or {})
+
+    assert "python_present_candidate" in anchor_kinds
+    assert "os_mention_candidate" in anchor_kinds
+    assert signals.get("python_present") is True
+    assert signals.get("os_present") is True
+
+
+def test_contextual_resolver_tracks_current_and_past_os_values() -> None:
+    analysis = analyze_message_for_memory("сейчас windows 11, до этого linux")
+
+    resolution = dict(analysis.contextual_resolution or {})
+
+    assert "Windows" in list(resolution.get("current_os_values") or [])
+    assert "Linux" in list(resolution.get("past_os_values") or [])
+    signals = dict(resolution.get("signals") or {})
+    assert signals.get("current_os_present") is True
+    assert signals.get("past_os_present") is True
+
+
+def test_ingest_analysis_understands_udav_as_python_version() -> None:
+    analysis = analyze_message_for_memory("сижу на удаве 3.11")
+
+    assert any(item.type == "python_version" and str(item.canonical) == "3.11" for item in analysis.entities)
+    assert any(item.kind == "python_version" and str(item.value) == "3.11" for item in analysis.numeric_facts)
+
+
+def test_ingest_analysis_understands_udav_version_phrase_with_plain_number() -> None:
+    analysis = analyze_message_for_memory("версия удава у меня 11")
+
+    assert any(item.type == "python_version" and str(item.canonical) == "11" for item in analysis.entities)
+    assert any(item.kind == "python_version" and str(item.value) == "11" for item in analysis.numeric_facts)
+
+
+def test_fact_synthesis_builds_typed_stable_facts_after_anchor_and_context_passes() -> None:
+    analysis = analyze_message_for_memory(
+        "i am 21 years old, i use RTX 3050 Ti with 4 GB VRAM, 32 GB RAM, and Windows"
+    )
+
+    stable_pairs = {(item.subject, item.predicate, str(item.value)) for item in analysis.stable_facts}
+
+    assert ("hardware", "gpu_model", "RTX 3050 Ti") in stable_pairs
+    assert ("hardware", "gpu_vram_gb", "4") in stable_pairs
+    assert ("hardware", "ram_gb", "32") in stable_pairs
+    assert ("identity", "age_years", "21") in stable_pairs
+    assert ("environment", "os_name", "Windows") in stable_pairs
+
+
+def test_fact_synthesis_prefers_current_os_over_past_os() -> None:
+    analysis = analyze_message_for_memory("у меня сейчас windows 11, до этого linux")
+
+    stable_pairs = {(item.subject, item.predicate, str(item.value)) for item in analysis.stable_facts}
+
+    assert ("environment", "os_name", "Windows") in stable_pairs
+    assert ("environment", "os_name", "Linux") not in stable_pairs
+
+
+def test_ingest_analysis_populates_memory_view_keys_from_entities_and_numeric_facts() -> None:
+    analysis = analyze_message_for_memory("РЈ РјРµРЅСЏ RTX 3050 Ti СЃ 4 GB VRAM Рё Python 3.11")
+
+    views = dict(analysis.memory_views or {})
+    entity_keys = set(str(x or "") for x in list(views.get("entity_keys") or []))
+    numeric_keys = set(str(x or "") for x in list(views.get("numeric_keys") or []))
+
+    assert "gpu" in entity_keys
+    assert "rtx_3050_ti" in entity_keys
+    assert "python" in entity_keys
+    assert "python_3_11" in entity_keys
+    assert "value:4gb" in numeric_keys
+    assert "vram:4gb" in numeric_keys
+    assert "version:3.11" in numeric_keys
+
+
 def test_fact_extractor_uses_ingest_analysis_structured_facts() -> None:
-    text = "У меня RTX 3050 Ti с 4 GB VRAM и Python 3.11 на Windows."
+    text = "РЈ РјРµРЅСЏ RTX 3050 Ti СЃ 4 GB VRAM Рё Python 3.11 РЅР° Windows."
     analysis = analyze_message_for_memory(text)
     rows = FactExtractor().extract_v2(
         text=text,
@@ -75,7 +184,7 @@ def test_fact_extractor_uses_entities_and_numeric_before_self_cues() -> None:
 
 
 def test_fact_extractor_dedupes_structured_python_fact() -> None:
-    text = "У меня Python 3.11"
+    text = "РЈ РјРµРЅСЏ Python 3.11"
     analysis = analyze_message_for_memory(text)
     rows = FactExtractor().extract_v2(
         text=text,
@@ -88,6 +197,23 @@ def test_fact_extractor_dedupes_structured_python_fact() -> None:
 
     python_rows = [row for row in rows if row.predicate == "environment_runtime_python" and str(row.value) == "python 3.11"]
     assert len(python_rows) == 1
+
+
+def test_fact_extractor_keeps_only_current_os_from_structured_entities() -> None:
+    text = "у меня сейчас windows 11, до этого linux"
+    analysis = analyze_message_for_memory(text)
+    rows = FactExtractor().extract_v2(
+        text=text,
+        metadata={"event_id": "evt:os-current", "namespace": "default"},
+        speaker="user",
+        scope=MemoryScope.CONVERSATION,
+        mode="BALANCED",
+        analysis=analysis,
+    )
+
+    os_rows = [row for row in rows if row.predicate == "environment_os"]
+
+    assert [str(row.value) for row in os_rows] == ["windows"]
 
 
 def test_fact_extractor_does_not_treat_i_am_state_as_identity_name() -> None:
@@ -124,15 +250,40 @@ def test_person_name_does_not_match_im_emotion_or_action() -> None:
 
 
 def test_numeric_extractor_skips_non_age_matches() -> None:
-    facts = extract_numeric_facts("мне 32 гб RAM и i am 3 commits behind")
+    facts = extract_numeric_facts("РјРЅРµ 32 РіР± RAM Рё i am 3 commits behind")
     assert all(item.kind != "age_years" for item in facts)
 
 
 def test_gpu_short_match_does_not_invent_brand() -> None:
-    entities = resolve_entities("nvidia 3050 ti в ноутбуке")
+    entities = resolve_entities("nvidia 3050 ti РІ РЅРѕСѓС‚Р±СѓРєРµ")
     gpu_entities = [item for item in entities if item.type == "gpu_model"]
     assert any(item.canonical == "3050 Ti" for item in gpu_entities)
 
+
+
+def test_anchor_context_helps_treat_4gb_memory_as_vram_near_gpu() -> None:
+    analysis = analyze_message_for_memory("3050ti with 4gb memory")
+
+    assert any(item.type == "gpu_model" and "3050" in str(item.canonical) for item in analysis.entities)
+    assert any(item.kind == "vram_gb" and str(item.value) == "4" for item in analysis.numeric_facts)
+    assert all(not (item.kind == "ram_gb" and str(item.value) == "4") for item in analysis.numeric_facts)
+
+
+def test_ingest_analysis_understands_colloquial_hardware_and_age_forms() -> None:
+    analysis = analyze_message_for_memory("оперативы 32, сижу на питоне 3.11, винда, мне уже 22")
+
+    assert any(item.kind == "ram_gb" and str(item.value) == "32" for item in analysis.numeric_facts)
+    assert any(item.type == "python_version" and str(item.canonical) == "3.11" for item in analysis.entities)
+    assert any(item.type == "os_name" and str(item.canonical) == "Windows" for item in analysis.entities)
+    assert any(item.kind == "age_years" and str(item.value) == "22" for item in analysis.numeric_facts)
+
+
+def test_ingest_analysis_understands_gpu_short_form_with_memory_phrase() -> None:
+    analysis = analyze_message_for_memory("3050ti с 4gb памяти")
+
+    assert any(item.type == "gpu_model" and "3050" in str(item.canonical) for item in analysis.entities)
+    assert any(item.kind == "vram_gb" and str(item.value) == "4" for item in analysis.numeric_facts)
+    assert all(not (item.kind == "ram_gb" and str(item.value) == "4") for item in analysis.numeric_facts)
 
 def test_singleton_fact_rules_cover_structured_environment_predicates() -> None:
     assert MemoryManager._is_singleton_fact_canonical("user.environment_os")

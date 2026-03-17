@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Legacy source ranker for the pre-web-v2 internet stack.
+
+This file remains for compatibility with older adapters such as
+``semantic_search_bridge``. The active ranking path lives in
+``modules.internet.web.source_ranker``.
+"""
+
 import datetime as dt
 from dataclasses import dataclass
 from typing import Any
@@ -16,7 +23,7 @@ class _ScoredResult:
 
 class SourceRanker:
     """
-    Rank already-fetched search results by quality + relevance and keep domain diversity.
+    Legacy ranker for already-fetched search results.
 
     Intent policies:
     - weather
@@ -371,4 +378,3 @@ class SourceRanker:
             except Exception:
                 continue
         return None
-

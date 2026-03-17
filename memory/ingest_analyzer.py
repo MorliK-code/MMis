@@ -5,6 +5,24 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class IngestAnchor:
+    kind: str
+    surface: str
+    normalized: str = ""
+    confidence: float = 0.0
+    hints: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": str(self.kind or "").strip(),
+            "surface": str(self.surface or "").strip(),
+            "normalized": str(self.normalized or "").strip(),
+            "confidence": float(self.confidence or 0.0),
+            "hints": dict(self.hints or {}),
+        }
+
+
+@dataclass(frozen=True)
 class EntityItem:
     type: str
     surface: str
@@ -55,6 +73,8 @@ class IngestAnalysis:
     normalized_text: str
     canonical_text: str
     search_text: str
+    anchors: list[IngestAnchor] = field(default_factory=list)
+    contextual_resolution: dict[str, Any] = field(default_factory=dict)
     entities: list[EntityItem] = field(default_factory=list)
     numeric_facts: list[NumericFact] = field(default_factory=list)
     stable_facts: list[StableFact] = field(default_factory=list)
@@ -68,6 +88,8 @@ class IngestAnalysis:
             "normalized_text": str(self.normalized_text or ""),
             "canonical_text": str(self.canonical_text or ""),
             "search_text": str(self.search_text or ""),
+            "anchors": [item.to_dict() for item in list(self.anchors or [])],
+            "contextual_resolution": dict(self.contextual_resolution or {}),
             "entities": [item.to_dict() for item in list(self.entities or [])],
             "numeric_facts": [item.to_dict() for item in list(self.numeric_facts or [])],
             "stable_facts": [item.to_dict() for item in list(self.stable_facts or [])],
@@ -113,8 +135,11 @@ _ENVIRONMENT_ENTITY_TYPES = {
 
 
 def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> IngestAnalysis:
+    from memory.anchor_extractor import extract_anchors
+    from memory.contextual_resolver import resolve_anchor_context
     from memory.emotion_profile import detect_memory_emotion
     from memory.entity_resolver import resolve_entities
+    from memory.fact_synthesizer import synthesize_stable_facts
     from memory.numeric_extractor import extract_numeric_facts
     from memory.retrieval_projection import build_memory_views
 
@@ -122,10 +147,29 @@ def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> In
     meta = dict(metadata or {})
     views = build_memory_views(raw, metadata=meta)
 
-    entities = resolve_entities(raw, metadata=meta)
-    numeric_facts = extract_numeric_facts(raw, entities=entities)
-    stable_facts = _build_stable_facts(raw, entities=entities, numeric_facts=numeric_facts, metadata=meta)
+    anchors = extract_anchors(raw, metadata=meta)
+    contextual = resolve_anchor_context(raw, anchors=anchors)
+    entities = resolve_entities(raw, metadata=meta, anchors=anchors, context=contextual.to_dict())
+    numeric_facts = extract_numeric_facts(raw, entities=entities, anchors=anchors, context=contextual.to_dict())
+    stable_facts = synthesize_stable_facts(
+        raw,
+        entities=entities,
+        numeric_facts=numeric_facts,
+        contextual_resolution=contextual.to_dict(),
+        metadata=meta,
+    )
     emotion = detect_memory_emotion(raw) if raw.strip() else None
+    views = build_memory_views(
+        raw,
+        metadata={
+            **meta,
+            "anchors": [item.to_dict() for item in list(anchors or [])],
+            "contextual_resolution": dict(contextual.to_dict()),
+            "memory_entities": [item.to_dict() for item in list(entities or [])],
+            "numeric_facts": [item.to_dict() for item in list(numeric_facts or [])],
+            "memory_views": dict(views or {}),
+        },
+    )
     tags = build_tags_from_analysis(
         entities=entities,
         numeric_facts=numeric_facts,
@@ -138,6 +182,8 @@ def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> In
         normalized_text=str(views.get("normalized_text") or ""),
         canonical_text=str(views.get("canonical_text") or ""),
         search_text=str(views.get("search_text") or raw),
+        anchors=anchors,
+        contextual_resolution=contextual.to_dict(),
         entities=entities,
         numeric_facts=numeric_facts,
         stable_facts=stable_facts,

@@ -46,6 +46,7 @@ PROFILE_QUALITY = "QUALITY"
 PROFILE_ECONOM = "ECONOM"
 PROFILE_ASYA = "ASYA"
 PROFILE_AUTONOMOUS = "AUTONOMOUS"
+_SELF_MEMORY_EXACT_MODE = "self_memory_exact"
 LOGGER = get_logger(__name__)
 WEB_TRACE_LOGGER = get_logger("web.trace")
 _WEB_TRACE_JSONL_LOCK = RLock()
@@ -658,6 +659,32 @@ class PromptBuildStage(PipelineStage):
             selected = list(_as_list(memory_context_for_prompt.get("selected")))
             if selected:
                 ctx.retrieved_memories = selected
+        self_facts = str(memory_blocks.get("self_facts") or "").strip()
+        if self_facts:
+            _append_policy_rule(
+                ctx.policies,
+                "If SELF_FACTS is present, treat it as the authoritative source for self-recall answers on this turn.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "Do not override SELF_FACTS with weaker guesses from ordinary memory snippets.",
+            )
+        fact_expectation = _as_dict(memory_context_for_prompt.get("fact_expectation"))
+        if bool(fact_expectation.get("exact_fact_required")):
+            missing_predicates = [
+                str(x).strip()
+                for x in list(_as_list(fact_expectation.get("missing_predicates")))
+                if str(x).strip()
+            ]
+            if missing_predicates:
+                _append_policy_rule(
+                    ctx.policies,
+                    "If the user is asking to recall an exact environment fact and the exact semantic fact is missing from memory, say you do not see the exact fact in memory instead of guessing from similar messages.",
+                )
+                _append_policy_rule(
+                    ctx.policies,
+                    f"Missing exact memory facts for this turn: {', '.join(missing_predicates)}. Do not present them as remembered facts unless they are explicitly present in SELF_FACTS or FACT_EXPECTATION_CHECK.",
+                )
         if bool(ctx.meta.get("think", False)):
             rules = ctx.policies.get("rules")
             if not isinstance(rules, list):
@@ -681,38 +708,52 @@ class PromptBuildStage(PipelineStage):
         web_used = str(ctx.tags.get("web_used") or "").strip().lower() == "true"
         web_fresh_missing = str(ctx.tags.get("web_fresh_missing") or "").strip().lower() == "true"
         web_response_style = str(ctx.tags.get("web_response_style") or "").strip().lower()
-        web_evidence_quality = _as_dict(
-            _pick_value(
-                ctx.meta.get("web_evidence_quality"),
-                ctx.state.get("web_evidence_quality"),
-                {},
-            )
-        )
-        web_evidence_context = _as_dict(
-            _pick_value(
-                ctx.meta.get("web_evidence_context"),
-                ctx.state.get("web_evidence_context"),
-                {},
-            )
-        )
+        web_evidence_quality = _as_dict(ctx.meta.get("web_evidence_quality"))
+        web_evidence_context = _as_dict(ctx.meta.get("web_evidence_context"))
         factual_response_mode = _resolve_web_factual_response_mode(
             web_intent=web_intent,
             web_category=web_category,
             web_evidence_context=web_evidence_context,
             quality=web_evidence_quality,
         )
+        web_used_for_prompt = bool(web_used)
+        factual_response_mode, web_used_for_prompt, self_fact_web_guard = _apply_self_fact_factual_mode_guard(
+            factual_response_mode=factual_response_mode,
+            web_used=web_used_for_prompt,
+            memory_context=memory_context_for_prompt,
+        )
+        if self_fact_web_guard:
+            ctx.meta["prompt_self_fact_guard"] = dict(self_fact_web_guard)
+            ctx.meta["skip_factual_context_isolation"] = True
+            ctx.logs.append("stage=prompt_build skip_factual_context_isolation(reason=exact_self_fact_present)")
+        if factual_response_mode == _SELF_MEMORY_EXACT_MODE:
+            _apply_self_memory_exact_turn_guard(ctx, prompt_state=prompt_state)
+            web_used_for_prompt = False
+            web_fresh_missing = False
+            web_response_style = "default"
+            web_evidence_quality = {}
+            web_evidence_context = {}
         if factual_response_mode:
             ctx.meta["factual_response_mode"] = factual_response_mode
             ctx.tags["factual_response_mode"] = factual_response_mode
+            if factual_response_mode == _SELF_MEMORY_EXACT_MODE:
+                ctx.meta["web_skip_citations"] = True
+                ctx.tags["self_memory_exact"] = "true"
             if web_evidence_context:
                 web_evidence_context = dict(web_evidence_context)
                 web_evidence_context.setdefault("factual_response_mode", factual_response_mode)
                 ctx.meta["web_evidence_context"] = dict(web_evidence_context)
-        if web_used and web_evidence_context:
+        else:
+            ctx.meta.pop("factual_response_mode", None)
+            ctx.tags.pop("factual_response_mode", None)
+            ctx.tags.pop("self_memory_exact", None)
+        if web_used_for_prompt and web_evidence_context:
             prompt_state["web_evidence_context"] = dict(web_evidence_context)
+        else:
+            prompt_state.pop("web_evidence_context", None)
         retrieved_for_prompt = list(_as_list(ctx.retrieved_memories))
         context_isolation_debug: dict[str, Any] = {}
-        if web_used and factual_response_mode:
+        if web_used_for_prompt and factual_response_mode:
             memory_context_for_prompt, retrieved_for_prompt, context_isolation_debug = _isolate_factual_prompt_context(
                 memory_context=memory_context_for_prompt,
                 retrieved_memories=retrieved_for_prompt,
@@ -730,10 +771,28 @@ class PromptBuildStage(PipelineStage):
                 emitter = ctx.meta.get("emit_web_trace_event")
                 if callable(emitter):
                     emitter("factual_context_isolation", dict(context_isolation_debug))
+        elif factual_response_mode == _SELF_MEMORY_EXACT_MODE:
+            memory_context_for_prompt, retrieved_for_prompt, context_isolation_debug = _isolate_self_memory_exact_context(
+                memory_context=memory_context_for_prompt,
+                retrieved_memories=retrieved_for_prompt,
+            )
+            if context_isolation_debug:
+                ctx.meta["prompt_context_isolation"] = dict(context_isolation_debug)
+                ctx.logs.append(
+                    "stage=prompt_build self_memory_exact_context_isolation "
+                    f"kept_blocks={len(list(_as_list(context_isolation_debug.get('included_memory_blocks'))))} "
+                    f"dropped_blocks={len(list(_as_list(context_isolation_debug.get('dropped_memory_blocks'))))} "
+                    f"kept_memories={int(_to_int(context_isolation_debug.get('included_retrieved_memories'), 0) or 0)} "
+                    f"dropped_memories={len(list(_as_list(context_isolation_debug.get('dropped_retrieved_memories'))))}"
+                )
         if memory_context_for_prompt:
+            ctx.memory_context = dict(memory_context_for_prompt)
+            ctx.state["memory_context"] = dict(memory_context_for_prompt)
             prompt_state["memory_context"] = dict(memory_context_for_prompt)
             memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
         else:
+            ctx.memory_context = {}
+            ctx.state.pop("memory_context", None)
             prompt_state.pop("memory_context", None)
             memory_blocks = {}
         prompt_state.pop("long_summary", None)
@@ -746,13 +805,26 @@ class PromptBuildStage(PipelineStage):
         tool_hint = str(memory_blocks.get("active_tool_state") or "").strip()
         if tool_hint:
             prompt_state["last_tool_result"] = tool_hint
-        if bool(intent_alignment.get("applied")) and factual_response_mode:
+        if factual_response_mode == _SELF_MEMORY_EXACT_MODE:
+            _append_policy_rule(
+                ctx.policies,
+                "This turn is a self_memory_exact recall request. Answer directly from SELF_FACTS.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "Do not use WEB_EVIDENCE, external sources, web-only rules, or source-style citations for this turn.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "If SELF_FACTS does not contain the exact requested detail, say you do not see the exact fact in memory instead of guessing.",
+            )
+        elif bool(intent_alignment.get("applied")) and factual_response_mode:
             _append_policy_rule(
                 ctx.policies,
                 f"This turn is a factual {factual_response_mode} request aligned from web classification, not open-ended chat. Keep the answer direct and evidence-led.",
             )
 
-        if web_used and factual_response_mode:
+        if web_used_for_prompt and factual_response_mode:
             _append_policy_rule(
                 ctx.policies,
                 "For time-sensitive web answers, respond directly with facts and avoid rhetorical openers like 'Ах, ты опять...' or similar chatter.",
@@ -770,7 +842,7 @@ class PromptBuildStage(PipelineStage):
                 "For web-backed factual answers, prefer compact evidence-led wording over conversational speculation or storytelling.",
             )
 
-        if web_used and factual_response_mode in {"price", "historical_factual", "latest_factual", "weather"}:
+        if web_used_for_prompt and factual_response_mode in {"price", "historical_factual", "latest_factual", "weather"}:
             _append_policy_rule(
                 ctx.policies,
                 "For factual web-backed answers, state only the value, date, range, or conclusion that is directly supported by WEB_EVIDENCE, then name the source.",
@@ -780,7 +852,7 @@ class PromptBuildStage(PipelineStage):
                 "Do not fill evidence gaps from memory, priors, or style. If the exact factual claim is not reliably supported, say that it could not be reliably confirmed.",
             )
 
-        if web_used and factual_response_mode == "fx_rate":
+        if web_used_for_prompt and factual_response_mode == "fx_rate":
             _append_policy_rule(
                 ctx.policies,
                 "For FX answers, use a compact factual format: one short line per confirmed pair, then rate type, then source.",
@@ -794,7 +866,7 @@ class PromptBuildStage(PipelineStage):
                 "If the exact FX value is not reliably confirmed, explicitly say that the exact value could not be reliably confirmed instead of inventing a number.",
             )
 
-        if web_used:
+        if web_used_for_prompt:
             _append_policy_rule(
                 ctx.policies,
                 "When web evidence is used, include compact citations (domain + date/time) without turning the answer into a verbose report.",
@@ -803,7 +875,7 @@ class PromptBuildStage(PipelineStage):
                 ctx.policies,
                 "Live web lookup already executed for this turn. Do not claim lack of internet/web access or say that you cannot check the data; use WEB_EVIDENCE as the factual source.",
             )
-        if web_used and factual_response_mode and bool(web_evidence_context.get("cautious_synthesis")):
+        if web_used_for_prompt and factual_response_mode and bool(web_evidence_context.get("cautious_synthesis")):
             _append_policy_rule(
                 ctx.policies,
                 "WEB_EVIDENCE for this turn is weak or conflicting. Do not invent an exact number/date from memory or priors. If the precise value is not consistently supported, explicitly say that the exact value could not be reliably confirmed.",
@@ -822,7 +894,7 @@ class PromptBuildStage(PipelineStage):
             tags_map = _as_dict(prompt_state.get("context_tags"))
             tags_map["web_guardrail"] = "fresh_missing_no_fabrication"
             prompt_state["context_tags"] = tags_map
-        elif web_used and factual_response_mode in {"fx_rate", "weather"}:
+        elif web_used_for_prompt and factual_response_mode in {"fx_rate", "weather"}:
             _append_policy_rule(
                 ctx.policies,
                 "When answering FX/weather requests, rely on fetched web evidence, include source domain and timestamp, and report a range if sources disagree.",
@@ -875,7 +947,7 @@ class PromptBuildStage(PipelineStage):
             )
         ctx.prompt_pack = _apply_web_evidence_to_prompt_pack(
             ctx.prompt_pack,
-            web_evidence_context=(web_evidence_context if web_used else {}),
+            web_evidence_context=(web_evidence_context if web_used_for_prompt else {}),
         )
         emitter = ctx.meta.get("emit_web_trace_event")
         if callable(emitter):
@@ -910,9 +982,20 @@ class PromptEngineStage(PipelineStage):
             ctx.logs.append("stage=prompt_engine skipped(no_pack)")
             return ctx
 
+        engine_state = dict(ctx.state or {})
+        engine_state["context_tags"] = dict(ctx.tags or {})
+        if ctx.memory_context:
+            engine_state["memory_context"] = dict(ctx.memory_context)
+        current_web_context = _as_dict(ctx.meta.get("web_evidence_context"))
+        current_web_used = _to_bool(_pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False), default=False)
+        if current_web_used and current_web_context:
+            engine_state["web_evidence_context"] = dict(current_web_context)
+        else:
+            engine_state.pop("web_evidence_context", None)
+
         result = self.prompt_engine.compose(
             prompt_pack=ctx.prompt_pack,
-            state=ctx.state,
+            state=engine_state,
             traits=ctx.traits,
             policies=ctx.policies,
         )
@@ -921,7 +1004,7 @@ class PromptEngineStage(PipelineStage):
         ctx.logs.append(f"stage=prompt_engine messages={len(ctx.prompt_messages)}")
         section_names = [str(x).strip() for x in list(ctx.prompt_sections.keys()) if str(x).strip()]
         token_usage = dict(getattr(ctx.prompt_pack, "token_usage", {}) or {})
-        web_context = _as_dict(_pick_value(ctx.meta.get("web_evidence_context"), ctx.state.get("web_evidence_context"), {}))
+        web_context = _as_dict(ctx.meta.get("web_evidence_context"))
         _emit_turn_summary(
             ctx,
             "prompt_summary",
@@ -2171,38 +2254,51 @@ class GenerateStage(PipelineStage):
                 ).strip().lower()
                 memory_context_for_prompt = _as_dict(ctx.memory_context)
                 retrieved_for_prompt = list(_as_list(ctx.retrieved_memories))
-                web_evidence_quality = _as_dict(
-                    _pick_value(
-                        ctx.meta.get("web_evidence_quality"),
-                        ctx.state.get("web_evidence_quality"),
-                        {},
-                    )
-                )
-                web_evidence_context = _as_dict(
-                    _pick_value(
-                        ctx.meta.get("web_evidence_context"),
-                        ctx.state.get("web_evidence_context"),
-                        {},
-                    )
-                )
+                web_evidence_quality = _as_dict(ctx.meta.get("web_evidence_quality"))
+                web_evidence_context = _as_dict(ctx.meta.get("web_evidence_context"))
+                web_used_for_prompt = False
                 if web_evidence_context and _to_bool(
                     _pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False),
                     default=False,
                 ):
+                    web_used_for_prompt = True
                     factual_response_mode = _resolve_web_factual_response_mode(
                         web_intent=web_intent,
                         web_category=web_category,
                         web_evidence_context=web_evidence_context,
                         quality=web_evidence_quality,
                     )
+                    factual_response_mode, web_used_for_prompt, self_fact_web_guard = _apply_self_fact_factual_mode_guard(
+                        factual_response_mode=factual_response_mode,
+                        web_used=web_used_for_prompt,
+                        memory_context=memory_context_for_prompt,
+                    )
+                    if self_fact_web_guard:
+                        ctx.meta["prompt_self_fact_guard"] = dict(self_fact_web_guard)
+                        ctx.meta["skip_factual_context_isolation"] = True
+                    if factual_response_mode == _SELF_MEMORY_EXACT_MODE:
+                        _apply_self_memory_exact_turn_guard(ctx, prompt_state=prompt_state)
+                        web_used_for_prompt = False
+                        web_evidence_quality = {}
+                        web_evidence_context = {}
                     if factual_response_mode:
                         ctx.meta["factual_response_mode"] = factual_response_mode
                         ctx.tags["factual_response_mode"] = factual_response_mode
+                        if factual_response_mode == _SELF_MEMORY_EXACT_MODE:
+                            ctx.meta["web_skip_citations"] = True
+                            ctx.tags["self_memory_exact"] = "true"
                         web_evidence_context = dict(web_evidence_context)
                         web_evidence_context.setdefault("factual_response_mode", factual_response_mode)
                         ctx.meta["web_evidence_context"] = dict(web_evidence_context)
-                    prompt_state["web_evidence_context"] = dict(web_evidence_context)
-                    if factual_response_mode:
+                    else:
+                        ctx.meta.pop("factual_response_mode", None)
+                        ctx.tags.pop("factual_response_mode", None)
+                        ctx.tags.pop("self_memory_exact", None)
+                    if web_used_for_prompt:
+                        prompt_state["web_evidence_context"] = dict(web_evidence_context)
+                    else:
+                        prompt_state.pop("web_evidence_context", None)
+                    if web_used_for_prompt and factual_response_mode:
                         memory_context_for_prompt, retrieved_for_prompt, context_isolation_debug = _isolate_factual_prompt_context(
                             memory_context=memory_context_for_prompt,
                             retrieved_memories=retrieved_for_prompt,
@@ -2211,12 +2307,17 @@ class GenerateStage(PipelineStage):
                         if context_isolation_debug:
                             ctx.meta["prompt_context_isolation"] = dict(context_isolation_debug)
                 if memory_context_for_prompt:
+                    ctx.memory_context = dict(memory_context_for_prompt)
+                    ctx.state["memory_context"] = dict(memory_context_for_prompt)
                     prompt_state["memory_context"] = dict(memory_context_for_prompt)
                     context_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
                     summary_hint = str(_pick_value(context_blocks.get("session_summary"), context_blocks.get("working_memory"), ""))
                     if summary_hint:
                         prompt_state["long_summary"] = summary_hint
                         prompt_state["dialog_summary"] = summary_hint
+                else:
+                    ctx.memory_context = {}
+                    ctx.state.pop("memory_context", None)
                 ctx.retrieved_memories = list(retrieved_for_prompt)
                 ctx.prompt_pack = self.character_runtime.build(
                     state=prompt_state,
@@ -2235,7 +2336,7 @@ class GenerateStage(PipelineStage):
                     ctx.prompt_pack,
                     web_evidence_context=(
                         web_evidence_context
-                        if _to_bool(_pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False), default=False)
+                        if web_used_for_prompt
                         else {}
                     ),
                 )
@@ -2338,71 +2439,63 @@ class PostprocessStage(PipelineStage):
                 if kept:
                     ctx.logs.append("stage=postprocess terms_kept=" + ",".join(kept))
 
-            web_intent = str(ctx.tags.get("web_query_intent") or "").strip().lower()
-            web_style = str(ctx.tags.get("web_response_style") or "").strip().lower()
-            web_fixed = _apply_time_sensitive_web_failsafe(
-                text,
-                web_intent=web_intent,
-                web_response_style=web_style,
-            )
-            if web_fixed != text:
-                text = web_fixed
-                ctx.logs.append(f"stage=postprocess web_failsafe=applied intent={web_intent}")
-
-            web_sync_fixed, web_sync_changed = _apply_web_tool_sync_guard(
-                text,
-                meta=_as_dict(ctx.meta),
-                web_evidence_context=_as_dict(
-                    _pick_value(
-                        ctx.meta.get("web_evidence_context"),
-                        ctx.state.get("web_evidence_context"),
-                        {},
-                    )
-                ),
-                web_intent=web_intent,
-            )
-            if web_sync_changed:
-                text = web_sync_fixed
-                ctx.logs.append(f"stage=postprocess web_tool_sync=applied intent={web_intent}")
-
-            web_cautious_fixed, web_cautious_changed = _apply_web_factual_caution_guard(
-                text,
-                meta=_as_dict(ctx.meta),
-                web_evidence_context=_as_dict(
-                    _pick_value(
-                        ctx.meta.get("web_evidence_context"),
-                        ctx.state.get("web_evidence_context"),
-                        {},
-                    )
-                ),
-                web_intent=web_intent,
-            )
-            if web_cautious_changed:
-                text = web_cautious_fixed
-                ctx.logs.append(f"stage=postprocess web_factual_caution=applied intent={web_intent}")
-
-            web_fx_fixed, web_fx_changed, web_fx_debug = _apply_web_fx_response_guard(
-                text,
-                meta=_as_dict(ctx.meta),
-                web_evidence_context=_as_dict(
-                    _pick_value(
-                        ctx.meta.get("web_evidence_context"),
-                        ctx.state.get("web_evidence_context"),
-                        {},
-                    )
-                ),
-                web_intent=web_intent,
-            )
-            if web_fx_debug:
-                ctx.meta["fx_response_format_debug"] = dict(web_fx_debug)
-            if web_fx_changed:
-                text = web_fx_fixed
-                ctx.meta["web_skip_citations"] = True
-                ctx.logs.append(
-                    "stage=postprocess web_fx_format=applied "
-                    f"pairs={int(web_fx_debug.get('pair_count', 0) or 0)} "
-                    f"cautious={str(bool(web_fx_debug.get('cautious'))).lower()}"
+            factual_response_mode = str(
+                _pick_value(
+                    ctx.meta.get("factual_response_mode"),
+                    ctx.tags.get("factual_response_mode"),
+                    "",
                 )
+                or ""
+            ).strip().lower()
+            self_memory_exact = factual_response_mode == _SELF_MEMORY_EXACT_MODE
+            web_intent = "" if self_memory_exact else str(ctx.tags.get("web_query_intent") or "").strip().lower()
+            web_style = "" if self_memory_exact else str(ctx.tags.get("web_response_style") or "").strip().lower()
+            if not self_memory_exact:
+                web_fixed = _apply_time_sensitive_web_failsafe(
+                    text,
+                    web_intent=web_intent,
+                    web_response_style=web_style,
+                )
+                if web_fixed != text:
+                    text = web_fixed
+                    ctx.logs.append(f"stage=postprocess web_failsafe=applied intent={web_intent}")
+
+                web_sync_fixed, web_sync_changed = _apply_web_tool_sync_guard(
+                    text,
+                    meta=_as_dict(ctx.meta),
+                    web_evidence_context=_as_dict(ctx.meta.get("web_evidence_context")),
+                    web_intent=web_intent,
+                )
+                if web_sync_changed:
+                    text = web_sync_fixed
+                    ctx.logs.append(f"stage=postprocess web_tool_sync=applied intent={web_intent}")
+
+                web_cautious_fixed, web_cautious_changed = _apply_web_factual_caution_guard(
+                    text,
+                    meta=_as_dict(ctx.meta),
+                    web_evidence_context=_as_dict(ctx.meta.get("web_evidence_context")),
+                    web_intent=web_intent,
+                )
+                if web_cautious_changed:
+                    text = web_cautious_fixed
+                    ctx.logs.append(f"stage=postprocess web_factual_caution=applied intent={web_intent}")
+
+                web_fx_fixed, web_fx_changed, web_fx_debug = _apply_web_fx_response_guard(
+                    text,
+                    meta=_as_dict(ctx.meta),
+                    web_evidence_context=_as_dict(ctx.meta.get("web_evidence_context")),
+                    web_intent=web_intent,
+                )
+                if web_fx_debug:
+                    ctx.meta["fx_response_format_debug"] = dict(web_fx_debug)
+                if web_fx_changed:
+                    text = web_fx_fixed
+                    ctx.meta["web_skip_citations"] = True
+                    ctx.logs.append(
+                        "stage=postprocess web_fx_format=applied "
+                        f"pairs={int(web_fx_debug.get('pair_count', 0) or 0)} "
+                        f"cautious={str(bool(web_fx_debug.get('cautious'))).lower()}"
+                    )
 
             temporal_fixed, temporal_changed = _apply_temporal_consistency_guard(
                 text=text,
@@ -2426,6 +2519,9 @@ class PostprocessStage(PipelineStage):
 
             # Citations are mandatory for web-backed answers, but remain compact and adaptive.
             web_used = _to_bool(_pick_value(ctx.tags.get("web_used"), ctx.meta.get("web_used"), False), default=False)
+            if self_memory_exact:
+                web_used = False
+                ctx.meta["web_skip_citations"] = True
             skip_citations = _to_bool(ctx.meta.get("web_skip_citations"), default=False)
             compact_citations = [str(x) for x in _as_list(_as_dict(ctx.meta).get("web_citations")) if str(x).strip()]
             if web_used and compact_citations and not skip_citations:
@@ -2436,15 +2532,6 @@ class PostprocessStage(PipelineStage):
                     classification=SimpleNamespace(query_type=str(classification.get("query_type") or "")),
                 )
                 ctx.logs.append(f"stage=postprocess citations=applied count={len(compact_citations)}")
-
-            factual_response_mode = str(
-                _pick_value(
-                    ctx.meta.get("factual_response_mode"),
-                    ctx.tags.get("factual_response_mode"),
-                    "",
-                )
-                or ""
-            ).strip().lower()
             if web_used and factual_response_mode:
                 quality = _as_dict(
                     _pick_value(
@@ -3710,11 +3797,16 @@ def _apply_web_evidence_to_prompt_pack(
     context = _as_dict(web_evidence_context)
     if not context:
         return pack
+    blocks = _as_dict(pack.blocks)
+    if str(blocks.get("self_facts") or "").strip():
+        cut_info = dict(pack.cut_info or {})
+        cut_info["web_evidence_skipped_for_self_facts"] = True
+        return replace(pack, cut_info=cut_info)
     web_block = _render_web_evidence_for_prompt(context)
     if not web_block:
         return pack
 
-    merged = dict(pack.blocks or {})
+    merged = dict(blocks or {})
     merged["web_evidence"] = web_block
 
     token_usage = dict(pack.token_usage or {})
@@ -3797,6 +3889,11 @@ def _render_web_evidence_for_prompt(context: dict[str, Any]) -> str:
 
 def _render_memory_context_for_prompt(blocks: dict[str, Any]) -> str:
     order = [
+        ("MEMORY_RECALL_MODE", "memory_recall_mode"),
+        ("SELF_FACTS", "self_facts"),
+        ("FACT_EXPECTATION_CHECK", "fact_expectation_check"),
+        ("EXACT_FACT_EVIDENCE", "exact_fact_evidence"),
+        ("SUPPORTING_MESSAGE", "supporting_message"),
         ("WORKING_MEMORY", "working_memory"),
         ("SESSION_SUMMARY", "session_summary"),
         ("SEMANTIC_FACTS", "retrieved_semantic"),
@@ -3812,6 +3909,78 @@ def _render_memory_context_for_prompt(blocks: dict[str, Any]) -> str:
             continue
         chunks.append(f"[{title}]\n{value}")
     return "\n\n".join(chunks).strip()
+
+
+def _has_exact_self_facts(memory_context: dict[str, Any] | None) -> bool:
+    row = _as_dict(memory_context)
+    if not row:
+        return False
+    self_facts_context = _as_dict(row.get("self_facts_context"))
+    found_predicates = [
+        str(x).strip()
+        for x in list(_as_list(self_facts_context.get("found_predicates")))
+        if str(x).strip()
+    ]
+    if found_predicates:
+        return True
+    fact_expectation = _as_dict(row.get("fact_expectation"))
+    expectation_found = [str(x).strip() for x in list(_as_list(fact_expectation.get("found_predicates"))) if str(x).strip()]
+    if expectation_found:
+        return True
+    blocks = _as_dict(row.get("blocks"))
+    return bool(str(blocks.get("self_facts") or "").strip())
+
+
+def _apply_self_fact_factual_mode_guard(
+    *,
+    factual_response_mode: str,
+    web_used: bool,
+    memory_context: dict[str, Any] | None,
+) -> tuple[str, bool, dict[str, Any]]:
+    mode = str(factual_response_mode or "").strip()
+    used = bool(web_used)
+    if not _has_exact_self_facts(memory_context):
+        return mode, used, {}
+    return _SELF_MEMORY_EXACT_MODE, False, {
+        "reason": "exact_self_fact_present",
+        "skip_factual_context_isolation": True,
+        "factual_response_mode": _SELF_MEMORY_EXACT_MODE,
+    }
+
+
+def _apply_self_memory_exact_turn_guard(ctx: PipelineContext, *, prompt_state: dict[str, Any] | None = None) -> None:
+    ctx.meta["factual_response_mode"] = _SELF_MEMORY_EXACT_MODE
+    ctx.tags["factual_response_mode"] = _SELF_MEMORY_EXACT_MODE
+    ctx.tags["self_memory_exact"] = "true"
+    ctx.meta["web_skip_citations"] = True
+    ctx.meta["web_used"] = False
+    ctx.meta["web_fresh_missing"] = False
+    ctx.meta["web_guardrail_local_reply"] = False
+    ctx.meta["web_response_style"] = "default"
+    ctx.tags["web_used"] = "false"
+    ctx.tags["web_fresh_missing"] = "false"
+    ctx.tags["web_response_style"] = "default"
+    for key in (
+        "web_evidence_context",
+        "web_evidence_quality",
+        "web_clarifying_question",
+        "web_clarify_reason",
+        "web_guardrail",
+    ):
+        ctx.meta.pop(key, None)
+    if isinstance(ctx.state, dict):
+        ctx.state.pop("web_evidence_context", None)
+        ctx.state.pop("web_evidence_quality", None)
+    if isinstance(prompt_state, dict):
+        prompt_state.pop("web_evidence_context", None)
+        tags_map = _as_dict(prompt_state.get("context_tags"))
+        tags_map["factual_response_mode"] = _SELF_MEMORY_EXACT_MODE
+        tags_map["self_memory_exact"] = "true"
+        tags_map["web_used"] = "false"
+        tags_map["web_fresh_missing"] = "false"
+        tags_map["web_response_style"] = "default"
+        tags_map.pop("web_guardrail", None)
+        prompt_state["context_tags"] = tags_map
 
 
 def _render_prompt_preview_from_blocks(blocks: dict[str, Any]) -> str:
@@ -4429,6 +4598,119 @@ def _isolate_factual_prompt_context(
         "strict_context_isolation": True,
     }
     return row, filtered_memories, debug
+
+
+def _isolate_self_memory_exact_context(
+    *,
+    memory_context: dict[str, Any] | None,
+    retrieved_memories: list[Any],
+) -> tuple[dict[str, Any], list[Any], dict[str, Any]]:
+    row = dict(_as_dict(memory_context))
+    blocks = _as_dict(row.get("blocks"))
+    kept_blocks: dict[str, Any] = {}
+    included_blocks: list[str] = []
+    dropped_blocks: list[dict[str, Any]] = []
+    for key in ("memory_recall_mode", "self_facts", "fact_expectation_check"):
+        text = _normalize_text(blocks.get(key))
+        if text:
+            kept_blocks[key] = text
+            included_blocks.append(key)
+
+    exact_fact_rows: list[dict[str, Any]] = []
+    supporting_messages: list[dict[str, Any]] = []
+    dropped_memories: list[dict[str, Any]] = []
+    for item in list(retrieved_memories or []):
+        row_item = _as_dict(item)
+        mem_type = str(row_item.get("memory_type") or "").strip().lower()
+        level = str(row_item.get("level") or "").strip().lower()
+        status = str(row_item.get("status") or "").strip().lower()
+        text = _normalize_text(row_item.get("text"))
+        meta = _as_dict(row_item.get("metadata"))
+        fact = _as_dict(meta.get("fact"))
+        source_kind = str(meta.get("source_kind") or row_item.get("source_kind") or "").strip().lower()
+        subject = str(fact.get("subject") or "").strip().lower()
+
+        keep_reason = ""
+        drop_reason = ""
+        # Exact self-recall should never be influenced by old assistant replies.
+        if source_kind == "assistant_reply":
+            drop_reason = "assistant_reply_not_allowed_in_self_memory_exact"
+        if (
+            not drop_reason
+            and mem_type == "fact"
+            and level == "l3_semantic"
+            and status == "active"
+            and subject == "user"
+            and text
+            and not exact_fact_rows
+        ):
+            exact_fact_rows.append(row_item)
+            keep_reason = "exact_active_user_fact"
+        elif (
+            not drop_reason
+            and
+            mem_type == "message"
+            and source_kind == "user"
+            and text
+            and not supporting_messages
+        ):
+            supporting_messages.append(row_item)
+            keep_reason = "single_supporting_user_message"
+
+        if keep_reason:
+            continue
+        dropped_memories.append(
+            {
+                "id": str(row_item.get("id") or ""),
+                "memory_type": mem_type or "unknown",
+                "reason": drop_reason or "self_memory_exact_noise",
+                "preview": _preview_text(text, 140),
+            }
+        )
+
+    if exact_fact_rows:
+        row_item = exact_fact_rows[0]
+        kept_blocks["exact_fact_evidence"] = (
+            f"- score={float(_to_float(row_item.get('score'), 0.0) or 0.0):.3f} "
+            f"level={str(row_item.get('level') or '').strip()} "
+            f"scope={str(row_item.get('scope') or '').strip()} "
+            f"{str(row_item.get('text') or '').strip()}"
+        ).strip()
+        included_blocks.append("exact_fact_evidence")
+    if supporting_messages:
+        row_item = supporting_messages[0]
+        kept_blocks["supporting_message"] = f"- {str(row_item.get('text') or '').strip()}".strip()
+        included_blocks.append("supporting_message")
+
+    for key, value in dict(blocks or {}).items():
+        name = str(key or "").strip()
+        if not name:
+            continue
+        if name in kept_blocks:
+            continue
+        text = _normalize_text(value)
+        if not text:
+            continue
+        dropped_blocks.append(
+            {
+                "block": name,
+                "reason": "self_memory_exact_noise",
+                "preview": _preview_text(text, 160),
+            }
+        )
+
+    filtered_selected = list(exact_fact_rows) + list(supporting_messages)
+    row["blocks"] = kept_blocks
+    row["selected"] = [dict(x) for x in filtered_selected]
+    debug = {
+        "target_category": _SELF_MEMORY_EXACT_MODE,
+        "included_memory_blocks": included_blocks,
+        "dropped_memory_blocks": dropped_blocks,
+        "included_retrieved_memories": len(filtered_selected),
+        "dropped_retrieved_memories": dropped_memories,
+        "strict_context_isolation": True,
+    }
+    return row, filtered_selected, debug
 
 
 def _normalize_factual_context_target(value: str) -> str:

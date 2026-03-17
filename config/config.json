@@ -16,7 +16,7 @@
   },
   "llm": {
     "provider": "ollama",
-    "model_name": "qwen3:8b",
+    "model_name": "deepseek-r1:8b",
     "model_fallbacks": [],
     "thinking_enabled": true,
     "json_mode_enabled": false,
@@ -117,7 +117,7 @@
         "ollama": {
           "num_thread": 6,
           "num_ctx": 8192,
-          "num_gpu": 28,
+          "num_gpu": 20,
           "num_batch": 128,
           "keep_alive": "5m"
         },

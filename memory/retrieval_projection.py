@@ -148,6 +148,11 @@ def _key_text(key: str) -> str:
     return _normalize_text(str(key or "").replace(":", " ").replace("_", " ").replace(".", " "))
 
 
+def _slug_key(value: Any) -> str:
+    parts = [part for part in _key_text(value).split() if part]
+    return "_".join(parts)
+
+
 def _collect_canonical_parts(text: str, metadata: dict[str, Any] | None = None) -> list[str]:
     meta = dict(metadata or {})
     fact = dict(meta.get("fact") or {})
@@ -206,6 +211,145 @@ def _preserved_canonical_text(value: Any) -> str:
     if canonical.lower() in _LOW_SIGNAL_CANONICAL_TEXTS:
         return ""
     return canonical
+
+
+def _metadata_entity_keys(metadata: dict[str, Any] | None = None) -> list[str]:
+    meta = dict(metadata or {})
+    rows = list(meta.get("memory_entities") or [])
+    if not rows:
+        rows = list(dict(meta.get("memory_analysis") or {}).get("entities") or [])
+    out: list[str] = []
+    for item in rows:
+        row = dict(item or {})
+        entity_type = str(row.get("type") or "").strip().lower()
+        canonical = str(row.get("canonical") or row.get("surface") or "").strip()
+        canonical_key = _slug_key(canonical)
+        if entity_type == "gpu_model":
+            out.append("gpu")
+            if canonical_key:
+                out.append(canonical_key)
+        elif entity_type == "cpu_model":
+            out.append("cpu")
+            if canonical_key:
+                out.append(canonical_key)
+        elif entity_type == "python_version":
+            out.append("python")
+            version = str(canonical or "").strip().lower().replace("python", "").strip()
+            version_key = _slug_key(version)
+            if version_key:
+                out.append(f"python_{version_key}")
+        elif entity_type == "project_name":
+            out.append("project")
+            if canonical_key:
+                out.append(canonical_key)
+        elif entity_type == "tool_name":
+            out.append("tool")
+            if canonical_key:
+                out.append(canonical_key)
+        elif entity_type == "os_name":
+            out.append("os")
+            if canonical_key:
+                out.append(canonical_key)
+        elif entity_type == "person_name":
+            out.append("person")
+            if canonical_key:
+                out.append(canonical_key)
+    fact = dict(meta.get("fact") or {})
+    predicate = str(fact.get("predicate") or "").strip().lower()
+    value = str(fact.get("value") or "").strip()
+    value_key = _slug_key(value)
+    if predicate == "environment_gpu_model":
+        out.append("gpu")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "environment_cpu_model":
+        out.append("cpu")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "environment_runtime_python":
+        out.append("python")
+        version_key = _slug_key(str(value).replace("python", " ").strip())
+        if version_key:
+            out.append(f"python_{version_key}")
+    elif predicate == "project_name":
+        out.append("project")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "environment_tool":
+        out.append("tool")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "environment_os":
+        out.append("os")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "identity_name":
+        out.append("person")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "decision":
+        out.append("decision")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "task":
+        out.append("task")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "task_goal":
+        out.append("task_goal")
+        if value_key:
+            out.append(value_key)
+    elif predicate == "agreed_plan":
+        out.append("agreed_plan")
+        if value_key:
+            out.append(value_key)
+    return merge_projection_keys(out)
+
+
+def _metadata_numeric_keys(metadata: dict[str, Any] | None = None) -> list[str]:
+    meta = dict(metadata or {})
+    rows = list(meta.get("numeric_facts") or [])
+    if not rows:
+        rows = list(dict(meta.get("memory_analysis") or {}).get("numeric_facts") or [])
+    out: list[str] = []
+    for item in rows:
+        row = dict(item or {})
+        kind = str(row.get("kind") or "").strip().lower()
+        value = _normalize_number(str(row.get("value") or "").strip())
+        unit = str(row.get("unit") or "").strip().lower()
+        compact = f"{value}{unit}" if value and unit else value
+        if compact and kind not in {"python_version"}:
+            out.append(f"value:{compact}")
+        if kind == "vram_gb" and compact:
+            out.append(f"vram:{compact}")
+        elif kind == "ram_gb" and compact:
+            out.append(f"ram:{compact}")
+        elif kind == "memory_gb" and compact:
+            out.append(f"memory:{compact}")
+        elif kind == "python_version" and value:
+            out.append(f"version:{value}")
+        elif kind == "age_years" and value:
+            out.append(f"age:{value}")
+    fact = dict(meta.get("fact") or {})
+    predicate = str(fact.get("predicate") or "").strip().lower()
+    value = _normalize_number(str(fact.get("value") or "").strip())
+    if predicate in {"environment_gpu_vram_gb", "environment_gpu_vram_size"} and value:
+        compact = f"{value}gb"
+        out.append(f"value:{compact}")
+        out.append(f"vram:{compact}")
+    elif predicate in {"environment_ram_gb", "environment_ram_size"} and value:
+        compact = f"{value}gb"
+        out.append(f"value:{compact}")
+        out.append(f"ram:{compact}")
+    elif predicate == "environment_memory_gb" and value:
+        compact = f"{value}gb"
+        out.append(f"value:{compact}")
+        out.append(f"memory:{compact}")
+    elif predicate == "environment_runtime_python" and value:
+        out.append(f"version:{value}")
+    elif predicate == "identity_age_years" and value:
+        out.append(f"age:{value}")
+    return merge_projection_keys(out)
 
 
 def extract_query_entity_keys(text: str, *, metadata: dict[str, Any] | None = None) -> list[str]:
@@ -319,10 +463,12 @@ def build_memory_views(text: str, *, metadata: dict[str, Any] | None = None) -> 
 
     entity_keys = merge_projection_keys(
         list(existing.get("entity_keys") or []),
+        _metadata_entity_keys(meta),
         extract_query_entity_keys(text, metadata=meta),
     )
     numeric_keys = merge_projection_keys(
         list(existing.get("numeric_keys") or []),
+        _metadata_numeric_keys(meta),
         extract_query_numeric_keys(text, metadata=meta),
     )
 

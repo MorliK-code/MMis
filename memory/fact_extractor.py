@@ -141,6 +141,18 @@ _PROBLEM_MARKERS = (
     "падает",
     "не ловит",
 )
+_PLAN_SEQUENCE_RE = re.compile(
+    r"\b(?:first|сначала)\s+([^.,;!?]{2,120})\s*(?:,|\s+)\s*(?:then|потом)\s+([^.,;!?]{2,120})",
+    re.I,
+)
+_CANONICAL_TERM_MAP = {
+    "search_text": ("search text", "search_text"),
+    "canonical_text": ("canonical text", "canonical_text"),
+    "assistant_thoughts": ("assistant thoughts", "assistant thought", "мысли ассистента", "thoughts of assistant"),
+    "write_policy": ("write policy", "write-policy", "policy write", "политика записи", "write policy"),
+    "memory": ("memory", "память"),
+    "web": ("web", "веб"),
+}
 
 
 class FactExtractor:
@@ -196,7 +208,17 @@ class FactExtractor:
         )
         rows.extend(self._identity_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
         rows.extend(self._project_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
-        rows.extend(self._environment_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
+        rows.extend(
+            self._environment_facts(
+                src,
+                segments=segments,
+                subject=subject,
+                scope=scope,
+                event_id=event_id,
+                namespace=namespace,
+                analysis=analysis,
+            )
+        )
         rows.extend(self._preference_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
         rows.extend(self._task_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
         rows.extend(self._decision_facts(src, segments=segments, subject=subject, scope=scope, event_id=event_id, namespace=namespace))
@@ -239,7 +261,44 @@ class FactExtractor:
                 for row in rows
             ]
 
-        return self._dedupe_v2(rows)
+        rows = self._dedupe_v2(rows)
+        source_role = str(speaker or "").strip().lower()
+        default_source_kind = "structured_fact" if analysis is not None else "extracted_fact"
+        out: list[FactRecordV2] = []
+        for row in list(rows or []):
+            out.append(
+                FactRecordV2(
+                    subject=row.subject,
+                    predicate=row.predicate,
+                    value=row.value,
+                    scope=row.scope,
+                    confidence=row.confidence,
+                    importance=row.importance,
+                    evidence=row.evidence,
+                    source_event_id=row.source_event_id,
+                    valid_from=row.valid_from,
+                    valid_to=row.valid_to,
+                    status=row.status,
+                    canonical_key=row.canonical_key,
+                    relation=row.relation,
+                    id=row.id,
+                    text=row.text,
+                    memory_type=row.memory_type,
+                    level=row.level,
+                    namespace=row.namespace,
+                    metadata={
+                        **dict(row.metadata or {}),
+                        "source_role": source_role,
+                        "source_kind": str(dict(row.metadata or {}).get("source_kind") or default_source_kind),
+                    },
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                    parent_id=row.parent_id,
+                    chunk_index=row.chunk_index,
+                    version=row.version,
+                )
+            )
+        return out
 
     @staticmethod
     def _subject_for_speaker(speaker: str) -> str:
@@ -326,6 +385,8 @@ class FactExtractor:
             value = str(item.canonical or "").strip()
             if target is None or not value:
                 continue
+            if entity_type == "os_name" and not self._structured_os_entity_allowed(analysis=analysis, value=value):
+                continue
             row = self._make_fact(
                 subject=subject,
                 predicate=target[0],
@@ -347,6 +408,26 @@ class FactExtractor:
             if row is not None:
                 out.append(row)
         return out
+
+    @staticmethod
+    def _structured_os_entity_allowed(*, analysis: IngestAnalysis | None, value: str) -> bool:
+        resolution = dict(getattr(analysis, "contextual_resolution", {}) or {})
+        current_os_values = {
+            str(x or "").strip().lower()
+            for x in list(resolution.get("current_os_values") or [])
+            if str(x or "").strip()
+        }
+        past_os_values = {
+            str(x or "").strip().lower()
+            for x in list(resolution.get("past_os_values") or [])
+            if str(x or "").strip()
+        }
+        token = str(value or "").strip().lower()
+        if current_os_values:
+            return token in current_os_values
+        if past_os_values and token in past_os_values:
+            return False
+        return True
 
     def _facts_from_numeric(
         self,
@@ -616,6 +697,59 @@ class FactExtractor:
             return False
         return not self._looks_actionable_task(src)
 
+    def _canonical_term_token(self, value: str) -> str:
+        src = self._clean_value(value).lower()
+        if not src:
+            return ""
+        for token, markers in _CANONICAL_TERM_MAP.items():
+            if any(marker in src for marker in markers):
+                return token
+        slug = self._normalized_signature(src).replace(" ", "_")
+        return slug[:80]
+
+    def _canonical_task_goal(self, value: str) -> str:
+        src = self._clean_value(value)
+        low = src.lower()
+        if "write policy" in low or "политик" in low and "запис" in low:
+            return "next_write_policy"
+        if "memory" in low and "web" in low and ("before" in low or "потом" in low or "сначала" in low):
+            return "finish_memory_before_web"
+        if "memory" in low:
+            return "next_memory"
+        if "web" in low:
+            return "next_web"
+        token = self._canonical_term_token(src)
+        if token:
+            return f"next_{token}"
+        return self._normalized_signature(src).replace(" ", "_")[:96]
+
+    def _canonical_decision_value(self, value: str) -> str:
+        src = self._clean_value(value)
+        low = src.lower()
+        if "search_text" in low or "search text" in low:
+            if "canonical_text" in low or "canonical text" in low:
+                if any(word in low for word in ("store", "keep", "хран", "save")):
+                    return "store_search_text_and_canonical_text"
+        if "мысли ассистента" in low or "assistant thought" in low:
+            if any(word in low for word in ("не", "not", "don't", "dont")) and any(word in low for word in ("сохраня", "store", "save", "persist")):
+                return "do_not_store_assistant_thoughts"
+        if "write policy" in low or ("политик" in low and "запис" in low):
+            if any(word in low for word in ("next", "следующ", "сначала", "потом", "делаем", "do", "build")):
+                return "next_write_policy"
+            return "write_policy"
+        if "memory" in low and "web" in low and ("before" in low or "потом" in low or "сначала" in low):
+            return "finish_memory_before_web"
+        token = self._canonical_term_token(src)
+        return token or self._normalized_signature(src).replace(" ", "_")[:96]
+
+    def _canonical_agreed_plan(self, first: str, second: str) -> str:
+        left = self._canonical_term_token(first)
+        right = self._canonical_term_token(second)
+        if left and right:
+            return f"finish_{left}_before_{right}"
+        merged = f"{self._clean_value(first)} {self._clean_value(second)}"
+        return self._normalized_signature(merged).replace(" ", "_")[:96]
+
     def _has_any(self, text: str, tokens: tuple[str, ...]) -> bool:
         low = str(text or "").lower()
         return any(token in low for token in tokens)
@@ -725,6 +859,9 @@ class FactExtractor:
                     except Exception:
                         raw_value = str(match.group(0) or "")
                     value = self._clean_value(raw_value)
+                    transform = rule.get("transform")
+                    if callable(transform):
+                        value = self._clean_value(str(transform(value, segment, match) or ""))
                     validator = rule.get("validator")
                     if callable(validator) and not bool(validator(value)):
                         continue
@@ -872,7 +1009,15 @@ class FactExtractor:
         )
 
     def _environment_facts(
-        self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
+        self,
+        text: str,
+        *,
+        segments: list[str],
+        subject: str,
+        scope: MemoryScope,
+        event_id: str,
+        namespace: str,
+        analysis: IngestAnalysis | None = None,
     ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         if subject != "user":
@@ -884,6 +1029,8 @@ class FactExtractor:
         for segment in candidate_segments:
             for pattern, predicate, value in _ENVIRONMENT_STATIC_RULES:
                 if not pattern.search(segment):
+                    continue
+                if predicate == "environment_os" and not self._structured_os_entity_allowed(analysis=analysis, value=str(value)):
                     continue
                 key = (predicate, str(value).lower())
                 if key in seen_pairs:
@@ -976,6 +1123,7 @@ class FactExtractor:
                 "confidence": 0.69,
                 "importance": 0.82,
                 "validator": self._looks_actionable_task,
+                "transform": lambda value, _segment, _match: self._canonical_task_goal(value),
             },
             {
                 "pattern": re.compile(r"\b(?:нужно|надо|надо бы|сделай|задача)\s+([^\n.!?]{3,180})", re.I),
@@ -984,6 +1132,7 @@ class FactExtractor:
                 "confidence": 0.73,
                 "importance": 0.84,
                 "validator": self._looks_actionable_task,
+                "transform": lambda value, _segment, _match: self._canonical_task_goal(value),
             },
             {
                 "pattern": re.compile(r"\b(?:i want to|i want|я хочу)\s+([^\n.!?]{3,180})", re.I),
@@ -992,9 +1141,19 @@ class FactExtractor:
                 "confidence": 0.70,
                 "importance": 0.80,
                 "validator": self._looks_actionable_task,
+                "transform": lambda value, _segment, _match: self._canonical_task_goal(value),
+            },
+            {
+                "pattern": re.compile(r"\b(?:next|следующим делом|следующий шаг)\s+([^\n.!?]{3,180})", re.I),
+                "predicate": "task_goal",
+                "relation": "task",
+                "confidence": 0.74,
+                "importance": 0.82,
+                "validator": self._looks_project_value,
+                "transform": lambda value, _segment, _match: self._canonical_task_goal(value),
             },
         ]
-        return self._extract_pattern_facts(
+        out = self._extract_pattern_facts(
             segments=segments,
             subject=subject,
             scope=scope,
@@ -1002,6 +1161,27 @@ class FactExtractor:
             namespace=namespace,
             rules=rules,
         )
+        for segment in list(segments or []):
+            match = _PLAN_SEQUENCE_RE.search(segment)
+            if not match:
+                continue
+            plan_value = self._canonical_agreed_plan(str(match.group(1) or ""), str(match.group(2) or ""))
+            if not self._is_informative(plan_value, min_chars=6):
+                continue
+            self._append_fact(
+                out,
+                subject=subject,
+                predicate="agreed_plan",
+                value=plan_value,
+                scope=scope,
+                confidence=0.84,
+                importance=0.86,
+                evidence=segment,
+                event_id=event_id,
+                relation="decision",
+                namespace=namespace,
+            )
+        return out
 
     def _decision_facts(
         self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
@@ -1014,6 +1194,16 @@ class FactExtractor:
                 "confidence": 0.78,
                 "importance": 0.84,
                 "validator": self._looks_project_value,
+                "transform": lambda value, _segment, _match: self._canonical_decision_value(value),
+            },
+            {
+                "pattern": re.compile(r"\b(?:we(?:'ll| will)|will|let's|lets)\s+(?:store|keep|save)\s+([^.,;!?]{2,160})", re.I),
+                "predicate": "decision",
+                "relation": "decision",
+                "confidence": 0.80,
+                "importance": 0.86,
+                "validator": self._looks_project_value,
+                "transform": lambda value, _segment, _match: self._canonical_decision_value(f"store {value}"),
             },
             {
                 "pattern": re.compile(r"\b(?:мы решили|решили|решено|оставляем|выбрали|не будем|пусть будет)\s+([^.,;!?]{2,160})", re.I),
@@ -1022,6 +1212,16 @@ class FactExtractor:
                 "confidence": 0.80,
                 "importance": 0.86,
                 "validator": self._looks_project_value,
+                "transform": lambda value, _segment, _match: self._canonical_decision_value(value),
+            },
+            {
+                "pattern": re.compile(r"\b(?:будем)\s+(?:хранить|сохранять)\s+([^.,;!?]{2,160})", re.I),
+                "predicate": "decision",
+                "relation": "decision",
+                "confidence": 0.80,
+                "importance": 0.86,
+                "validator": self._looks_project_value,
+                "transform": lambda value, _segment, _match: self._canonical_decision_value(f"store {value}"),
             },
             {
                 "pattern": re.compile(r"^(?:мы\s+)?будем\s+([^.,;!?]{2,160})", re.I),
@@ -1030,6 +1230,16 @@ class FactExtractor:
                 "confidence": 0.74,
                 "importance": 0.82,
                 "validator": self._looks_project_value,
+                "transform": lambda value, _segment, _match: self._canonical_decision_value(value),
+            },
+            {
+                "pattern": re.compile(r"\b(?:договорились|agreed)\s+([^.,;!?]{2,160})", re.I),
+                "predicate": "decision",
+                "relation": "decision",
+                "confidence": 0.82,
+                "importance": 0.86,
+                "validator": self._looks_project_value,
+                "transform": lambda value, _segment, _match: self._canonical_decision_value(value),
             },
         ]
         return self._extract_pattern_facts(

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Legacy bridge between semantic NLU outputs and the pre-web-v2 search stack.
+
+The active internet pipeline lives under ``modules.internet.web.*``.
+This adapter is retained only for backward compatibility.
+"""
+
 import re
 from dataclasses import replace
 from typing import Any
@@ -12,7 +18,7 @@ from modules.nlu.types import SearchTask, UnderstandingResult
 
 class SemanticSearchBridge:
     """
-    Adapter layer between semantic NLU pipeline and legacy internet search layer.
+    Legacy adapter layer between semantic NLU outputs and older internet search code.
 
     Responsibilities:
     - convert semantic SearchTask objects into search-layer compatible parameters
@@ -304,4 +310,3 @@ class SemanticSearchBridge:
         if not match:
             return ""
         return match.group(0).replace(",", ".")
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from modules.internet.web.continuity import build_continuity_patch
+from modules.internet.web.continuity import ContinuityConfig, build_continuity_patch, resolve_continuation
 from modules.internet.web.query_classifier import classify_query
 from modules.internet.web.query_planner import build_query_plan
 from modules.internet.web.query_text import analyze_search_text, extract_search_core, normalize_search_text
@@ -130,6 +130,53 @@ class WebQueryCoreExtractionTests(unittest.TestCase):
         self.assertEqual(debug.get("extracted_search_core"), "какой курс доллара сегодня")
         self.assertIn("/mode_lock on /web", str(debug.get("removed_wrapper_text") or ""))
         self.assertEqual(plan.query_roles["primary"], ["какой курс доллара сегодня"])
+
+
+    def test_self_memory_query_does_not_continue_old_price_task(self) -> None:
+        state = {
+            "web_active_task": {
+                "task_id": "task_old_price",
+                "query": "цена rtx 3050 сегодня",
+                "base_query": "цена rtx 3050 сегодня",
+                "latest_query": "цена rtx 3050 сегодня",
+                "resolved_intent": "generic",
+                "turn_timestamp": "2026-03-17T10:00:00+00:00",
+            }
+        }
+
+        resolution = resolve_continuation(
+            query="подскажи мою видеокарту",
+            state=state,
+            config=ContinuityConfig(ttl_minutes=999, max_user_turns=99),
+        )
+
+        self.assertFalse(resolution.used)
+        self.assertEqual(resolution.resolved_query, "мою видеокарту")
+        self.assertEqual(resolution.base_query, "мою видеокарту")
+        self.assertEqual(resolution.reason, "self_memory_query")
+
+    def test_followup_shaped_self_memory_query_still_breaks_price_continuation(self) -> None:
+        state = {
+            "web_active_task": {
+                "task_id": "task_old_price",
+                "query": "цена rtx 3050 сегодня",
+                "base_query": "цена rtx 3050 сегодня",
+                "latest_query": "цена rtx 3050 сегодня",
+                "resolved_intent": "generic",
+                "turn_timestamp": "2026-03-17T10:00:00+00:00",
+            }
+        }
+
+        resolution = resolve_continuation(
+            query="а моя видеокарта?",
+            state=state,
+            config=ContinuityConfig(ttl_minutes=999, max_user_turns=99),
+        )
+
+        self.assertFalse(resolution.used)
+        self.assertEqual(resolution.resolved_query, "моя видеокарта")
+        self.assertEqual(resolution.base_query, "моя видеокарта")
+        self.assertEqual(resolution.reason, "self_memory_query")
 
 
 if __name__ == "__main__":

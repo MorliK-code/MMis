@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Legacy semantic-to-search planner.
+
+This module is kept only for compatibility with older internet search flows.
+The active web pipeline lives under ``modules.internet.web.*`` and should be
+preferred for new routing or retrieval work.
+"""
+
 from dataclasses import dataclass
 
 from modules.nlu.location_resolver import LocationResolver
@@ -16,7 +23,7 @@ class _PlanContext:
 
 
 class SearchPlanner:
-    """Build structured search tasks from semantic NLU outputs."""
+    """Legacy planner for structured search tasks from semantic NLU outputs."""
 
     _FINANCE_CURRENCY_HINTS = {"usd", "eur", "gbp", "uah", "btc"}
     _CODING_WEB_REQUIRED_FACT_KEYS = {

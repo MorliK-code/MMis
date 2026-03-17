@@ -377,6 +377,9 @@ class ContextBuildResult:
     dropped: list[dict[str, Any]] = field(default_factory=list)
     score_breakdowns: list[dict[str, Any]] = field(default_factory=list)
     truncation_log: list[dict[str, Any]] = field(default_factory=list)
+    fact_expectation: dict[str, Any] = field(default_factory=dict)
+    self_facts_context: dict[str, Any] = field(default_factory=dict)
+    recall_mode: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -385,6 +388,9 @@ class ContextBuildResult:
             "dropped": [dict(x) for x in list(self.dropped or [])],
             "score_breakdowns": [dict(x) for x in list(self.score_breakdowns or [])],
             "truncation_log": [dict(x) for x in list(self.truncation_log or [])],
+            "fact_expectation": dict(self.fact_expectation or {}),
+            "self_facts_context": dict(self.self_facts_context or {}),
+            "recall_mode": str(self.recall_mode or ""),
         }
 
 

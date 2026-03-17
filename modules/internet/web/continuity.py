@@ -79,6 +79,8 @@ def resolve_continuation(
     source = _sanitize_task_query(query)
     if not source:
         return ContinuationResolution(used=False, resolved_query="")
+    if _is_self_memory_query(source):
+        return ContinuationResolution(used=False, resolved_query=source, base_query=source, reason="self_memory_query")
 
     state_map = dict(state or {})
     active_task = _as_dict(state_map.get("web_active_task"))
@@ -242,6 +244,66 @@ def _is_followup_phrase(text: str, markers: tuple[str, ...]) -> bool:
 def _has_any(text: str, tokens: tuple[str, ...]) -> bool:
     low = str(text or "").strip().lower()
     return any(str(token).strip().lower() in low for token in tokens if str(token).strip())
+
+
+def _is_self_memory_query(text: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return False
+    target_markers = (
+        "видюх",
+        "видях",
+        "видеокарт",
+        "видеокарта",
+        "карточк",
+        "gpu",
+        "graphics card",
+        "video card",
+        "python",
+        "питон",
+        "ос",
+        "операционк",
+        "operating system",
+        "name",
+        "имя",
+        "age",
+        "возраст",
+    )
+    context_markers = (
+        "какая у меня",
+        "какой у меня",
+        "какое у меня",
+        "какие у меня",
+        "что у меня за",
+        "что у меня с",
+        "подскажи мою",
+        "подскажи мой",
+        "скажи мою",
+        "скажи мой",
+        "напомни мою",
+        "напомни мой",
+        "мой ",
+        "моя ",
+        "мою ",
+        "my ",
+        "what is my",
+        "what's my",
+        "remind me my",
+        "на чём я",
+    )
+    if "на чём я" in low and any(token in low for token in ("сижу", "работаю", "кручусь", "run on", "running on")):
+        return True
+    if not any(token in low for token in target_markers):
+        return False
+    if any(marker in low for marker in context_markers):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:какая|какой|какое|какие|what(?:'s| is)|which)\b.{0,48}\b(?:у меня|my)\b",
+            low,
+            flags=re.I,
+        )
+    )
 
 
 def _is_expired(

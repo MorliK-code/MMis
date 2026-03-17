@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -38,6 +39,7 @@ from memory.memory_models import (
     MemoryStatus,
     MemoryType,
     Reranker,
+    RetrievalCandidate,
     RetrievalQuery,
     RetrievalResult,
 )
@@ -48,6 +50,7 @@ from memory.memory_scoring import (
     SalienceWeights,
     ScoreWeights,
     build_message_signal_breakdown,
+    build_score_breakdown,
     build_salience_score,
 )
 from memory.retrieval_projection import (
@@ -62,6 +65,79 @@ from utils.logger import get_logger, log_json
 
 
 LOGGER = get_logger(__name__)
+
+_FACT_EXPECTATION_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...] = (
+    (
+        re.compile(
+            r"(?:"
+            r"какая|какой|напомни|помнишь|помниш|помни|скажи|подскажи|"
+            r"remember|what(?:'s| is)|what do i have|"
+            r"что\s+у\s+меня\s+за|"
+            r"моя|мою|мой"
+            r")[^?.!\n]{0,64}(?:"
+            r"видюх|видеокарт|видеокарта|gpu|graphics card|video card|"
+            r"карточк|карта"
+            r")",
+            re.I,
+        ),
+        ("environment_gpu_model",),
+        "gpu_model",
+    ),
+    (
+        re.compile(
+            r"(?:"
+            r"какая|какой|напомни|помнишь|помниш|помни|скажи|подскажи|"
+            r"remember|what(?:'s| is)|what do i have|"
+            r"что\s+у\s+меня\s+за|"
+            r"моя|мою|мой"
+            r")[^?.!\n]{0,64}(?:"
+            r"python|питон|пайтон|версия python|версия питона|версия пайтона"
+            r")",
+            re.I,
+        ),
+        ("environment_runtime_python",),
+        "python_version",
+    ),
+    (
+        re.compile(
+            r"(?:"
+            r"на\s+ч[её]м\s+я\s+(?:сейчас\s+)?сижу|"
+            r"какая\s+у\s+меня\s+ос|"
+            r"какая\s+у\s+меня\s+операционк|"
+            r"что\s+у\s+меня\s+за\s+(?:ос|операционк|винд|систем)|"
+            r"моя\s+(?:ос|операционк|винда|система)|"
+            r"помнишь[^?.!\n]{0,64}(?:ос|операционк|винд|систем)|"
+            r"помниш[^?.!\n]{0,64}(?:ос|операционк|винд|систем)|"
+            r"версия\s+винды|"
+            r"what\s+os|which\s+os"
+            r")",
+            re.I,
+        ),
+        ("environment_os",),
+        "operating_system",
+    ),
+    (
+        re.compile(
+            r"(?:"
+            r"сколько|какая|какой|напомни|помнишь|помниш|помни|скажи|подскажи|"
+            r"remember|what(?:'s| is)|what do i have|"
+            r"что\s+у\s+меня\s+с|"
+            r"моя|мою|мой"
+            r")[^?.!\n]{0,64}(?:"
+            r"озу|ram|оператив|оперативк|memory"
+            r")",
+            re.I,
+        ),
+        ("environment_ram_gb", "environment_memory_gb"),
+        "ram_amount",
+    ),
+)
+_CONTEXTUAL_RECALL_RULES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:о чем|о ч[её]м|what did we|what were we|what did we discuss)", re.I),
+    re.compile(r"(?:что мы обсуждали|что обсуждали|что решили|what we decided|what did we decide)", re.I),
+    re.compile(r"(?:почему так сделали|why did we do that|why we did that)", re.I),
+    re.compile(r"(?:что ты советовала|what did you suggest|what did you advise)", re.I),
+)
 
 
 class MemoryManager:
@@ -348,6 +424,7 @@ class MemoryManager:
                 return IngestResult(stored_ids=stored_ids)
 
             preview_facts: list[FactRecordV2] = []
+            source_preview_facts: list[FactRecordV2] = []
             ingest_analysis: IngestAnalysis | None = None
             if memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY} and scope != MemoryScope.PRIVATE_RUNTIME:
                 ingest_analysis = analyze_message_for_memory(
@@ -364,11 +441,20 @@ class MemoryManager:
                         mode=str(metadata.get("quality_profile") or "BALANCED"),
                         analysis=ingest_analysis,
                     )
+                    source_preview_facts = [
+                        fact
+                        for fact in list(preview_facts or [])
+                        if self._policy.is_fact_allowed_for_source(
+                            predicate=str(fact.predicate or ""),
+                            source_role=str(event.role or "user"),
+                            source_kind=source_kind,
+                        )
+                    ]
                 metadata = self._augment_message_metadata(
                     text=text,
                     metadata=metadata,
                     namespace=namespace,
-                    preview_facts=preview_facts,
+                    preview_facts=(source_preview_facts or preview_facts),
                 )
 
             assistant_write_decision = AssistantWriteDecision(reason="not_applicable")
@@ -382,11 +468,25 @@ class MemoryManager:
                 metadata["assistant_write_policy"] = assistant_write_decision.to_dict()
                 metadata["assistant_write_blocked"] = bool(not assistant_write_decision.allow_store)
                 metadata["assistant_write_reason"] = str(assistant_write_decision.reason or "")
+                decision_signals = dict(assistant_write_decision.signals or {})
+                assistant_reply_kind = str(
+                    decision_signals.get("assistant_reply_kind")
+                    or metadata.get("assistant_reply_kind")
+                    or ""
+                ).strip()
+                if assistant_reply_kind:
+                    metadata["assistant_reply_kind"] = assistant_reply_kind
+                if decision_signals.get("memory_help_noise") is not None:
+                    metadata["assistant_memory_help_noise"] = bool(decision_signals.get("memory_help_noise"))
                 if assistant_write_decision.target_scope is not None:
                     scope = assistant_write_decision.target_scope
                 if scope == MemoryScope.TEMPORARY:
                     metadata.setdefault("ttl_sec", int(self._temporary_ttl_sec))
-                if not assistant_write_decision.allow_fact_records or not source_fact_records_allowed:
+                if (
+                    not assistant_write_decision.allow_fact_records
+                    or not source_fact_records_allowed
+                    or (preview_facts and not source_preview_facts)
+                ):
                     metadata["assistant_fact_records_blocked"] = True
 
             level = self._initial_level(memory_type)
@@ -483,7 +583,7 @@ class MemoryManager:
                 promoted_ids.append(promoted.id)
 
             writeable_preview_facts = (
-                list(preview_facts)
+                list(source_preview_facts or preview_facts)
                 if assistant_write_decision.allow_fact_records and source_fact_records_allowed
                 else []
             )
@@ -493,6 +593,8 @@ class MemoryManager:
                     namespace=namespace,
                     now_ts=now_ts,
                     event_id=event_id,
+                    source_role=str(event.role or "user"),
+                    source_kind=str(metadata.get("source_kind") or "structured_fact"),
                 )
 
             self._event_store.append(
@@ -664,6 +766,29 @@ class MemoryManager:
             metadata_filters={},
         )
         retrieval_result = self.retrieve(retrieval_query)
+        recall_mode = self._classify_memory_recall_mode(query_text=str(request.user_message or ""))
+        fact_expectation = self._build_fact_expectation_check(
+            query_text=str(request.user_message or ""),
+            namespace=str(request.namespace or "default"),
+        )
+        exact_fact_candidates = self._exact_fact_candidates_for_expectation(
+            query=retrieval_result.query,
+            namespace=str(request.namespace or "default"),
+            fact_expectation=fact_expectation,
+        )
+        prioritized_candidates = self._prioritize_retrieval_candidates_for_fact_expectation(
+            query=retrieval_result.query,
+            candidates=list(retrieval_result.candidates or []),
+            exact_fact_candidates=exact_fact_candidates,
+            fact_expectation=fact_expectation,
+        )
+        selected_candidates = self._select_candidates_for_recall_mode(
+            query_text=str(request.user_message or ""),
+            recall_mode=recall_mode,
+            fallback_candidates=prioritized_candidates,
+            exact_fact_candidates=exact_fact_candidates,
+            fact_expectation=fact_expectation,
+        )
 
         private_runtime = self._private_runtime_for_namespace(request.namespace)
         working = self._working_for_namespace(namespace=request.namespace, scopes=list(request.scopes or []))
@@ -686,9 +811,48 @@ class MemoryManager:
 
         result = self._context_builder.build(
             request=req,
-            retrieved=list(retrieval_result.candidates or []),
+            retrieved=selected_candidates,
             private_runtime_state=private_runtime,
         )
+        self_facts_context = self._build_self_facts_context(
+            query_text=str(request.user_message or ""),
+            selected_candidates=list(result.selected or []),
+            fact_expectation=fact_expectation,
+        )
+        if fact_expectation or self_facts_context:
+            blocks = dict(result.blocks or {})
+            blocks["fact_expectation_check"] = self._render_fact_expectation_check(fact_expectation)
+            self_facts_block = self._render_self_facts(self_facts_context)
+            if self_facts_block:
+                blocks["self_facts"] = self_facts_block
+            recall_mode_block = self._render_memory_recall_mode(recall_mode)
+            if recall_mode_block:
+                blocks["memory_recall_mode"] = recall_mode_block
+            result = ContextBuildResult(
+                blocks=blocks,
+                selected=list(result.selected or []),
+                dropped=[dict(x) for x in list(result.dropped or [])],
+                score_breakdowns=[dict(x) for x in list(result.score_breakdowns or [])],
+                truncation_log=[dict(x) for x in list(result.truncation_log or [])],
+                fact_expectation=fact_expectation,
+                self_facts_context=self_facts_context,
+                recall_mode=recall_mode,
+            )
+        elif recall_mode:
+            blocks = dict(result.blocks or {})
+            recall_mode_block = self._render_memory_recall_mode(recall_mode)
+            if recall_mode_block:
+                blocks["memory_recall_mode"] = recall_mode_block
+            result = ContextBuildResult(
+                blocks=blocks,
+                selected=list(result.selected or []),
+                dropped=[dict(x) for x in list(result.dropped or [])],
+                score_breakdowns=[dict(x) for x in list(result.score_breakdowns or [])],
+                truncation_log=[dict(x) for x in list(result.truncation_log or [])],
+                fact_expectation=fact_expectation,
+                self_facts_context=self_facts_context,
+                recall_mode=recall_mode,
+            )
         self._debugger.record_retrieval_trace(
             query=req.user_message,
             selected=list(result.selected or []),
@@ -698,6 +862,488 @@ class MemoryManager:
             context_blocks=dict(result.blocks or {}),
         )
         return result
+
+    def _build_fact_expectation_check(self, *, query_text: str, namespace: str) -> dict[str, Any]:
+        query = str(query_text or "").strip()
+        if not query:
+            return {}
+        expected_predicates: list[str] = []
+        intents: list[str] = []
+        for pattern, predicates, intent_name in _FACT_EXPECTATION_RULES:
+            if not pattern.search(query):
+                continue
+            intents.append(str(intent_name))
+            for predicate in list(predicates or []):
+                token = str(predicate or "").strip().lower()
+                if token and token not in expected_predicates:
+                    expected_predicates.append(token)
+        if not expected_predicates and self._classify_memory_recall_mode(query_text=query) == "exact_fact_recall":
+            fallback_predicates = self._relevant_self_fact_predicates(
+                query_text=query,
+                fact_expectation={},
+            )
+            for predicate in list(fallback_predicates or []):
+                token = str(predicate or "").strip().lower()
+                if token and token not in expected_predicates:
+                    expected_predicates.append(token)
+            if expected_predicates and "self_fact_fallback" not in intents:
+                intents.append("self_fact_fallback")
+        if not expected_predicates:
+            return {}
+
+        fact_rows = self._find_active_semantic_fact_rows(namespace=namespace, predicates=expected_predicates)
+        found_by_predicate: dict[str, list[dict[str, Any]]] = {predicate: [] for predicate in expected_predicates}
+        for row in list(fact_rows or []):
+            fact = dict(dict(row.metadata or {}).get("fact") or {})
+            predicate = str(fact.get("predicate") or "").strip().lower()
+            if predicate not in found_by_predicate:
+                continue
+            found_by_predicate[predicate].append(
+                {
+                    "record_id": str(row.id or ""),
+                    "value": fact.get("value"),
+                    "confidence": float(fact.get("confidence") or row.confidence or 0.0),
+                    "scope": str(row.scope.value),
+                    "source_event_id": str(row.source_event_id or ""),
+                }
+            )
+
+        found_predicates = [predicate for predicate in expected_predicates if found_by_predicate.get(predicate)]
+        missing_predicates = [predicate for predicate in expected_predicates if not found_by_predicate.get(predicate)]
+        return {
+            "query": query,
+            "intents": intents,
+            "expected_predicates": expected_predicates,
+            "found_predicates": found_predicates,
+            "missing_predicates": missing_predicates,
+            "found_facts": found_by_predicate,
+            "exact_fact_required": True,
+            "should_answer_cautiously": bool(missing_predicates),
+        }
+
+    def _exact_fact_candidates_for_expectation(
+        self,
+        *,
+        query: RetrievalQuery,
+        namespace: str,
+        fact_expectation: dict[str, Any] | None,
+    ) -> list[RetrievalCandidate]:
+        row = dict(fact_expectation or {})
+        expected_predicates = [
+            str(x).strip().lower()
+            for x in list(row.get("expected_predicates") or [])
+            if str(x).strip()
+        ]
+        if not expected_predicates:
+            return []
+
+        exact_fact_rows = self._find_active_semantic_fact_rows(namespace=namespace, predicates=expected_predicates)
+        exact_fact_candidates: list[RetrievalCandidate] = []
+        for record in list(exact_fact_rows or []):
+            breakdown = build_score_breakdown(
+                query=query,
+                record=record,
+                semantic_similarity=1.0,
+                lexical_score=1.0,
+            )
+            exact_fact_candidates.append(
+                RetrievalCandidate(
+                    record=record,
+                    score_breakdown=breakdown,
+                    source="fact_expectation_exact",
+                )
+            )
+        return exact_fact_candidates
+
+    def _prioritize_retrieval_candidates_for_fact_expectation(
+        self,
+        *,
+        query: RetrievalQuery,
+        candidates: list[RetrievalCandidate],
+        exact_fact_candidates: list[RetrievalCandidate],
+        fact_expectation: dict[str, Any] | None,
+    ) -> list[RetrievalCandidate]:
+        row = dict(fact_expectation or {})
+        expected_predicates = [
+            str(x).strip().lower()
+            for x in list(row.get("expected_predicates") or [])
+            if str(x).strip()
+        ]
+        if not expected_predicates:
+            return list(candidates or [])
+
+        existing_ids = {str(item.record.id or "") for item in list(exact_fact_candidates or [])}
+        fallback_candidates = []
+        for item in list(candidates or []):
+            record_id = str(item.record.id or "")
+            if record_id in existing_ids:
+                continue
+            fallback_candidates.append(item)
+        all_candidates = list(exact_fact_candidates or []) + fallback_candidates
+
+        def _priority(item: RetrievalCandidate) -> tuple[float, float, float, float]:
+            record = item.record
+            metadata = dict(record.metadata or {})
+            fact = dict(metadata.get("fact") or {})
+            predicate = str(fact.get("predicate") or "").strip().lower()
+            is_expected_fact = 1.0 if record.memory_type == MemoryType.FACT and predicate in expected_predicates else 0.0
+            is_any_fact = 1.0 if record.memory_type == MemoryType.FACT else 0.0
+            episodic_bias = 1.0 if record.level in {MemoryLevel.L2_EPISODIC, MemoryLevel.L3_SEMANTIC} else 0.0
+            working_penalty = 0.0 if record.level == MemoryLevel.L0_WORKING else 1.0
+            return (
+                is_expected_fact,
+                is_any_fact,
+                episodic_bias + working_penalty,
+                float(item.final_score),
+            )
+
+        ordered = sorted(list(all_candidates), key=_priority, reverse=True)
+        top_k = max(1, int(query.top_k or getattr(self, "_retrieval_top_k", 8) or 8))
+        return ordered[: max(top_k, len(exact_fact_candidates))]
+
+    @staticmethod
+    def _select_candidates_for_self_fact_recall(
+        *,
+        fallback_candidates: list[RetrievalCandidate],
+        exact_fact_candidates: list[RetrievalCandidate],
+        fact_expectation: dict[str, Any] | None,
+    ) -> list[RetrievalCandidate]:
+        row = dict(fact_expectation or {})
+        found_predicates = [str(x).strip() for x in list(row.get("found_predicates") or []) if str(x).strip()]
+        if found_predicates:
+            return list(exact_fact_candidates or [])
+        expected_predicates = {
+            str(x).strip().lower()
+            for x in list(row.get("expected_predicates") or [])
+            if str(x).strip()
+        }
+        if not expected_predicates:
+            return list(fallback_candidates or [])
+        filtered: list[RetrievalCandidate] = []
+        for item in list(fallback_candidates or []):
+            record = item.record
+            if record.memory_type != MemoryType.FACT:
+                filtered.append(item)
+                continue
+            fact = dict(dict(record.metadata or {}).get("fact") or {})
+            predicate = str(fact.get("predicate") or "").strip().lower()
+            if record.level == MemoryLevel.L3_SEMANTIC and predicate in expected_predicates:
+                filtered.append(item)
+        return filtered
+
+    def _select_candidates_for_recall_mode(
+        self,
+        *,
+        query_text: str,
+        recall_mode: str,
+        fallback_candidates: list[RetrievalCandidate],
+        exact_fact_candidates: list[RetrievalCandidate],
+        fact_expectation: dict[str, Any] | None,
+    ) -> list[RetrievalCandidate]:
+        mode = str(recall_mode or "").strip().lower()
+        if mode == "exact_fact_recall":
+            return self._select_candidates_for_self_fact_recall(
+                fallback_candidates=fallback_candidates,
+                exact_fact_candidates=exact_fact_candidates,
+                fact_expectation=fact_expectation,
+            )
+        if mode == "contextual_recall":
+            return self._prioritize_contextual_recall_candidates(
+                query_text=query_text,
+                candidates=fallback_candidates,
+            )
+        return list(fallback_candidates or [])
+
+    @staticmethod
+    def _prioritize_contextual_recall_candidates(
+        *,
+        query_text: str,
+        candidates: list[RetrievalCandidate],
+    ) -> list[RetrievalCandidate]:
+        _ = str(query_text or "")
+
+        def _priority(item: RetrievalCandidate) -> tuple[float, float, float]:
+            record = item.record
+            meta = dict(record.metadata or {})
+            fact = dict(meta.get("fact") or {})
+            predicate = str(fact.get("predicate") or "").strip().lower()
+            is_message = 1.0 if record.memory_type == MemoryType.MESSAGE else 0.0
+            is_summary = 1.0 if record.memory_type == MemoryType.SUMMARY else 0.0
+            is_context_fact = 1.0 if record.memory_type == MemoryType.FACT and predicate in {"decision", "task", "task_goal", "agreed_plan"} else 0.0
+            is_other_fact = 1.0 if record.memory_type == MemoryType.FACT else 0.0
+            docs_penalty = 0.0 if record.level == MemoryLevel.L4_DOCUMENT else 1.0
+            return (
+                (is_message * 5.0) + (is_summary * 4.0) + (is_context_fact * 3.0) + (docs_penalty * 0.2) - (is_other_fact * 0.5),
+                float(item.final_score),
+                float(record.updated_at or 0.0),
+            )
+
+        ordered = sorted(list(candidates or []), key=_priority, reverse=True)
+        return ordered
+
+    def _find_active_semantic_fact_rows(self, *, namespace: str, predicates: list[str]) -> list[MemoryRecord]:
+        expected = {str(x or "").strip().lower() for x in list(predicates or []) if str(x or "").strip()}
+        if not expected:
+            return []
+        rows: list[MemoryRecord] = []
+        for row in list(self._store.iter_records(namespace=namespace)):
+            if row.memory_type != MemoryType.FACT or row.status != MemoryStatus.ACTIVE:
+                continue
+            metadata = dict(row.metadata or {})
+            fact = dict(metadata.get("fact") or {})
+            predicate = str(fact.get("predicate") or "").strip().lower()
+            subject = str(fact.get("subject") or "").strip().lower()
+            if predicate not in expected or subject != "user":
+                continue
+            rows.append(row)
+        rows.sort(
+            key=lambda item: (
+                float(dict(dict(item.metadata or {}).get("fact") or {}).get("confidence") or item.confidence or 0.0),
+                float(item.updated_at or 0.0),
+                float(item.created_at or 0.0),
+            ),
+            reverse=True,
+        )
+        return rows
+
+    @staticmethod
+    def _render_fact_expectation_check(row: dict[str, Any]) -> str:
+        if not row:
+            return ""
+        expected = [str(x) for x in list(row.get("expected_predicates") or []) if str(x).strip()]
+        missing = [str(x) for x in list(row.get("missing_predicates") or []) if str(x).strip()]
+        found = dict(row.get("found_facts") or {})
+        lines = [
+            "- exact_fact_required: true",
+            f"- expected_predicates: {', '.join(expected) if expected else 'none'}",
+        ]
+        if missing:
+            lines.append(f"- missing_predicates: {', '.join(missing)}")
+            lines.append("- response_rule: if an expected semantic fact is missing, say you do not see the exact fact in memory.")
+            lines.append("- response_rule: do not infer an exact model/version/os from similar message records alone.")
+        for predicate in expected:
+            values = [str(dict(item).get('value') or '').strip() for item in list(found.get(predicate) or []) if str(dict(item).get("value") or "").strip()]
+            if values:
+                lines.append(f"- {predicate}: {', '.join(values)}")
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _render_self_facts(row: dict[str, Any]) -> str:
+        found = dict(row.get("found_facts") or {})
+        found_predicates = [str(x).strip() for x in list(row.get("found_predicates") or []) if str(x).strip()]
+        if not found_predicates:
+            return ""
+        lines = [
+            "- trust_level: exact_active_self_facts",
+            "- response_rule: treat these as confirmed self facts for this turn.",
+            "- response_rule: answer directly from these facts.",
+            "- response_rule: do not suggest ways to check manually.",
+            "- response_rule: do not say you cannot see it in memory.",
+            "- response_rule: ignore weaker ordinary memory snippets if they conflict.",
+        ]
+        for predicate in found_predicates:
+            items = list(found.get(predicate) or [])
+            values = [str(dict(item).get("value") or "").strip() for item in items if str(dict(item).get("value") or "").strip()]
+            if not values:
+                continue
+            lines.append(f"- {predicate}: {', '.join(values)}")
+        return "\n".join(lines).strip()
+
+    def _build_self_facts_context(
+        self,
+        *,
+        query_text: str,
+        selected_candidates: list[RetrievalCandidate],
+        fact_expectation: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        expectation = dict(fact_expectation or {})
+        query = str(query_text or "").strip()
+        relevant_predicates = set(self._relevant_self_fact_predicates(query_text=query, fact_expectation=expectation))
+        if not relevant_predicates:
+            return expectation if expectation.get("found_predicates") else {}
+        found_facts: dict[str, list[dict[str, Any]]] = {}
+        if expectation.get("found_facts"):
+            for predicate, items in dict(expectation.get("found_facts") or {}).items():
+                token = str(predicate or "").strip().lower()
+                if relevant_predicates and token not in relevant_predicates:
+                    continue
+                rows = [dict(x) for x in list(items or []) if isinstance(x, dict)]
+                if rows:
+                    found_facts[token] = rows
+
+        for candidate in list(selected_candidates or []):
+            record = candidate.record
+            if record.memory_type != MemoryType.FACT or record.status != MemoryStatus.ACTIVE:
+                continue
+            if record.level != MemoryLevel.L3_SEMANTIC:
+                continue
+            fact = dict(dict(record.metadata or {}).get("fact") or {})
+            predicate = str(fact.get("predicate") or "").strip().lower()
+            subject = str(fact.get("subject") or "").strip().lower()
+            value = fact.get("value")
+            if not predicate or subject != "user" or value in {"", None}:
+                continue
+            if relevant_predicates and predicate not in relevant_predicates:
+                continue
+            if float(candidate.final_score) < 0.58 and float(record.confidence or 0.0) < 0.72:
+                continue
+            payload = {
+                "record_id": str(record.id or ""),
+                "value": value,
+                "confidence": float(fact.get("confidence") or record.confidence or 0.0),
+                "scope": str(record.scope.value),
+                "source_event_id": str(record.source_event_id or ""),
+                "retrieval_score": float(candidate.final_score),
+                "source": str(candidate.source or ""),
+            }
+            bucket = found_facts.setdefault(predicate, [])
+            key = (str(payload["record_id"]), str(payload["value"]))
+            existing_keys = {(str(dict(item).get("record_id") or ""), str(dict(item).get("value") or "")) for item in bucket}
+            if key in existing_keys:
+                continue
+            bucket.append(payload)
+
+        found_predicates = [predicate for predicate, items in found_facts.items() if list(items or [])]
+        if not found_predicates:
+            return expectation if expectation.get("found_predicates") else {}
+        return {
+            "query": query,
+            "intents": list(expectation.get("intents") or []),
+            "expected_predicates": [
+                predicate
+                for predicate in list(expectation.get("expected_predicates") or [])
+                if not relevant_predicates or str(predicate or "").strip().lower() in relevant_predicates
+            ],
+            "found_predicates": found_predicates,
+            "missing_predicates": [
+                predicate
+                for predicate in list(expectation.get("missing_predicates") or [])
+                if predicate not in set(found_predicates)
+                and (not relevant_predicates or str(predicate or "").strip().lower() in relevant_predicates)
+            ],
+            "found_facts": found_facts,
+            "exact_fact_required": bool(expectation.get("exact_fact_required")),
+            "should_answer_cautiously": bool(
+                expectation.get("should_answer_cautiously")
+                and not found_predicates
+            ),
+            "self_recall_like_query": bool(self._is_self_recall_like_query(query)),
+        }
+
+    @staticmethod
+    def _classify_memory_recall_mode(*, query_text: str) -> str:
+        text = str(query_text or "").strip()
+        if not text:
+            return ""
+        if MemoryManager._is_self_recall_like_query(text):
+            return "exact_fact_recall"
+        low = text.lower()
+        if any(pattern.search(low) for pattern in _CONTEXTUAL_RECALL_RULES):
+            return "contextual_recall"
+        return ""
+
+    @staticmethod
+    def _render_memory_recall_mode(recall_mode: str) -> str:
+        mode = str(recall_mode or "").strip().lower()
+        if mode == "exact_fact_recall":
+            return "\n".join(
+                [
+                    "- mode: exact_fact_recall",
+                    "- response_rule: prioritize exact active user facts over conversational snippets.",
+                    "- response_rule: if the exact fact is missing, answer honestly that the exact fact is not visible in memory.",
+                ]
+            )
+        if mode == "contextual_recall":
+            return "\n".join(
+                [
+                    "- mode: contextual_recall",
+                    "- response_rule: prioritize messages, summaries, and decision/task facts.",
+                    "- response_rule: answer from remembered discussion context, not as an exact self-fact lookup.",
+                ]
+            )
+        return ""
+
+    @staticmethod
+    def _relevant_self_fact_predicates(*, query_text: str, fact_expectation: dict[str, Any] | None) -> list[str]:
+        expectation = dict(fact_expectation or {})
+        preferred: list[str] = []
+        for item in list(expectation.get("expected_predicates") or []):
+            token = str(item or "").strip().lower()
+            if token and token not in preferred:
+                preferred.append(token)
+
+        text = str(query_text or "").strip().lower()
+        if not text:
+            return preferred
+
+        heuristic_groups: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+            (
+                ("видюх", "видеокарт", "видеокарта", "gpu", "graphics card", "video card", "карточк", "карта"),
+                ("environment_gpu_model", "environment_gpu_vram_gb"),
+            ),
+            (
+                ("python", "питон", "пайтон", "версия python", "версия питона", "версия пайтона"),
+                ("environment_runtime_python",),
+            ),
+            (
+                ("ос", "операционк", "os", "operating system", "windows", "linux", "ubuntu", "macos", "винда", "винды", "система"),
+                ("environment_os",),
+            ),
+            (
+                ("озу", "ram", "оператив", "оперативк", "оперативы", "оперативка", "memory"),
+                ("environment_ram_gb", "environment_memory_gb"),
+            ),
+            (
+                ("имя", "name", "зовут"),
+                ("identity_name",),
+            ),
+            (
+                ("возраст", "age", "лет"),
+                ("identity_age_years",),
+            ),
+        )
+        for markers, predicates in heuristic_groups:
+            if not any(marker in text for marker in markers):
+                continue
+            for predicate in predicates:
+                token = str(predicate or "").strip().lower()
+                if token and token not in preferred:
+                    preferred.append(token)
+        return preferred
+
+    @staticmethod
+    def _is_self_recall_like_query(query_text: str) -> bool:
+        text = str(query_text or "").strip().lower()
+        if not text:
+            return False
+        recall_markers = ("какая", "какой", "какое", "подскажи", "напомни", "скажи", "remember", "remind", "what", "which")
+        self_markers = ("у меня", "мой ", "мою ", "моя ", "моё ", "my ", "mine", "me ")
+        if any(marker in text for marker in self_markers) and any(marker in text for marker in recall_markers):
+            return True
+        return any(
+            marker in text
+            for marker in (
+                "видюх",
+                "видеокарт",
+                "карточк",
+                "карта",
+                "python",
+                "питон",
+                "пайтон",
+                "os",
+                "операционк",
+                "винда",
+                "винды",
+                "система",
+                "имя",
+                "возраст",
+                "озу",
+                "ram",
+                "оператив",
+                "оперативк",
+                "оперативы",
+            )
+        )
 
     def ingest_document(self, request: DocumentIngestRequest) -> DocumentIngestResult:
         with self._lock:
@@ -767,11 +1413,28 @@ class MemoryManager:
         namespace: str,
         now_ts: float,
         event_id: str,
+        source_role: str = "user",
+        source_kind: str = "structured_fact",
     ) -> list[FactRecordV2]:
         out: list[FactRecordV2] = []
         for fact in list(facts or []):
             canonical = str(fact.canonical_key or f"{fact.subject}.{fact.predicate}")
-            existing = self._find_active_fact_by_canonical(namespace=namespace, canonical_key=canonical)
+            candidates = self._find_active_fact_candidates_for_write(namespace=namespace, fact=fact)
+            existing = self._pick_primary_fact_candidate(fact=fact, candidates=candidates)
+            decision = self._policy.decide_fact_write(
+                fact=fact,
+                source_role=source_role,
+                existing_record=existing,
+            )
+
+            if not decision.allow_write and str(decision.action or "").strip().lower() in {"skip", "keep_existing"}:
+                continue
+
+            fact_payload = {
+                **dict(fact.to_dict() or {}),
+                "source_role": str(source_role or "").strip().lower(),
+                "source_kind": str(source_kind or dict(fact.metadata or {}).get("source_kind") or "structured_fact"),
+            }
             record = MemoryRecord(
                 id=f"fact:{uuid.uuid4().hex[:18]}",
                 text=f"{fact.subject}.{fact.predicate}={fact.value}",
@@ -780,9 +1443,10 @@ class MemoryManager:
                 scope=fact.scope,
                 namespace=namespace,
                 metadata={
-                    "fact": fact.to_dict(),
+                    "fact": fact_payload,
                     "canonical_key": canonical,
                     "relation": fact.relation,
+                    "write_policy": decision.to_dict(),
                 },
                 importance=float(fact.importance),
                 confidence=float(fact.confidence),
@@ -793,73 +1457,85 @@ class MemoryManager:
                 source_event_id=event_id,
             )
 
-            if existing is not None and str(existing.text) != str(record.text):
-                decision = self._lifecycle.resolve_conflict(old=existing, new=record)
-                action = str(decision.action or "").strip().lower()
-                force_supersede_existing = bool(
-                    action == "parallel" and self._is_singleton_fact_canonical(canonical)
-                )
-
-                if force_supersede_existing or (
-                    decision.superseded_record_id and str(decision.superseded_record_id) == str(existing.id)
-                ):
+            if candidates and decision.allow_supersede:
+                for previous in list(candidates):
                     superseded = self._status_transition(
-                        existing,
+                        previous,
                         target=MemoryStatus.SUPERSEDED,
                         now_ts=now_ts,
-                        reason=(
-                            "singleton_fact_override"
-                            if force_supersede_existing
-                            else str(decision.reason or "conflict_supersede")
-                        ),
+                        reason=str(decision.reason or "write_policy_supersede"),
                     )
                     self._store.upsert(superseded)
-                if decision.archive_record_id and str(decision.archive_record_id) == str(existing.id):
-                    archived = self._status_transition(
-                        existing,
-                        target=MemoryStatus.ARCHIVED,
-                        now_ts=now_ts,
-                        reason=str(decision.reason or "conflict_archive"),
-                    )
-                    self._store.upsert(archived)
-                if action == "parallel" and not force_supersede_existing:
-                    record = MemoryRecord(
-                        id=record.id,
-                        text=record.text,
-                        memory_type=record.memory_type,
-                        level=record.level,
-                        scope=record.scope,
-                        namespace=record.namespace,
-                        metadata={
-                            **dict(record.metadata or {}),
-                            "conflict_resolution": {
-                                "action": "parallel",
-                                "parallel_with": decision.parallel_with_record_id,
-                                "reason": decision.reason,
-                                "score_delta": float(decision.score_delta),
-                            },
-                        },
-                        embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
-                        importance=record.importance,
-                        confidence=record.confidence,
-                        created_at=record.created_at,
-                        updated_at=record.updated_at,
-                        expires_at=record.expires_at,
-                        status=MemoryStatus.ACTIVE,
-                        version=record.version,
-                        parent_id=(record.parent_id or existing.id),
-                        chunk_index=record.chunk_index,
-                        source_event_id=record.source_event_id,
-                        embedding_model=record.embedding_model,
-                        embedding_fingerprint=record.embedding_fingerprint,
-                        embedding_version=record.embedding_version,
-                    )
-                if not force_supersede_existing and decision.keep_record_id != record.id:
-                    continue
+            if existing is not None and str(decision.action or "").strip().lower() == "parallel":
+                record = MemoryRecord(
+                    id=record.id,
+                    text=record.text,
+                    memory_type=record.memory_type,
+                    level=record.level,
+                    scope=record.scope,
+                    namespace=record.namespace,
+                    metadata={
+                        **dict(record.metadata or {}),
+                        "parallel_with": existing.id,
+                    },
+                    embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
+                    importance=record.importance,
+                    confidence=record.confidence,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                    expires_at=record.expires_at,
+                    status=MemoryStatus.ACTIVE,
+                    version=record.version,
+                    parent_id=(record.parent_id or existing.id),
+                    chunk_index=record.chunk_index,
+                    source_event_id=record.source_event_id,
+                    embedding_model=record.embedding_model,
+                    embedding_fingerprint=record.embedding_fingerprint,
+                    embedding_version=record.embedding_version,
+                )
 
             self._store.upsert(record)
             out.append(fact)
         return out
+
+    def _find_active_fact_candidates_for_write(self, *, namespace: str, fact: FactRecordV2) -> list[MemoryRecord]:
+        rows = self._store.iter_records(namespace=namespace)
+        canonical = str(fact.canonical_key or f"{fact.subject}.{fact.predicate}").strip().lower()
+        subject = str(fact.subject or "").strip().lower()
+        group = str(self._policy.fact_group(str(fact.predicate or "")) or "").strip().lower()
+        exact: list[MemoryRecord] = []
+        grouped: list[MemoryRecord] = []
+
+        for row in rows:
+            if row.memory_type != MemoryType.FACT or row.status != MemoryStatus.ACTIVE:
+                continue
+            metadata = dict(row.metadata or {})
+            existing_canonical = str(metadata.get("canonical_key") or "").strip().lower()
+            if canonical and existing_canonical == canonical:
+                exact.append(row)
+                continue
+            if not self._policy.is_singleton_group(group):
+                continue
+            old_fact = dict(metadata.get("fact") or {})
+            old_subject = str(old_fact.get("subject") or "").strip().lower()
+            old_predicate = str(old_fact.get("predicate") or "").strip().lower()
+            old_group = str(self._policy.fact_group(old_predicate) or "").strip().lower()
+            if subject and old_subject == subject and old_group == group:
+                grouped.append(row)
+
+        return exact or sorted(
+            grouped,
+            key=lambda row: (
+                float(dict(dict(row.metadata or {}).get("fact") or {}).get("confidence") or row.confidence or 0.0),
+                float(row.updated_at or 0.0),
+            ),
+            reverse=True,
+        )
+
+    @staticmethod
+    def _pick_primary_fact_candidate(*, fact: FactRecordV2, candidates: list[MemoryRecord]) -> MemoryRecord | None:
+        _ = fact
+        return candidates[0] if candidates else None
 
     def _find_active_fact_by_canonical(self, *, namespace: str, canonical_key: str) -> MemoryRecord | None:
         rows = self._store.iter_records(namespace=namespace)
@@ -882,25 +1558,7 @@ class MemoryManager:
         if not key:
             return False
         predicate = key.split(".", 1)[1] if "." in key else key
-        return predicate in {
-            "preference",
-            "identity_name",
-            "identity_age_years",
-            "project_name",
-            "environment",
-            "environment_os",
-            "environment_tool",
-            "environment_runtime_python",
-            "environment_llm_model",
-            "environment_gpu_model",
-            "environment_cpu_model",
-            "environment_gpu_vram_size",
-            "environment_gpu_vram_gb",
-            "environment_ram_size",
-            "environment_ram_gb",
-            "environment_memory_gb",
-            "issue_status",
-        }
+        return MemoryPolicy.is_singleton_predicate(predicate) or predicate in {"preference", "environment"}
 
     def _promote_record(self, record: MemoryRecord, *, target: MemoryLevel, now_ts: float) -> MemoryRecord:
         return MemoryRecord(
@@ -1102,7 +1760,7 @@ class MemoryManager:
         out["emotion_profile"] = emotion_view
         if emotion_view:
             out["emotion"] = emotion_view
-        out["tags"] = _merge_tags(out.get("tags"), list(analysis.tags or []))
+        out["memory_tags"] = _merge_tags(out.get("memory_tags"), list(analysis.tags or []))
         out["memory_analysis"] = analysis.to_dict()
         return out
 
