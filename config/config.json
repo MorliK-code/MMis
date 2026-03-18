@@ -502,6 +502,7 @@
     "db_path": "{dir_path}\\data\\memory_storage\\memory.db",
     "version": "v2",
     "backend": "chroma",
+    "storage_profile": "compact",
     "embedding": {
       "backend": "sentence_transformers",
       "model": "all-MiniLM-L6-v2",

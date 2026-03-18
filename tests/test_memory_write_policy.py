@@ -102,6 +102,28 @@ class MemoryWritePolicyTests(unittest.TestCase):
         manager._root = temp_dir
         manager._state_path = temp_dir / "manager_state.json"
         manager._lock = RLock()
+        # Storage profile (must match MemoryManager)
+        manager._storage_profile = "compact"
+        # Debug metadata fields to strip before storage (must match MemoryManager)
+        manager._DEBUG_METADATA_FIELDS = {
+            "web_used", "web_factual_mode", "web_query_intent", "web_search_mode",
+            "web_primary_category", "web_evidence_quality_score", "web_evidence_quality",
+            "web_sources_scanned", "web_sources_selected", "web_evidence_count",
+            "web_conflicting_sources", "web_low_evidence_quality", "web_selected_avg_quality",
+            "web_topical_filtered_sources", "web_conflict_severity", "web_evidence_strength",
+            "web_final_factual_confidence", "web_cautious_synthesis",
+            "web_numeric_candidates_selected", "web_numeric_candidates_rejected",
+            "_persona_snapshot_debug", "persona_snapshot",
+            "promotion_project_signal", "promotion_task_signal", "promotion_decision_signal",
+            "promotion_preference_signal", "promotion_issue_signal", "promotion_technical_signal",
+            "promotion_repeated_topic_signal", "promotion_smalltalk_signal",
+            "promotion_signal_score", "promotion_stable_fact_signal", "promotion_fact_signal",
+            "promotion_fact_relation_diversity",
+            "extracted_facts_count", "extracted_fact_relations",
+            "memory_analysis", "memory_views_debug",
+            "lifecycle_decision", "decision_debug",
+            "assistant_write_policy", "assistant_write_blocked", "assistant_write_reason",
+        }
         manager._store = _FakeStore()
         manager._event_store = _FakeEventStore()
         manager._fact_extractor = _FakeFactExtractor()
@@ -182,8 +204,8 @@ class MemoryWritePolicyTests(unittest.TestCase):
         self.assertEqual(result.extracted_facts, [])
         stored = manager._store.records[0]
         self.assertEqual(stored.scope, MemoryScope.TEMPORARY)
-        self.assertEqual(stored.metadata["assistant_write_policy"]["action"], "temporary_only")
-        self.assertEqual(stored.metadata["assistant_write_policy"]["reason"], "assistant_factual_temporary_only")
+        # Check lifecycle reason for temporary scope
+        self.assertEqual(stored.metadata["lifecycle_reason"], "assistant_factual_temporary_only")
         self.assertTrue(bool(stored.metadata.get("assistant_fact_records_blocked")))
 
     def test_conflicted_assistant_historical_claim_is_skipped(self) -> None:
@@ -236,9 +258,9 @@ class MemoryWritePolicyTests(unittest.TestCase):
         self.assertEqual(result.extracted_facts, [])
         stored = manager._store.records[0]
         self.assertEqual(stored.scope, MemoryScope.CONVERSATION)
-        self.assertEqual(stored.metadata["assistant_write_policy"]["action"], "allow")
-        self.assertFalse(stored.metadata["assistant_write_policy"]["allow_fact_records"])
+        # assistant_write_policy is no longer stored - check source_kind and assistant_fact_records_blocked
         self.assertEqual(stored.metadata["source_kind"], "assistant_reply")
+        self.assertTrue(stored.metadata.get("assistant_fact_records_blocked"))
 
     def test_cautious_numeric_web_answer_is_skipped_from_long_term_memory(self) -> None:
         manager = self._manager()
@@ -342,7 +364,8 @@ class MemoryWritePolicyTests(unittest.TestCase):
         self.assertEqual(result.promoted_ids, [])
         stored = manager._store.records[0]
         self.assertEqual(stored.scope, MemoryScope.TEMPORARY)
-        self.assertEqual(stored.metadata["assistant_write_policy"]["reason"], "assistant_memory_miss_help_temporary_only")
+        # Check lifecycle reason and assistant reply kind
+        self.assertEqual(stored.metadata["lifecycle_reason"], "assistant_memory_miss_help_temporary_only")
         self.assertEqual(stored.metadata["assistant_reply_kind"], "memory_miss_help")
         self.assertTrue(bool(stored.metadata.get("assistant_memory_help_noise")))
 
@@ -527,11 +550,40 @@ class MemoryWritePolicyTests(unittest.TestCase):
         )
 
         self.assertNotIn("entities", sanitized)
+        self.assertNotIn("tags", sanitized)
         self.assertEqual(
             sanitized.get("runtime_entities"),
             {"software": ["Python"], "os": ["Windows"]},
         )
         self.assertTrue(bool(sanitized.get("legacy_runtime_entities_stripped")))
+
+    def test_sanitize_metadata_strips_raw_ingest_text_projections(self) -> None:
+        policy = MemoryPolicy()
+
+        sanitized = policy.sanitize_metadata_for_storage(
+            metadata={
+                "search_text": "gpu rtx 3050 ti",
+                "normalized_text": "gpu rtx 3050 ti",
+                "canonical_text": "RTX 3050 Ti",
+                "memory_views": {
+                    "entity_keys": ["gpu", "rtx_3050_ti"],
+                    "numeric_keys": ["vram:4gb"],
+                    "search_text": "gpu rtx 3050 ti",
+                },
+            },
+            source_kind=MemorySourceKind.USER,
+        )
+
+        self.assertNotIn("search_text", sanitized)
+        self.assertNotIn("normalized_text", sanitized)
+        self.assertNotIn("canonical_text", sanitized)
+        self.assertEqual(
+            sanitized.get("memory_views"),
+            {
+                "entity_keys": ["gpu", "rtx_3050_ti"],
+                "numeric_keys": ["vram:4gb"],
+            },
+        )
 
     def test_brain_flatten_turn_metadata_uses_runtime_entities_not_entities(self) -> None:
         flattened = Brain._flatten_turn_metadata(

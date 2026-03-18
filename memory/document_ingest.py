@@ -10,6 +10,7 @@ from memory.document_memory import ChunkingConfig, DocumentMemory
 from memory.document_models import DocumentClaim, DocumentChunk, DocumentRecord, DocumentSummary
 from memory.ingest_analyzer import IngestAnalysis, analyze_message_for_memory
 from memory.memory_models import DocumentIngestRequest, MemoryLevel, MemoryRecord, MemoryScope, MemoryStatus, MemoryType
+from memory.storage_profile import DEFAULT_STORAGE_PROFILE, normalize_storage_profile, sanitize_storage_metadata
 from memory.vector_store import VectorStore
 
 
@@ -87,9 +88,11 @@ class DocumentIngestArtifacts:
 class DocumentIngestPipeline:
     store: VectorStore
     chunking: ChunkingConfig | None = None
+    storage_profile: str = DEFAULT_STORAGE_PROFILE
 
     def __post_init__(self) -> None:
         self.document_memory = DocumentMemory(store=self.store, chunking=self.chunking)
+        self.storage_profile = normalize_storage_profile(self.storage_profile)
 
     def ingest_document(self, request: DocumentIngestRequest) -> DocumentIngestArtifacts:
         source = str(request.source or "document").strip() or "document"
@@ -467,7 +470,38 @@ class DocumentIngestPipeline:
             records.append(self._claim_record(document=document, claim=row, now_ts=now_ts))
             stored_ids.append(row.id)
 
-        self.store.batch_upsert(records)
+        compact_records: list[MemoryRecord] = []
+        for record in list(records or []):
+            compact_records.append(
+                MemoryRecord(
+                    id=record.id,
+                    text=record.text,
+                    memory_type=record.memory_type,
+                    level=record.level,
+                    scope=record.scope,
+                    namespace=record.namespace,
+                    metadata=sanitize_storage_metadata(
+                        metadata=dict(record.metadata or {}),
+                        storage_profile=self.storage_profile,
+                    ),
+                    embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
+                    importance=record.importance,
+                    confidence=record.confidence,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                    expires_at=record.expires_at,
+                    status=record.status,
+                    version=record.version,
+                    parent_id=record.parent_id,
+                    chunk_index=record.chunk_index,
+                    source_event_id=record.source_event_id,
+                    embedding_model=record.embedding_model,
+                    embedding_fingerprint=record.embedding_fingerprint,
+                    embedding_version=record.embedding_version,
+                )
+            )
+
+        self.store.batch_upsert(compact_records)
         return self._dedupe_preserve(stored_ids)
 
     def _summary_record(self, *, document: DocumentRecord, summary: DocumentSummary, now_ts: float) -> MemoryRecord:

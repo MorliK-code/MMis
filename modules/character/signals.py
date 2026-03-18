@@ -36,17 +36,39 @@ class CharacterSignals:
 
 def build_character_signals(*, text: str, metadata: dict[str, Any] | None = None) -> CharacterSignals:
     meta = dict(metadata or {})
-    raw_tags = _normalize_tags(meta.get("metadata_tags") or meta.get("tags"))
+    # Tags: prefer top-level tags, fallback to metadata_tags (legacy)
+    raw_tags = _normalize_tags(meta.get("tags") or meta.get("metadata_tags"))
     lang = _resolve_lang(meta=meta, tags=raw_tags)
     tags = _canonicalize_lang_tag(tags=raw_tags, lang=lang)
     topics = _extract_topics(tags=tags, metadata=meta)
     feedback = detect_feedback(text)
+    
+    # Emotion: prefer emotion_profile (memory), fallback to emotion (NLU)
+    emotion_profile = meta.get("emotion_profile") or {}
+    emotion_val = (
+        emotion_profile.get("primary") or
+        emotion_profile.get("label") or
+        meta.get("emotion") or
+        meta.get("mood") or
+        "neutral"
+    )
+    emotion_intensity = (
+        emotion_profile.get("intensity") or
+        meta.get("emotion_intensity") or
+        0.0
+    )
+    emotion_arousal = (
+        emotion_profile.get("arousal") or
+        meta.get("emotion_arousal") or
+        0.0
+    )
+    
     return CharacterSignals(
         lang=lang,
-        intent=str(meta.get("intent") or "chat").strip().lower() or "chat",
-        emotion=normalize_emotion(str(meta.get("emotion") or meta.get("mood") or "neutral").strip().lower() or "neutral"),
-        emotion_intensity=_coerce_unit_float(meta.get("emotion_intensity"), default=0.0),
-        emotion_arousal=_coerce_unit_float(meta.get("emotion_arousal"), default=0.0),
+        intent=str(meta.get("intent") or meta.get("meta", {}).get("intent_label") or "chat").strip().lower() or "chat",
+        emotion=normalize_emotion(str(emotion_val).strip().lower() or "neutral"),
+        emotion_intensity=_coerce_unit_float(emotion_intensity, default=0.0),
+        emotion_arousal=_coerce_unit_float(emotion_arousal, default=0.0),
         mode=_resolve_mode(meta=meta),
         topics=topics,
         tags=tags,

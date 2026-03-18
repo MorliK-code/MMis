@@ -28,7 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--type",
         dest="memory_type",
         default="",
-        help="Filter by memory type: message, fact, summary, document, document_chunk, tool_result, task_state",
+        help="Filter by memory type: message, fact, claim, summary, document, document_chunk, tool_result, task_state",
     )
     parser.add_argument(
         "--status",

@@ -104,6 +104,7 @@ def _analysis_payload(analysis: IngestAnalysis) -> dict[str, Any]:
         "numeric_keys": list(views.get("numeric_keys") or []),
         "entities": [item.to_dict() for item in list(analysis.entities or [])],
         "numeric_facts": [item.to_dict() for item in list(analysis.numeric_facts or [])],
+        "claim_candidates": [item.to_dict() for item in list(analysis.claim_candidates or [])],
         "stable_facts": [item.to_dict() for item in list(analysis.stable_facts or [])],
         "emotion": (analysis.emotion.to_dict() if analysis.emotion is not None else None),
         "memory_tags": [str(tag) for tag in list(analysis.tags or [])],
@@ -185,6 +186,9 @@ def _print_human(payload: dict[str, Any]) -> None:
     print("=" * 100)
     print("Numeric Facts")
     print(json.dumps(list(analysis.get("numeric_facts") or []), ensure_ascii=False, indent=2))
+    print("=" * 100)
+    print("Claim Candidates")
+    print(json.dumps(list(analysis.get("claim_candidates") or []), ensure_ascii=False, indent=2))
     print("=" * 100)
     print("Stable Facts")
     print(json.dumps(list(analysis.get("stable_facts") or []), ensure_ascii=False, indent=2))

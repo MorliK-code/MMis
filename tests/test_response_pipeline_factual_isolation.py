@@ -27,6 +27,10 @@ class ResponsePipelineFactualIsolationTests(unittest.TestCase):
                 "memory_recall_mode": "- mode: exact_fact_recall",
                 "self_facts": "- environment_gpu_model: RTX 3050 Ti",
                 "fact_expectation_check": "- expected_predicates: environment_gpu_model",
+                "relevant_claims": "- user uses VS Code",
+                "recalled_dialog": "Topic: memory design\nSummary: You discussed memory layers.",
+                "document_evidence": "Chunk 12: where ollama is called",
+                "supporting_messages": "- user: у меня rtx 3050 ti",
                 "working_memory": "old working note",
                 "retrieved_semantic": "old semantic noise",
             },
@@ -38,10 +42,16 @@ class ResponsePipelineFactualIsolationTests(unittest.TestCase):
             "[FACT_EXPECTATION_CHECK]\n- expected_predicates: environment_gpu_model",
             block,
         )
+        self.assertIn("[RELEVANT_CLAIMS]\n- user uses VS Code", block)
+        self.assertIn("[RECALLED_DIALOG]\nTopic: memory design\nSummary: You discussed memory layers.", block)
+        self.assertIn("[DOCUMENT_EVIDENCE]\nChunk 12: where ollama is called", block)
+        self.assertIn("[SUPPORTING_MESSAGES]\n- user: у меня rtx 3050 ti", block)
         self.assertIn("[WORKING_MEMORY]\nold working note", block)
         self.assertIn("[SEMANTIC_FACTS]\nold semantic noise", block)
         self.assertLess(block.index("[SELF_FACTS]"), block.index("[WORKING_MEMORY]"))
         self.assertLess(block.index("[FACT_EXPECTATION_CHECK]"), block.index("[SEMANTIC_FACTS]"))
+        self.assertLess(block.index("[RELEVANT_CLAIMS]"), block.index("[WORKING_MEMORY]"))
+        self.assertLess(block.index("[RECALLED_DIALOG]"), block.index("[SEMANTIC_FACTS]"))
 
     def test_prompt_build_and_prompt_engine_keep_self_facts_in_final_memory_section(self) -> None:
         ctx = PipelineContext(

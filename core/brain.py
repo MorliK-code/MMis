@@ -657,8 +657,9 @@ class Brain:
                 personality_id=personality_id,
             )
             assistant_meta.update(self._assistant_memory_web_meta(meta))
+            # persona_snapshot is debug-only, don't store in memory
             if persona_snapshot:
-                assistant_meta["persona_snapshot"] = dict(persona_snapshot)
+                assistant_meta["_persona_snapshot_debug"] = dict(persona_snapshot)
             ingest_result = self.memory_manager.ingest_event(
                 MemoryEvent(
                     role="assistant",
@@ -961,6 +962,17 @@ class Brain:
                 topic = item
         intent_label = str(intent.get("label") or data.get("intent") or "")
         emotion_label = str(emotion.get("label") or data.get("emotion") or "")
+        
+        # Build compact meta for storage (not the full nested structure)
+        inner_meta = dict(meta.get("meta") or {})
+        compact_meta = {
+            "lang_conf": float(meta.get("lang_conf") or 0.0),
+            "intent_label": str(intent.get("label") or ""),
+            "intent_conf": float(intent.get("conf") or 0.0),
+            "source": str(inner_meta.get("source") or ""),
+            "ts": str(inner_meta.get("ts") or ""),
+        }
+        
         out = {
             "lang": str(data.get("lang") or ""),
             "intent": intent_label,
@@ -973,7 +985,7 @@ class Brain:
             "has_code": bool(meta.get("has_code", False)),
             "has_link": bool(meta.get("has_link", False)),
             "runtime_entities": dict(data.get("runtime_entities") or data.get("entities") or {}),
-            "meta": data,
+            "meta": compact_meta,
         }
         try:
             out["confidence"] = float(intent.get("conf") or 0.0)

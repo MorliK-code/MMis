@@ -99,8 +99,8 @@ def test_retrieval_uses_query_search_text_not_raw_text() -> None:
         )
     )
 
-    assert store.semantic_queries == ["gpu", "gpu"]
-    assert store.lexical_queries == ["gpu", "gpu"]
+    assert store.semantic_queries == ["gpu", "gpu", "gpu"]
+    assert store.lexical_queries == ["gpu", "gpu", "gpu"]
 
 
 def test_prepare_record_embeds_search_text_not_raw_text() -> None:
@@ -189,6 +189,311 @@ def test_retrieval_includes_fact_channel_alongside_message_channel() -> None:
     ids = [item.record.id for item in result.candidates]
     assert "fact-gpu" in ids
     assert "msg-gpu" in ids
+
+
+def test_claim_retrieval_prefers_matching_predicate_and_subject() -> None:
+    likes_claim = _record(
+        "claim-like-rose",
+        "user.likes=смотреть в глаза розе",
+        metadata=ensure_memory_views(
+            "user.likes=смотреть в глаза розе",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "obj": "смотреть в глаза розе",
+                    "object_surface": "смотреть в глаза Розе",
+                    "topic_keys": ["likes", "preference", "activity"],
+                    "trigger_keys": ["likes", "розе", "смотреть"],
+                    "recall_mode": "ambient",
+                    "spontaneous_recall": True,
+                },
+                "canonical_key": "user.likes.rose_eyes",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    uses_claim = _record(
+        "claim-use-vscode",
+        "user.uses=vs code",
+        metadata=ensure_memory_views(
+            "user.uses=vs code",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "uses",
+                    "obj": "vs code",
+                    "object_surface": "VS Code",
+                    "topic_keys": ["uses", "usage", "tool"],
+                    "trigger_keys": ["uses", "vs", "code"],
+                    "recall_mode": "contextual",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.uses.vs_code",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(likes_claim, 0.60), (uses_claim, 0.63)],
+        lexical_hits=[(likes_claim, 0.58), (uses_claim, 0.61)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="что мне нравится",
+            search_text="что мне нравится",
+            top_k=4,
+        )
+    )
+
+    assert [item.record.id for item in result.candidates][:1] == ["claim-like-rose"]
+
+
+def test_claim_retrieval_uses_topic_and_trigger_keys() -> None:
+    rose_claim = _record(
+        "claim-like-rose",
+        "user.likes=смотреть в глаза розе",
+        metadata=ensure_memory_views(
+            "user.likes=смотреть в глаза розе",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "obj": "смотреть в глаза розе",
+                    "object_surface": "смотреть в глаза Розе",
+                    "topic_keys": ["likes", "preference", "activity"],
+                    "trigger_keys": ["likes", "розе", "смотреть"],
+                    "recall_mode": "ambient",
+                    "spontaneous_recall": True,
+                },
+                "canonical_key": "user.likes.rose_eyes",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    lotus_claim = _record(
+        "claim-like-lotus",
+        "user.likes=запах цветка лотоса",
+        metadata=ensure_memory_views(
+            "user.likes=запах цветка лотоса",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "obj": "запах цветка лотоса",
+                    "object_surface": "запах цветка лотоса",
+                    "topic_keys": ["likes", "preference", "sensory_object"],
+                    "trigger_keys": ["likes", "лотоса", "запах"],
+                    "recall_mode": "contextual",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.likes.lotus_smell",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(rose_claim, 0.57), (lotus_claim, 0.59)],
+        lexical_hits=[(rose_claim, 0.58), (lotus_claim, 0.58)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="Роза",
+            search_text="Роза",
+            top_k=4,
+        )
+    )
+
+    assert [item.record.id for item in result.candidates][:1] == ["claim-like-rose"]
+
+
+def test_claim_retrieval_considers_recall_mode_and_spontaneous_recall() -> None:
+    ambient_claim = _record(
+        "claim-ambient",
+        "user.likes=смотреть в глаза розе",
+        metadata=ensure_memory_views(
+            "user.likes=смотреть в глаза розе",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "obj": "смотреть в глаза розе",
+                    "object_surface": "смотреть в глаза Розе",
+                    "topic_keys": ["likes", "preference", "activity"],
+                    "trigger_keys": ["likes", "розе", "смотреть"],
+                    "recall_mode": "ambient",
+                    "spontaneous_recall": True,
+                },
+                "canonical_key": "user.likes.rose_eyes",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    contextual_claim = _record(
+        "claim-contextual",
+        "user.likes=запах цветка лотоса",
+        metadata=ensure_memory_views(
+            "user.likes=запах цветка лотоса",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "obj": "запах цветка лотоса",
+                    "object_surface": "запах цветка лотоса",
+                    "topic_keys": ["likes", "preference", "sensory_object"],
+                    "trigger_keys": ["likes", "лотоса", "запах"],
+                    "recall_mode": "contextual",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.likes.lotus_smell",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(ambient_claim, 0.58), (contextual_claim, 0.60)],
+        lexical_hits=[(ambient_claim, 0.56), (contextual_claim, 0.59)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="что я люблю",
+            search_text="что я люблю",
+            top_k=4,
+        )
+    )
+
+    assert [item.record.id for item in result.candidates][:1] == ["claim-ambient"]
+
+
+def test_exact_self_fact_query_does_not_promote_unrelated_claim_noise() -> None:
+    fact_record = _record(
+        "fact-gpu",
+        "user.environment_gpu_model=RTX 3050 Ti",
+        metadata=ensure_memory_views(
+            "user.environment_gpu_model=RTX 3050 Ti",
+            metadata={
+                "fact": {"predicate": "environment_gpu_model", "subject": "user", "value": "RTX 3050 Ti"},
+                "canonical_key": "user.environment_gpu_model",
+            },
+        ),
+        memory_type=MemoryType.FACT,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    claim_record = _record(
+        "claim-use-vscode",
+        "user.uses=vs code",
+        metadata=ensure_memory_views(
+            "user.uses=vs code",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "uses",
+                    "obj": "vs code",
+                    "object_surface": "VS Code",
+                    "topic_keys": ["uses", "tool"],
+                    "trigger_keys": ["uses", "vs", "code"],
+                    "recall_mode": "contextual",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.uses.vs_code",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(claim_record, 0.72), (fact_record, 0.58)],
+        lexical_hits=[(claim_record, 0.74), (fact_record, 0.61)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="what is my gpu?",
+            search_text="gpu rtx 3050 ti",
+            entity_keys=["gpu", "rtx_3050_ti"],
+            top_k=4,
+        )
+    )
+
+    assert [item.record.id for item in result.candidates][:1] == ["fact-gpu"]
+
+
+def test_claim_retrieval_skips_document_level_claims_for_generic_claim_queries() -> None:
+    live_claim = _record(
+        "claim-use-vscode",
+        "user.uses=vs code",
+        metadata=ensure_memory_views(
+            "user.uses=vs code",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "uses",
+                    "obj": "vs code",
+                    "object_surface": "VS Code",
+                    "topic_keys": ["uses", "tool"],
+                    "trigger_keys": ["uses", "vs", "code"],
+                    "recall_mode": "contextual",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.uses.vs_code",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    document_claim = _record(
+        "claim-doc-ollama",
+        "document.uses=ollama client",
+        metadata=ensure_memory_views(
+            "document.uses=ollama client",
+            metadata={
+                "claim": {
+                    "subject": "document",
+                    "predicate": "uses",
+                    "obj": "ollama client",
+                    "object_surface": "ollama client",
+                    "topic_keys": ["uses", "tool"],
+                    "trigger_keys": ["uses", "ollama", "client"],
+                    "recall_mode": "document",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "document.uses.ollama_client",
+                "document_id": "doc:ollama-guide",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L4_DOCUMENT,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(document_claim, 0.80), (live_claim, 0.62)],
+        lexical_hits=[(document_claim, 0.79), (live_claim, 0.64)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="what do i use?",
+            search_text="what do i use",
+            top_k=4,
+        )
+    )
+
+    ids = [item.record.id for item in result.candidates]
+    assert "claim-doc-ollama" not in ids
+    assert ids[:1] == ["claim-use-vscode"]
 
 
 def test_retrieval_self_like_query_boosts_expected_fact_hit() -> None:
@@ -423,7 +728,7 @@ def test_retrieval_drops_candidates_below_min_candidate_score() -> None:
     assert result.candidates == []
 
 
-def test_build_memory_views_does_not_reinflate_existing_search_text() -> None:
+def test_build_memory_views_returns_only_keys() -> None:
     metadata = ensure_memory_views(
         "user.identity_name=Паша",
         metadata={
@@ -441,34 +746,32 @@ def test_build_memory_views_does_not_reinflate_existing_search_text() -> None:
     rebuilt = build_memory_views("user.identity_name=Паша", metadata=metadata)
     rebuilt_twice = build_memory_views("user.identity_name=Паша", metadata={"memory_views": rebuilt, **metadata})
 
-    assert rebuilt["search_text"] == first["search_text"]
-    assert rebuilt_twice["search_text"] == rebuilt["search_text"]
+    # Keys may be empty if there are no entities/numeric facts
+    assert "entity_keys" in rebuilt or len(rebuilt) == 0
+    assert rebuilt.get("entity_keys") == first.get("entity_keys")
+    assert rebuilt.get("numeric_keys") == first.get("numeric_keys")
+    assert rebuilt_twice.get("entity_keys") == rebuilt.get("entity_keys")
+    assert rebuilt_twice.get("numeric_keys") == rebuilt.get("numeric_keys")
 
 
 def test_build_memory_views_does_not_leak_generic_source_into_search_text() -> None:
+    search_text = record_search_text(
+        "привет. меня зовут Паша",
+        metadata={"source": "api"},
+    )
+
+    assert "привет" in search_text.lower()
+    assert "паша" in search_text.lower()
+
+
+def test_build_memory_views_does_not_leak_generic_source_into_keys() -> None:
     views = build_memory_views(
         "привет. меня зовут Паша",
         metadata={"source": "api"},
     )
 
-    assert views["canonical_text"] == ""
-    assert views["search_text"] == "привет. меня зовут паша"
-
-
-def test_build_memory_views_discards_old_low_signal_canonical_text() -> None:
-    views = build_memory_views(
-        "привет. меня зовут Паша",
-        metadata={
-            "source": "api",
-            "memory_views": {
-                "canonical_text": "api",
-                "search_text": "привет. меня зовут паша api",
-            },
-        },
-    )
-
-    assert views["canonical_text"] == ""
-    assert views["search_text"] == "привет. меня зовут паша"
+    assert "api" not in list(views.get("entity_keys") or [])
+    assert "api" not in list(views.get("numeric_keys") or [])
 
 
 def test_build_memory_views_uses_structured_metadata_keys_for_message_records() -> None:

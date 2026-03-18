@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
-from memory.memory_models import MemoryRecord, MemoryScope, MemoryType, RetrievalQuery
+from memory.memory_models import MemoryLevel, MemoryRecord, MemoryScope, MemoryType, RetrievalQuery
 from memory.vector_store import VectorStore
 from modules.nlu.normalizer import normalize_text
 
@@ -93,6 +93,13 @@ class ClaimRetriever:
             metadata_filters=claim_filters,
         )
         rows = self._merge_hits(query=query, semantic_hits=semantic_hits, lexical_hits=lexical_hits)
+        rows = [
+            row
+            for row in list(rows or [])
+            if getattr(row.get("record"), "level", None) != MemoryLevel.L4_DOCUMENT
+            and not bool(dict(getattr(row.get("record"), "metadata", {}) or {}).get("document_id"))
+            and not bool(dict(getattr(row.get("record"), "metadata", {}) or {}).get("doc_id"))
+        ]
         for row in rows:
             row["source"] = "claim_channel"
         return rows

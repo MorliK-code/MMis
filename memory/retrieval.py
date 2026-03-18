@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from memory.claim_retrieval import ClaimRetriever
 from memory.memory_models import (
     MemoryLevel,
     MemoryScope,
@@ -18,6 +19,7 @@ from memory.memory_models import (
     ScoreBreakdown,
 )
 from memory.memory_scoring import ScoreWeights, build_score_breakdown
+from memory.recall_policy import classify_query_recall_profile, recall_policy_adjustment
 from memory.vector_store import VectorStore
 from modules.nlu.normalizer import normalize_text
 
@@ -49,8 +51,6 @@ _MESSAGE_CHANNEL_TYPES = [
     MemoryType.SUMMARY.value,
     MemoryType.EPISODE.value,
     MemoryType.SEMANTIC.value,
-    MemoryType.DOCUMENT.value,
-    MemoryType.DOCUMENT_CHUNK.value,
     MemoryType.TASK_STATE.value,
     MemoryType.TOOL_RESULT.value,
     MemoryType.RUNTIME_STATE.value,
@@ -70,6 +70,10 @@ class HybridRetriever:
     lexical_score_hook: LexicalScoreHook | None = None
     min_candidate_score: float = 0.28
     min_memory_admit_score: float = 0.38
+    claim_retriever: ClaimRetriever = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.claim_retriever = ClaimRetriever(store=self.store, lexical_score_hook=self.lexical_score_hook)
 
     def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
         namespace = str(query.namespace or "default")
@@ -86,6 +90,14 @@ class HybridRetriever:
             top_k=top_k,
             filters=filters,
         )
+        claim_hits = self._retrieve_claim_hits(
+            query=query,
+            query_text=query_text,
+            namespace=namespace,
+            scopes=scopes,
+            top_k=top_k,
+            filters=filters,
+        )
         message_hits = self._retrieve_message_hits(
             query=query,
             query_text=query_text,
@@ -94,7 +106,7 @@ class HybridRetriever:
             top_k=top_k,
             filters=filters,
         )
-        rows = self._fuse_memory_hits(query=query, fact_hits=fact_hits, message_hits=message_hits)
+        rows = self._fuse_memory_hits(query=query, fact_hits=fact_hits, claim_hits=claim_hits, message_hits=message_hits)
 
         candidates: list[RetrievalCandidate] = []
         for row in rows:
@@ -202,19 +214,44 @@ class HybridRetriever:
             metadata_filters=message_filters,
         )
         rows = self._merge_hits(query=query, semantic_hits=semantic_hits, lexical_hits=lexical_hits)
+        rows = [
+            row
+            for row in list(rows or [])
+            if getattr(row.get("record"), "level", None) != MemoryLevel.L4_DOCUMENT
+        ]
         for row in rows:
             row["source"] = "message_channel"
         return rows
+
+    def _retrieve_claim_hits(
+        self,
+        *,
+        query: RetrievalQuery,
+        query_text: str,
+        namespace: str,
+        scopes: list[MemoryScope],
+        top_k: int,
+        filters: dict[str, object],
+    ) -> list[dict[str, object]]:
+        return self.claim_retriever.retrieve(
+            query=query,
+            query_text=query_text,
+            namespace=namespace,
+            scopes=scopes,
+            top_k=top_k,
+            filters=filters,
+        )
 
     def _fuse_memory_hits(
         self,
         *,
         query: RetrievalQuery,
         fact_hits: list[dict[str, object]],
+        claim_hits: list[dict[str, object]],
         message_hits: list[dict[str, object]],
     ) -> list[dict[str, object]]:
         merged: dict[str, dict[str, object]] = {}
-        for row in list(fact_hits or []) + list(message_hits or []):
+        for row in list(fact_hits or []) + list(claim_hits or []) + list(message_hits or []):
             record = row.get("record")
             if not isinstance(record, MemoryRecord):
                 continue
@@ -231,10 +268,13 @@ class HybridRetriever:
             current["lexical_score"] = max(float(current.get("lexical_score") or 0.0), float(row.get("lexical_score") or 0.0))
             if str(current.get("source") or "") != "fact_channel" and str(row.get("source") or "") == "fact_channel":
                 current["source"] = "fact_channel"
+            elif str(current.get("source") or "") == "message_channel" and str(row.get("source") or "") == "claim_channel":
+                current["source"] = "claim_channel"
         out = list(merged.values())
         out.sort(
             key=lambda row: (
                 1.0 if getattr(row.get("record"), "memory_type", None) == MemoryType.FACT else 0.0,
+                1.0 if getattr(row.get("record"), "memory_type", None) == MemoryType.CLAIM else 0.0,
                 max(float(row.get("semantic_score") or 0.0), float(row.get("lexical_score") or 0.0)),
             ),
             reverse=True,
@@ -286,6 +326,8 @@ class HybridRetriever:
     ) -> ScoreBreakdown:
         final = float(breakdown.final_score)
         fact_bonus = 0.0
+        claim_bonus = 0.0
+        profile = classify_query_recall_profile(str(query.query_text or query.search_text or ""))
         if record.memory_type == MemoryType.FACT:
             fact_bonus += 0.12
             if str(source or "") == "fact_channel":
@@ -301,8 +343,15 @@ class HybridRetriever:
                 fact_bonus += 0.40
             elif self._is_self_like_query(query) and record_predicate and record_subject == "user":
                 fact_bonus += 0.16
+        if record.memory_type == MemoryType.CLAIM and record.level != MemoryLevel.L4_DOCUMENT:
+            claim_bonus += self.claim_retriever.score_bonus(
+                query=query,
+                record=record,
+                source=source,
+            )
+        recall_policy_bonus = recall_policy_adjustment(profile=profile, record=record)
         assistant_penalty = self._assistant_reply_penalty(query=query, record=record)
-        boosted_final = max(0.0, min(1.0, final + fact_bonus - assistant_penalty))
+        boosted_final = max(0.0, min(1.0, final + fact_bonus + claim_bonus + recall_policy_bonus - assistant_penalty))
         return ScoreBreakdown(
             semantic_similarity=breakdown.semantic_similarity,
             lexical_score=breakdown.lexical_score,
@@ -324,13 +373,9 @@ class HybridRetriever:
         penalty = 0.06
         if record.level == MemoryLevel.L2_EPISODIC:
             penalty += 0.04
-        write_policy = dict(meta.get("assistant_write_policy") or {})
-        write_reason = str(meta.get("assistant_write_reason") or write_policy.get("reason") or "").strip().lower()
-        reply_kind = str(
-            meta.get("assistant_reply_kind")
-            or dict(write_policy.get("signals") or {}).get("assistant_reply_kind")
-            or ""
-        ).strip().lower()
+        # Use assistant_write_reason directly from metadata (no longer stored in policy)
+        write_reason = str(meta.get("assistant_write_reason") or "").strip().lower()
+        reply_kind = str(meta.get("assistant_reply_kind") or "").strip().lower()
         if write_reason == "assistant_memory_miss_help_temporary_only" or reply_kind == "memory_miss_help":
             penalty += 0.24
 

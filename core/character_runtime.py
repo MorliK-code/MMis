@@ -1541,11 +1541,23 @@ class CharacterRuntime:
                 self._state.get("address_terms"),
                 conversation_id=current_session,
             )
+            # Emotion: prefer emotion_profile (memory), fallback to emotion (NLU)
+            emotion_profile = meta_map.get("emotion_profile") or {}
             signals = {
                 "intent": str(meta_map.get("intent") or "").strip().lower(),
-                "emotion": str(meta_map.get("emotion") or meta_map.get("mood") or "").strip().lower(),
-                "emotion_intensity": self._clamp01(self._to_float(meta_map.get("emotion_intensity"), 0.0)),
-                "emotion_arousal": self._clamp01(self._to_float(meta_map.get("emotion_arousal"), 0.0)),
+                "emotion": str(
+                    emotion_profile.get("primary") or
+                    emotion_profile.get("label") or
+                    meta_map.get("emotion") or
+                    meta_map.get("mood") or
+                    ""
+                ).strip().lower(),
+                "emotion_intensity": self._clamp01(self._to_float(
+                    emotion_profile.get("intensity") or meta_map.get("emotion_intensity"), 0.0
+                )),
+                "emotion_arousal": self._clamp01(self._to_float(
+                    emotion_profile.get("arousal") or meta_map.get("emotion_arousal"), 0.0
+                )),
                 "topic": str(meta_map.get("topic") or "").strip().lower(),
                 "active_mode": str(self._state.get("active_mode") or "chatting"),
                 "has_code": bool(meta_map.get("has_code", False)),
@@ -2390,12 +2402,13 @@ class CharacterRuntime:
                 "intent": meta_map.get("intent"),
                 "emotion": meta_map.get("emotion"),
                 "mood": meta_map.get("mood"),
+                "emotion_profile": meta_map.get("emotion_profile"),
                 "emotion_intensity": meta_map.get("emotion_intensity"),
                 "emotion_arousal": meta_map.get("emotion_arousal"),
                 "mode": meta_map.get("active_mode") or meta_map.get("mode") or self._state.get("active_mode"),
                 "topic": meta_map.get("topic"),
                 "topics": meta_map.get("topics"),
-                "metadata_tags": meta_map.get("metadata_tags") or meta_map.get("tags"),
+                "tags": meta_map.get("tags"),
             },
         )
         last_signals = signals.to_dict()
@@ -2556,10 +2569,23 @@ class CharacterRuntime:
         state["emotional_state_after"] = dict(emotion_state)
         state["persona_feedback_applied"] = list(persona_feedback_applied)
         self.storage.save_state(cid, state)
+        
+        # Emotion: prefer emotion_profile (memory), fallback to emotion (NLU)
+        emotion_profile = meta_map.get("emotion_profile") or {}
         emotion_detector_payload = {
-            "emotion": str(meta_map.get("emotion") or meta_map.get("mood") or "").strip().lower(),
-            "emotion_intensity": self._clamp01(self._to_float(meta_map.get("emotion_intensity"), 0.0)),
-            "emotion_arousal": self._clamp01(self._to_float(meta_map.get("emotion_arousal"), 0.0)),
+            "emotion": str(
+                emotion_profile.get("primary") or
+                emotion_profile.get("label") or
+                meta_map.get("emotion") or
+                meta_map.get("mood") or
+                ""
+            ).strip().lower(),
+            "emotion_intensity": self._clamp01(self._to_float(
+                emotion_profile.get("intensity") or meta_map.get("emotion_intensity"), 0.0
+            )),
+            "emotion_arousal": self._clamp01(self._to_float(
+                emotion_profile.get("arousal") or meta_map.get("emotion_arousal"), 0.0
+            )),
             "source": "metadata",
         }
         emotional_state_delta = self._build_state_delta(
@@ -2723,7 +2749,7 @@ class CharacterRuntime:
             traits=traits,
             dialog_mode=dict(meta.get("dialog_mode") or {}),
             context_meta={
-                "intent": str(meta.get("intent") or ""),
+                "intent": str(meta.get("intent") or meta.get("meta", {}).get("intent_label") or ""),
                 "is_technical": self._coerce_bool(meta.get("is_technical"), default=False),
                 "active_mode": active_mode,
             },
@@ -3693,13 +3719,35 @@ class CharacterRuntime:
 
     def _build_context(self, *, text: str, meta: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
         """Построить контекст для rule evaluator."""
-        tags = list(meta.get("metadata_tags") or meta.get("tags") or [])
+        # Tags: prefer top-level tags, fallback to metadata_tags (legacy)
+        tags = list(meta.get("tags") or meta.get("metadata_tags") or [])
+        
+        # Emotion: prefer emotion_profile (memory), fallback to emotion (NLU)
+        emotion_profile = meta.get("emotion_profile") or {}
+        emotion_val = (
+            emotion_profile.get("primary") or
+            emotion_profile.get("label") or
+            meta.get("emotion") or
+            meta.get("mood") or
+            ""
+        )
+        emotion_intensity = (
+            emotion_profile.get("intensity") or
+            meta.get("emotion_intensity") or
+            0.0
+        )
+        emotion_arousal = (
+            emotion_profile.get("arousal") or
+            meta.get("emotion_arousal") or
+            0.0
+        )
+        
         return {
             "text": str(text or ""),
-            "intent": str(meta.get("intent") or "").strip().lower(),
-            "emotion": str(meta.get("emotion") or meta.get("mood") or "").strip().lower(),
-            "emotion_intensity": self._clamp01(self._to_float(meta.get("emotion_intensity"), 0.0)),
-            "emotion_arousal": self._clamp01(self._to_float(meta.get("emotion_arousal"), 0.0)),
+            "intent": str(meta.get("intent") or meta.get("meta", {}).get("intent_label") or "").strip().lower(),
+            "emotion": str(emotion_val).strip().lower(),
+            "emotion_intensity": self._clamp01(self._to_float(emotion_intensity, 0.0)),
+            "emotion_arousal": self._clamp01(self._to_float(emotion_arousal, 0.0)),
             "mode": str(
                 meta.get("active_mode")
                 or meta.get("mode")

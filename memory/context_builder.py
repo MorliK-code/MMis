@@ -18,6 +18,7 @@ from memory.memory_models import (
     ContextBuildResult,
     MemoryLevel,
     MemoryRecord,
+    MemoryType,
     RetrievalCandidate,
 )
 
@@ -44,8 +45,10 @@ class ContextBuilderV2:
         working_block = self._render_working_memory(request.working_memory)
         session_block = str(request.session_summary or "").strip()
         semantic_block = self._render_candidates(grouped["semantic"])
+        claims_block = self._render_candidates(grouped["claims"])
         episodic_block = self._render_candidates(grouped["episodic"])
         docs_block = self._render_candidates(grouped["docs"])
+        supporting_block = self._render_candidates(grouped["supporting_messages"])
         tools_block = self._render_tools(request.tool_state, private_runtime_state)
         unresolved_block = self._render_unresolved(request.unresolved_items)
 
@@ -54,9 +57,11 @@ class ContextBuilderV2:
             "user_message": str(request.user_message or "").strip(),
             "working_memory": working_block,
             "session_summary": session_block,
+            "relevant_claims": claims_block,
             "retrieved_semantic": semantic_block,
             "retrieved_episodic": episodic_block,
             "retrieved_docs": docs_block,
+            "supporting_messages": supporting_block,
             "active_tool_state": tools_block,
             "unresolved_items": unresolved_block,
         }
@@ -72,9 +77,11 @@ class ContextBuilderV2:
         soft_memory = max(96, int(request.context_budget_memory))
         soft_working = max(72, int(soft_memory * 0.24))
         soft_session = max(72, int(soft_memory * 0.22))
+        soft_claims = max(64, int(soft_memory * 0.18))
         soft_semantic = max(96, int(soft_memory * 0.34))
         soft_episodic = max(64, int(soft_memory * 0.20))
         soft_docs = max(96, int(request.context_budget_docs))
+        soft_supporting = max(64, int(soft_memory * 0.18))
         soft_tools = max(64, int(request.context_budget_tools))
         soft_unresolved = max(48, min(220, int(soft_memory * 0.20)))
 
@@ -84,9 +91,11 @@ class ContextBuilderV2:
             "user_message": 99,
             "working_memory": 92,
             "session_summary": 88,
+            "relevant_claims": 89,
             "retrieved_semantic": 90,
             "retrieved_episodic": 52,
             "retrieved_docs": 46,
+            "supporting_messages": 58,
             "active_tool_state": 87,
             "unresolved_items": 44,
         }
@@ -95,9 +104,11 @@ class ContextBuilderV2:
             "user_message": 40 if blocks["user_message"] else 0,
             "working_memory": 32 if blocks["working_memory"] else 0,
             "session_summary": 24 if blocks["session_summary"] else 0,
+            "relevant_claims": 32 if blocks["relevant_claims"] else 0,
             "retrieved_semantic": 72 if blocks["retrieved_semantic"] else 0,
             "retrieved_episodic": 0,
             "retrieved_docs": 0,
+            "supporting_messages": 0,
             "active_tool_state": 48 if blocks["active_tool_state"] else 0,
             "unresolved_items": 0,
         }
@@ -129,6 +140,12 @@ class ContextBuilderV2:
                 priority=priorities["session_summary"],
             ),
             BudgetBlock(
+                block_id="relevant_claims",
+                max_tokens=soft_claims,
+                min_tokens=min_tokens["relevant_claims"],
+                priority=priorities["relevant_claims"],
+            ),
+            BudgetBlock(
                 block_id="retrieved_semantic",
                 max_tokens=soft_semantic,
                 min_tokens=min_tokens["retrieved_semantic"],
@@ -145,6 +162,12 @@ class ContextBuilderV2:
                 max_tokens=soft_docs,
                 min_tokens=min_tokens["retrieved_docs"],
                 priority=priorities["retrieved_docs"],
+            ),
+            BudgetBlock(
+                block_id="supporting_messages",
+                max_tokens=soft_supporting,
+                min_tokens=min_tokens["supporting_messages"],
+                priority=priorities["supporting_messages"],
             ),
             BudgetBlock(
                 block_id="active_tool_state",
@@ -204,10 +227,19 @@ class ContextBuilderV2:
 
     def _group_candidates(self, rows: list[RetrievalCandidate]) -> dict[str, list[RetrievalCandidate]]:
         semantic: list[RetrievalCandidate] = []
+        claims: list[RetrievalCandidate] = []
         episodic: list[RetrievalCandidate] = []
         docs: list[RetrievalCandidate] = []
+        supporting_messages: list[RetrievalCandidate] = []
         for row in list(rows or []):
-            level = row.record.level
+            record = row.record
+            level = record.level
+            if record.memory_type == MemoryType.CLAIM:
+                claims.append(row)
+                continue
+            if record.memory_type == MemoryType.MESSAGE:
+                supporting_messages.append(row)
+                continue
             if level == MemoryLevel.L3_SEMANTIC:
                 semantic.append(row)
             elif level == MemoryLevel.L2_EPISODIC:
@@ -218,8 +250,10 @@ class ContextBuilderV2:
                 episodic.append(row)
         return {
             "semantic": semantic,
+            "claims": claims,
             "episodic": episodic,
             "docs": docs,
+            "supporting_messages": supporting_messages,
         }
 
     @staticmethod
@@ -311,6 +345,15 @@ class ContextBuilderV2:
         if self._total(blocks) <= usable:
             return
 
+        if blocks.get("supporting_messages"):
+            blocks["supporting_messages"] = self._micro_summary(blocks["supporting_messages"], limit_tokens=72)
+            _log_step("micro_summary_supporting_messages")
+            if self._total(blocks) > usable and blocks.get("supporting_messages"):
+                _drop_block("supporting_messages", "overflow_drop_low_priority")
+                _log_step("drop_low_priority_supporting_messages")
+        if self._total(blocks) <= usable:
+            return
+
         if blocks.get("retrieved_episodic"):
             _drop_block("retrieved_episodic", "overflow_drop_low_priority")
             _log_step("drop_low_priority_episodic")
@@ -341,7 +384,7 @@ class ContextBuilderV2:
         if self._total(blocks) <= usable:
             return
 
-        for key in ("retrieved_docs", "retrieved_episodic", "unresolved_items", "session_summary", "working_memory"):
+        for key in ("retrieved_docs", "retrieved_episodic", "supporting_messages", "unresolved_items", "session_summary", "working_memory"):
             value = str(blocks.get(key) or "").strip()
             if not value:
                 continue

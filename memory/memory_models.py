@@ -39,6 +39,7 @@ class MemoryType(str, Enum):
     MESSAGE = "message"
     SUMMARY = "summary"
     FACT = "fact"
+    CLAIM = "claim"
     EPISODE = "episode"
     SEMANTIC = "semantic"
     DOCUMENT = "document"

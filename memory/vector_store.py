@@ -493,11 +493,6 @@ class SQLiteFTSBackend(LexicalIndexBackend):
         else:
             data = dict(row)
         metadata = json.loads(str(data.get("metadata_json") or "{}"))
-        if str(data.get("search_text") or "").strip():
-            metadata = ensure_memory_views(str(data.get("text") or ""), metadata=metadata)
-            views = dict(metadata.get("memory_views") or {})
-            views["search_text"] = str(data.get("search_text") or "").strip()
-            metadata["memory_views"] = views
         return MemoryRecord.from_dict(
             {
                 "id": str(data.get("id") or ""),

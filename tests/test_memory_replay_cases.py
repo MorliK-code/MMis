@@ -78,6 +78,28 @@ def _manager() -> MemoryManager:
     manager._root = temp_dir
     manager._state_path = temp_dir / "manager_state.json"
     manager._lock = RLock()
+    # Storage profile (must match MemoryManager)
+    manager._storage_profile = "compact"
+    # Debug metadata fields to strip before storage (must match MemoryManager)
+    manager._DEBUG_METADATA_FIELDS = {
+        "web_used", "web_factual_mode", "web_query_intent", "web_search_mode",
+        "web_primary_category", "web_evidence_quality_score", "web_evidence_quality",
+        "web_sources_scanned", "web_sources_selected", "web_evidence_count",
+        "web_conflicting_sources", "web_low_evidence_quality", "web_selected_avg_quality",
+        "web_topical_filtered_sources", "web_conflict_severity", "web_evidence_strength",
+        "web_final_factual_confidence", "web_cautious_synthesis",
+        "web_numeric_candidates_selected", "web_numeric_candidates_rejected",
+        "_persona_snapshot_debug", "persona_snapshot",
+        "promotion_project_signal", "promotion_task_signal", "promotion_decision_signal",
+        "promotion_preference_signal", "promotion_issue_signal", "promotion_technical_signal",
+        "promotion_repeated_topic_signal", "promotion_smalltalk_signal",
+        "promotion_signal_score", "promotion_stable_fact_signal", "promotion_fact_signal",
+        "promotion_fact_relation_diversity",
+        "extracted_facts_count", "extracted_fact_relations",
+        "memory_analysis", "memory_views_debug",
+        "lifecycle_decision", "decision_debug",
+        "assistant_write_policy", "assistant_write_blocked", "assistant_write_reason",
+    }
     manager._store = _ReplayStore()
     manager._event_store = _ReplayEventStore()
     manager._fact_extractor = FactExtractor()
@@ -108,6 +130,23 @@ def _manager() -> MemoryManager:
     )
     manager._save_state = lambda: None
     manager._cleanup_expired = lambda: None
+    # Debug metadata fields to strip before storage
+    manager._DEBUG_METADATA_FIELDS = {
+        "web_used", "web_factual_mode", "web_query_intent", "web_search_mode",
+        "web_primary_category", "web_evidence_quality_score", "web_evidence_quality",
+        "web_sources_scanned", "web_sources_selected", "web_evidence_count",
+        "web_conflicting_sources", "web_low_evidence_quality", "web_selected_avg_quality",
+        "web_topical_filtered_sources", "web_conflict_severity", "web_evidence_strength",
+        "web_final_factual_confidence", "web_cautious_synthesis",
+        "web_numeric_candidates_selected", "web_numeric_candidates_rejected",
+        "_persona_snapshot_debug", "persona_snapshot",
+        "promotion_project_signal", "promotion_task_signal", "promotion_decision_signal",
+        "promotion_preference_signal", "promotion_issue_signal", "promotion_technical_signal",
+        "promotion_repeated_topic_signal", "promotion_smalltalk_signal",
+        "promotion_signal_score", "promotion_stable_fact_signal", "promotion_fact_signal",
+        "promotion_fact_relation_diversity",
+        "extracted_facts_count", "extracted_fact_relations",
+    }
     return manager
 
 
@@ -256,8 +295,40 @@ def test_replay_builds_structured_environment_profile_from_short_turns() -> None
 
     root_messages = _root_message_rows(manager, namespace="profile")
     assert len(root_messages) == 4
-    assert all(str(dict(row.metadata or {}).get("analysis_version") or "") == "memory_ingest_v3" for row in root_messages)
-    assert all(bool(dict(dict(row.metadata or {}).get("memory_views") or {}).get("search_text")) for row in root_messages)
+    # Message metadata stays compact: no duplicated raw projections.
+    for row in root_messages:
+        meta = dict(row.metadata or {})
+        assert "search_text" not in meta
+        assert "normalized_text" not in meta
+        assert "canonical_text" not in meta
+        views = dict(meta.get("memory_views") or {})
+        has_keys = bool(views.get("entity_keys") or views.get("numeric_keys"))
+        assert has_keys, f"Missing compact memory_views keys for record {row.id}"
+
+
+def test_replay_persists_compact_fact_metadata() -> None:
+    manager = _manager()
+
+    _ingest_turn(manager, text="я сижу на python 3.11", namespace="compact-facts")
+
+    fact_rows = _fact_rows(
+        manager,
+        namespace="compact-facts",
+        predicate="environment_runtime_python",
+        status=MemoryStatus.ACTIVE,
+    )
+    assert fact_rows
+
+    metadata = dict(fact_rows[0].metadata or {})
+    fact = dict(metadata.get("fact") or {})
+    write_policy = dict(metadata.get("write_policy") or {})
+
+    assert "evidence" not in fact
+    assert "metadata" not in fact
+    assert "text" not in fact
+    assert "created_at" not in fact
+    assert "updated_at" not in fact
+    assert "signals" not in write_policy
 
 
 def test_replay_false_positive_guards_block_identity_and_age_noise() -> None:
@@ -337,7 +408,7 @@ def test_fact_expectation_check_prefers_exact_gpu_fact_over_message_similarity()
             level=MemoryLevel.L0_WORKING,
             scope=MemoryScope.CONVERSATION,
             namespace="fact-check",
-            metadata={"memory_views": {"search_text": "gpu rtx 3050 ti"}},
+            metadata={"memory_views": {"entity_keys": ["gpu", "rtx_3050_ti"], "numeric_keys": []}},
         )
     )
 
@@ -720,9 +791,31 @@ def test_memory_recall_mode_detects_contextual_recall() -> None:
     assert mode == "contextual_recall"
 
 
-def test_contextual_recall_prioritizes_messages_and_decision_facts_over_other_facts() -> None:
+def test_memory_recall_mode_detects_document_recall() -> None:
+    manager = _manager()
+
+    mode = manager._classify_memory_recall_mode(query_text="where in code is ollama called?")
+
+    assert mode == "document_recall"
+
+
+def test_contextual_recall_prioritizes_episodes_then_messages_then_decision_facts() -> None:
     manager = _manager()
     candidates = [
+        RetrievalCandidate(
+            record=MemoryRecord(
+                id="episode:memory",
+                text="memory design episode",
+                memory_type=MemoryType.EPISODE,
+                level=MemoryLevel.L2_EPISODIC,
+                scope=MemoryScope.CONVERSATION,
+                namespace="contextual-recall",
+                metadata={"episode": {"topic": "memory design"}},
+                status=MemoryStatus.ACTIVE,
+            ),
+            score_breakdown=ScoreBreakdown(final_score=0.64),
+            source="message_channel",
+        ),
         RetrievalCandidate(
             record=MemoryRecord(
                 id="fact:gpu",
@@ -771,9 +864,9 @@ def test_contextual_recall_prioritizes_messages_and_decision_facts_over_other_fa
     )
 
     assert [str(item.record.id or "") for item in ordered[:3]] == [
+        "episode:memory",
         "msg:discussion",
         "fact:decision",
-        "fact:gpu",
     ]
 
 
@@ -783,7 +876,16 @@ def test_render_memory_recall_mode_contextual_includes_context_rule() -> None:
     block = manager._render_memory_recall_mode("contextual_recall")
 
     assert "mode: contextual_recall" in block
-    assert "messages, summaries, and decision/task facts" in block
+    assert "dialog episodes" in block
+
+
+def test_render_memory_recall_mode_document_includes_document_rule() -> None:
+    manager = _manager()
+
+    block = manager._render_memory_recall_mode("document_recall")
+
+    assert "mode: document_recall" in block
+    assert "document chunks" in block
 
 
 def test_self_facts_context_uses_exact_ram_fact_for_ozu_query() -> None:

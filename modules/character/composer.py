@@ -58,7 +58,7 @@ class CharacterComposer:
         meta = dict(context_meta or {})
         context_mods = compute_context_trait_modifiers(
             dialog_mode=dm,
-            intent=str(meta.get("intent") or ""),
+            intent=str(meta.get("intent") or meta.get("meta", {}).get("intent_label") or ""),
             is_technical=bool(meta.get("is_technical", False)),
         )
         overlay_mods = _overlay_modifiers(traits)

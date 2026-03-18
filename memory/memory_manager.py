@@ -10,7 +10,11 @@ from typing import Any
 
 from config.settings import load_config
 from llm.tokenizer import create_tokenizer
+from memory.claim_promoter import promote_claim_candidates
+from memory.claim_models import ClaimPromotionDecision, ClaimRecord
+from memory.dialog_episode_retriever import DialogEpisodeHit, DialogEpisodeRetriever
 from memory.document_memory import ChunkingConfig, DocumentMemory
+from memory.document_retrieval import DocumentRetrievalHit, DocumentRetriever
 from memory.embedding_provider import build_embedding_provider
 from memory.event_store import EventStore
 from memory.fact_extractor import FactExtractor
@@ -52,6 +56,13 @@ from memory.memory_scoring import (
     build_message_signal_breakdown,
     build_score_breakdown,
     build_salience_score,
+)
+from memory.recall_policy import classify_query_recall_profile
+from memory.storage_profile import (
+    DEBUG_ONLY_METADATA_FIELDS,
+    DEFAULT_STORAGE_PROFILE,
+    normalize_storage_profile,
+    sanitize_storage_metadata,
 )
 from memory.retrieval_projection import (
     build_memory_search_text,
@@ -138,6 +149,11 @@ _CONTEXTUAL_RECALL_RULES: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:почему так сделали|why did we do that|why we did that)", re.I),
     re.compile(r"(?:что ты советовала|what did you suggest|what did you advise)", re.I),
 )
+_DOCUMENT_RECALL_RULES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:что было в главе|what was in chapter|chapter\s+\d+|глава\s+\d+)", re.I),
+    re.compile(r"(?:где .*вызывается|где .*объявляется|where .*called|where .*declared)", re.I),
+    re.compile(r"(?:где в коде|where in (?:the )?code|класс|class|function|method|код|файл|документ|chapter|глава)", re.I),
+)
 
 
 class MemoryManager:
@@ -160,6 +176,14 @@ class MemoryManager:
         self._state_path = self._root / "manager_state.json"
 
         self._lock = RLock()
+
+        # Storage profile: "compact" (default) or "debug"
+        # Can be set via config or environment variable MEMORY_STORAGE_PROFILE
+        self._storage_profile = normalize_storage_profile(
+            str(getattr(self._cfg, "memory_storage_profile", DEFAULT_STORAGE_PROFILE) or DEFAULT_STORAGE_PROFILE)
+        )
+        self._DEBUG_METADATA_FIELDS = set(DEBUG_ONLY_METADATA_FIELDS)
+
         memory_backend = str(getattr(self._cfg, "memory_backend", "chroma") or "chroma").strip().lower()
         if memory_backend not in {"chroma", "chromadb"}:
             raise ValueError(
@@ -248,6 +272,8 @@ class MemoryManager:
                 ),
             ),
         )
+        self._dialog_episode_retriever = DialogEpisodeRetriever(store=self._store)
+        self._document_retriever = DocumentRetriever(store=self._store)
         self._reranker: Reranker = HeuristicReranker()
         self._context_builder = ContextBuilderV2(tokenizer=create_tokenizer())
         self._document_memory = DocumentMemory(
@@ -318,6 +344,8 @@ class MemoryManager:
                 metadata=metadata,
                 source_kind=source_kind,
                 thinking=thinking,
+                storage_profile=self._storage_profile,
+                compact_for_storage=False,
             )
             source_fact_records_allowed = self._policy.allow_fact_records_for_source(source_kind=source_kind)
             metadata["source_fact_records_allowed"] = bool(source_fact_records_allowed)
@@ -337,9 +365,7 @@ class MemoryManager:
                     allow_fact_records=False,
                     signals={"source_kind": str(source_kind.value)},
                 )
-                metadata["assistant_write_policy"] = decision.to_dict()
-                metadata["assistant_write_blocked"] = True
-                metadata["assistant_write_reason"] = str(decision.reason or "")
+                # Do not store assistant_write_policy - it's runtime-only
                 self._record_ingest_skip(
                     event_id=event_id,
                     now_ts=now_ts,
@@ -425,6 +451,7 @@ class MemoryManager:
 
             preview_facts: list[FactRecordV2] = []
             source_preview_facts: list[FactRecordV2] = []
+            preview_claims: list[ClaimRecord] = []
             ingest_analysis: IngestAnalysis | None = None
             if memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY} and scope != MemoryScope.PRIVATE_RUNTIME:
                 ingest_analysis = analyze_message_for_memory(
@@ -432,6 +459,14 @@ class MemoryManager:
                     metadata={"event_id": event_id, "namespace": namespace, **metadata},
                 )
                 metadata = self._merge_ingest_analysis_into_metadata(metadata=metadata, analysis=ingest_analysis)
+                source_claim_records_allowed = self._policy.allow_claim_records_for_source(source_kind=source_kind)
+                if source_claim_records_allowed:
+                    preview_claims = promote_claim_candidates(
+                        list(ingest_analysis.claim_candidates or []),
+                        event_id=event_id,
+                        namespace=namespace,
+                        scope=str(scope.value),
+                    )
                 if source_fact_records_allowed:
                     preview_facts = self._fact_extractor.extract_v2(
                         text=text,
@@ -465,9 +500,8 @@ class MemoryManager:
                     memory_type=memory_type,
                     requested_scope=scope,
                 )
-                metadata["assistant_write_policy"] = assistant_write_decision.to_dict()
-                metadata["assistant_write_blocked"] = bool(not assistant_write_decision.allow_store)
-                metadata["assistant_write_reason"] = str(assistant_write_decision.reason or "")
+                # Do not store assistant_write_policy - it's runtime-only
+                # Only extract and store essential signals
                 decision_signals = dict(assistant_write_decision.signals or {})
                 assistant_reply_kind = str(
                     decision_signals.get("assistant_reply_kind")
@@ -514,6 +548,7 @@ class MemoryManager:
             stored_ids: list[str] = []
             promoted_ids: list[str] = []
             extracted_facts: list[FactRecordV2] = []
+            extracted_claims: list[ClaimRecord] = []
             if not assistant_write_decision.allow_store:
                 self._record_ingest_skip(
                     event_id=event_id,
@@ -555,6 +590,26 @@ class MemoryManager:
                 }
                 stored_ids.append(record.id)
             else:
+                # Strip debug metadata before storage
+                record = MemoryRecord(
+                    id=record.id,
+                    text=record.text,
+                    memory_type=record.memory_type,
+                    level=record.level,
+                    scope=record.scope,
+                    namespace=record.namespace,
+                    metadata=self._strip_debug_metadata(record.metadata),
+                    embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
+                    importance=record.importance,
+                    confidence=record.confidence,
+                    created_at=record.created_at,
+                    updated_at=record.updated_at,
+                    expires_at=record.expires_at,
+                    status=record.status,
+                    version=record.version,
+                    parent_id=record.parent_id,
+                    chunk_index=record.chunk_index,
+                )
                 self._store.upsert(record)
                 stored_ids.append(record.id)
                 self._update_session_state_from_event(record)
@@ -572,6 +627,26 @@ class MemoryManager:
                     now_ts=now_ts,
                     reason=str(lifecycle_decision.reason or "lifecycle"),
                 )
+                # Strip debug metadata from status transition record
+                status_row = MemoryRecord(
+                    id=status_row.id,
+                    text=status_row.text,
+                    memory_type=status_row.memory_type,
+                    level=status_row.level,
+                    scope=status_row.scope,
+                    namespace=status_row.namespace,
+                    metadata=self._strip_debug_metadata(status_row.metadata),
+                    embedding=list(status_row.embedding or []) if isinstance(status_row.embedding, list) else None,
+                    importance=status_row.importance,
+                    confidence=status_row.confidence,
+                    created_at=status_row.created_at,
+                    updated_at=status_row.updated_at,
+                    expires_at=status_row.expires_at,
+                    status=status_row.status,
+                    version=status_row.version,
+                    parent_id=status_row.parent_id,
+                    chunk_index=status_row.chunk_index,
+                )
                 self._store.upsert(status_row)
             if (
                 scope != MemoryScope.PRIVATE_RUNTIME
@@ -579,6 +654,26 @@ class MemoryManager:
                 and lifecycle_decision.promote_to != record.level
             ):
                 promoted = self._promote_record(record, target=lifecycle_decision.promote_to, now_ts=now_ts)
+                # Strip debug metadata from promoted record
+                promoted = MemoryRecord(
+                    id=promoted.id,
+                    text=promoted.text,
+                    memory_type=promoted.memory_type,
+                    level=promoted.level,
+                    scope=promoted.scope,
+                    namespace=promoted.namespace,
+                    metadata=self._strip_debug_metadata(promoted.metadata),
+                    embedding=list(promoted.embedding or []) if isinstance(promoted.embedding, list) else None,
+                    importance=promoted.importance,
+                    confidence=promoted.confidence,
+                    created_at=promoted.created_at,
+                    updated_at=promoted.updated_at,
+                    expires_at=promoted.expires_at,
+                    status=promoted.status,
+                    version=promoted.version,
+                    parent_id=promoted.parent_id,
+                    chunk_index=promoted.chunk_index,
+                )
                 self._store.upsert(promoted)
                 promoted_ids.append(promoted.id)
 
@@ -595,6 +690,17 @@ class MemoryManager:
                     event_id=event_id,
                     source_role=str(event.role or "user"),
                     source_kind=str(metadata.get("source_kind") or "structured_fact"),
+                )
+            if (
+                scope != MemoryScope.PRIVATE_RUNTIME
+                and str(source_kind.value) == MemorySourceKind.USER.value
+                and preview_claims
+            ):
+                extracted_claims = self._write_claim_records(
+                    claims=preview_claims,
+                    namespace=namespace,
+                    now_ts=now_ts,
+                    event_id=event_id,
                 )
 
             self._event_store.append(
@@ -620,7 +726,9 @@ class MemoryManager:
                             else ""
                         ),
                         "preview_facts_count": int(len(preview_facts)),
-                        "assistant_write_policy": dict(metadata.get("assistant_write_policy") or {}),
+                        "preview_claims_count": int(len(preview_claims)),
+                        "assistant_write_action": str(assistant_write_decision.action or "allow"),
+                        "assistant_write_reason": str(assistant_write_decision.reason or ""),
                         "request_id": str(metadata.get("request_id") or ""),
                         "turn_id": str(metadata.get("turn_id") or ""),
                         "conversation_id": str(metadata.get("conversation_id") or namespace),
@@ -630,16 +738,15 @@ class MemoryManager:
                 )
             self._save_state()
 
-        assistant_policy = dict(metadata.get("assistant_write_policy") or {})
         log_json(
             LOGGER,
             "memory_v2_ingest",
             summary=(
                 f"type={memory_type.value} scope={scope.value} stored={len(stored_ids)} "
-                f"facts={len(extracted_facts)} promotions={len(promoted_ids)} "
+                f"facts={len(extracted_facts)} claims={len(extracted_claims)} promotions={len(promoted_ids)} "
                 f"reason={str(lifecycle_decision.reason or '-')} "
-                f"write_policy={str(assistant_policy.get('action') or 'allow')} "
-                f"write_reason={str(assistant_policy.get('reason') or '-')}"
+                f"write_action={str(assistant_write_decision.action or 'allow')} "
+                f"write_reason={str(assistant_write_decision.reason or '-')}"
             ),
             context=self._event_log_context(metadata=metadata, namespace=namespace),
             namespace=namespace,
@@ -649,17 +756,11 @@ class MemoryManager:
             stored=len(stored_ids),
             promoted=len(promoted_ids),
             facts=len(extracted_facts),
+            claims=len(extracted_claims),
             promotion_reason=str(lifecycle_decision.reason or ""),
             promotion_route=str(lifecycle_decision.route or ""),
-            promotion_score=float(
-                dict(lifecycle_decision.decision_debug or {}).get("composite_score") or 0.0
-            ),
-            promotion_threshold=float(
-                dict(lifecycle_decision.decision_debug or {}).get("composite_threshold") or 0.0
-            ),
-            assistant_write_blocked=bool(metadata.get("assistant_write_blocked")),
-            assistant_write_reason=str(metadata.get("assistant_write_reason") or ""),
-            assistant_write_policy=assistant_policy,
+            assistant_write_action=str(assistant_write_decision.action or "allow"),
+            assistant_write_reason=str(assistant_write_decision.reason or ""),
         )
         return IngestResult(
             stored_ids=stored_ids,
@@ -814,13 +915,50 @@ class MemoryManager:
             retrieved=selected_candidates,
             private_runtime_state=private_runtime,
         )
+        blocks = dict(result.blocks or {})
+        relevant_claims_block = self._render_relevant_claims(list(result.selected or []))
+        if relevant_claims_block:
+            blocks["relevant_claims"] = relevant_claims_block
+
+        dialog_hits = self._retrieve_dialog_episode_hits(
+            query=retrieval_result.query,
+            recall_mode=recall_mode,
+        )
+        recalled_dialog_block = self._render_recalled_dialog(dialog_hits)
+        if recalled_dialog_block:
+            blocks["recalled_dialog"] = recalled_dialog_block
+
+        document_hits = self._retrieve_document_evidence_hits(
+            query=retrieval_result.query,
+            recall_mode=recall_mode,
+        )
+        document_evidence_block = self._render_document_evidence(document_hits)
+        if document_evidence_block:
+            blocks["document_evidence"] = document_evidence_block
+
+        supporting_messages_block = self._render_supporting_messages(
+            selected_candidates=list(result.selected or []),
+            dialog_hits=dialog_hits,
+        )
+        if supporting_messages_block:
+            blocks["supporting_messages"] = supporting_messages_block
+
+        result = ContextBuildResult(
+            blocks=blocks,
+            selected=list(result.selected or []),
+            dropped=[dict(x) for x in list(result.dropped or [])],
+            score_breakdowns=[dict(x) for x in list(result.score_breakdowns or [])],
+            truncation_log=[dict(x) for x in list(result.truncation_log or [])],
+            fact_expectation=dict(result.fact_expectation or {}),
+            self_facts_context=dict(result.self_facts_context or {}),
+            recall_mode=str(result.recall_mode or ""),
+        )
         self_facts_context = self._build_self_facts_context(
             query_text=str(request.user_message or ""),
             selected_candidates=list(result.selected or []),
             fact_expectation=fact_expectation,
         )
         if fact_expectation or self_facts_context:
-            blocks = dict(result.blocks or {})
             blocks["fact_expectation_check"] = self._render_fact_expectation_check(fact_expectation)
             self_facts_block = self._render_self_facts(self_facts_context)
             if self_facts_block:
@@ -1052,6 +1190,11 @@ class MemoryManager:
                 query_text=query_text,
                 candidates=fallback_candidates,
             )
+        if mode == "document_recall":
+            return self._prioritize_document_recall_candidates(
+                query_text=query_text,
+                candidates=fallback_candidates,
+            )
         return list(fallback_candidates or [])
 
     @staticmethod
@@ -1067,19 +1210,55 @@ class MemoryManager:
             meta = dict(record.metadata or {})
             fact = dict(meta.get("fact") or {})
             predicate = str(fact.get("predicate") or "").strip().lower()
+            is_episode = 1.0 if record.memory_type == MemoryType.EPISODE else 0.0
             is_message = 1.0 if record.memory_type == MemoryType.MESSAGE else 0.0
             is_summary = 1.0 if record.memory_type == MemoryType.SUMMARY else 0.0
+            is_claim = 1.0 if record.memory_type == MemoryType.CLAIM else 0.0
             is_context_fact = 1.0 if record.memory_type == MemoryType.FACT and predicate in {"decision", "task", "task_goal", "agreed_plan"} else 0.0
             is_other_fact = 1.0 if record.memory_type == MemoryType.FACT else 0.0
-            docs_penalty = 0.0 if record.level == MemoryLevel.L4_DOCUMENT else 1.0
+            docs_penalty = -3.5 if record.level == MemoryLevel.L4_DOCUMENT else 0.0
             return (
-                (is_message * 5.0) + (is_summary * 4.0) + (is_context_fact * 3.0) + (docs_penalty * 0.2) - (is_other_fact * 0.5),
+                (is_episode * 6.0)
+                + (is_message * 5.0)
+                + (is_summary * 4.0)
+                + (is_context_fact * 3.0)
+                + (is_claim * 2.4)
+                + docs_penalty
+                - (is_other_fact * 0.5),
                 float(item.final_score),
                 float(record.updated_at or 0.0),
             )
 
         ordered = sorted(list(candidates or []), key=_priority, reverse=True)
         return ordered
+
+    @staticmethod
+    def _prioritize_document_recall_candidates(
+        *,
+        query_text: str,
+        candidates: list[RetrievalCandidate],
+    ) -> list[RetrievalCandidate]:
+        _ = str(query_text or "")
+
+        def _priority(item: RetrievalCandidate) -> tuple[float, float, float]:
+            record = item.record
+            meta = dict(record.metadata or {})
+            is_document = 1.0 if record.memory_type == MemoryType.DOCUMENT else 0.0
+            is_chunk = 1.0 if record.memory_type == MemoryType.DOCUMENT_CHUNK else 0.0
+            is_doc_summary = 1.0 if record.memory_type == MemoryType.SUMMARY and record.level == MemoryLevel.L4_DOCUMENT else 0.0
+            is_doc_claim = 1.0 if record.memory_type == MemoryType.CLAIM and (record.level == MemoryLevel.L4_DOCUMENT or meta.get("document_id") or meta.get("doc_id")) else 0.0
+            unrelated_penalty = -4.0 if record.level != MemoryLevel.L4_DOCUMENT and not is_doc_claim else 0.0
+            return (
+                (is_chunk * 6.0)
+                + (is_doc_summary * 5.0)
+                + (is_doc_claim * 4.5)
+                + (is_document * 4.0)
+                + unrelated_penalty,
+                float(item.final_score),
+                float(record.updated_at or 0.0),
+            )
+
+        return sorted(list(candidates or []), key=_priority, reverse=True)
 
     def _find_active_semantic_fact_rows(self, *, namespace: str, predicates: list[str]) -> list[MemoryRecord]:
         expected = {str(x or "").strip().lower() for x in list(predicates or []) if str(x or "").strip()}
@@ -1148,6 +1327,171 @@ class MemoryManager:
                 continue
             lines.append(f"- {predicate}: {', '.join(values)}")
         return "\n".join(lines).strip()
+
+    @staticmethod
+    def _render_relevant_claims(candidates: list[RetrievalCandidate]) -> str:
+        lines: list[str] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in list(candidates or []):
+            record = item.record
+            if record.memory_type != MemoryType.CLAIM or record.status != MemoryStatus.ACTIVE:
+                continue
+            if record.level == MemoryLevel.L4_DOCUMENT:
+                continue
+            claim = dict(dict(record.metadata or {}).get("claim") or {})
+            subject = str(claim.get("subject") or "").strip().lower()
+            predicate = str(claim.get("predicate") or "").strip().lower()
+            obj = str(claim.get("object_surface") or claim.get("obj") or "").strip()
+            if subject != "user" or not predicate or not obj:
+                continue
+            key = (subject, predicate, obj.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"- {subject} {predicate} {obj}")
+            if len(lines) >= 4:
+                break
+        return "\n".join(lines).strip()
+
+    def _retrieve_dialog_episode_hits(
+        self,
+        *,
+        query: RetrievalQuery,
+        recall_mode: str,
+    ) -> list[DialogEpisodeHit]:
+        if str(recall_mode or "").strip().lower() != "contextual_recall":
+            return []
+        hits = self._dialog_episode_retriever.retrieve(
+            query=query,
+            query_text=str(query.query_text or ""),
+            namespace=str(query.namespace or "default"),
+            scopes=list(query.scopes or self._default_retrieval_scopes()),
+            top_k=2,
+        )
+        floor = 0.44 if str(recall_mode or "").strip().lower() == "contextual_recall" else 0.72
+        return [row for row in list(hits or []) if float(row.score) >= floor]
+
+    def _retrieve_document_evidence_hits(
+        self,
+        *,
+        query: RetrievalQuery,
+        recall_mode: str,
+    ) -> list[DocumentRetrievalHit]:
+        query_text = str(query.query_text or query.search_text or "").strip()
+        doc_like = self._is_document_recall_like_query(query_text)
+        if not doc_like and str(recall_mode or "").strip().lower() != "document_recall":
+            return []
+        hits = self._document_retriever.retrieve(
+            query=query,
+            query_text=query_text,
+            namespace=str(query.namespace or "default"),
+            scopes=list(query.scopes or self._default_retrieval_scopes()),
+            top_k=2,
+        )
+        floor = 0.42 if doc_like else (0.48 if str(recall_mode or "").strip().lower() == "contextual_recall" else 0.74)
+        return [row for row in list(hits or []) if float(row.score) >= floor]
+
+    @staticmethod
+    def _render_recalled_dialog(hits: list[DialogEpisodeHit]) -> str:
+        if not hits:
+            return ""
+        top = hits[0]
+        lines = []
+        topic = str(top.episode.topic or "").strip()
+        if topic:
+            lines.append(f"Topic: {topic}")
+        summary_short = str(top.summary_short or "").strip()
+        if summary_short:
+            lines.append(f"Summary: {summary_short}")
+        summary_reasoning = str(top.summary_reasoning or "").strip()
+        if summary_reasoning:
+            lines.append(f"Reasoning: {summary_reasoning}")
+        decisions = [str(x).strip() for x in list(top.decisions or []) if str(x).strip()]
+        if decisions:
+            lines.append("Decisions:")
+            for item in decisions[:4]:
+                lines.append(f"- {item}")
+        open_questions = [str(x).strip() for x in list(top.episode.open_questions or []) if str(x).strip()]
+        if open_questions:
+            lines.append("Open questions:")
+            for item in open_questions[:3]:
+                lines.append(f"- {item}")
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _render_document_evidence(hits: list[DocumentRetrievalHit]) -> str:
+        if not hits:
+            return ""
+        lines: list[str] = []
+        for hit in list(hits or [])[:2]:
+            document = hit.document_record
+            title = str(dict(getattr(document, "metadata", {}) or {}).get("title") or getattr(document, "text", "") or hit.document_id).strip()
+            if title:
+                lines.append(f"Document: {title}")
+            if hit.section_summary is not None:
+                summary_text = str(hit.section_summary.text or "").strip()
+                if summary_text:
+                    lines.append(f"Section summary: {summary_text}")
+            for chunk in list(hit.relevant_chunks or [])[:3]:
+                chunk_index = dict(chunk.metadata or {}).get("chunk_index")
+                prefix = f"Chunk {chunk_index}: " if chunk_index is not None else "Chunk: "
+                lines.append(prefix + str(chunk.text or "").strip())
+            for claim in list(hit.document_claims or [])[:2]:
+                obj = str(claim.object_surface or claim.obj or "").strip()
+                if obj:
+                    lines.append(f"Claim: {claim.subject} {claim.predicate} {obj}")
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _render_supporting_messages(
+        *,
+        selected_candidates: list[RetrievalCandidate],
+        dialog_hits: list[DialogEpisodeHit],
+    ) -> str:
+        lines: list[str] = []
+        seen: set[str] = set()
+
+        for hit in list(dialog_hits or [])[:1]:
+            for turn in list(hit.supporting_turns or [])[:4]:
+                role = str(turn.role or "message").strip().lower() or "message"
+                text = str(turn.text or "").strip()
+                if not text:
+                    continue
+                key = f"{role}:{text.lower()}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                lines.append(f"- {role}: {text}")
+                if len(lines) >= 4:
+                    return "\n".join(lines).strip()
+
+        for item in list(selected_candidates or []):
+            record = item.record
+            if record.memory_type != MemoryType.MESSAGE:
+                continue
+            meta = dict(record.metadata or {})
+            source_kind = str(meta.get("source_kind") or "").strip().lower()
+            if source_kind == "assistant_reply":
+                continue
+            text = str(record.text or "").strip()
+            if not text:
+                continue
+            role = "user" if source_kind in {"", "user"} else source_kind
+            key = f"{role}:{text.lower()}"
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"- {role}: {text}")
+            if len(lines) >= 4:
+                break
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _is_document_recall_like_query(query_text: str) -> bool:
+        text = str(query_text or "").strip().lower()
+        if not text:
+            return False
+        return any(pattern.search(text) for pattern in _DOCUMENT_RECALL_RULES)
 
     def _build_self_facts_context(
         self,
@@ -1232,15 +1576,7 @@ class MemoryManager:
 
     @staticmethod
     def _classify_memory_recall_mode(*, query_text: str) -> str:
-        text = str(query_text or "").strip()
-        if not text:
-            return ""
-        if MemoryManager._is_self_recall_like_query(text):
-            return "exact_fact_recall"
-        low = text.lower()
-        if any(pattern.search(low) for pattern in _CONTEXTUAL_RECALL_RULES):
-            return "contextual_recall"
-        return ""
+        return str(classify_query_recall_profile(str(query_text or "")).mode or "")
 
     @staticmethod
     def _render_memory_recall_mode(recall_mode: str) -> str:
@@ -1257,8 +1593,16 @@ class MemoryManager:
             return "\n".join(
                 [
                     "- mode: contextual_recall",
-                    "- response_rule: prioritize messages, summaries, and decision/task facts.",
+                    "- response_rule: prioritize dialog episodes, supporting messages, summaries, and decision/task facts.",
                     "- response_rule: answer from remembered discussion context, not as an exact self-fact lookup.",
+                ]
+            )
+        if mode == "document_recall":
+            return "\n".join(
+                [
+                    "- mode: document_recall",
+                    "- response_rule: prioritize document chunks, section summaries, and document claims.",
+                    "- response_rule: do not answer document/code/file questions from ordinary dialog memory if document evidence is present.",
                 ]
             )
         return ""
@@ -1316,34 +1660,40 @@ class MemoryManager:
         text = str(query_text or "").strip().lower()
         if not text:
             return False
-        recall_markers = ("какая", "какой", "какое", "подскажи", "напомни", "скажи", "remember", "remind", "what", "which")
-        self_markers = ("у меня", "мой ", "мою ", "моя ", "моё ", "my ", "mine", "me ")
-        if any(marker in text for marker in self_markers) and any(marker in text for marker in recall_markers):
+        profile = classify_query_recall_profile(text)
+        if bool(profile.self_like):
             return True
-        return any(
-            marker in text
-            for marker in (
-                "видюх",
-                "видеокарт",
-                "карточк",
-                "карта",
-                "python",
-                "питон",
-                "пайтон",
-                "os",
-                "операционк",
-                "винда",
-                "винды",
-                "система",
-                "имя",
-                "возраст",
-                "озу",
-                "ram",
-                "оператив",
-                "оперативк",
-                "оперативы",
-            )
+        follow_up_markers = (
+            "ещё раз",
+            "еще раз",
+            "а сколько",
+            "а какая",
+            "а какой",
+            "а какая у меня",
+            "а какой у меня",
         )
+        domain_markers = (
+            "видюх",
+            "видеокарт",
+            "карточк",
+            "карта",
+            "python",
+            "питон",
+            "пайтон",
+            "os",
+            "операционк",
+            "винда",
+            "винды",
+            "система",
+            "имя",
+            "возраст",
+            "озу",
+            "ram",
+            "оператив",
+            "оперативк",
+            "оперативы",
+        )
+        return any(marker in text for marker in follow_up_markers) and any(marker in text for marker in domain_markers)
 
     def ingest_document(self, request: DocumentIngestRequest) -> DocumentIngestResult:
         with self._lock:
@@ -1442,12 +1792,14 @@ class MemoryManager:
                 level=MemoryLevel.L3_SEMANTIC,
                 scope=fact.scope,
                 namespace=namespace,
-                metadata={
-                    "fact": fact_payload,
-                    "canonical_key": canonical,
-                    "relation": fact.relation,
-                    "write_policy": decision.to_dict(),
-                },
+                metadata=self._strip_debug_metadata(
+                    {
+                        "fact": fact_payload,
+                        "canonical_key": canonical,
+                        "relation": fact.relation,
+                        "write_policy": decision.to_dict(),
+                    }
+                ),
                 importance=float(fact.importance),
                 confidence=float(fact.confidence),
                 created_at=now_ts,
@@ -1464,6 +1816,29 @@ class MemoryManager:
                         target=MemoryStatus.SUPERSEDED,
                         now_ts=now_ts,
                         reason=str(decision.reason or "write_policy_supersede"),
+                    )
+                    superseded = MemoryRecord(
+                        id=superseded.id,
+                        text=superseded.text,
+                        memory_type=superseded.memory_type,
+                        level=superseded.level,
+                        scope=superseded.scope,
+                        namespace=superseded.namespace,
+                        metadata=self._strip_debug_metadata(dict(superseded.metadata or {})),
+                        embedding=list(superseded.embedding or []) if isinstance(superseded.embedding, list) else None,
+                        importance=superseded.importance,
+                        confidence=superseded.confidence,
+                        created_at=superseded.created_at,
+                        updated_at=superseded.updated_at,
+                        expires_at=superseded.expires_at,
+                        status=superseded.status,
+                        version=superseded.version,
+                        parent_id=superseded.parent_id,
+                        chunk_index=superseded.chunk_index,
+                        source_event_id=superseded.source_event_id,
+                        embedding_model=superseded.embedding_model,
+                        embedding_fingerprint=superseded.embedding_fingerprint,
+                        embedding_version=superseded.embedding_version,
                     )
                     self._store.upsert(superseded)
             if existing is not None and str(decision.action or "").strip().lower() == "parallel":
@@ -1497,6 +1872,66 @@ class MemoryManager:
             self._store.upsert(record)
             out.append(fact)
         return out
+
+    def _write_claim_records(
+        self,
+        *,
+        claims: list[ClaimRecord],
+        namespace: str,
+        now_ts: float,
+        event_id: str,
+    ) -> list[ClaimRecord]:
+        out: list[ClaimRecord] = []
+        for claim in list(claims or []):
+            decision = self._decide_claim_promotion(claim=claim, namespace=namespace)
+            if not decision.allow_write:
+                continue
+            record = MemoryRecord(
+                id=f"claim:{uuid.uuid4().hex[:18]}",
+                text=f"{claim.subject}.{claim.predicate}={claim.obj}",
+                memory_type=MemoryType.CLAIM,
+                level=MemoryLevel.L3_SEMANTIC,
+                scope=MemoryScope(str(claim.scope or MemoryScope.CONVERSATION.value)),
+                namespace=namespace,
+                metadata=self._strip_debug_metadata(
+                    {
+                        "claim": claim.to_dict(),
+                        "canonical_key": str(claim.canonical_key or ""),
+                        "topic_keys": list(claim.topic_keys or []),
+                        "trigger_keys": list(claim.trigger_keys or []),
+                        "write_policy": decision.to_dict(),
+                    }
+                ),
+                importance=float(claim.salience or 0.0),
+                confidence=float(claim.confidence or 0.0),
+                created_at=now_ts,
+                updated_at=now_ts,
+                status=MemoryStatus(str(claim.status or MemoryStatus.ACTIVE.value)),
+                source_event_id=str(event_id or claim.source_event_id or ""),
+            )
+            self._store.upsert(record)
+            out.append(claim)
+        return out
+
+    def _decide_claim_promotion(self, *, claim: ClaimRecord, namespace: str) -> ClaimPromotionDecision:
+        existing = self._find_active_claim_by_canonical(namespace=namespace, canonical_key=str(claim.canonical_key or ""))
+        if existing is None:
+            return ClaimPromotionDecision(action="allow", reason="new_claim", allow_write=True)
+
+        old_claim = dict(dict(existing.metadata or {}).get("claim") or {})
+        old_obj = str(old_claim.get("obj") or old_claim.get("object_surface") or "").strip().lower()
+        new_obj = str(claim.obj or claim.object_surface or "").strip().lower()
+        if old_obj and new_obj and old_obj == new_obj:
+            old_conf = float(old_claim.get("confidence") or existing.confidence or 0.0)
+            new_conf = float(claim.confidence or 0.0)
+            if new_conf <= old_conf:
+                return ClaimPromotionDecision(
+                    action="keep_existing",
+                    reason="same_claim_existing_confidence",
+                    allow_write=False,
+                    signals={"old_conf": old_conf, "new_conf": new_conf},
+                )
+        return ClaimPromotionDecision(action="allow", reason="claim_refresh", allow_write=True)
 
     def _find_active_fact_candidates_for_write(self, *, namespace: str, fact: FactRecordV2) -> list[MemoryRecord]:
         rows = self._store.iter_records(namespace=namespace)
@@ -1544,6 +1979,21 @@ class MemoryManager:
             return None
         for row in rows:
             if row.memory_type != MemoryType.FACT:
+                continue
+            if row.status != MemoryStatus.ACTIVE:
+                continue
+            existing = str(dict(row.metadata or {}).get("canonical_key") or "").strip().lower()
+            if existing == key:
+                return row
+        return None
+
+    def _find_active_claim_by_canonical(self, *, namespace: str, canonical_key: str) -> MemoryRecord | None:
+        rows = self._store.iter_records(namespace=namespace)
+        key = str(canonical_key or "").strip().lower()
+        if not key:
+            return None
+        for row in rows:
+            if row.memory_type != MemoryType.CLAIM:
                 continue
             if row.status != MemoryStatus.ACTIVE:
                 continue
@@ -1679,9 +2129,41 @@ class MemoryManager:
                 or int(next_row.version) != int(row.version)
                 or float(next_row.updated_at) != float(row.updated_at)
             ):
+                # Strip debug metadata from decayed records
+                next_row = MemoryRecord(
+                    id=next_row.id,
+                    text=next_row.text,
+                    memory_type=next_row.memory_type,
+                    level=next_row.level,
+                    scope=next_row.scope,
+                    namespace=next_row.namespace,
+                    metadata=self._strip_debug_metadata(next_row.metadata),
+                    embedding=list(next_row.embedding or []) if isinstance(next_row.embedding, list) else None,
+                    importance=next_row.importance,
+                    confidence=next_row.confidence,
+                    created_at=next_row.created_at,
+                    updated_at=next_row.updated_at,
+                    expires_at=next_row.expires_at,
+                    status=next_row.status,
+                    version=next_row.version,
+                    parent_id=next_row.parent_id,
+                    chunk_index=next_row.chunk_index,
+                )
                 changed.append(next_row)
         if changed:
             self._store.batch_upsert(changed)
+
+    def _strip_debug_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """Remove debug/runtime fields from metadata before storage.
+
+        In compact profile, also apply full compaction via MemoryPolicy._compact_metadata().
+        """
+        if not isinstance(metadata, dict):
+            return metadata
+        return sanitize_storage_metadata(
+            metadata=dict(metadata or {}),
+            storage_profile=self._storage_profile,
+        )
 
     def _default_retrieval_scopes(self) -> list[MemoryScope]:
         return [
@@ -1696,7 +2178,7 @@ class MemoryManager:
     def _initial_level(self, memory_type: MemoryType) -> MemoryLevel:
         if memory_type in {MemoryType.DOCUMENT, MemoryType.DOCUMENT_CHUNK}:
             return MemoryLevel.L4_DOCUMENT
-        if memory_type == MemoryType.FACT:
+        if memory_type in {MemoryType.FACT, MemoryType.CLAIM}:
             return MemoryLevel.L3_SEMANTIC
         if memory_type == MemoryType.SUMMARY:
             return MemoryLevel.L1_SESSION
@@ -1725,6 +2207,11 @@ class MemoryManager:
         metadata: dict[str, Any],
         analysis: IngestAnalysis | None,
     ) -> dict[str, Any]:
+        """Merge ingest analysis into metadata.
+
+        Store only essential fields for retrieval and search.
+        Skip verbose analysis details to save storage space.
+        """
         out = dict(metadata or {})
         if analysis is None:
             return out
@@ -1745,23 +2232,89 @@ class MemoryManager:
                 tags.append(token)
             return tags
 
-        emotion_payload = analysis.emotion.to_dict() if analysis.emotion is not None else {}
-        emotion_view = {**dict(emotion_payload or {})}
-        if emotion_view and "label" not in emotion_view:
-            emotion_view["label"] = str(emotion_view.get("primary") or "")
-        out["analysis_version"] = "memory_ingest_v3"
-        out["normalized_text"] = str(analysis.normalized_text or "")
-        out["canonical_text"] = str(analysis.canonical_text or "")
-        out["search_text"] = str(analysis.search_text or "")
-        out["memory_views"] = dict(analysis.memory_views or {})
-        out["memory_entities"] = [item.to_dict() for item in list(analysis.entities or [])]
-        out["numeric_facts"] = [item.to_dict() for item in list(analysis.numeric_facts or [])]
-        out["stable_facts"] = [item.to_dict() for item in list(analysis.stable_facts or [])]
-        out["emotion_profile"] = emotion_view
+        def _compact_claims() -> list[dict[str, Any]]:
+            rows: list[dict[str, Any]] = []
+            seen: set[tuple[str, str, str]] = set()
+            for item in list(analysis.claim_candidates or []):
+                subject = str(item.subject or "").strip().lower()
+                predicate = str(item.predicate or "").strip().lower()
+                obj = str(item.normalized_object or item.object_surface or "").strip()
+                if not subject or not predicate or not obj:
+                    continue
+                key = (subject, predicate, obj.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                row = {
+                    "subject": subject,
+                    "predicate": predicate,
+                    "obj": obj,
+                    "object_surface": str(item.object_surface or "").strip(),
+                    "object_type": str(item.object_type or "").strip().lower(),
+                    "topic_keys": [str(x).strip().lower() for x in list(item.topic_keys or []) if str(x).strip()][:6],
+                    "trigger_keys": [str(x).strip().lower() for x in list(item.trigger_keys or []) if str(x).strip()][:6],
+                    "confidence": round(float(item.confidence or 0.0), 4),
+                }
+                rows.append(row)
+            return rows
+
+        def _compact_emotion_profile() -> dict[str, Any]:
+            if analysis.emotion is None:
+                return {}
+            primary = str(analysis.emotion.primary or "").strip()
+            label = primary
+            out: dict[str, Any] = {}
+            if primary:
+                out["primary"] = primary
+                out["label"] = label
+            try:
+                intensity = float(analysis.emotion.intensity or 0.0)
+            except Exception:
+                intensity = 0.0
+            try:
+                confidence = float(analysis.emotion.confidence or 0.0)
+            except Exception:
+                confidence = 0.0
+            if intensity > 0.0:
+                out["intensity"] = round(intensity, 4)
+            if confidence > 0.0:
+                out["confidence"] = round(confidence, 4)
+            return out
+
+        # Store only compact retrieval keys in memory_views.
+        entity_keys = list(analysis.memory_views.get("entity_keys") or [])
+        numeric_keys = list(analysis.memory_views.get("numeric_keys") or [])
+        if entity_keys or numeric_keys:
+            compact_views: dict[str, Any] = {}
+            if entity_keys:
+                compact_views["entity_keys"] = entity_keys
+            if numeric_keys:
+                compact_views["numeric_keys"] = numeric_keys
+            if compact_views:
+                out["memory_views"] = compact_views
+
+        # Only store non-empty lists
+        memory_entities = [item.to_dict() for item in list(analysis.entities or [])]
+        if memory_entities:
+            out["memory_entities"] = memory_entities
+
+        numeric_facts = [item.to_dict() for item in list(analysis.numeric_facts or [])]
+        if numeric_facts:
+            out["numeric_facts"] = numeric_facts
+
+        claims = _compact_claims()
+        if claims:
+            out["claims"] = claims
+
+        stable_facts = [item.to_dict() for item in list(analysis.stable_facts or [])]
+        if stable_facts:
+            out["stable_facts"] = stable_facts
+
+        emotion_view = _compact_emotion_profile()
         if emotion_view:
-            out["emotion"] = emotion_view
+            out["emotion_profile"] = emotion_view
+
         out["memory_tags"] = _merge_tags(out.get("memory_tags"), list(analysis.tags or []))
-        out["memory_analysis"] = analysis.to_dict()
         return out
 
     def _augment_message_metadata(
@@ -1772,6 +2325,11 @@ class MemoryManager:
         namespace: str,
         preview_facts: list[FactRecordV2],
     ) -> dict[str, Any]:
+        """Augment metadata with signal analysis for lifecycle decisions.
+
+        Do NOT store promotion signals - they are computed for decision-making
+        only and should not be persisted to save storage space.
+        """
         out = dict(metadata or {})
         recent = [
             str(row.text or "")
@@ -1791,46 +2349,14 @@ class MemoryManager:
             }
         )
         facts_count = len(list(preview_facts or []))
-        relation_weights = {
-            "decision": 0.24,
-            "issue": 0.22,
-            "task": 0.20,
-            "project": 0.18,
-            "preference": 0.18,
-            "environment": 0.14,
-            "identity": 0.10,
-            "temporary": 0.06,
-            "resolved": 0.12,
-            "unresolved": 0.12,
-        }
-        relation_bonus = sum(float(relation_weights.get(name, 0.08)) for name in fact_relations)
-        fact_signal = self._clamp01((0.24 * min(3, facts_count)) + min(0.52, relation_bonus))
-        fact_relation_diversity = self._clamp01(float(len(fact_relations)) / 3.0)
 
-        out["promotion_project_signal"] = self._meta_float(out, "promotion_project_signal", signal.project_relevance)
-        out["promotion_task_signal"] = self._meta_float(out, "promotion_task_signal", signal.task_intent)
-        out["promotion_decision_signal"] = self._meta_float(out, "promotion_decision_signal", signal.decision_signal)
-        out["promotion_preference_signal"] = self._meta_float(
-            out, "promotion_preference_signal", signal.preference_signal
-        )
-        out["promotion_issue_signal"] = self._meta_float(out, "promotion_issue_signal", signal.issue_signal)
-        out["promotion_technical_signal"] = self._meta_float(
-            out, "promotion_technical_signal", signal.technical_relevance
-        )
-        out["promotion_repeated_topic_signal"] = self._meta_float(
-            out, "promotion_repeated_topic_signal", signal.repeated_theme
-        )
-        out["promotion_smalltalk_signal"] = self._meta_float(out, "promotion_smalltalk_signal", signal.smalltalk)
-        out["promotion_signal_score"] = self._meta_float(out, "promotion_signal_score", signal.meaningful_signal)
-        out["promotion_stable_fact_signal"] = self._meta_float(
-            out, "promotion_stable_fact_signal", signal.stable_fact_signal
-        )
-        out["promotion_fact_signal"] = self._meta_float(out, "promotion_fact_signal", fact_signal)
-        out["promotion_fact_relation_diversity"] = self._meta_float(
-            out, "promotion_fact_relation_diversity", fact_relation_diversity
-        )
-        out["extracted_facts_count"] = int(max(0, self._to_int(out.get("extracted_facts_count"), facts_count)))
-        out["extracted_fact_relations"] = list(fact_relations)[:16]
+        # Do NOT store promotion signals - they are runtime-only for lifecycle decisions
+        # Only store fact relations for reference (useful for debugging/analysis)
+        if fact_relations:
+            out["fact_relations"] = list(fact_relations)[:16]
+        if facts_count > 0:
+            out["facts_count"] = facts_count
+
         return out
 
     def _attach_lifecycle_debug(
@@ -1840,8 +2366,13 @@ class MemoryManager:
         lifecycle_decision: LifecycleDecision,
         extracted_facts_count: int,
     ) -> MemoryRecord:
+        """Attach lifecycle decision to metadata.
+
+        Store only minimal decision info for runtime use.
+        Full debug info is logged but not persisted to save storage.
+        """
         meta = dict(record.metadata or {})
-        debug_payload = dict(lifecycle_decision.decision_debug or {})
+        # Store only essential lifecycle decision fields (no promotion_debug)
         lifecycle_payload = {
             "reason": str(lifecycle_decision.reason or ""),
             "route": str(lifecycle_decision.route or ""),
@@ -1851,19 +2382,16 @@ class MemoryManager:
             "mark_status": (
                 str(lifecycle_decision.mark_status.value) if lifecycle_decision.mark_status is not None else None
             ),
-            "importance": float(record.importance),
-            "confidence": float(record.confidence),
-            "extracted_facts_count": int(max(0, extracted_facts_count)),
-            "promotion_debug": dict(debug_payload or {}),
         }
         updated_meta = {
             **meta,
-            "extracted_facts_count": int(
-                max(0, self._to_int(meta.get("extracted_facts_count"), extracted_facts_count))
-            ),
-            "lifecycle_decision": lifecycle_payload,
-            "promotion_debug": dict(debug_payload or {}),
+            "lifecycle_reason": lifecycle_payload["reason"],
+            "lifecycle_route": lifecycle_payload["route"],
         }
+        if lifecycle_decision.promote_to is not None:
+            updated_meta["promoted_to"] = lifecycle_payload["promote_to"]
+        if lifecycle_decision.mark_status is not None:
+            updated_meta["mark_status"] = lifecycle_payload["mark_status"]
         return self._clone_record_with_metadata(record, metadata=updated_meta)
 
     @staticmethod
@@ -1933,6 +2461,7 @@ class MemoryManager:
         reason: str,
         decision: AssistantWriteDecision,
     ) -> None:
+        """Record skipped ingest event (event store only, not in memory metadata)."""
         self._event_store.append(
             {
                 "event_id": event_id,
@@ -1950,7 +2479,8 @@ class MemoryManager:
                     "record_id": str(record_id or ""),
                     "namespace": str(namespace or "default"),
                     "reason": str(reason or ""),
-                    "assistant_write_policy": decision.to_dict(),
+                    "assistant_write_action": str(decision.action or "allow"),
+                    "assistant_write_reason": str(decision.reason or ""),
                     "request_id": str(metadata.get("request_id") or ""),
                     "turn_id": str(metadata.get("turn_id") or ""),
                     "conversation_id": str(metadata.get("conversation_id") or namespace),
@@ -1964,6 +2494,7 @@ class MemoryManager:
             summary=(
                 f"type={event.memory_type.value} scope={event.scope.value} "
                 f"reason={str(reason or 'skipped')} "
+                f"write_action={str(decision.action or 'allow')} "
                 f"factual_mode={str(dict(decision.signals or {}).get('factual_mode') or '-')} "
                 f"confidence={float(dict(decision.signals or {}).get('final_factual_confidence') or 0.0):.3f}"
             ),
@@ -1973,10 +2504,11 @@ class MemoryManager:
             memory_type=str(event.memory_type.value),
             source_kind=str(metadata.get("source_kind") or ""),
             reason=str(reason or ""),
+            write_action=str(decision.action or "allow"),
+            write_reason=str(decision.reason or ""),
             factual_mode=str(dict(decision.signals or {}).get("factual_mode") or ""),
             final_factual_confidence=float(dict(decision.signals or {}).get("final_factual_confidence") or 0.0),
             conflict_severity=float(dict(decision.signals or {}).get("conflict_severity") or 0.0),
-            assistant_write_policy=decision.to_dict(),
         )
 
     @staticmethod
@@ -1987,10 +2519,10 @@ class MemoryManager:
         scope: MemoryScope,
         decision: AssistantWriteDecision,
     ) -> LifecycleDecision:
-        debug_payload = dict(lifecycle_decision.decision_debug or {})
-        debug_payload["promotion_disabled_by_write_policy"] = True
-        debug_payload["assistant_write_policy"] = decision.to_dict()
-        debug_payload["effective_scope"] = str(scope.value)
+        """Create lifecycle decision without promotion (runtime-only).
+
+        Do not store debug payload - it's used for logging only.
+        """
         return LifecycleDecision(
             promote_to=None,
             mark_status=lifecycle_decision.mark_status,
@@ -1999,7 +2531,6 @@ class MemoryManager:
             route="assistant_write_policy",
             next_version=lifecycle_decision.next_version,
             chain_parent_id=lifecycle_decision.chain_parent_id,
-            decision_debug=debug_payload,
         )
 
     def _importance_score(self, *, text: str, metadata: dict[str, Any], namespace: str) -> float:
@@ -2121,4 +2652,3 @@ class MemoryManager:
             "working_records": [x.to_dict() for x in list(self._working_records or [])],
         }
         self._state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-

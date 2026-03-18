@@ -1,6 +1,16 @@
 from __future__ import annotations
 
 from memory.auto_migration import run_auto_migration
+from memory.claim_models import ClaimCandidate, ClaimPromotionDecision, ClaimRecord
+from memory.claim_promoter import decide_claim_promotion, promote_claim_candidates
+from memory.document_chunker import ChunkingConfig, DocumentChunker
+from memory.claim_retrieval import ClaimRetriever
+from memory.dialog_episode_builder import DialogEpisodeBoundary, DialogEpisodeBuilder, DialogTurn
+from memory.dialog_episode_models import DialogEpisode
+from memory.dialog_episode_retriever import DialogEpisodeHit, DialogEpisodeRetriever, DialogEpisodeQueryHints, DialogSupportingTurn
+from memory.document_ingest import DocumentChunkAnalysis, DocumentIngestArtifacts, DocumentIngestPipeline, DocumentOutline
+from memory.document_models import DocumentChunk, DocumentClaim, DocumentRecord, DocumentSummary
+from memory.document_retrieval import DocumentRetrievalHit, DocumentRetriever, DocumentRetrievalHints
 from memory.document_memory import DocumentMemory
 from memory.embedding_provider import build_embedding_provider
 from memory.fact_extractor import FactExtractor
@@ -22,7 +32,6 @@ from memory.memory_models import (
     ContextBuildResult,
     DocumentIngestRequest,
     DocumentIngestResult,
-    DocumentRecord,
     EmbeddingProvider,
     IngestResult,
     LexicalIndexBackend,
@@ -64,11 +73,37 @@ __all__ = [
     "DocumentIngestRequest",
     "DocumentIngestResult",
     "DocumentRecord",
+    "DocumentChunk",
+    "DocumentSummary",
+    "DocumentClaim",
+    "DocumentRetrievalHints",
+    "DocumentRetrievalHit",
+    "DocumentRetriever",
     "ChunkRecord",
     "VectorStore",
     "EMBED_VERSION",
     "embed_text",
     "FactExtractor",
+    "ClaimCandidate",
+    "ClaimRecord",
+    "ClaimPromotionDecision",
+    "decide_claim_promotion",
+    "promote_claim_candidates",
+    "ClaimRetriever",
+    "ChunkingConfig",
+    "DialogTurn",
+    "DialogEpisodeBoundary",
+    "DialogEpisodeBuilder",
+    "DialogEpisode",
+    "DialogEpisodeQueryHints",
+    "DialogSupportingTurn",
+    "DialogEpisodeHit",
+    "DialogEpisodeRetriever",
+    "DocumentChunkAnalysis",
+    "DocumentOutline",
+    "DocumentIngestArtifacts",
+    "DocumentIngestPipeline",
+    "DocumentChunker",
     "DocumentMemory",
     "LongMemoryV2",
     "MemoryPolicy",

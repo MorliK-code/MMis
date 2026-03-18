@@ -7,6 +7,18 @@ from typing import Any
 from modules.nlu.normalizer import normalize_text
 from modules.nlu.types import Fact
 from memory.memory_models import FactRecordV2, MemoryRecord, MemoryScope, MemorySourceKind, MemoryType
+from memory.storage_profile import compact_metadata_payload, sanitize_storage_metadata
+
+
+def _is_empty_value(value: Any) -> bool:
+    """Check if a value is empty (None, empty string, empty list, empty dict)."""
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    if isinstance(value, (list, dict)) and len(value) == 0:
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -26,6 +38,7 @@ class AssistantWriteDecision:
         return self.allow_store and self.target_scope not in {MemoryScope.TEMPORARY, MemoryScope.PRIVATE_RUNTIME}
 
     def to_dict(self) -> dict[str, Any]:
+        """Compact dict for storage (without signals)."""
         return {
             "action": str(self.action or "").strip().lower() or "allow",
             "reason": str(self.reason or "").strip(),
@@ -37,6 +50,12 @@ class AssistantWriteDecision:
             "allow_store": bool(self.allow_store),
             "allow_long_term": bool(self.allow_long_term),
             "allow_fact_records": bool(self.allow_fact_records),
+        }
+
+    def to_dict_debug(self) -> dict[str, Any]:
+        """Full dict with signals for debug logging."""
+        return {
+            **self.to_dict(),
             "signals": dict(self.signals or {}),
         }
 
@@ -594,7 +613,28 @@ class MemoryPolicy:
         metadata: dict[str, Any] | None,
         source_kind: MemorySourceKind,
         thinking: str = "",
+        storage_profile: str = "compact",
+        compact_for_storage: bool = True,
     ) -> dict[str, Any]:
+        """Sanitize metadata for storage.
+
+        Args:
+            metadata: Raw metadata dict
+            source_kind: Source kind for the record
+            thinking: Optional thinking/reasoning text to strip
+            storage_profile: "compact" (default) or "debug"
+
+        compact profile:
+            - Strip debug-only fields
+            - Remove duplicate text projections from metadata
+            - Remove memory_analysis entirely
+            - Keep only compact emotion_profile
+            - Keep only non-empty lists/dicts
+            - Strip assistant_write_policy.signals
+
+        debug profile:
+            - Keep all fields for debugging
+        """
         out = dict(metadata or {})
         hidden = str(thinking or out.get("thinking") or "").strip()
         legacy_entities = out.pop("entities", None)
@@ -602,14 +642,28 @@ class MemoryPolicy:
             out["runtime_entities"] = legacy_entities
             out["legacy_runtime_entities_stripped"] = True
         out.pop("thinking", None)
+        # Tags stored at top-level, not in metadata
+        out.pop("tags", None)
         out["source_kind"] = str(source_kind.value)
         if source_kind in {MemorySourceKind.ASSISTANT_REPLY, MemorySourceKind.ASSISTANT_THOUGHT} and hidden:
             out["assistant_thinking_stripped"] = True
+
+        if compact_for_storage:
+            return sanitize_storage_metadata(metadata=out, storage_profile=storage_profile)
         return out
+
+    @staticmethod
+    def _compact_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+        """Compact metadata for storage by removing duplicates and debug-only fields."""
+        return compact_metadata_payload(metadata)
 
     @staticmethod
     def allow_fact_records_for_source(*, source_kind: MemorySourceKind) -> bool:
         return source_kind != MemorySourceKind.ASSISTANT_THOUGHT
+
+    @staticmethod
+    def allow_claim_records_for_source(*, source_kind: MemorySourceKind) -> bool:
+        return source_kind == MemorySourceKind.USER
 
     def is_fact_allowed_for_source(
         self,

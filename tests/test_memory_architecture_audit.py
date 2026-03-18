@@ -17,6 +17,8 @@ from memory import (
     DocumentSummary,
     analyze_message_for_memory,
 )
+from memory.claim_extractor import promote_claim_candidates as legacy_promote_claim_candidates
+from memory.claim_promoter import promote_claim_candidates
 
 
 def test_memory_layers_are_importable() -> None:
@@ -46,3 +48,7 @@ def test_claim_layer_is_connected_to_ingest() -> None:
         str(item.predicate or "").strip().lower() == "uses"
         for item in list(analysis.claim_candidates or [])
     )
+
+
+def test_claim_extractor_legacy_shim_points_to_claim_promoter() -> None:
+    assert legacy_promote_claim_candidates is promote_claim_candidates

@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--type",
         dest="memory_type",
         default="",
-        help="Filter by memory type: message, fact, summary, document, document_chunk, tool_result, task_state",
+        help="Filter by memory type: message, fact, claim, summary, document, document_chunk, tool_result, task_state",
     )
     parser.add_argument(
         "--status",
@@ -152,6 +152,7 @@ def _record_payload(record: MemoryRecord, *, include_full_metadata: bool, includ
             "emotion_profile": meta.get("emotion_profile"),
             "memory_entities": meta.get("memory_entities"),
             "numeric_facts": meta.get("numeric_facts"),
+            "claims": meta.get("claims") or meta.get("claim_candidates"),
             "stable_facts": meta.get("stable_facts"),
         }
     return payload

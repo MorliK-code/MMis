@@ -5,15 +5,14 @@ from __future__ import annotations
 import re
 import time
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from memory.document_chunker import ChunkingConfig, DocumentChunker
+from memory.document_models import DocumentChunk, DocumentRecord
 from memory.memory_models import (
-    ChunkRecord,
     DocumentIngestRequest,
     DocumentIngestResult,
-    DocumentRecord,
     MemoryLevel,
     MemoryRecord,
     MemoryType,
@@ -32,16 +31,11 @@ _CODE_EXT_LANG = {
 }
 
 
-@dataclass
-class ChunkingConfig:
-    chunk_size: int = 1200
-    chunk_overlap: int = 160
-
-
 class DocumentMemory:
     def __init__(self, *, store: VectorStore, chunking: ChunkingConfig | None = None):
         self.store = store
         self.chunking = chunking or ChunkingConfig()
+        self._chunker = DocumentChunker(config=self.chunking)
 
     def ingest_document(self, request: DocumentIngestRequest) -> DocumentIngestResult:
         text = str(request.text or "").strip()
@@ -155,24 +149,24 @@ class DocumentMemory:
         title: str = "",
         summary: str = "",
         language: str = "",
-    ) -> list[ChunkRecord]:
+    ) -> list[DocumentChunk]:
         src = str(text or "")
         lang = str(language or "").strip().lower() or self._detect_language(metadata=metadata, text=src)
-        chunks: list[tuple[str, int, int]]
-        if lang:
-            raw = self._chunk_code(src, language=lang, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-            chunks = self._approximate_spans(src, raw)
-        else:
-            chunks = self._chunk_plain_spans(src, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        chunks = self._chunker.chunk_spans(
+            src,
+            language=lang,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
 
-        out: list[ChunkRecord] = []
+        out: list[DocumentChunk] = []
         for idx, payload in enumerate(chunks):
             chunk_text, start_char, end_char = payload
             piece = str(chunk_text or "").strip()
             if not piece:
                 continue
             out.append(
-                ChunkRecord(
+                DocumentChunk(
                     id=f"chunk:{document_id}:{idx}",
                     document_id=document_id,
                     chunk_index=idx,

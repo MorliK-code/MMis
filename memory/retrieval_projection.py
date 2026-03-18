@@ -254,6 +254,28 @@ def _metadata_entity_keys(metadata: dict[str, Any] | None = None) -> list[str]:
             out.append("person")
             if canonical_key:
                 out.append(canonical_key)
+    claim_rows = list(meta.get("claims") or meta.get("claim_candidates") or [])
+    for item in claim_rows:
+        row = dict(item or {})
+        predicate = str(row.get("predicate") or "").strip().lower()
+        object_type = str(row.get("object_type") or "").strip().lower()
+        normalized_object = str(row.get("obj") or row.get("normalized_object") or row.get("object_surface") or "").strip()
+        normalized_key = _slug_key(normalized_object)
+        if predicate:
+            out.append("claim")
+            out.append(predicate)
+        if object_type:
+            out.append(object_type)
+        for token in list(row.get("topic_keys") or []):
+            value = _slug_key(token)
+            if value:
+                out.append(value)
+        for token in list(row.get("trigger_keys") or []):
+            value = _slug_key(token)
+            if value:
+                out.append(value)
+        if normalized_key:
+            out.append(normalized_key)
     fact = dict(meta.get("fact") or {})
     predicate = str(fact.get("predicate") or "").strip().lower()
     value = str(fact.get("value") or "").strip()
@@ -303,6 +325,26 @@ def _metadata_entity_keys(metadata: dict[str, Any] | None = None) -> list[str]:
         out.append("agreed_plan")
         if value_key:
             out.append(value_key)
+    claim = dict(meta.get("claim") or {})
+    claim_predicate = str(claim.get("predicate") or "").strip().lower()
+    claim_object_type = str(claim.get("object_type") or "").strip().lower()
+    claim_object = str(claim.get("obj") or claim.get("object_surface") or "").strip()
+    claim_object_key = _slug_key(claim_object)
+    if claim_predicate:
+        out.append("claim")
+        out.append(claim_predicate)
+    if claim_object_type:
+        out.append(claim_object_type)
+    for token in list(claim.get("topic_keys") or []):
+        value = _slug_key(token)
+        if value:
+            out.append(value)
+    for token in list(claim.get("trigger_keys") or []):
+        value = _slug_key(token)
+        if value:
+            out.append(value)
+    if claim_object_key:
+        out.append(claim_object_key)
     return merge_projection_keys(out)
 
 
@@ -458,9 +500,6 @@ def build_memory_views(text: str, *, metadata: dict[str, Any] | None = None) -> 
     meta = dict(metadata or {})
     existing = dict(meta.get("memory_views") or {})
 
-    normalized_text = str(existing.get("normalized_text") or "").strip() or _normalize_text(text)
-    canonical_text = _preserved_canonical_text(existing.get("canonical_text")) or _canonical_text(text=text, metadata=meta)
-
     entity_keys = merge_projection_keys(
         list(existing.get("entity_keys") or []),
         _metadata_entity_keys(meta),
@@ -472,23 +511,13 @@ def build_memory_views(text: str, *, metadata: dict[str, Any] | None = None) -> 
         extract_query_numeric_keys(text, metadata=meta),
     )
 
-    # Build search projection from the raw record text, not from the previous
-    # derived search_text, otherwise repeated rebuilds self-amplify tokens.
-    search_seed = str(text or "").strip() or normalized_text or canonical_text
-    search_text = build_memory_search_text(
-        search_seed,
-        metadata=meta,
-        entity_keys=entity_keys,
-        numeric_keys=numeric_keys,
-    )
-
-    return {
-        "normalized_text": normalized_text,
-        "canonical_text": canonical_text,
-        "search_text": search_text,
-        "entity_keys": entity_keys,
-        "numeric_keys": numeric_keys,
-    }
+    # Only include non-empty keys
+    views = {}
+    if entity_keys:
+        views["entity_keys"] = entity_keys
+    if numeric_keys:
+        views["numeric_keys"] = numeric_keys
+    return views
 
 
 def ensure_memory_views(text: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -498,6 +527,9 @@ def ensure_memory_views(text: str, metadata: dict[str, Any] | None = None) -> di
 
 
 def record_search_text(text: str, metadata: dict[str, Any] | None = None) -> str:
-    views = build_memory_views(text, metadata=metadata)
-    value = str(views.get("search_text") or "").strip()
-    return value or _normalize_text(text)
+    meta = dict(metadata or {})
+    views = build_memory_views(text, metadata=meta)
+    entity_keys = list(views.get("entity_keys") or [])
+    numeric_keys = list(views.get("numeric_keys") or [])
+    search_text = build_memory_search_text(text, metadata=meta, entity_keys=entity_keys, numeric_keys=numeric_keys)
+    return search_text or _normalize_text(text)

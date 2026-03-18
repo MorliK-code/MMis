@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from memory.claim_models import ClaimCandidate
+
 
 @dataclass(frozen=True)
 class IngestAnchor:
@@ -77,6 +79,7 @@ class IngestAnalysis:
     contextual_resolution: dict[str, Any] = field(default_factory=dict)
     entities: list[EntityItem] = field(default_factory=list)
     numeric_facts: list[NumericFact] = field(default_factory=list)
+    claim_candidates: list[ClaimCandidate] = field(default_factory=list)
     stable_facts: list[StableFact] = field(default_factory=list)
     emotion: IngestEmotion | None = None
     tags: list[str] = field(default_factory=list)
@@ -92,6 +95,7 @@ class IngestAnalysis:
             "contextual_resolution": dict(self.contextual_resolution or {}),
             "entities": [item.to_dict() for item in list(self.entities or [])],
             "numeric_facts": [item.to_dict() for item in list(self.numeric_facts or [])],
+            "claim_candidates": [item.to_dict() for item in list(self.claim_candidates or [])],
             "stable_facts": [item.to_dict() for item in list(self.stable_facts or [])],
             "emotion": (self.emotion.to_dict() if self.emotion is not None else None),
             "tags": [str(x).strip().lower() for x in list(self.tags or []) if str(x).strip()],
@@ -136,6 +140,7 @@ _ENVIRONMENT_ENTITY_TYPES = {
 
 def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> IngestAnalysis:
     from memory.anchor_extractor import extract_anchors
+    from memory.claim_candidate_extractor import extract_claim_candidates
     from memory.contextual_resolver import resolve_anchor_context
     from memory.emotion_profile import detect_memory_emotion
     from memory.entity_resolver import resolve_entities
@@ -151,6 +156,13 @@ def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> In
     contextual = resolve_anchor_context(raw, anchors=anchors)
     entities = resolve_entities(raw, metadata=meta, anchors=anchors, context=contextual.to_dict())
     numeric_facts = extract_numeric_facts(raw, entities=entities, anchors=anchors, context=contextual.to_dict())
+    claim_candidates = extract_claim_candidates(
+        raw,
+        entities=entities,
+        numeric_facts=numeric_facts,
+        anchors=anchors,
+        context=contextual.to_dict(),
+    )
     stable_facts = synthesize_stable_facts(
         raw,
         entities=entities,
@@ -167,12 +179,14 @@ def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> In
             "contextual_resolution": dict(contextual.to_dict()),
             "memory_entities": [item.to_dict() for item in list(entities or [])],
             "numeric_facts": [item.to_dict() for item in list(numeric_facts or [])],
+            "claim_candidates": [item.to_dict() for item in list(claim_candidates or [])],
             "memory_views": dict(views or {}),
         },
     )
     tags = build_tags_from_analysis(
         entities=entities,
         numeric_facts=numeric_facts,
+        claim_candidates=claim_candidates,
         stable_facts=stable_facts,
         emotion=emotion,
     )
@@ -186,6 +200,7 @@ def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> In
         contextual_resolution=contextual.to_dict(),
         entities=entities,
         numeric_facts=numeric_facts,
+        claim_candidates=claim_candidates,
         stable_facts=stable_facts,
         emotion=emotion,
         tags=tags,
@@ -197,6 +212,7 @@ def build_tags_from_analysis(
     *,
     entities: list[EntityItem],
     numeric_facts: list[NumericFact],
+    claim_candidates: list[ClaimCandidate] | None = None,
     stable_facts: list[StableFact] | None = None,
     emotion: IngestEmotion | None = None,
 ) -> list[str]:
@@ -235,6 +251,18 @@ def build_tags_from_analysis(
             _add("topic_environment")
         elif kind in {"age_years"}:
             _add("topic_identity")
+
+    for item in list(claim_candidates or []):
+        predicate = _slug(item.predicate)
+        if predicate:
+            _add(f"claim_{predicate}")
+        for key in list(item.topic_keys or []):
+            topic = _slug(key)
+            if topic:
+                _add(f"claim_topic_{topic}")
+        normalized_object = _slug(item.normalized_object or item.object_surface)
+        if normalized_object and predicate:
+            _add(f"claim_object_{predicate}_{normalized_object}")
 
     for item in list(stable_facts or []):
         predicate = _slug(item.predicate)
