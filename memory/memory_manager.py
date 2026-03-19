@@ -19,6 +19,12 @@ from memory.embedding_provider import build_embedding_provider
 from memory.event_store import EventStore
 from memory.fact_extractor import FactExtractor
 from memory.governor import GovernorProfileSnapshot, MemoryGovernor
+from memory.identity_core import (
+    IdentityCoreCandidate,
+    IdentityCoreManager,
+    IdentityCoreRecord,
+    IdentityCoreSnapshot,
+)
 from memory.ingest_analyzer import IngestAnalysis, analyze_message_for_memory
 from memory.long_memory import LongMemoryV2
 from memory.memory_debug import BasicMemoryDebugger
@@ -147,7 +153,10 @@ _FACT_EXPECTATION_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...
 _CONTEXTUAL_RECALL_RULES: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:о чем|о ч[её]м|what did we|what were we|what did we discuss)", re.I),
     re.compile(r"(?:что мы обсуждали|что обсуждали|что решили|what we decided|what did we decide)", re.I),
-    re.compile(r"(?:почему так сделали|why did we do that|why we did that)", re.I),
+    re.compile(
+        r"(?:почему (?:так сделали|(?:мы\s+)?(?:решили|выбрали))|why did we (?:do that|decide|choose)|why we (?:did that|decided|chose))",
+        re.I,
+    ),
     re.compile(r"(?:что ты советовала|what did you suggest|what did you advise)", re.I),
 )
 _DOCUMENT_RECALL_RULES: tuple[re.Pattern[str], ...] = (
@@ -290,6 +299,7 @@ class MemoryManager:
         )
         self._long_memory = LongMemoryV2(store=self._store, document_memory=self._document_memory)
         self._debugger: MemoryDebugger = BasicMemoryDebugger(store=self._store)
+        self._identity_core_manager = IdentityCoreManager()
         # Phase 1 extension point: real compressor can be injected in next phases.
         self._context_compressor: ContextCompressor | None = None
 
@@ -300,6 +310,7 @@ class MemoryManager:
         self._active_preferences: list[str] = []
         self._private_runtime: dict[str, dict[str, Any]] = {}
         self._governor_profile_snapshots: dict[str, GovernorProfileSnapshot] = {}
+        self._identity_core_snapshots: dict[str, IdentityCoreSnapshot] = {}
 
         self._temporary_ttl_sec = int(getattr(self._cfg, "memory_temporary_ttl_sec", 3600) or 3600)
         self._private_runtime_ttl_sec = int(getattr(self._cfg, "memory_private_runtime_ttl_sec", 900) or 900)
@@ -458,6 +469,7 @@ class MemoryManager:
             preview_facts: list[FactRecordV2] = []
             source_preview_facts: list[FactRecordV2] = []
             preview_claims: list[ClaimRecord] = []
+            preview_identity_core_candidates: list[IdentityCoreCandidate] = []
             ingest_analysis: IngestAnalysis | None = None
             if memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY} and scope != MemoryScope.PRIVATE_RUNTIME:
                 # Long-term memory extraction must be text-first and memory-layer-owned.
@@ -502,6 +514,12 @@ class MemoryManager:
                     metadata=metadata,
                     namespace=namespace,
                     preview_facts=(source_preview_facts or preview_facts),
+                )
+                preview_identity_core_candidates = self._build_identity_core_message_candidates(
+                    text=text,
+                    metadata=metadata,
+                    source_role=str(event.role or "user"),
+                    now_ts=now_ts,
                 )
 
             assistant_write_decision = AssistantWriteDecision(reason="not_applicable")
@@ -558,6 +576,7 @@ class MemoryManager:
             promoted_ids: list[str] = []
             extracted_facts: list[FactRecordV2] = []
             extracted_claims: list[ClaimRecord] = []
+            extracted_identity_core_ids: list[str] = []
             if not assistant_write_decision.allow_store:
                 self._record_ingest_skip(
                     event_id=event_id,
@@ -711,6 +730,17 @@ class MemoryManager:
                     now_ts=now_ts,
                     event_id=event_id,
                 )
+            if scope != MemoryScope.PRIVATE_RUNTIME:
+                identity_core_candidates = list(preview_identity_core_candidates or [])
+                if identity_core_candidates:
+                    extracted_identity_core_ids = self._write_identity_core_records(
+                        candidates=identity_core_candidates,
+                        namespace=namespace,
+                        now_ts=now_ts,
+                        event_id=event_id,
+                        source_role=str(event.role or "user"),
+                        source_kind=str(metadata.get("source_kind") or source_kind.value or "structured_fact"),
+                    )
 
             self._event_store.append(
                 {
@@ -736,6 +766,7 @@ class MemoryManager:
                         ),
                         "preview_facts_count": int(len(preview_facts)),
                         "preview_claims_count": int(len(preview_claims)),
+                        "preview_identity_core_count": int(len(preview_identity_core_candidates)),
                         "assistant_write_action": str(assistant_write_decision.action or "allow"),
                         "assistant_write_reason": str(assistant_write_decision.reason or ""),
                         "request_id": str(metadata.get("request_id") or ""),
@@ -752,7 +783,7 @@ class MemoryManager:
             "memory_v2_ingest",
             summary=(
                 f"type={memory_type.value} scope={scope.value} stored={len(stored_ids)} "
-                f"facts={len(extracted_facts)} claims={len(extracted_claims)} promotions={len(promoted_ids)} "
+                f"facts={len(extracted_facts)} claims={len(extracted_claims)} identity_core={len(extracted_identity_core_ids)} promotions={len(promoted_ids)} "
                 f"reason={str(lifecycle_decision.reason or '-')} "
                 f"write_action={str(assistant_write_decision.action or 'allow')} "
                 f"write_reason={str(assistant_write_decision.reason or '-')}"
@@ -766,6 +797,7 @@ class MemoryManager:
             promoted=len(promoted_ids),
             facts=len(extracted_facts),
             claims=len(extracted_claims),
+            identity_core=len(extracted_identity_core_ids),
             promotion_reason=str(lifecycle_decision.reason or ""),
             promotion_route=str(lifecycle_decision.route or ""),
             assistant_write_action=str(assistant_write_decision.action or "allow"),
@@ -960,6 +992,9 @@ class MemoryManager:
             truncation_log=[dict(x) for x in list(result.truncation_log or [])],
             fact_expectation=dict(result.fact_expectation or {}),
             self_facts_context=dict(result.self_facts_context or {}),
+            dialog_episode_hits=[row.to_dict() for row in list(dialog_hits or [])],
+            open_questions=[str(x) for x in list(self._open_questions or []) if str(x).strip()],
+            current_decisions=[str(x) for x in list(self._current_decisions or []) if str(x).strip()],
             recall_mode=str(result.recall_mode or ""),
         )
         self_facts_context = self._build_self_facts_context(
@@ -983,6 +1018,9 @@ class MemoryManager:
                 truncation_log=[dict(x) for x in list(result.truncation_log or [])],
                 fact_expectation=fact_expectation,
                 self_facts_context=self_facts_context,
+                dialog_episode_hits=[dict(x) for x in list(result.dialog_episode_hits or [])],
+                open_questions=[str(x) for x in list(result.open_questions or []) if str(x).strip()],
+                current_decisions=[str(x) for x in list(result.current_decisions or []) if str(x).strip()],
                 recall_mode=recall_mode,
             )
         elif recall_mode:
@@ -998,6 +1036,9 @@ class MemoryManager:
                 truncation_log=[dict(x) for x in list(result.truncation_log or [])],
                 fact_expectation=fact_expectation,
                 self_facts_context=self_facts_context,
+                dialog_episode_hits=[dict(x) for x in list(result.dialog_episode_hits or [])],
+                open_questions=[str(x) for x in list(result.open_questions or []) if str(x).strip()],
+                current_decisions=[str(x) for x in list(result.current_decisions or []) if str(x).strip()],
                 recall_mode=recall_mode,
             )
         self._debugger.record_retrieval_trace(
@@ -1739,6 +1780,7 @@ class MemoryManager:
             # Runtime-only state should not survive session termination.
             self._private_runtime = {}
             self._governor_profile_snapshots = {}
+            self._identity_core_snapshots = {}
             self._save_state()
             self._store.close()
             if hasattr(self._embedding_provider, "close"):
@@ -1771,6 +1813,166 @@ class MemoryManager:
         if not isinstance(cache, dict):
             return None
         return cache.get(str(namespace or "default"))
+
+    def get_identity_core_snapshot(self, namespace: str = "default") -> IdentityCoreSnapshot | None:
+        cache = getattr(self, "_identity_core_snapshots", None)
+        if not isinstance(cache, dict):
+            return None
+        return cache.get(str(namespace or "default"))
+
+    def read_identity_core_records(
+        self,
+        *,
+        namespace: str = "default",
+        key: str = "",
+        status: MemoryStatus | str | None = MemoryStatus.ACTIVE,
+    ) -> list[MemoryRecord]:
+        with self._lock:
+            namespace_norm = str(namespace or "default")
+            key_norm = str(key or "").strip().lower()
+            status_norm = (
+                str(status.value if isinstance(status, MemoryStatus) else status or "").strip().lower()
+            )
+            rows = [
+                row
+                for row in self._latest_records(namespace=namespace_norm)
+                if row.memory_type == MemoryType.IDENTITY_CORE
+            ]
+            if status_norm:
+                rows = [
+                    row for row in rows
+                    if str(
+                        getattr(getattr(row, "status", None), "value", getattr(row, "status", "")) or ""
+                    ).strip().lower() == status_norm
+                ]
+            if key_norm:
+                rows = [
+                    row for row in rows
+                    if str(dict(getattr(row, "metadata", {}) or {}).get("identity_core_key") or "").strip().lower() == key_norm
+                ]
+            return sorted(
+                list(rows),
+                key=lambda row: (
+                    float(getattr(row, "updated_at", 0.0) or 0.0),
+                    float(getattr(row, "created_at", 0.0) or 0.0),
+                    str(getattr(row, "id", "") or ""),
+                ),
+                reverse=True,
+            )
+
+    def rebuild_identity_core_snapshot(self, *, namespace: str = "default") -> IdentityCoreSnapshot | None:
+        with self._lock:
+            return self._refresh_identity_core_snapshot(namespace=namespace)
+
+    def write_identity_core(
+        self,
+        *,
+        candidates: list[IdentityCoreCandidate],
+        namespace: str = "default",
+        now_ts: float | None = None,
+        event_id: str = "",
+        source_role: str = "user",
+        source_kind: str = "identity_core_rule",
+    ) -> list[str]:
+        with self._lock:
+            timestamp = float(now_ts or time.time())
+            event_id_norm = str(event_id or f"identity-core:{uuid.uuid4().hex[:12]}").strip()
+            return self._write_identity_core_records(
+                candidates=list(candidates or []),
+                namespace=str(namespace or "default"),
+                now_ts=timestamp,
+                event_id=event_id_norm,
+                source_role=str(source_role or "user"),
+                source_kind=str(source_kind or "identity_core_rule"),
+            )
+
+    def debug_recent_governor_events(
+        self,
+        *,
+        namespace: str = "default",
+        request_id: str = "",
+        limit: int = 16,
+    ) -> list[dict[str, Any]]:
+        namespace_norm = str(namespace or "default")
+        request_id_norm = str(request_id or "").strip()
+        rows = list(getattr(self, "_event_store").last(max(int(limit or 16) * 8, 64)) or [])
+        out: list[dict[str, Any]] = []
+        for row in reversed(list(rows)):
+            if str(dict(row).get("type") or "").strip() != "memory_governor_decision":
+                continue
+            payload = dict(dict(row).get("payload") or {})
+            if str(payload.get("namespace") or "").strip() != namespace_norm:
+                continue
+            if request_id_norm and str(payload.get("request_id") or "").strip() != request_id_norm:
+                continue
+            out.append(
+                {
+                    "ts": str(row.get("ts") or ""),
+                    "record_id": str(payload.get("record_id") or ""),
+                    "predicate": str(payload.get("predicate") or ""),
+                    "value": payload.get("value"),
+                    "group": str(payload.get("group") or ""),
+                    "group_mode": str(payload.get("group_mode") or ""),
+                    "action": str(payload.get("action") or ""),
+                    "reason": str(payload.get("reason") or ""),
+                    "winner_record_id": str(payload.get("winner_record_id") or ""),
+                    "loser_record_id": str(payload.get("loser_record_id") or ""),
+                    "parallel_with_record_id": str(payload.get("parallel_with_record_id") or ""),
+                    "superseded_record_ids": [
+                        str(x).strip()
+                        for x in list(payload.get("superseded_record_ids") or [])
+                        if str(x).strip()
+                    ],
+                    "winner": dict(payload.get("winner") or {}),
+                    "loser": dict(payload.get("loser") or {}),
+                    "superseded_rows": [dict(x) for x in list(payload.get("superseded_rows") or []) if isinstance(x, dict)],
+                    "request_id": str(payload.get("request_id") or ""),
+                    "trace_id": str(payload.get("trace_id") or ""),
+                }
+            )
+            if len(out) >= max(1, int(limit or 16)):
+                break
+        out.reverse()
+        return out
+
+    def debug_recent_identity_core_events(
+        self,
+        *,
+        namespace: str = "default",
+        request_id: str = "",
+        limit: int = 16,
+    ) -> list[dict[str, Any]]:
+        namespace_norm = str(namespace or "default")
+        request_id_norm = str(request_id or "").strip()
+        rows = list(getattr(self, "_event_store").last(max(int(limit or 16) * 8, 64)) or [])
+        out: list[dict[str, Any]] = []
+        for row in reversed(list(rows)):
+            if str(dict(row).get("type") or "").strip() != "memory_identity_core_decision":
+                continue
+            payload = dict(dict(row).get("payload") or {})
+            if str(payload.get("namespace") or "").strip() != namespace_norm:
+                continue
+            if request_id_norm and str(payload.get("request_id") or "").strip() != request_id_norm:
+                continue
+            out.append(
+                {
+                    "ts": str(row.get("ts") or ""),
+                    "source_event_id": str(payload.get("source_event_id") or ""),
+                    "key": str(payload.get("key") or ""),
+                    "value": payload.get("value"),
+                    "action": str(payload.get("action") or ""),
+                    "reason": str(payload.get("reason") or ""),
+                    "allow_write": bool(payload.get("allow_write", False)),
+                    "explicit_confirmation": bool(payload.get("explicit_confirmation", False)),
+                    "signals": dict(payload.get("signals") or {}),
+                    "candidate": dict(payload.get("candidate") or {}),
+                    "existing": dict(payload.get("existing") or {}),
+                }
+            )
+            if len(out) >= max(1, int(limit or 16)):
+                break
+        out.reverse()
+        return out
 
     def _write_fact_records(
         self,
@@ -1943,9 +2145,214 @@ class MemoryManager:
 
             self._store.upsert(record)
             out.append(fact)
+        if out:
+            identity_core_candidates: list[IdentityCoreCandidate] = []
+            manager = self._identity_core_manager_for_write()
+            for fact in list(out or []):
+                identity_core_candidates.extend(
+                    manager.extract_candidates_from_fact(
+                        fact=fact,
+                        source_role=source_role,
+                        now_ts=now_ts,
+                    )
+                )
+            if identity_core_candidates:
+                self._write_identity_core_records(
+                    candidates=identity_core_candidates,
+                    namespace=namespace,
+                    now_ts=now_ts,
+                    event_id=event_id,
+                    source_role=source_role,
+                    source_kind=source_kind,
+                )
         if facts:
             self._refresh_governor_profile_snapshot(namespace=namespace)
         return out
+
+    def _build_identity_core_message_candidates(
+        self,
+        *,
+        text: str,
+        metadata: dict[str, Any],
+        source_role: str,
+        now_ts: float,
+    ) -> list[IdentityCoreCandidate]:
+        manager = self._identity_core_manager_for_write()
+        return manager.extract_candidates_from_message(
+            text=text,
+            metadata=metadata,
+            source_role=source_role,
+            now_ts=now_ts,
+        )
+
+    def _identity_core_manager_for_write(self) -> IdentityCoreManager:
+        manager = getattr(self, "_identity_core_manager", None)
+        if isinstance(manager, IdentityCoreManager):
+            return manager
+        manager = IdentityCoreManager()
+        self._identity_core_manager = manager
+        return manager
+
+    def _write_identity_core_records(
+        self,
+        *,
+        candidates: list[IdentityCoreCandidate],
+        namespace: str,
+        now_ts: float,
+        event_id: str,
+        source_role: str,
+        source_kind: str,
+    ) -> list[str]:
+        manager = self._identity_core_manager_for_write()
+        written_ids: list[str] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        wrote_any = False
+
+        for candidate in list(candidates or []):
+            if not isinstance(candidate, IdentityCoreCandidate):
+                continue
+            key = str(candidate.record.key or "").strip()
+            normalized_key = str(manager._normalize_key(key) or "").strip()
+            if not normalized_key:
+                continue
+            dedupe_key = (normalized_key, json.dumps(candidate.record.value, ensure_ascii=False, sort_keys=True, default=str))
+            if dedupe_key in seen_pairs:
+                continue
+            seen_pairs.add(dedupe_key)
+
+            existing_rows = self._find_active_identity_core_candidates(
+                namespace=namespace,
+                identity_key=normalized_key,
+            )
+            existing_record = self._pick_primary_identity_core_candidate(existing_rows)
+            existing_payload = (
+                IdentityCoreRecord.from_dict(dict(dict(existing_record.metadata or {}).get("identity_core") or {}))
+                if isinstance(existing_record, MemoryRecord)
+                else None
+            )
+            decision = manager.decide_write(
+                candidate=candidate,
+                existing_record=existing_payload,
+                source_role=source_role,
+            )
+            self._record_identity_core_decision_event(
+                now_ts=now_ts,
+                namespace=namespace,
+                source_event_id=event_id,
+                decision=decision,
+                candidate=candidate,
+                existing_record=existing_record,
+            )
+            if not decision.allow_write:
+                continue
+
+            merged_value = manager.merge_values_for_key(
+                normalized_key,
+                (existing_payload.value if existing_payload is not None else None),
+                candidate.record.value,
+            )
+            final_payload = IdentityCoreRecord(
+                key=normalized_key,
+                value=merged_value,
+                confidence=max(
+                    float(candidate.record.confidence or 0.0),
+                    float(existing_payload.confidence or 0.0) if existing_payload is not None else 0.0,
+                ),
+                source=str(candidate.record.source or ""),
+                requires_confirmation_to_override=bool(decision.requires_confirmation_to_override),
+                updated_at=float(candidate.record.updated_at or now_ts or time.time()),
+            )
+            record = MemoryRecord(
+                id=f"identity_core:{uuid.uuid4().hex[:18]}",
+                text=f"{normalized_key}={merged_value}",
+                memory_type=MemoryType.IDENTITY_CORE,
+                level=MemoryLevel.L3_SEMANTIC,
+                scope=MemoryScope.GLOBAL_USER,
+                namespace=namespace,
+                metadata=self._strip_debug_metadata(
+                    {
+                        "identity_core": final_payload.to_dict(),
+                        "identity_core_key": normalized_key,
+                        "write_policy": decision.to_dict(),
+                        "source_role": str(source_role or "").strip().lower(),
+                        "source_kind": str(source_kind or "").strip().lower(),
+                    },
+                    memory_type=MemoryType.IDENTITY_CORE,
+                ),
+                importance=max(0.72, float(candidate.record.confidence or 0.0)),
+                confidence=float(final_payload.confidence or 0.0),
+                created_at=now_ts,
+                updated_at=now_ts,
+                status=MemoryStatus.ACTIVE,
+                source_event_id=event_id,
+            )
+
+            if existing_rows:
+                for previous in list(existing_rows or []):
+                    transitioned = self._status_transition(
+                        previous,
+                        target=MemoryStatus.SUPERSEDED,
+                        now_ts=now_ts,
+                        reason=str(decision.reason or "identity_core_override"),
+                    )
+                    transitioned = MemoryRecord(
+                        id=transitioned.id,
+                        text=transitioned.text,
+                        memory_type=transitioned.memory_type,
+                        level=transitioned.level,
+                        scope=transitioned.scope,
+                        namespace=transitioned.namespace,
+                        metadata=self._strip_debug_metadata(
+                            dict(transitioned.metadata or {}),
+                            memory_type=transitioned.memory_type,
+                        ),
+                        embedding=list(transitioned.embedding or []) if isinstance(transitioned.embedding, list) else None,
+                        importance=transitioned.importance,
+                        confidence=transitioned.confidence,
+                        created_at=transitioned.created_at,
+                        updated_at=transitioned.updated_at,
+                        expires_at=transitioned.expires_at,
+                        status=transitioned.status,
+                        version=transitioned.version,
+                        parent_id=transitioned.parent_id,
+                        chunk_index=transitioned.chunk_index,
+                        source_event_id=transitioned.source_event_id,
+                        embedding_model=transitioned.embedding_model,
+                        embedding_fingerprint=transitioned.embedding_fingerprint,
+                        embedding_version=transitioned.embedding_version,
+                    )
+                    self._store.upsert(transitioned)
+
+            self._store.upsert(record)
+            written_ids.append(record.id)
+            wrote_any = True
+
+        if wrote_any:
+            self._refresh_identity_core_snapshot(namespace=namespace)
+        return written_ids
+
+    def _find_active_identity_core_candidates(self, *, namespace: str, identity_key: str) -> list[MemoryRecord]:
+        rows = self._latest_records(namespace=namespace)
+        key = str(identity_key or "").strip().lower()
+        out: list[MemoryRecord] = []
+        for row in rows:
+            if row.memory_type != MemoryType.IDENTITY_CORE or row.status != MemoryStatus.ACTIVE:
+                continue
+            record_key = str(dict(row.metadata or {}).get("identity_core_key") or "").strip().lower()
+            if record_key == key:
+                out.append(row)
+        return sorted(
+            out,
+            key=lambda row: (
+                float(dict(dict(row.metadata or {}).get("identity_core") or {}).get("confidence") or row.confidence or 0.0),
+                float(row.updated_at or 0.0),
+            ),
+            reverse=True,
+        )
+
+    @staticmethod
+    def _pick_primary_identity_core_candidate(candidates: list[MemoryRecord]) -> MemoryRecord | None:
+        return candidates[0] if candidates else None
 
     def _write_claim_records(
         self,
@@ -2204,6 +2611,29 @@ class MemoryManager:
         self._record_profile_snapshot_rebuilt_event(namespace=namespace_norm, snapshot=snapshot)
         return snapshot
 
+    def _refresh_identity_core_snapshot(self, *, namespace: str) -> IdentityCoreSnapshot | None:
+        manager = self._identity_core_manager_for_write()
+        namespace_norm = str(namespace or "default")
+        active_rows = [
+            row
+            for row in self._latest_records(namespace=namespace_norm)
+            if row.memory_type == MemoryType.IDENTITY_CORE and row.status == MemoryStatus.ACTIVE
+        ]
+        snapshot = manager.build_snapshot(
+            rows=[
+                dict(dict(row.metadata or {}).get("identity_core") or {})
+                for row in list(active_rows or [])
+                if isinstance(dict(dict(row.metadata or {}).get("identity_core") or {}), dict)
+            ]
+        )
+        cache = getattr(self, "_identity_core_snapshots", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._identity_core_snapshots = cache
+        cache[namespace_norm] = snapshot
+        self._record_identity_core_snapshot_rebuilt_event(namespace=namespace_norm, snapshot=snapshot)
+        return snapshot
+
     def _record_governor_decision_event(
         self,
         *,
@@ -2214,13 +2644,25 @@ class MemoryManager:
         governor_decision: Any,
         active_candidates: list[MemoryRecord],
     ) -> None:
+        record_meta = dict(fact_record.metadata or {})
         fact_meta = dict(dict(fact_record.metadata or {}).get("fact") or {})
+        active_candidate_rows = [self._governor_fact_event_row(row) for row in list(active_candidates or [])]
+        loser_row = next(
+            (
+                row for row in list(active_candidate_rows)
+                if str(row.get("record_id") or "").strip() == str(governor_decision.loser_record_id or "").strip()
+            ),
+            active_candidate_rows[0] if active_candidate_rows else {},
+        )
         self._event_store.append(
             {
                 "ts": now_ts,
                 "type": "memory_governor_decision",
+                "trace_id": str(record_meta.get("trace_id") or ""),
                 "payload": {
                     "namespace": str(namespace or "default"),
+                    "request_id": str(record_meta.get("request_id") or ""),
+                    "trace_id": str(record_meta.get("trace_id") or ""),
                     "source_event_id": str(source_event_id or ""),
                     "record_id": str(fact_record.id or ""),
                     "canonical_key": str(dict(fact_record.metadata or {}).get("canonical_key") or ""),
@@ -2232,10 +2674,17 @@ class MemoryManager:
                     "reason": str(governor_decision.reason or ""),
                     "winner_record_id": str(governor_decision.winner_record_id or ""),
                     "loser_record_id": str(governor_decision.loser_record_id or ""),
+                    "winner": self._governor_fact_event_row(fact_record),
+                    "loser": dict(loser_row or {}),
                     "parallel_with_record_id": str(governor_decision.parallel_with_record_id or ""),
                     "active_candidate_ids": [str(row.id or "") for row in list(active_candidates or [])],
                     "superseded_record_ids": (
                         [str(row.id or "") for row in list(active_candidates or [])]
+                        if str(governor_decision.action or "").strip().lower() == "supersede_old"
+                        else []
+                    ),
+                    "superseded_rows": (
+                        [dict(x) for x in list(active_candidate_rows or [])]
                         if str(governor_decision.action or "").strip().lower() == "supersede_old"
                         else []
                     ),
@@ -2248,6 +2697,20 @@ class MemoryManager:
                 ],
             }
         )
+
+    @staticmethod
+    def _governor_fact_event_row(record: MemoryRecord | None) -> dict[str, Any]:
+        if not isinstance(record, MemoryRecord):
+            return {}
+        meta = dict(record.metadata or {})
+        fact = dict(meta.get("fact") or {})
+        return {
+            "record_id": str(record.id or ""),
+            "predicate": str(fact.get("predicate") or ""),
+            "value": fact.get("value"),
+            "subject": str(fact.get("subject") or ""),
+            "status": str(record.status.value if isinstance(record.status, MemoryStatus) else record.status or ""),
+        }
 
     def _record_profile_snapshot_rebuilt_event(
         self,
@@ -2271,6 +2734,69 @@ class MemoryManager:
                     ],
                 },
                 "tags": ["memory", "profile_snapshot", str(namespace or "default")],
+            }
+        )
+
+    def _record_identity_core_decision_event(
+        self,
+        *,
+        now_ts: float,
+        namespace: str,
+        source_event_id: str,
+        decision: Any,
+        candidate: IdentityCoreCandidate,
+        existing_record: MemoryRecord | None,
+    ) -> None:
+        candidate_payload = dict(candidate.record.to_dict() or {})
+        existing_payload = (
+            dict(dict(existing_record.metadata or {}).get("identity_core") or {})
+            if isinstance(existing_record, MemoryRecord)
+            else {}
+        )
+        self._event_store.append(
+            {
+                "ts": now_ts,
+                "type": "memory_identity_core_decision",
+                "payload": {
+                    "namespace": str(namespace or "default"),
+                    "source_event_id": str(source_event_id or ""),
+                    "key": str(candidate_payload.get("key") or ""),
+                    "value": candidate_payload.get("value"),
+                    "action": str(getattr(decision, "action", "") or ""),
+                    "reason": str(getattr(decision, "reason", "") or ""),
+                    "allow_write": bool(getattr(decision, "allow_write", False)),
+                    "explicit_confirmation": bool(getattr(decision, "explicit_confirmation", False)),
+                    "signals": dict(getattr(decision, "signals", {}) or {}),
+                    "candidate": candidate_payload,
+                    "existing": existing_payload,
+                },
+                "tags": ["memory", "identity_core", str(namespace or "default")],
+            }
+        )
+
+    def _record_identity_core_snapshot_rebuilt_event(
+        self,
+        *,
+        namespace: str,
+        snapshot: IdentityCoreSnapshot,
+    ) -> None:
+        payload = snapshot.to_dict()
+        self._event_store.append(
+            {
+                "ts": float(time.time()),
+                "type": "memory_identity_core_snapshot_rebuilt",
+                "payload": {
+                    "namespace": str(namespace or "default"),
+                    "rebuilt": True,
+                    "keys": {
+                        "addressing": sorted(list(dict(payload.get("addressing") or {}).keys())),
+                        "interaction_style": sorted(list(dict(payload.get("interaction_style") or {}).keys())),
+                        "boundaries": sorted(list(dict(payload.get("boundaries") or {}).keys())),
+                        "emotional_rules": sorted(list(dict(payload.get("emotional_rules") or {}).keys())),
+                        "assistant_trait_baseline": sorted(list(dict(payload.get("assistant_trait_baseline") or {}).keys())),
+                    },
+                },
+                "tags": ["memory", "identity_core_snapshot", str(namespace or "default")],
             }
         )
 

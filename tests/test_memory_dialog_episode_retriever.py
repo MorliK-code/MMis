@@ -249,3 +249,134 @@ def test_dialog_episode_retriever_resolves_supporting_turns_from_turn_ids() -> N
     assert 2 <= len(row.supporting_turns) <= 4
     assert any("SELF_FACTS" in item.text for item in row.supporting_turns)
     assert any(item.role == "assistant" for item in row.supporting_turns)
+
+
+def test_dialog_episode_retriever_finds_anchor_only_episode_when_summary_is_weak() -> None:
+    target_episode = _record(
+        "episode-memory-plan",
+        "Discussed this.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-memory-plan",
+                "topic": "general_dialog",
+                "turn_ids": ["evt:m1", "evt:m2"],
+                "summary_short": "Discussed this.",
+                "summary_reasoning": "We aligned the memory roadmap around facts, claims, and dialog episodes.",
+                "decisions": ["First stabilize memory, then return to web."],
+                "open_questions": ["How should soft singleton groups work?"],
+                "participants": ["user", "assistant"],
+                "salience": 0.88,
+                "topic_keys": ["memory", "plan"],
+                "entity_keys": ["soft_singleton", "memory_governor"],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    distractor_episode = _record(
+        "episode-greeting",
+        "Discussed greetings.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-greeting",
+                "topic": "general_dialog",
+                "turn_ids": ["evt:g1", "evt:g2"],
+                "summary_short": "Discussed greetings.",
+                "summary_reasoning": "We exchanged short greetings.",
+                "decisions": [],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.42,
+                "topic_keys": ["greeting"],
+                "entity_keys": [],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    store = _StoreSpy(records=[target_episode, distractor_episode])
+    retriever = DialogEpisodeRetriever(store=store)
+
+    rows = retriever.retrieve(
+        query=RetrievalQuery(
+            query_text="What was our plan for memory?",
+            search_text="memory plan",
+            top_k=2,
+        )
+    )
+
+    assert rows
+    assert rows[0].record.id == "episode-memory-plan"
+    assert rows[0].source == "episode_anchor_channel"
+    assert "First stabilize memory, then return to web." in rows[0].decisions
+
+
+def test_dialog_episode_retriever_anchor_score_can_beat_weaker_summary_match() -> None:
+    target_episode = _record(
+        "episode-python-policy",
+        "Discussed this.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-python-policy",
+                "topic": "general_dialog",
+                "turn_ids": ["evt:p1", "evt:p2"],
+                "summary_short": "Discussed this.",
+                "summary_reasoning": "We decided singleton latest wins for environment.python to keep active facts canonical.",
+                "decisions": ["Use singleton_latest_wins for environment.python."],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.9,
+                "topic_keys": ["memory", "python"],
+                "entity_keys": ["environment_python", "singleton_latest_wins"],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    distractor_episode = _record(
+        "episode-memory-smalltalk",
+        "Discussed memory setup in general.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-memory-smalltalk",
+                "topic": "memory",
+                "turn_ids": ["evt:s1", "evt:s2"],
+                "summary_short": "Discussed memory setup in general.",
+                "summary_reasoning": "We talked broadly about memory setup.",
+                "decisions": [],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.6,
+                "topic_keys": ["memory"],
+                "entity_keys": [],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    store = _StoreSpy(
+        semantic_hits=[(distractor_episode, 0.80), (target_episode, 0.60)],
+        lexical_hits=[(distractor_episode, 0.78), (target_episode, 0.58)],
+        records=[target_episode, distractor_episode],
+    )
+    retriever = DialogEpisodeRetriever(store=store)
+
+    rows = retriever.retrieve(
+        query=RetrievalQuery(
+            query_text="Why did we choose singleton latest wins for python?",
+            search_text="python singleton plan",
+            top_k=2,
+        )
+    )
+
+    assert rows
+    assert rows[0].record.id == "episode-python-policy"
+    assert "singleton latest wins" in rows[0].summary_reasoning.lower()

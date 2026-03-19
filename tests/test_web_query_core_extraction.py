@@ -78,7 +78,7 @@ class WebQueryCoreExtractionTests(unittest.TestCase):
         self.assertIn("/mode_lock on /web", str(debug.get("removed_wrapper_text") or ""))
 
     def test_strips_mode_argument_prefix_from_search_core(self) -> None:
-        text = "/mode engineer РЅР°Р№РґРё РІРµСЂСЃРёСЋ python 3.11"
+        text = "/mode engineer найди версию python 3.11"
         debug = analyze_search_text(text)
 
         self.assertNotIn("/mode", str(debug["normalized_query"]))
@@ -90,20 +90,20 @@ class WebQueryCoreExtractionTests(unittest.TestCase):
     def test_continuity_patch_stores_sanitized_task_queries(self) -> None:
         patch = build_continuity_patch(
             state={},
-            query="/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
+            query="/mode_lock on /web курс доллара сегодня",
             resolved_intent="fx_rate",
             active_task={
                 "task_id": "task_demo",
-                "query": "/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
-                "base_query": "/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
-                "latest_query": "/mode_lock on /web РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ",
+                "query": "/mode_lock on /web курс доллара сегодня",
+                "base_query": "/mode_lock on /web курс доллара сегодня",
+                "latest_query": "/mode_lock on /web курс доллара сегодня",
             },
         )
 
         active = dict(patch.get("web_active_task") or {})
-        self.assertEqual(active.get("query"), "РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ")
-        self.assertEqual(active.get("base_query"), "РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ")
-        self.assertEqual(active.get("latest_query"), "РєСѓСЂСЃ РґРѕР»Р»Р°СЂР° СЃРµРіРѕРґРЅСЏ")
+        self.assertEqual(active.get("query"), "курс доллара сегодня")
+        self.assertEqual(active.get("base_query"), "курс доллара сегодня")
+        self.assertEqual(active.get("latest_query"), "курс доллара сегодня")
 
     def test_removes_model_argument_wrapper_from_search_core(self) -> None:
         text = "ты точно смотришь евро-гривны?"

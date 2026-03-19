@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from memory.dialog_episode_builder import DialogEpisodeBuilder, DialogTurn
 from memory.memory_models import MemoryRecord, MemorySourceKind, MemoryStatus, MemoryType
 from memory.memory_policy import MemoryPolicy
 from memory.retrieval_projection import build_memory_views
@@ -65,6 +66,15 @@ def run_final_backfill(
     target_namespace = str(namespace or "").strip()
     rows = list(manager._store.iter_records(namespace=(target_namespace or None)))
     policy = MemoryPolicy()
+    rows_by_namespace_id: dict[str, dict[str, MemoryRecord]] = {}
+    rows_by_namespace_source_event_id: dict[str, dict[str, MemoryRecord]] = {}
+
+    for row in list(rows or []):
+        ns = str(row.namespace or "").strip() or "(empty)"
+        rows_by_namespace_id.setdefault(ns, {})[str(row.id or "").strip()] = row
+        source_event_id = str(row.source_event_id or "").strip()
+        if source_event_id:
+            rows_by_namespace_source_event_id.setdefault(ns, {})[source_event_id] = row
 
     scanned = 0
     rewritten = 0
@@ -90,6 +100,8 @@ def run_final_backfill(
             policy=policy,
             storage_profile=profile,
             archive_assistant_noise=archive_assistant_noise,
+            rows_by_id=rows_by_namespace_id.get(ns, {}),
+            rows_by_source_event_id=rows_by_namespace_source_event_id.get(ns, {}),
         )
         if not changed_fields:
             continue
@@ -139,16 +151,26 @@ def backfill_record(
     policy: MemoryPolicy,
     storage_profile: str,
     archive_assistant_noise: bool = True,
+    rows_by_id: dict[str, MemoryRecord] | None = None,
+    rows_by_source_event_id: dict[str, MemoryRecord] | None = None,
 ) -> tuple[MemoryRecord, list[str], bool]:
     changed_fields: list[str] = []
     updated = record
 
+    if updated.memory_type == MemoryType.EPISODE:
+        updated, episode_changed_fields = rebuild_episode_record(
+            updated,
+            rows_by_id=dict(rows_by_id or {}),
+            rows_by_source_event_id=dict(rows_by_source_event_id or {}),
+        )
+        changed_fields.extend(list(episode_changed_fields or []))
+
     rebuilt_metadata = rebuild_record_metadata(
-        record,
+        updated,
         policy=policy,
         storage_profile=storage_profile,
     )
-    if dict(rebuilt_metadata or {}) != dict(record.metadata or {}):
+    if dict(rebuilt_metadata or {}) != dict(updated.metadata or {}):
         changed_fields.append("metadata")
         updated = _replace_record(updated, metadata=rebuilt_metadata)
 
@@ -176,6 +198,87 @@ def backfill_record(
             )
 
     return updated, changed_fields, assistant_noise_archived
+
+
+def rebuild_episode_record(
+    record: MemoryRecord,
+    *,
+    rows_by_id: dict[str, MemoryRecord],
+    rows_by_source_event_id: dict[str, MemoryRecord],
+) -> tuple[MemoryRecord, list[str]]:
+    meta = dict(record.metadata or {})
+    episode_payload = dict(meta.get("dialog_episode") or meta.get("episode") or {})
+    turn_ids = [str(x).strip() for x in list(episode_payload.get("turn_ids") or meta.get("turn_ids") or []) if str(x).strip()]
+    if not turn_ids:
+        return record, []
+
+    turns: list[DialogTurn] = []
+    seen_turn_ids: set[str] = set()
+    for turn_id in turn_ids:
+        source = rows_by_id.get(turn_id) or rows_by_source_event_id.get(turn_id)
+        if source is None:
+            continue
+        if str(source.id or "").strip() == str(record.id or "").strip():
+            continue
+        if source.memory_type != MemoryType.MESSAGE:
+            continue
+        text = str(source.text or "").strip()
+        if not text:
+            continue
+        turn_record_id = str(source.id or turn_id).strip()
+        if not turn_record_id or turn_record_id in seen_turn_ids:
+            continue
+        seen_turn_ids.add(turn_record_id)
+        turns.append(
+            DialogTurn(
+                turn_id=turn_record_id,
+                role=infer_turn_role(source),
+                text=text,
+                ts=float(source.created_at or source.updated_at or time.time()),
+                topic=infer_turn_topic(source),
+                metadata=dict(source.metadata or {}),
+            )
+        )
+
+    if len(turns) < 2:
+        return record, []
+
+    builder = DialogEpisodeBuilder()
+    rebuilt = builder.build_episode(
+        turns,
+        episode_id=str(episode_payload.get("id") or record.id or ""),
+        now_ts=float(record.updated_at or time.time()),
+    )
+    if rebuilt is None:
+        return record, []
+
+    rebuilt_payload = rebuilt.to_dict()
+    rebuilt_payload["created_at"] = float(episode_payload.get("created_at") or record.created_at or rebuilt.created_at)
+    rebuilt_payload["updated_at"] = float(episode_payload.get("updated_at") or record.updated_at or rebuilt.updated_at)
+
+    next_meta = dict(meta)
+    next_meta["dialog_episode"] = rebuilt_payload
+    next_meta["topic"] = str(rebuilt.topic or "")
+    next_meta["summary_short"] = str(rebuilt.summary_short or "")
+    next_meta["summary_reasoning"] = str(rebuilt.summary_reasoning or "")
+    next_meta["decisions"] = list(rebuilt.decisions or [])
+    next_meta["open_questions"] = list(rebuilt.open_questions or [])
+    next_meta["participants"] = list(rebuilt.participants or [])
+    next_meta["turn_ids"] = list(rebuilt.turn_ids or [])
+    next_meta["topic_keys"] = list(rebuilt.topic_keys or [])
+    next_meta["entity_keys"] = list(rebuilt.entity_keys or [])
+    next_meta["salience"] = float(rebuilt.salience or 0.0)
+
+    changed_fields: list[str] = []
+    next_text = str(rebuilt.summary_short or record.text or "").strip()
+    updated = record
+    if next_text and next_text != str(record.text or "").strip():
+        changed_fields.append("text")
+        updated = _replace_record(updated, text=next_text)
+    if next_meta != meta:
+        changed_fields.append("episode_refresh")
+        updated = _replace_record(updated, metadata=next_meta)
+    return updated, changed_fields
 
 
 def rebuild_record_metadata(
@@ -224,6 +327,29 @@ def infer_source_kind(record: MemoryRecord) -> MemorySourceKind:
     if record.memory_type == MemoryType.TOOL_RESULT:
         return MemorySourceKind.TOOL_RESULT
     return MemorySourceKind.USER
+
+
+def infer_turn_role(record: MemoryRecord) -> str:
+    meta = dict(record.metadata or {})
+    source_role = str(meta.get("source_role") or "").strip().lower()
+    if source_role in {"assistant", "user", "system", "tool"}:
+        return source_role
+    source_kind = str(meta.get("source_kind") or "").strip().lower()
+    if source_kind in {"assistant_reply", "assistant"}:
+        return "assistant"
+    return "user"
+
+
+def infer_turn_topic(record: MemoryRecord) -> str:
+    meta = dict(record.metadata or {})
+    topic = str(meta.get("topic") or "").strip()
+    if topic:
+        return topic
+    nested_meta = dict(meta.get("meta") or {})
+    nested_topic = str(nested_meta.get("topic") or "").strip()
+    if nested_topic:
+        return nested_topic
+    return ""
 
 
 def is_assistant_memory_noise_record(record: MemoryRecord, *, policy: MemoryPolicy) -> bool:

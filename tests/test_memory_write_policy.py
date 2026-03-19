@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from core.brain import Brain
 from metadata.metadata_extractor import extract_message_metadata
 from memory.governor import MemoryGovernor
+from memory.identity_core import IdentityCoreCandidate, IdentityCoreManager, IdentityCoreRecord
 from memory.ingest_analyzer import analyze_message_for_memory
 from memory.memory_manager import MemoryManager
 from memory.memory_models import (
@@ -136,12 +137,15 @@ class MemoryWritePolicyTests(unittest.TestCase):
         manager._policy = MemoryPolicy()
         manager._lifecycle = _FakeLifecycle()
         manager._governor = MemoryGovernor(lifecycle=manager._lifecycle)
+        manager._identity_core_manager = IdentityCoreManager()
         manager._working_records = []
         manager._session_summary = ""
         manager._open_questions = []
         manager._current_decisions = []
         manager._active_preferences = []
         manager._private_runtime = {}
+        manager._governor_profile_snapshots = {}
+        manager._identity_core_snapshots = {}
         manager._temporary_ttl_sec = 3600
         manager._private_runtime_ttl_sec = 900
         manager._working_limit = 120
@@ -656,6 +660,192 @@ class MemoryWritePolicyTests(unittest.TestCase):
         self.assertEqual(only_fact["value"], "python 3.12")
         self.assertEqual(only_fact["group"], "environment.python")
 
+    def test_identity_core_is_written_from_strong_identity_name_fact(self) -> None:
+        manager = self._manager()
+
+        written = manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="identity_name",
+                    value="Pasha",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.91,
+                    importance=0.82,
+                    evidence="меня зовут Паша",
+                    source_event_id="evt:identity-name-1",
+                    canonical_key="user.identity_name",
+                    relation="identity",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-identity-core-name",
+            now_ts=1.0,
+            event_id="evt:identity-name-1",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        self.assertEqual(len(written), 1)
+        latest_by_id = {}
+        for row in manager._store.records:
+            latest_by_id[str(getattr(row, "id", ""))] = row
+        identity_rows = [
+            row for row in latest_by_id.values()
+            if getattr(row, "memory_type", None) == MemoryType.IDENTITY_CORE
+            and getattr(row, "status", None) == MemoryStatus.ACTIVE
+        ]
+        self.assertEqual(len(identity_rows), 1)
+        payload = dict(dict(identity_rows[0].metadata or {}).get("identity_core") or {})
+        self.assertEqual(payload["key"], "addressing.canonical_name")
+        self.assertEqual(payload["value"], "Pasha")
+        snapshot = manager.get_identity_core_snapshot("conv-identity-core-name")
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(dict(snapshot.to_dict().get("addressing") or {}).get("canonical_name"), "Pasha")
+
+    def test_identity_core_blocks_canonical_name_override_without_confirmation(self) -> None:
+        manager = self._manager()
+
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="identity_name",
+                    value="Pasha",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.91,
+                    importance=0.82,
+                    evidence="меня зовут Паша",
+                    source_event_id="evt:identity-name-1",
+                    canonical_key="user.identity_name",
+                    relation="identity",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-identity-core-override",
+            now_ts=1.0,
+            event_id="evt:identity-name-1",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="identity_name",
+                    value="Pashka",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.94,
+                    importance=0.84,
+                    evidence="теперь зови меня Пашка",
+                    source_event_id="evt:identity-name-2",
+                    canonical_key="user.identity_name",
+                    relation="identity",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-identity-core-override",
+            now_ts=2.0,
+            event_id="evt:identity-name-2",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        snapshot = manager.get_identity_core_snapshot("conv-identity-core-override")
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(dict(snapshot.to_dict().get("addressing") or {}).get("canonical_name"), "Pasha")
+
+        identity_events = [
+            row for row in list(manager._event_store.entries or [])
+            if str(dict(row).get("type") or "") == "memory_identity_core_decision"
+        ]
+        self.assertEqual(str(dict(identity_events[-1].get("payload") or {}).get("reason") or ""), "override_requires_confirmation")
+
+    def test_identity_core_is_written_from_direct_user_boundary_message(self) -> None:
+        manager = self._manager()
+
+        manager.ingest_event(
+            MemoryEvent(
+                role="user",
+                text="Не называй меня Пашка и не выдумывай факты про меня.",
+                namespace="conv-identity-core-boundary",
+                scope=MemoryScope.CONVERSATION,
+                memory_type=MemoryType.MESSAGE,
+                metadata={},
+            )
+        )
+
+        latest_by_id = {}
+        for row in manager._store.records:
+            latest_by_id[str(getattr(row, "id", ""))] = row
+        identity_rows = [
+            row for row in latest_by_id.values()
+            if getattr(row, "memory_type", None) == MemoryType.IDENTITY_CORE
+            and getattr(row, "status", None) == MemoryStatus.ACTIVE
+        ]
+        self.assertGreaterEqual(len(identity_rows), 2)
+        snapshot = manager.get_identity_core_snapshot("conv-identity-core-boundary")
+        self.assertIsNotNone(snapshot)
+        payload = snapshot.to_dict()
+        self.assertIn("Пашка", list(dict(payload.get("addressing") or {}).get("forbidden_forms") or []))
+        self.assertTrue(bool(dict(payload.get("boundaries") or {}).get("avoid_inventing_user_facts")))
+
+    def test_identity_core_is_written_from_examples_on_user_code_rule(self) -> None:
+        manager = self._manager()
+
+        manager.ingest_event(
+            MemoryEvent(
+                role="user",
+                text="Лучше показывай примеры на моем коде, когда объясняешь.",
+                namespace="conv-identity-core-examples",
+                scope=MemoryScope.CONVERSATION,
+                memory_type=MemoryType.MESSAGE,
+                metadata={},
+            )
+        )
+
+        snapshot = manager.get_identity_core_snapshot("conv-identity-core-examples")
+        self.assertIsNotNone(snapshot)
+        self.assertTrue(bool(dict(snapshot.to_dict().get("interaction_style") or {}).get("prefers_examples_on_user_code")))
+
+    def test_identity_core_has_separate_public_write_read_and_snapshot_api(self) -> None:
+        manager = self._manager()
+
+        written = manager.write_identity_core(
+            candidates=[
+                IdentityCoreCandidate(
+                    record=IdentityCoreRecord(
+                        key="addressing.canonical_name",
+                        value="Pasha",
+                        confidence=0.93,
+                        source="fact:self_identification",
+                        updated_at=5.0,
+                    ),
+                    signals={"stable_self_identification": True},
+                )
+            ],
+            namespace="conv-identity-core-public-api",
+            now_ts=5.0,
+            event_id="evt:identity-core-public",
+            source_role="user",
+            source_kind="identity_core_rule",
+        )
+
+        self.assertEqual(len(written), 1)
+        rows = manager.read_identity_core_records(
+            namespace="conv-identity-core-public-api",
+            key="addressing.canonical_name",
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].memory_type, MemoryType.IDENTITY_CORE)
+        self.assertEqual(
+            str(dict(dict(rows[0].metadata or {}).get("identity_core") or {}).get("value") or ""),
+            "Pasha",
+        )
+        snapshot = manager.rebuild_identity_core_snapshot(namespace="conv-identity-core-public-api")
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(dict(snapshot.to_dict().get("addressing") or {}).get("canonical_name"), "Pasha")
+
     def test_governor_snapshot_keeps_multi_value_project_facts(self) -> None:
         manager = self._manager()
 
@@ -776,6 +966,13 @@ class MemoryWritePolicyTests(unittest.TestCase):
         self.assertEqual(latest_governor["action"], "supersede_old")
         self.assertEqual(latest_governor["winner_record_id"][:5], "fact:")
         self.assertEqual(len(list(latest_governor.get("superseded_record_ids") or [])), 1)
+        self.assertEqual(dict(latest_governor.get("winner") or {}).get("predicate"), "environment_ram_gb")
+        self.assertEqual(dict(latest_governor.get("loser") or {}).get("predicate"), "environment_memory_gb")
+        self.assertEqual(len(list(latest_governor.get("superseded_rows") or [])), 1)
+        self.assertEqual(
+            dict(list(latest_governor.get("superseded_rows") or [{}])[0]).get("predicate"),
+            "environment_memory_gb",
+        )
 
         latest_snapshot = dict(snapshot_events[-1].get("payload") or {})
         self.assertEqual(latest_snapshot["namespace"], "conv-governor-events")

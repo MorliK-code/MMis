@@ -147,6 +147,7 @@ def test_prepare_storage_metadata_is_single_compact_entrypoint_for_write_path() 
 def test_storage_schema_for_fact_claim_episode_and_document_chunk_is_frozen() -> None:
     fact_schema = storage_schema_for_memory_type("fact")
     claim_schema = storage_schema_for_memory_type("claim")
+    identity_core_schema = storage_schema_for_memory_type("identity_core")
     episode_schema = storage_schema_for_memory_type("episode")
     chunk_schema = storage_schema_for_memory_type("document_chunk")
     message_schema = storage_schema_for_memory_type("message")
@@ -161,6 +162,13 @@ def test_storage_schema_for_fact_claim_episode_and_document_chunk_is_frozen() ->
         "document_id",
         "topic_keys",
         "trigger_keys",
+        "write_policy",
+    ]
+    assert identity_core_schema["always"] == [
+        "identity_core",
+        "identity_core_key",
+        "source_kind",
+        "source_role",
         "write_policy",
     ]
     assert episode_schema["always"] == [
@@ -264,6 +272,25 @@ def test_compact_storage_profile_enforces_fact_episode_and_document_chunk_schema
         },
         memory_type="document_chunk",
     )
+    identity_core = compact_metadata_payload(
+        {
+            "identity_core": {
+                "key": "addressing.canonical_name",
+                "value": "Pasha",
+                "confidence": 0.91,
+                "source": "fact:self_identification",
+                "requires_confirmation_to_override": True,
+                "updated_at": 10.0,
+                "debug": {"raw": True},
+            },
+            "identity_core_key": "addressing.canonical_name",
+            "source_kind": "structured_fact",
+            "source_role": "user",
+            "write_policy": {"action": "allow", "reason": "canonical_name_strong_self_identification", "allow_write": True, "signals": {"x": 1}},
+            "memory_analysis": {"anchors": [{"kind": "identity"}]},
+        },
+        memory_type="identity_core",
+    )
 
     assert set(fact.keys()) == {"fact", "canonical_key", "governor_reason", "relation", "write_policy"}
     assert set(episode.keys()) == {"dialog_episode", "topic", "summary_short", "summary_reasoning", "turn_ids"}
@@ -280,3 +307,21 @@ def test_compact_storage_profile_enforces_fact_episode_and_document_chunk_schema
         "memory_tags",
     }
     assert chunk["memory_views"] == {"entity_keys": ["ollama"], "numeric_keys": ["version:3.11"]}
+    assert identity_core == {
+        "identity_core": {
+            "key": "addressing.canonical_name",
+            "value": "Pasha",
+            "confidence": 0.91,
+            "source": "fact:self_identification",
+            "requires_confirmation_to_override": True,
+            "updated_at": 10.0,
+        },
+        "identity_core_key": "addressing.canonical_name",
+        "source_kind": "structured_fact",
+        "source_role": "user",
+        "write_policy": {
+            "action": "allow",
+            "reason": "canonical_name_strong_self_identification",
+            "allow_write": True,
+        },
+    }

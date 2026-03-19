@@ -47,8 +47,18 @@ class CharacterComposer:
         traits: dict[str, Any],
         dialog_mode: dict[str, Any] | None = None,
         context_meta: dict[str, Any] | None = None,
+        persona_snapshot: dict[str, Any] | None = None,
+        identity_core_snapshot: dict[str, Any] | None = None,
     ) -> CharacterComposeResult:
-        mood = str(state.get("mood") or character.get("default_mood") or "thoughtful").strip().lower()
+        snapshot = dict(persona_snapshot or {})
+        identity_core = dict(identity_core_snapshot or {})
+        snapshot_mood = str(snapshot.get("mood") or "").strip().lower()
+        mood = str(
+            snapshot_mood
+            or state.get("mood")
+            or character.get("default_mood")
+            or "thoughtful"
+        ).strip().lower()
         if mood == "romantic_soft":
             mood = "soft_supportive"
         active = set(str(x).strip().lower() for x in list(state.get("active_traits") or []) if str(x).strip())
@@ -78,6 +88,10 @@ class CharacterComposer:
             base_levels=style_coefficients,
             dialog_targets=mode_profile.dialog_targets,
             alpha=MODE_BLEND_ALPHA,
+        )
+        style_coefficients = _apply_response_bias(
+            style_coefficients=style_coefficients,
+            response_bias=_as_float_map(snapshot.get("response_bias")),
         )
 
         effective_traits: dict[str, float] = {}
@@ -122,13 +136,40 @@ class CharacterComposer:
         stable_traits_payload = dict(persona_payload.get("traits") or {})
         if not stable_traits_payload:
             stable_traits_payload.update(persona_traits)
+        stable_traits_payload = _apply_identity_core_trait_policy(
+            current=stable_traits_payload,
+            identity_core=identity_core,
+        )
+        stable_traits_payload = _overlay_stable_traits(
+            current=stable_traits_payload,
+            overlay=_as_float_map(snapshot.get("stable_traits")),
+        )
         persona_payload["traits"] = stable_traits_payload
         persona_payload["mood"] = mood
         persona_payload["emotional_state"] = dict(storage.load_emotion_state(character_id) or {})
         if not dict(persona_payload.get("emotional_state") or {}).get("mood"):
             persona_payload["emotional_state"] = dict(persona_payload.get("emotional_state") or {})
             persona_payload["emotional_state"]["mood"] = mood
-        user_addressing = dict(storage.load_user_addressing(character_id) or {})
+        persona_payload["relation_state"] = _merge_relation_state(
+            current=persona_payload.get("relation_state"),
+            overlay=snapshot.get("relation_state"),
+        )
+        persona_payload["boundaries"] = _merge_boundaries(
+            current=persona_payload.get("boundaries"),
+            overlay=snapshot.get("boundaries"),
+        )
+        persona_payload["emotional_handling"] = _merge_emotional_handling(
+            current=persona_payload.get("emotional_handling"),
+            overlay=snapshot.get("emotional_handling"),
+        )
+        user_addressing = _overlay_user_addressing(
+            current=storage.load_user_addressing(character_id),
+            overlay=dict(identity_core.get("addressing") or {}),
+        )
+        user_addressing = _overlay_user_addressing(
+            current=user_addressing,
+            overlay=snapshot.get("user_addressing"),
+        )
         for key in ("warmth", "sarcasm", "strictness", "verbosity", "empathy", "teasing"):
             if key in stable_traits_payload:
                 effective_traits[key] = float(_to_float(stable_traits_payload.get(key), 0.5))
@@ -282,4 +323,145 @@ def _resolve_style_coefficients(
             context_modifier=context_modifier + ((dialog_target - base) * 0.6),
         )
         out[key] = max(0.0, min(1.0, float(effective)))
+    return out
+
+
+def _as_float_map(value: Any) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for raw_key, raw_value in dict(value or {}).items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        try:
+            out[key] = max(0.0, min(1.0, float(raw_value)))
+        except Exception:
+            continue
+    return out
+
+
+def _overlay_stable_traits(*, current: dict[str, Any] | None, overlay: dict[str, float] | None) -> dict[str, float]:
+    merged: dict[str, float] = {}
+    for raw_key, raw_value in dict(current or {}).items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        try:
+            merged[key] = max(0.0, min(1.0, float(raw_value)))
+        except Exception:
+            continue
+    for key, value in dict(overlay or {}).items():
+        if key in merged:
+            merged[key] = max(0.0, min(1.0, (float(merged[key]) * 0.35) + (float(value) * 0.65)))
+        else:
+            merged[key] = max(0.0, min(1.0, float(value)))
+    return merged
+
+
+def _apply_identity_core_trait_policy(*, current: dict[str, Any] | None, identity_core: dict[str, Any] | None) -> dict[str, float]:
+    merged: dict[str, float] = {}
+    for raw_key, raw_value in dict(current or {}).items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        try:
+            merged[key] = max(0.0, min(1.0, float(raw_value)))
+        except Exception:
+            continue
+
+    baseline = dict(dict(identity_core or {}).get("assistant_trait_baseline") or {})
+    if not baseline:
+        return merged
+
+    if "warmth_baseline" in baseline:
+        merged["warmth"] = max(0.0, min(1.0, _to_float(baseline.get("warmth_baseline"), merged.get("warmth", 0.5))))
+    if "directness_baseline" in baseline:
+        merged["directness"] = max(0.0, min(1.0, _to_float(baseline.get("directness_baseline"), merged.get("directness", 0.5))))
+    if "empathy_floor" in baseline:
+        merged["empathy"] = max(
+            max(0.0, min(1.0, _to_float(merged.get("empathy"), 0.5))),
+            max(0.0, min(1.0, _to_float(baseline.get("empathy_floor"), 0.0))),
+        )
+    if "professionalism_floor" in baseline:
+        merged["professionalism"] = max(
+            max(0.0, min(1.0, _to_float(merged.get("professionalism"), 0.5))),
+            max(0.0, min(1.0, _to_float(baseline.get("professionalism_floor"), 0.0))),
+        )
+    if "sarcasm_ceiling" in baseline:
+        merged["sarcasm"] = min(
+            max(0.0, min(1.0, _to_float(merged.get("sarcasm"), 0.5))),
+            max(0.0, min(1.0, _to_float(baseline.get("sarcasm_ceiling"), 1.0))),
+        )
+    return merged
+
+
+def _merge_relation_state(*, current: Any, overlay: Any) -> dict[str, Any]:
+    merged = dict(current or {})
+    for raw_key, raw_value in dict(overlay or {}).items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        merged[key] = raw_value
+    return merged
+
+
+def _overlay_user_addressing(*, current: Any, overlay: Any) -> dict[str, Any]:
+    merged = dict(current or {})
+    row = dict(overlay or {})
+    for key in ("canonical_name", "use_name_by_default", "allow_diminutives"):
+        if key in row:
+            merged[key] = row.get(key)
+    for key in ("allowed_forms", "forbidden_forms"):
+        values = [str(x).strip() for x in list(row.get(key) or []) if str(x).strip()]
+        if values:
+            merged[key] = values
+    return merged
+
+
+def _merge_boundaries(*, current: Any, overlay: Any) -> dict[str, Any]:
+    merged = dict(current or {})
+    for raw_key, raw_value in dict(overlay or {}).items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        merged[key] = bool(raw_value)
+    return merged
+
+
+def _merge_emotional_handling(*, current: Any, overlay: Any) -> dict[str, Any]:
+    merged = dict(current or {})
+    for raw_key, raw_value in dict(overlay or {}).items():
+        key = str(raw_key or "").strip().lower()
+        if not key:
+            continue
+        if key in {"deescalate_on_irritation", "treat_short_replies_as_low_bandwidth"}:
+            merged[key] = bool(raw_value)
+            continue
+        try:
+            merged[key] = max(0.0, min(1.0, float(raw_value)))
+        except Exception:
+            continue
+    return merged
+
+
+def _apply_response_bias(*, style_coefficients: dict[str, float], response_bias: dict[str, float]) -> dict[str, float]:
+    out = {str(k): max(0.0, min(1.0, float(v))) for k, v in dict(style_coefficients or {}).items()}
+    if not response_bias:
+        return out
+    technical_mode = float(response_bias.get("technical_mode", 0.0) or 0.0)
+    if technical_mode > 0.0:
+        out["strictness"] = max(0.0, min(1.0, out.get("strictness", 0.5) + (0.18 * technical_mode)))
+        out["sarcasm"] = max(0.0, min(1.0, out.get("sarcasm", 0.5) - (0.16 * technical_mode)))
+    short_answer = float(response_bias.get("needs_short_answer", 0.0) or 0.0)
+    if short_answer > 0.0:
+        out["verbosity"] = max(0.0, min(1.0, out.get("verbosity", 0.5) - (0.22 * short_answer)))
+    frustration_softening = float(response_bias.get("frustration_softening", 0.0) or 0.0)
+    if frustration_softening > 0.0:
+        out["warmth"] = max(0.0, min(1.0, out.get("warmth", 0.5) + (0.18 * frustration_softening)))
+        out["sarcasm"] = max(0.0, min(1.0, out.get("sarcasm", 0.5) - (0.18 * frustration_softening)))
+    warmth_upshift = float(response_bias.get("warmth_upshift", 0.0) or 0.0)
+    if warmth_upshift > 0.0:
+        out["warmth"] = max(0.0, min(1.0, out.get("warmth", 0.5) + (0.24 * warmth_upshift)))
+    playfulness_downshift = float(response_bias.get("playfulness_downshift", 0.0) or 0.0)
+    if playfulness_downshift > 0.0:
+        out["sarcasm"] = max(0.0, min(1.0, out.get("sarcasm", 0.5) - (0.22 * playfulness_downshift)))
     return out

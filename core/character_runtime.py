@@ -2493,6 +2493,19 @@ class CharacterRuntime:
                 "is_technical": bool(meta_map.get("is_technical", False)),
                 "active_mode": str(meta_map.get("active_mode") or self._state.get("active_mode") or "chatting"),
             },
+            persona_snapshot=dict(
+                meta_map.get("persona_snapshot")
+                or state.get("persona_snapshot")
+                or self._state.get("persona_snapshot")
+                or {}
+            ),
+            identity_core_snapshot=dict(
+                meta_map.get("identity_core_snapshot")
+                or meta_map.get("identity_core")
+                or state.get("identity_core")
+                or self._state.get("identity_core")
+                or {}
+            ),
         )
         trait_values = self._flat_trait_values(merged)
         persona_entry = self._build_persona_entry(
@@ -2753,6 +2766,19 @@ class CharacterRuntime:
                 "is_technical": self._coerce_bool(meta.get("is_technical"), default=False),
                 "active_mode": active_mode,
             },
+            persona_snapshot=dict(
+                meta.get("persona_snapshot")
+                or state.get("persona_snapshot")
+                or self._state.get("persona_snapshot")
+                or {}
+            ),
+            identity_core_snapshot=dict(
+                meta.get("identity_core_snapshot")
+                or meta.get("identity_core")
+                or state.get("identity_core")
+                or self._state.get("identity_core")
+                or {}
+            ),
         )
         trait_values = self._flat_trait_values(traits)
         mood = str(state.get("mood") or composed.mood or persona.get("mood") or character.get("default_mood") or "neutral").strip().lower() or "neutral"
@@ -3373,8 +3399,19 @@ class CharacterRuntime:
         characters = dict(state.get("characters") or {})
         entry = dict(characters.get(character) or {})
         persona_state = dict(entry.get("persona") or {})
+        persona_snapshot = _as_dict(state.get("persona_snapshot"))
 
         trait_map = dict(persona_state.get("traits") or {})
+        snapshot_traits = _as_dict(persona_snapshot.get("stable_traits"))
+        for raw_key, raw_value in dict(snapshot_traits or {}).items():
+            key = self._normalize_trait_name(raw_key)
+            if not key or isinstance(raw_value, bool):
+                continue
+            try:
+                value = self._clamp01(float(raw_value))
+            except Exception:
+                continue
+            trait_map[key] = value
         for raw_key, raw_value in dict(traits or {}).items():
             key = self._normalize_trait_name(raw_key)
             if not key or isinstance(raw_value, bool):
@@ -3409,11 +3446,40 @@ class CharacterRuntime:
 
         persona_payload = dict(persona_state)
         persona_payload["traits"] = trait_map
+        snapshot_relation_state = _as_dict(persona_snapshot.get("relation_state"))
+        if snapshot_relation_state:
+            persona_payload["relation_state"] = dict(snapshot_relation_state)
+        snapshot_boundaries = _as_dict(persona_snapshot.get("boundaries"))
+        if snapshot_boundaries:
+            merged_boundaries = dict(persona_payload.get("boundaries") or {})
+            for raw_key, raw_value in dict(snapshot_boundaries or {}).items():
+                key = str(raw_key or "").strip().lower()
+                if not key:
+                    continue
+                merged_boundaries[key] = bool(raw_value)
+            persona_payload["boundaries"] = merged_boundaries
+        snapshot_emotional_handling = _as_dict(persona_snapshot.get("emotional_handling"))
+        if snapshot_emotional_handling:
+            merged_emotional_handling = dict(persona_payload.get("emotional_handling") or {})
+            for raw_key, raw_value in dict(snapshot_emotional_handling or {}).items():
+                key = str(raw_key or "").strip().lower()
+                if not key:
+                    continue
+                if key in {"deescalate_on_irritation", "treat_short_replies_as_low_bandwidth"}:
+                    merged_emotional_handling[key] = bool(raw_value)
+                else:
+                    try:
+                        merged_emotional_handling[key] = self._clamp01(float(raw_value))
+                    except Exception:
+                        continue
+            persona_payload["emotional_handling"] = merged_emotional_handling
+        snapshot_mood = str(persona_snapshot.get("mood") or "").strip().lower()
         persona_payload = self._build_compiler_persona_payload(
             character_id=character,
             persona_state=persona_payload,
             mood=str(
-                persona_payload.get("mood")
+                snapshot_mood
+                or persona_payload.get("mood")
                 or state.get("mood")
                 or traits.get("mood")
                 or "neutral"
@@ -3424,12 +3490,27 @@ class CharacterRuntime:
         locks.setdefault("informal_you", True)
         persona_payload["locks"] = locks
         persona_payload["bans"] = [str(x).strip() for x in list(persona_payload.get("bans") or []) if str(x).strip()]
-        mode = self._normalize_active_mode(state.get("active_mode") or state.get("mode") or "chatting")
+        mode = self._normalize_active_mode(
+            persona_snapshot.get("active_mode")
+            or state.get("active_mode")
+            or state.get("mode")
+            or "chatting"
+        )
+        user_addressing = dict(self.storage.load_user_addressing(character) or {})
+        snapshot_user_addressing = _as_dict(persona_snapshot.get("user_addressing"))
+        if snapshot_user_addressing:
+            for key in ("canonical_name", "use_name_by_default", "allow_diminutives"):
+                if key in snapshot_user_addressing:
+                    user_addressing[key] = snapshot_user_addressing.get(key)
+            for key in ("allowed_forms", "forbidden_forms"):
+                values = [str(x).strip() for x in list(snapshot_user_addressing.get(key) or []) if str(x).strip()]
+                if values:
+                    user_addressing[key] = values
         text, _ = compile_system_persona(
             character_id=character,
             persona_state=persona_payload,
             active_mode=mode,
-            user_addressing=self.storage.load_user_addressing(character),
+            user_addressing=user_addressing,
         )
         return _normalize_text(text)
 

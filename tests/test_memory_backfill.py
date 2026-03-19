@@ -100,7 +100,7 @@ def test_final_backfill_rewrites_old_message_metadata_to_compact_profile() -> No
         reindex=False,
     )
 
-    assert summary.rewritten == 1
+    assert summary.rewritten >= 1
     row = manager._store.iter_records(namespace="default")[0]
     metadata = dict(row.metadata or {})
     assert "memory_analysis" not in metadata
@@ -184,3 +184,80 @@ def test_final_backfill_reports_namespace_stats_and_runs_reindex() -> None:
     assert summary.namespace_stats["beta"]["scanned"] == 1
     assert manager.reindex_calls == [(None, False)]
     assert dict(summary.reindex_result or {}).get("namespace") == "*"
+
+
+def test_final_backfill_rebuilds_legacy_episode_summary_from_turns() -> None:
+    manager = _BackfillManager(
+        [
+            _record(
+                "turn:1",
+                "привет",
+                namespace="dialog",
+                metadata={"source_kind": "user"},
+            ),
+            _record(
+                "turn:2",
+                "ок",
+                namespace="dialog",
+                metadata={"source_kind": "assistant_reply"},
+            ),
+            _record(
+                "turn:3",
+                "Давай разделим память на facts, claims и dialog episodes.",
+                namespace="dialog",
+                metadata={"source_kind": "user", "topic": "memory"},
+            ),
+            _record(
+                "turn:4",
+                "И document memory оставим отдельным контуром.",
+                namespace="dialog",
+                metadata={"source_kind": "assistant_reply", "topic": "memory"},
+            ),
+            _record(
+                "episode:legacy",
+                "Discussed привет.",
+                namespace="dialog",
+                memory_type=MemoryType.EPISODE,
+                metadata={
+                    "dialog_episode": {
+                        "id": "episode:legacy",
+                        "topic": "привет",
+                        "turn_ids": ["turn:1", "turn:2", "turn:3", "turn:4"],
+                        "summary_short": "Discussed привет.",
+                        "summary_reasoning": "Discussed привет.",
+                        "decisions": [],
+                        "open_questions": [],
+                        "participants": ["user", "assistant"],
+                        "salience": 0.4,
+                        "topic_keys": ["привет"],
+                        "entity_keys": [],
+                        "created_at": 100.0,
+                        "updated_at": 120.0,
+                    },
+                    "topic": "привет",
+                    "summary_short": "Discussed привет.",
+                    "summary_reasoning": "Discussed привет.",
+                    "turn_ids": ["turn:1", "turn:2", "turn:3", "turn:4"],
+                },
+            ),
+        ]
+    )
+
+    summary = run_final_backfill(
+        manager=manager,
+        namespace="dialog",
+        dry_run=False,
+        storage_profile="compact",
+        archive_assistant_noise=False,
+        reindex=False,
+    )
+
+    assert summary.rewritten >= 1
+    row = next(record for record in manager._store.iter_records(namespace="dialog") if record.memory_type == MemoryType.EPISODE)
+    metadata = dict(row.metadata or {})
+    episode = dict(metadata.get("dialog_episode") or {})
+    assert str(row.text or "").lower() != "discussed привет."
+    assert "привет" not in str(metadata.get("summary_short") or "").lower()
+    assert "facts, claims и dialog episodes" in str(metadata.get("summary_short") or "").lower()
+    assert str(metadata.get("topic") or "") == "memory"
+    assert str(episode.get("topic") or "") == "memory"

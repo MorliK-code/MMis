@@ -117,6 +117,15 @@ _CLAIM_KEYS = {
     "namespace",
 }
 
+_IDENTITY_CORE_ROW_KEYS = {
+    "key",
+    "value",
+    "confidence",
+    "source",
+    "requires_confirmation_to_override",
+    "updated_at",
+}
+
 _COMPACT_CLAIM_LIST_KEYS = {
     "subject",
     "predicate",
@@ -221,6 +230,14 @@ _CLAIM_METADATA_KEYS = {
     "document_claim",
 }
 
+_IDENTITY_CORE_METADATA_KEYS = {
+    "identity_core",
+    "identity_core_key",
+    "write_policy",
+    "source_kind",
+    "source_role",
+}
+
 _EPISODE_METADATA_KEYS = {
     "dialog_episode",
     "topic",
@@ -316,6 +333,8 @@ def compact_metadata_payload(metadata: dict[str, Any] | None, *, memory_type: An
         out["fact"] = _compact_dict(out["fact"], _FACT_KEYS)
     if isinstance(out.get("claim"), dict):
         out["claim"] = _compact_dict(out["claim"], _CLAIM_KEYS)
+    if isinstance(out.get("identity_core"), dict):
+        out["identity_core"] = _compact_dict(out["identity_core"], _IDENTITY_CORE_ROW_KEYS)
     if isinstance(out.get("dialog_episode"), dict):
         out["dialog_episode"] = _compact_dict(out["dialog_episode"], _DIALOG_EPISODE_KEYS)
     if isinstance(out.get("document_outline"), dict):
@@ -432,6 +451,8 @@ def _allowed_top_level_keys(memory_type: str, metadata: dict[str, Any]) -> set[s
         return set(_FACT_METADATA_KEYS)
     if token == "claim":
         return set(_CLAIM_METADATA_KEYS)
+    if token == "identity_core":
+        return set(_IDENTITY_CORE_METADATA_KEYS)
     if token == "episode":
         return set(_EPISODE_METADATA_KEYS)
     if token == "document":

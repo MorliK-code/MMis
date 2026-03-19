@@ -27,6 +27,8 @@ class ApiReply:
     model: str
     parameters: dict | None = None
     summary: str | None = None
+    debug_trace: dict | None = None
+    memory_debug_snapshot: dict | None = None
 
 
 class ApiClient:
@@ -166,6 +168,8 @@ class ApiClient:
         model = self._runtime_model_cache
         parameters: dict | None = None
         summary: str | None = None
+        debug_trace: dict | None = None
+        memory_debug_snapshot: dict | None = None
         chunk_count = 0
         thinking_chunk_count = 0
         log_json(
@@ -215,6 +219,12 @@ class ApiClient:
                         summary = str(raw_summary).strip() if raw_summary is not None else None
                         if summary == "":
                             summary = None
+                        debug_trace = data.get("debug_trace") if isinstance(data.get("debug_trace"), dict) else None
+                        memory_debug_snapshot = (
+                            data.get("memory_debug_snapshot")
+                            if isinstance(data.get("memory_debug_snapshot"), dict)
+                            else None
+                        )
                         self._runtime_model_cache = model or self._runtime_model_cache
                         log_json(
                             LOGGER,
@@ -232,6 +242,8 @@ class ApiClient:
                             model=model,
                             parameters=parameters,
                             summary=summary,
+                            debug_trace=debug_trace,
+                            memory_debug_snapshot=memory_debug_snapshot,
                         )
         except urllib_error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
@@ -268,4 +280,6 @@ class ApiClient:
             model=model,
             parameters=parameters,
             summary=summary,
+            debug_trace=debug_trace,
+            memory_debug_snapshot=memory_debug_snapshot,
         )

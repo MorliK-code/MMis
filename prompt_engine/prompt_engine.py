@@ -137,7 +137,11 @@ class PromptEngine:
         user_profile_block = self._build_user_profile_block(state_map)
         metadata_block = self._build_metadata_block(state_map=state_map, blocks=blocks)
         tools_state_block = self._build_tools_state_block(state_map, memory_blocks=memory_blocks)
-        memory_retrieval_block = self._build_memory_retrieval_block(blocks=blocks, memory_blocks=memory_blocks)
+        memory_retrieval_block = self._build_memory_retrieval_block(
+            blocks=blocks,
+            memory_blocks=memory_blocks,
+            state_map=state_map,
+        )
         web_evidence_block = self._build_web_evidence_block(
             blocks=blocks,
             memory_blocks=memory_blocks,
@@ -456,11 +460,25 @@ class PromptEngine:
             return str(value)
 
     @staticmethod
-    def _build_memory_retrieval_block(*, blocks: dict[str, str], memory_blocks: dict[str, Any]) -> str:
+    def _build_memory_retrieval_block(
+        *,
+        blocks: dict[str, str],
+        memory_blocks: dict[str, Any],
+        state_map: dict[str, Any] | None = None,
+    ) -> str:
+        active_task_block = PromptEngine._render_active_task_block(
+            _as_dict(_as_dict(state_map).get("active_task"))
+        )
         if not memory_blocks:
-            return str(blocks.get("retrieved_memories") or "")
+            fallback = str(blocks.get("retrieved_memories") or "").strip()
+            if active_task_block and fallback:
+                return f"[ACTIVE_TASK]\n{active_task_block}\n\n{fallback}".strip()
+            if active_task_block:
+                return f"[ACTIVE_TASK]\n{active_task_block}".strip()
+            return fallback
         order = [
             ("MEMORY_RECALL_MODE", "memory_recall_mode"),
+            ("ACTIVE_TASK", "__active_task__"),
             ("SELF_FACTS", "self_facts"),
             ("FACT_EXPECTATION_CHECK", "fact_expectation_check"),
             ("RELEVANT_CLAIMS", "relevant_claims"),
@@ -478,12 +496,60 @@ class PromptEngine:
             ("UNRESOLVED_ITEMS", "unresolved_items"),
         ]
         parts: list[str] = []
+        suppress_raw_episodic = bool(str(memory_blocks.get("recalled_dialog") or "").strip())
         for title, key in order:
-            text = str(memory_blocks.get(key) or "").strip()
+            if key == "retrieved_episodic" and suppress_raw_episodic:
+                continue
+            if key == "__active_task__":
+                text = str(active_task_block or "").strip()
+            else:
+                text = str(memory_blocks.get(key) or "").strip()
             if not text:
                 continue
             parts.append(f"[{title}]\n{text}")
         return "\n\n".join(parts).strip()
+
+    @staticmethod
+    def _render_active_task_block(task: dict[str, Any]) -> str:
+        row = dict(task or {})
+        if not row:
+            return ""
+
+        topic = str(row.get("topic") or "").strip()
+        status = str(row.get("status") or "").strip()
+        lines = []
+        if topic:
+            lines.append(f"- topic: {topic}")
+        if status:
+            lines.append(f"- status: {status}")
+
+        summary = str(row.get("summary_short") or "").strip()
+        if summary:
+            lines.append(f"- summary: {summary}")
+
+        goal = str(row.get("current_goal") or "").strip()
+        if goal:
+            lines.append(f"- current_goal: {goal}")
+
+        steps = [str(x).strip() for x in list(row.get("next_steps") or []) if str(x).strip()]
+        if steps:
+            lines.append("- next_steps:")
+            for item in steps[:4]:
+                lines.append(f"  - {item}")
+
+        questions = [str(x).strip() for x in list(row.get("open_questions") or []) if str(x).strip()]
+        if questions:
+            lines.append("- open_questions:")
+            for item in questions[:4]:
+                lines.append(f"  - {item}")
+
+        decisions = [str(x).strip() for x in list(row.get("decisions") or []) if str(x).strip()]
+        if decisions:
+            lines.append("- decisions:")
+            for item in decisions[:4]:
+                lines.append(f"  - {item}")
+
+        return "\n".join(lines).strip()
 
     @staticmethod
     def _build_web_evidence_block(

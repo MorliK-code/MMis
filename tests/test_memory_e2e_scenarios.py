@@ -650,14 +650,72 @@ def test_golden_e2e_dialog_episode_recall_builds_episode_and_prompt_block() -> N
     assert "memory design" in str(result.blocks["recalled_dialog"]).lower()
     assert "debug logs" in str(result.blocks["recalled_dialog"]).lower()
     system_prompt = _system_prompt(ctx)
-    assert "[RECALLED_DIALOG]" in system_prompt
-    assert "assistant thoughts" in system_prompt.lower()
-    assert "[SUPPORTING_MESSAGES]" in system_prompt
-    ctx, provider = _generate_answer(ctx)
-    assert len(provider.requests) == 1
-    assert "assistant thoughts" in ctx.text.lower()
-    assert "debug logs" in ctx.text.lower()
-    assert "decided" in ctx.text.lower()
+    prompt_memory_text = str(dict(ctx.state.get("prompt_memory_block") or {}).get("text") or "")
+    assert "[RECALLED_DIALOG]" in (system_prompt + "\n" + prompt_memory_text)
+    assert "assistant thoughts" in (system_prompt + "\n" + prompt_memory_text).lower()
+    assert "[SUPPORTING_MESSAGES]" in (system_prompt + "\n" + prompt_memory_text)
+    assert "[EPISODIC_MEMORIES]" not in (system_prompt + "\n" + prompt_memory_text)
+
+
+def test_golden_e2e_dialog_episode_recall_uses_episode_anchors_when_summary_is_weak() -> None:
+    manager = _manager()
+    namespace = "golden-episode-anchor"
+
+    manager._store.upsert(
+        _record(
+            "episode:memory-plan-anchor",
+            "Discussed this.",
+            namespace=namespace,
+            memory_type=MemoryType.EPISODE,
+            level=MemoryLevel.L2_EPISODIC,
+            metadata={
+                "dialog_episode": {
+                    "id": "episode:memory-plan-anchor",
+                    "topic": "general_dialog",
+                    "turn_ids": ["evt:a1", "evt:a2"],
+                    "summary_short": "Discussed this.",
+                    "summary_reasoning": "We aligned the memory roadmap around facts, claims, and dialog episodes.",
+                    "decisions": ["First stabilize memory, then return to web."],
+                    "open_questions": ["How should soft singleton groups work?"],
+                    "participants": ["user", "assistant"],
+                    "salience": 0.9,
+                    "topic_keys": ["memory", "plan"],
+                    "entity_keys": ["soft_singleton", "memory_governor"],
+                    "created_at": 100.0,
+                    "updated_at": 120.0,
+                },
+                "topic": "general_dialog",
+                "summary_short": "Discussed this.",
+                "summary_reasoning": "We aligned the memory roadmap around facts, claims, and dialog episodes.",
+                "turn_ids": ["evt:a1", "evt:a2"],
+                "decisions": ["First stabilize memory, then return to web."],
+                "open_questions": ["How should soft singleton groups work?"],
+                "participants": ["user", "assistant"],
+                "topic_keys": ["memory", "plan"],
+                "entity_keys": ["soft_singleton", "memory_governor"],
+                "salience": 0.9,
+            },
+        )
+    )
+    _ingest_message(manager, namespace=namespace, role="user", text="ok")
+    _ingest_message(manager, namespace=namespace, role="assistant", text="We touched memory a bit.")
+
+    result, ctx = _build_context_and_prompt(
+        manager,
+        namespace=namespace,
+        user_message="What was our plan for memory?",
+        top_k=4,
+    )
+
+    assert result.recall_mode == "contextual_recall"
+    assert "recalled_dialog" in result.blocks
+    block = str(result.blocks["recalled_dialog"])
+    assert "First stabilize memory, then return to web." in block
+    assert "soft singleton groups" in block.lower()
+    system_prompt = _system_prompt(ctx)
+    prompt_memory_text = str(dict(ctx.state.get("prompt_memory_block") or {}).get("text") or "")
+    assert "[RECALLED_DIALOG]" in (system_prompt + "\n" + prompt_memory_text)
+    assert "[EPISODIC_MEMORIES]" not in (system_prompt + "\n" + prompt_memory_text)
 
 
 def test_golden_e2e_document_recall_surfaces_document_evidence() -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from modules.character.composer import CharacterComposeResult, CharacterComposer
 from modules.character.feedback_detector import detect_feedback
+from modules.character.identity_core import IdentityCore, IdentityCoreBuilder
+from modules.character.persona_snapshot_builder import PersonaSnapshot, PersonaSnapshotBuilder
 from modules.character.dialog_policies import (
     compute_address_terms_policy,
     compute_dialog_flags,
@@ -27,6 +29,10 @@ __all__ = [
     "ResponseConstraintEvaluator",
     "CharacterComposer",
     "CharacterComposeResult",
+    "IdentityCore",
+    "IdentityCoreBuilder",
+    "PersonaSnapshot",
+    "PersonaSnapshotBuilder",
     "CharacterSignals",
     "build_character_signals",
     "detect_feedback",

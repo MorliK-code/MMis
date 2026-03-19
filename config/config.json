@@ -5,6 +5,12 @@
     "locale": "ru_RU",
     "default_language": "ru"
   },
+  "debug": {
+    "memory_inspector_enabled": true,
+    "show_raw_scores": false,
+    "show_filtered_items": false,
+    "show_prompt_blocks": false
+  },
   "startup": {
     "mode": "api",
     "active_profile": "BALANCED",
@@ -640,7 +646,7 @@
       "timeout_sec": 2.5,
       "stream_timeout_sec": 600.0,
       "store_turn": true,
-      "show_thinking": false,
+      "show_thinking": true,
       "thinking_first": true,
       "auto_start_api": true,
       "auto_start_ollama": true,

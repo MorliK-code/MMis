@@ -72,6 +72,7 @@ from ui.api_client import ApiClient, ApiClientError
 from ui.constants import DEFAULT_BUBBLE_OPACITY, DEFAULT_TEXT_SIZE, FEMALE_TONE_PRESETS, SHOW_TFLOPS_EST
 from ui.metrics import est_tflops, ms_to_s_text, safe_div
 from ui.widgets import (
+    MemoryInspectorPanel,
     _ButtonAnimFilter,
     _FeedbackVisualFilter,
     _HoverRevealFilter,
@@ -139,6 +140,7 @@ class MainWindow(QMainWindow):
         self.sum_prompt = 0
         self.sum_tps = 0.0
         self._request_primary_model: str = ""
+        self._last_memory_debug_snapshot: dict[str, object] = {}
 
         self._text_size = DEFAULT_TEXT_SIZE
         self._bubble_opacity = DEFAULT_BUBBLE_OPACITY
@@ -597,7 +599,15 @@ class MainWindow(QMainWindow):
             avg_layout.addWidget(w)
         side_layout.addWidget(avg_block)
 
-        side_layout.addStretch(1)
+        self.memory_inspector_panel = MemoryInspectorPanel(self.stats_panel)
+        self.memory_inspector_panel.setObjectName("memory_inspector_panel")
+        self.memory_inspector_panel.configure_display(
+            enabled=bool(getattr(_cfg, "debug_memory_inspector_enabled", True)),
+            show_raw_scores=bool(getattr(_cfg, "debug_memory_inspector_show_raw_scores", False)),
+            show_filtered_items=bool(getattr(_cfg, "debug_memory_inspector_show_filtered_items", False)),
+            show_prompt_blocks=bool(getattr(_cfg, "debug_memory_inspector_show_prompt_blocks", False)),
+        )
+        side_layout.addWidget(self.memory_inspector_panel, 1)
         splitter.addWidget(self.stats_panel)
 
         self.splitter = splitter
@@ -2695,6 +2705,10 @@ class MainWindow(QMainWindow):
                 self._stream_ai_index = None
         else:
             self._append_ai(res.text, stat_line, thinking=res.thinking)
+        snapshot = dict(res.memory_debug_snapshot or {})
+        if not snapshot:
+            snapshot = dict(res.debug_trace or {})
+        self._apply_memory_debug_snapshot(snapshot)
         self._save_chat_sessions()
 
         served_model = str(res.model or stats.get("served_model") or "").strip()
@@ -2723,6 +2737,12 @@ class MainWindow(QMainWindow):
                 self._set_status("Готово")
             except Exception:
                 self._set_status("Ошибка")
+
+    def _apply_memory_debug_snapshot(self, snapshot: dict | None) -> None:
+        payload = dict(snapshot or {})
+        self._last_memory_debug_snapshot = payload
+        if hasattr(self, "memory_inspector_panel") and self.memory_inspector_panel is not None:
+            self.memory_inspector_panel.set_snapshot(payload)
 
     @Slot(str)
     def _on_error(self, tb: str):
@@ -2782,9 +2802,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-

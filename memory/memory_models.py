@@ -40,6 +40,7 @@ class MemoryType(str, Enum):
     SUMMARY = "summary"
     FACT = "fact"
     CLAIM = "claim"
+    IDENTITY_CORE = "identity_core"
     EPISODE = "episode"
     SEMANTIC = "semantic"
     DOCUMENT = "document"
@@ -380,6 +381,9 @@ class ContextBuildResult:
     truncation_log: list[dict[str, Any]] = field(default_factory=list)
     fact_expectation: dict[str, Any] = field(default_factory=dict)
     self_facts_context: dict[str, Any] = field(default_factory=dict)
+    dialog_episode_hits: list[dict[str, Any]] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    current_decisions: list[str] = field(default_factory=list)
     recall_mode: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -391,6 +395,9 @@ class ContextBuildResult:
             "truncation_log": [dict(x) for x in list(self.truncation_log or [])],
             "fact_expectation": dict(self.fact_expectation or {}),
             "self_facts_context": dict(self.self_facts_context or {}),
+            "dialog_episode_hits": [dict(x) for x in list(self.dialog_episode_hits or [])],
+            "open_questions": [str(x) for x in list(self.open_questions or []) if str(x).strip()],
+            "current_decisions": [str(x) for x in list(self.current_decisions or []) if str(x).strip()],
             "recall_mode": str(self.recall_mode or ""),
         }
 

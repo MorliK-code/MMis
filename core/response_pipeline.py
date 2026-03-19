@@ -22,12 +22,15 @@ from modules.character.dialog_policies import (
     local_region_name as dialog_local_region_name,
     trim_leading_greeting as dialog_trim_leading_greeting,
 )
+from modules.character import IdentityCoreBuilder, PersonaSnapshotBuilder
+from core.debug_trace import DebugTrace
 from core.character_runtime import CharacterRuntime
 from core.character_runtime import PromptPack
 from core.mode_selector import ModeSelector, list_runtime_modes, normalize_mode_name
 from llm.provider_base import LLMProviderBase, LLMRequest, Message, ToolCall, ToolSpec
 from llm.task_router import run_task_model
 from llm.tokenizer import estimate_tokens
+from memory import EpisodePlanner, build_memory_debug_snapshot
 from memory.memory_models import ContextBuildRequest, MemoryScope
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
@@ -462,6 +465,7 @@ class MemoryRetrieveStage(PipelineStage):
         self._cfg = load_config()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
+        _ensure_debug_trace(ctx)
         if ctx.route != "chat":
             ctx.logs.append("stage=memory_retrieve skipped(route)")
             return ctx
@@ -573,6 +577,27 @@ class MemoryRetrieveStage(PipelineStage):
 
         ctx.memory_context = dict(pack)
         ctx.state["memory_context"] = dict(pack)
+        active_profile_snapshot: dict[str, Any] = {}
+        if hasattr(manager, "get_governor_profile_snapshot"):
+            try:
+                snapshot = manager.get_governor_profile_snapshot(context_request.namespace)
+            except Exception:
+                snapshot = None
+            if snapshot is not None:
+                active_profile_snapshot = {
+                    "namespace": str(getattr(snapshot, "namespace", context_request.namespace) or context_request.namespace),
+                    "active_facts": dict(getattr(snapshot, "active_facts", {}) or {}),
+                    "conflicts": [
+                        dict(x)
+                        for x in list(getattr(snapshot, "conflicts", []) or [])
+                        if isinstance(x, dict)
+                    ],
+                    "updated_at": float(_to_float(getattr(snapshot, "updated_at", 0.0), 0.0) or 0.0),
+                }
+        if active_profile_snapshot:
+            ctx.state["active_profile_snapshot"] = active_profile_snapshot
+        else:
+            ctx.state.pop("active_profile_snapshot", None)
         retrieved = list(_as_list(pack.get("selected")))
         if retrieved:
             ctx.retrieved_memories = retrieved
@@ -611,16 +636,504 @@ class MemoryRetrieveStage(PipelineStage):
             has_session_summary=bool(session_summary),
             memory_block_keys=sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
         )
+        trace = _ensure_debug_trace(ctx)
+        trace.memory_retrieval = {
+            "query": str(query or ""),
+            "recall_mode": str(pack.get("recall_mode") or ""),
+            "memory_block_keys": sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
+            "selected_total": int(len(retrieved)),
+            "selected_facts": [
+                _trace_compact_selected_memory(row)
+                for row in list(retrieved)
+                if str(dict(row).get("memory_type") or "").strip().lower() == "fact"
+            ],
+            "selected_claims": [
+                _trace_compact_selected_memory(row)
+                for row in list(retrieved)
+                if str(dict(row).get("memory_type") or "").strip().lower() == "claim"
+            ],
+            "selected_messages": [
+                _trace_compact_selected_memory(row)
+                for row in list(retrieved)
+                if str(dict(row).get("memory_type") or "").strip().lower() == "message"
+            ],
+            "selected_documents": [
+                _trace_compact_selected_memory(row)
+                for row in list(retrieved)
+                if str(dict(row).get("memory_type") or "").strip().lower() in {"document", "document_chunk"}
+            ],
+            "selected_episodes": [
+                _trace_compact_episode_hit(row)
+                for row in list(_as_list(pack.get("dialog_episode_hits")))
+                if isinstance(row, dict)
+            ],
+            "filtered_out": [
+                _trace_compact_filtered_item(row)
+                for row in list(dropped or [])
+                if isinstance(row, dict)
+            ],
+            "truncated": [dict(x) for x in list(truncation_log or []) if isinstance(x, dict)],
+            "confidence": {
+                "selected_hits": int(hit_summary["retrieved"]),
+                "semantic_hits": int(hit_summary["semantic"]),
+                "episodic_hits": int(hit_summary["episodic"]),
+                "document_hits": int(hit_summary["docs"]),
+                "web_hits": int(hit_summary["web"]),
+                "top_selected_score": max(
+                    [_to_float(dict(row).get("score"), 0.0) or 0.0 for row in list(retrieved or [])],
+                    default=0.0,
+                ),
+            },
+            "exact_self_fact_hits": {
+                "fact_expectation": dict(_as_dict(pack.get("fact_expectation"))),
+                "self_facts_context": {
+                    "found_predicates": [
+                        str(x).strip()
+                        for x in list(_as_dict(pack.get("self_facts_context")).get("found_predicates") or [])
+                        if str(x).strip()
+                    ],
+                    "expected_predicates": [
+                        str(x).strip()
+                        for x in list(_as_dict(pack.get("fact_expectation")).get("expected_predicates") or [])
+                        if str(x).strip()
+                    ],
+                },
+            },
+        }
+        trace.active_profile = dict(active_profile_snapshot or {})
+        return ctx
+
+
+class EpisodeContinuityStage(PipelineStage):
+    name = "episode_continuity"
+
+    def __init__(self, planner: EpisodePlanner | None = None):
+        self.planner = planner or EpisodePlanner()
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        trace = _ensure_debug_trace(ctx)
+        if ctx.route != "chat":
+            ctx.logs.append("stage=episode_continuity skipped(route)")
+            return ctx
+        user_text = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
+        if not user_text:
+            ctx.logs.append("stage=episode_continuity skipped(empty)")
+            return ctx
+        previous_active_task = dict(ctx.state.get("active_task") or {})
+        continuation_reason = self.planner.continuation_reason(
+            user_text=user_text,
+            active_task=previous_active_task,
+            meta=dict(ctx.meta or {}),
+        )
+        close_reason = self.planner.close_reason(
+            user_text=user_text,
+            active_task=previous_active_task,
+        )
+
+        active_task_state = self.planner.resolve_active_task(
+            user_text=user_text,
+            memory_context=dict(ctx.memory_context or {}),
+            state=dict(ctx.state or {}),
+            meta=dict(ctx.meta or {}),
+        )
+        if active_task_state is not None:
+            active_task_payload = active_task_state.to_dict()
+            closed_status = str(active_task_state.status or "").strip().lower()
+            if closed_status in {"done", "abandoned"}:
+                ctx.state.pop("active_task", None)
+                ctx.state.pop("active_goal", None)
+                ctx.state.pop("active_tasks", None)
+                ctx.state.pop("_active_task_source", None)
+                trace.active_task = {
+                    **dict(active_task_payload),
+                    "source": "episode_planner",
+                    "reason": str(close_reason or "explicit_close_signal"),
+                    "event": "close",
+                }
+                ctx.logs.append(
+                    f"stage=episode_continuity active_task_closed task={active_task_state.task_id} status={closed_status}"
+                )
+                _emit_turn_summary(
+                    ctx,
+                    "active_task_closed",
+                    summary=(
+                        f"task_id={active_task_state.task_id} "
+                        f"status={closed_status} "
+                        f"topic={active_task_state.topic or '-'}"
+                    ),
+                    stage="episode_continuity",
+                    task_id=str(active_task_state.task_id or ""),
+                    topic=str(active_task_state.topic or ""),
+                    status=closed_status,
+                    source_episode_id=str(active_task_state.source_episode_id or ""),
+                    current_goal=str(active_task_state.current_goal or ""),
+                    next_steps=[str(x) for x in list(active_task_state.next_steps or []) if str(x).strip()],
+                    open_questions=[str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()],
+                    decisions=[str(x) for x in list(active_task_state.decisions or []) if str(x).strip()],
+                    confidence=float(active_task_state.confidence or 0.0),
+                )
+                return ctx
+            ctx.state["active_task"] = dict(active_task_payload)
+            ctx.state["active_goal"] = str(
+                active_task_state.current_goal
+                or active_task_state.summary_short
+                or active_task_state.topic
+                or ""
+            ).strip()
+            ctx.state["active_tasks"] = [dict(active_task_payload)]
+            ctx.state["_active_task_source"] = "episode_planner"
+            resolution_source = "runtime_hints"
+            resolution_reason = "runtime_decisions_fallback"
+            if continuation_reason in {"short_followup", "followup_like_meta"} and previous_active_task:
+                resolution_source = "continuation"
+                resolution_reason = continuation_reason
+            elif str(active_task_state.source_episode_id or "").strip():
+                resolution_source = "episode_hit"
+                resolution_reason = (
+                    "episode_open_questions"
+                    if list(active_task_state.open_questions or [])
+                    else "episode_decisions"
+                )
+            elif list(active_task_state.open_questions or []):
+                resolution_reason = "runtime_open_questions_fallback"
+            trace.active_task = {
+                **dict(active_task_payload),
+                "source": resolution_source,
+                "reason": resolution_reason,
+                "event": "resolved",
+            }
+            ctx.logs.append(
+                f"stage=episode_continuity task={active_task_state.task_id} status={active_task_state.status}"
+            )
+            _emit_turn_summary(
+                ctx,
+                "active_task_resolved",
+                summary=(
+                    f"task_id={active_task_state.task_id} "
+                    f"status={active_task_state.status} "
+                    f"topic={active_task_state.topic or '-'}"
+                ),
+                stage="episode_continuity",
+                task_id=str(active_task_state.task_id or ""),
+                topic=str(active_task_state.topic or ""),
+                status=str(active_task_state.status or ""),
+                source_episode_id=str(active_task_state.source_episode_id or ""),
+                current_goal=str(active_task_state.current_goal or ""),
+                next_steps=[str(x) for x in list(active_task_state.next_steps or []) if str(x).strip()],
+                open_questions=[str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()],
+                decisions=[str(x) for x in list(active_task_state.decisions or []) if str(x).strip()],
+                confidence=float(active_task_state.confidence or 0.0),
+            )
+            return ctx
+
+        if str(ctx.state.get("_active_task_source") or "").strip().lower() == "episode_planner":
+            previous_task_id = str(previous_active_task.get("task_id") or "").strip()
+            previous_topic = str(previous_active_task.get("topic") or "").strip()
+            clear_reason = (
+                continuation_reason
+                if continuation_reason in {"meta_topic_switch", "switch_topic_phrase"}
+                else "no_relevant_episode"
+            )
+            ctx.state.pop("active_task", None)
+            ctx.state.pop("active_goal", None)
+            ctx.state.pop("active_tasks", None)
+            ctx.state.pop("_active_task_source", None)
+            trace.active_task = {
+                "task_id": previous_task_id,
+                "topic": previous_topic,
+                "status": "cleared",
+                "source": "episode_planner",
+                "reason": clear_reason,
+                "event": "clear",
+            }
+            ctx.logs.append("stage=episode_continuity active_task_cleared")
+            _emit_turn_summary(
+                ctx,
+                "active_task_cleared",
+                summary="source=episode_planner",
+                stage="episode_continuity",
+                source="episode_planner",
+                reason=clear_reason,
+            )
+        else:
+            ctx.logs.append("stage=episode_continuity no_active_task")
         return ctx
 
 
 class PromptBuildStage(PipelineStage):
     name = "prompt_build"
 
-    def __init__(self, character_runtime: CharacterRuntime):
+    def __init__(
+        self,
+        character_runtime: CharacterRuntime,
+        persona_snapshot_builder: PersonaSnapshotBuilder | None = None,
+        identity_core_builder: IdentityCoreBuilder | None = None,
+    ):
         self.character_runtime = character_runtime
+        self.persona_snapshot_builder = persona_snapshot_builder or PersonaSnapshotBuilder()
+        self.identity_core_builder = identity_core_builder or IdentityCoreBuilder()
+
+    def _build_persona_snapshot_payload(
+        self,
+        *,
+        ctx: PipelineContext,
+        prompt_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        active_character_id = str(
+            _pick_value(
+                ctx.meta.get("character_id"),
+                prompt_state.get("active_character_id"),
+                prompt_state.get("active_personality_id"),
+                ctx.state.get("active_character_id"),
+                ctx.state.get("active_personality_id"),
+                "asya",
+            )
+            or "asya"
+        ).strip().lower() or "asya"
+        namespace = str(
+            _pick_value(
+                ctx.meta.get("conversation_id"),
+                ctx.state.get("conversation_id"),
+                "default",
+            )
+            or "default"
+        ).strip().lower() or "default"
+        stored_identity_core: dict[str, Any] = {}
+        memory_identity_core_snapshot: dict[str, Any] = {}
+        memory_manager = ctx.meta.get("memory_manager")
+        if memory_manager is not None and hasattr(memory_manager, "get_identity_core_snapshot"):
+            try:
+                memory_identity_core = memory_manager.get_identity_core_snapshot(namespace)
+                if memory_identity_core is not None:
+                    memory_identity_core_snapshot = (
+                        dict(memory_identity_core.to_dict() or {})
+                        if hasattr(memory_identity_core, "to_dict")
+                        else dict(memory_identity_core or {})
+                    )
+            except Exception:
+                memory_identity_core_snapshot = {}
+        runtime_storage = getattr(self.character_runtime, "storage", None)
+        if runtime_storage is not None and hasattr(runtime_storage, "load_identity_core"):
+            try:
+                stored_identity_core = dict(runtime_storage.load_identity_core(active_character_id) or {})
+            except Exception:
+                stored_identity_core = {}
+        identity_core_snapshot = self.identity_core_builder.build(
+            character_id=active_character_id,
+            active_profile_snapshot=dict(ctx.state.get("active_profile_snapshot") or {}),
+            stored_identity_core=stored_identity_core,
+            memory_identity_core_snapshot=memory_identity_core_snapshot,
+        )
+        character_trait_defaults: dict[str, Any] = {}
+        try:
+            persona_state_spec = dict(load_character_spec(active_character_id, "persona_state", required=False) or {})
+        except Exception:
+            persona_state_spec = {}
+        character_trait_defaults = dict(
+            _pick_value(
+                _as_dict(_as_dict(persona_state_spec.get("learned")).get("baseline_traits")),
+                _as_dict(persona_state_spec.get("traits")),
+                {},
+            )
+            or {}
+        )
+        identity_core_payload = identity_core_snapshot.to_dict()
+        ctx.state["identity_core"] = dict(identity_core_payload)
+        ctx.state["identity_core_memory_snapshot"] = dict(memory_identity_core_snapshot)
+        ctx.state["identity_core_runtime_fallback"] = dict(stored_identity_core)
+        ctx.state["character_trait_defaults"] = dict(character_trait_defaults)
+        prompt_state["identity_core"] = dict(identity_core_payload)
+        prompt_state["character_trait_defaults"] = dict(character_trait_defaults)
+        ctx.meta["identity_core_snapshot"] = dict(identity_core_payload)
+        ctx.meta["identity_core_memory_snapshot"] = dict(memory_identity_core_snapshot)
+        ctx.meta["identity_core_runtime_fallback"] = dict(stored_identity_core)
+        ctx.meta["character_trait_defaults"] = dict(character_trait_defaults)
+        persona_snapshot = self.persona_snapshot_builder.build(
+            character_id=active_character_id,
+            active_profile_snapshot=dict(ctx.state.get("active_profile_snapshot") or {}),
+            identity_core_snapshot=dict(identity_core_payload),
+            memory_context=dict(ctx.memory_context or {}),
+            state=dict(ctx.state or {}),
+            meta=dict(ctx.meta or {}),
+        )
+        payload = {
+            "mood": str(persona_snapshot.mood or "neutral").strip().lower() or "neutral",
+            "relation_state": dict(persona_snapshot.relation_state or {}),
+            "user_addressing": dict(persona_snapshot.user_addressing or {}),
+            "stable_traits": dict(persona_snapshot.stable_traits or {}),
+            "response_bias": dict(persona_snapshot.response_bias or {}),
+            "boundaries": dict(persona_snapshot.boundaries or {}),
+            "emotional_handling": dict(persona_snapshot.emotional_handling or {}),
+            "user_profile_hints": dict(persona_snapshot.user_profile_hints or {}),
+            "active_mode": str(persona_snapshot.active_mode or "chatting").strip().lower() or "chatting",
+            "debug": dict(persona_snapshot.debug or {}),
+        }
+        ctx.state["persona_snapshot"] = dict(payload)
+        prompt_state["persona_snapshot"] = dict(payload)
+        persona_sources = _as_dict(payload.get("debug", {}).get("sources"))
+        ctx.meta["persona_snapshot_sources"] = dict(persona_sources)
+        ctx.meta["persona_snapshot_built"] = {
+            "character_id": active_character_id,
+            "mood": payload["mood"],
+            "active_mode": payload["active_mode"],
+            "profile_keys": list(_as_list(payload.get("debug", {}).get("profile_keys"))),
+            "relation_fields": sorted(dict(payload.get("relation_state") or {}).keys()),
+            "stable_trait_fields": sorted(dict(payload.get("stable_traits") or {}).keys()),
+            "boundary_fields": sorted(dict(payload.get("boundaries") or {}).keys()),
+            "emotional_handling_fields": sorted(dict(payload.get("emotional_handling") or {}).keys()),
+            "user_profile_hint_fields": sorted(dict(payload.get("user_profile_hints") or {}).keys()),
+        }
+        ctx.meta["persona_snapshot_applied"] = {
+            "character_id": active_character_id,
+            "relation_fields": sorted(dict(payload.get("relation_state") or {}).keys()),
+            "applied_traits": sorted(dict(payload.get("stable_traits") or {}).keys()),
+            "boundary_fields": sorted(dict(payload.get("boundaries") or {}).keys()),
+            "emotional_handling_fields": sorted(dict(payload.get("emotional_handling") or {}).keys()),
+            "applied_user_addressing_fields": sorted(
+                [
+                    key for key, value in dict(payload.get("user_addressing") or {}).items()
+                    if not _is_empty_string_list_or_value(value)
+                ]
+            ),
+            "persistent_fields": sorted(
+                set(
+                    list(_as_list(persona_sources.get("profile_hint_fields")))
+                    + list(_as_list(persona_sources.get("relation_fields_from_persistent")))
+                    + list(_as_list(persona_sources.get("relation_fields_from_identity_core")))
+                    + list(_as_list(persona_sources.get("user_addressing_from_persistent")))
+                    + list(_as_list(persona_sources.get("user_addressing_from_identity_core")))
+                    + list(_as_list(persona_sources.get("stable_traits_from_persistent")))
+                    + list(_as_list(persona_sources.get("stable_traits_from_identity_core")))
+                    + list(_as_list(persona_sources.get("boundary_fields_from_identity_core")))
+                    + list(_as_list(persona_sources.get("emotional_handling_fields_from_identity_core")))
+                )
+            ),
+            "turn_local_fields": sorted(list(_as_list(persona_sources.get("turn_local_fields")))),
+        }
+        ctx.logs.append(
+            "stage=prompt_build persona_snapshot "
+            f"character={active_character_id} "
+            f"profile_keys={len(list(_as_list(payload.get('debug', {}).get('profile_keys'))))}"
+        )
+        _emit_turn_summary(
+            ctx,
+            "persona_snapshot_sources",
+            summary=(
+                f"persistent={len(list(_as_list(persona_sources.get('persistent_profile_keys'))))} "
+                f"turn_local={len(list(_as_list(persona_sources.get('turn_local_fields'))))}"
+            ),
+            character_id=active_character_id,
+            persistent_profile_keys=sorted(list(_as_list(persona_sources.get("persistent_profile_keys")))),
+            relation_fields_from_persistent=sorted(list(_as_list(persona_sources.get("relation_fields_from_persistent")))),
+            relation_fields_from_identity_core=sorted(list(_as_list(persona_sources.get("relation_fields_from_identity_core")))),
+            stable_traits_from_character_defaults=sorted(list(_as_list(persona_sources.get("stable_traits_from_character_defaults")))),
+            stable_traits_from_persistent=sorted(list(_as_list(persona_sources.get("stable_traits_from_persistent")))),
+            stable_traits_from_identity_core=sorted(list(_as_list(persona_sources.get("stable_traits_from_identity_core")))),
+            stable_traits_ignored_runtime=sorted(list(_as_list(persona_sources.get("stable_traits_ignored_runtime")))),
+            user_addressing_from_persistent=sorted(list(_as_list(persona_sources.get("user_addressing_from_persistent")))),
+            user_addressing_from_runtime=sorted(list(_as_list(persona_sources.get("user_addressing_from_runtime")))),
+            user_addressing_from_identity_core=sorted(list(_as_list(persona_sources.get("user_addressing_from_identity_core")))),
+            boundary_fields_from_identity_core=sorted(list(_as_list(persona_sources.get("boundary_fields_from_identity_core")))),
+            boundary_source=dict(_as_dict(persona_sources.get("boundary_source"))),
+            emotional_handling_fields_from_identity_core=sorted(list(_as_list(persona_sources.get("emotional_handling_fields_from_identity_core")))),
+            emotional_handling_source=dict(_as_dict(persona_sources.get("emotional_handling_source"))),
+            trait_layer_priority=list(_as_list(persona_sources.get("trait_layer_priority"))),
+            mood_source=str(persona_sources.get("mood_source") or ""),
+            active_mode_source=str(persona_sources.get("active_mode_source") or ""),
+            interaction_style_source=dict(_as_dict(persona_sources.get("interaction_style_source"))),
+            response_bias_sources=sorted(list(_as_list(persona_sources.get("response_bias_sources")))),
+            turn_local_fields=sorted(list(_as_list(persona_sources.get("turn_local_fields")))),
+        )
+        _emit_turn_summary(
+            ctx,
+            "persona_snapshot_built",
+            summary=(
+                f"traits={len(dict(payload.get('stable_traits') or {}))} "
+                f"relation={len(dict(payload.get('relation_state') or {}))} "
+                f"hints={len(dict(payload.get('user_profile_hints') or {}))} "
+                f"boundaries={len(dict(payload.get('boundaries') or {}))} "
+                f"emotional_handling={len(dict(payload.get('emotional_handling') or {}))}"
+            ),
+            character_id=active_character_id,
+            mood=payload["mood"],
+            active_mode=payload["active_mode"],
+            profile_keys=sorted(list(_as_list(payload.get("debug", {}).get("profile_keys")))),
+            relation_fields=sorted(dict(payload.get("relation_state") or {}).keys()),
+            stable_trait_fields=sorted(dict(payload.get("stable_traits") or {}).keys()),
+            boundary_fields=sorted(dict(payload.get("boundaries") or {}).keys()),
+            emotional_handling_fields=sorted(dict(payload.get("emotional_handling") or {}).keys()),
+            user_profile_hint_fields=sorted(dict(payload.get("user_profile_hints") or {}).keys()),
+        )
+        _emit_turn_summary(
+            ctx,
+            "persona_snapshot_applied",
+            summary=(
+                f"traits={len(dict(payload.get('stable_traits') or {}))} "
+                f"addressing={len(dict(payload.get('user_addressing') or {}))} "
+                f"persistent={len(list(_as_list(persona_sources.get('profile_hint_fields'))))} "
+                f"boundaries={len(dict(payload.get('boundaries') or {}))} "
+                f"emotional_handling={len(dict(payload.get('emotional_handling') or {}))}"
+            ),
+            character_id=active_character_id,
+            applied_traits=sorted(dict(payload.get("stable_traits") or {}).keys()),
+            applied_user_addressing_fields=sorted(
+                [
+                    key for key, value in dict(payload.get("user_addressing") or {}).items()
+                    if not _is_empty_string_list_or_value(value)
+                ]
+            ),
+            relation_fields=sorted(dict(payload.get("relation_state") or {}).keys()),
+            boundary_fields=sorted(dict(payload.get("boundaries") or {}).keys()),
+            emotional_handling_fields=sorted(dict(payload.get("emotional_handling") or {}).keys()),
+            persistent_fields=sorted(
+                set(
+                    list(_as_list(persona_sources.get("profile_hint_fields")))
+                    + list(_as_list(persona_sources.get("relation_fields_from_persistent")))
+                    + list(_as_list(persona_sources.get("relation_fields_from_identity_core")))
+                    + list(_as_list(persona_sources.get("user_addressing_from_persistent")))
+                    + list(_as_list(persona_sources.get("user_addressing_from_identity_core")))
+                    + list(_as_list(persona_sources.get("stable_traits_from_persistent")))
+                    + list(_as_list(persona_sources.get("stable_traits_from_identity_core")))
+                    + list(_as_list(persona_sources.get("boundary_fields_from_identity_core")))
+                    + list(_as_list(persona_sources.get("emotional_handling_fields_from_identity_core")))
+                )
+            ),
+            turn_local_fields=sorted(list(_as_list(persona_sources.get("turn_local_fields")))),
+        )
+        trace = _ensure_debug_trace(ctx)
+        identity_sources = dict(_as_dict(dict(identity_core_payload).get("debug", {}).get("sources")))
+        trace.identity_core = {
+            "snapshot": dict(identity_core_payload),
+            "memory_snapshot_input": dict(memory_identity_core_snapshot),
+            "runtime_fallback_input": dict(stored_identity_core),
+            "active_identity_keys": {
+                "addressing": sorted(dict(identity_core_payload.get("addressing") or {}).keys()),
+                "interaction_style": sorted(dict(identity_core_payload.get("interaction_style") or {}).keys()),
+                "boundaries": sorted(dict(identity_core_payload.get("boundaries") or {}).keys()),
+                "emotional_handling": sorted(dict(identity_core_payload.get("emotional_handling") or {}).keys()),
+                "assistant_trait_baseline": sorted(dict(identity_core_payload.get("assistant_trait_baseline") or {}).keys()),
+            },
+            "trait_baselines": dict(identity_core_payload.get("assistant_trait_baseline") or {}),
+            "sources": identity_sources,
+            "source_priority": [
+                "memory_identity_core",
+                "runtime_identity_core",
+                "active_profile",
+            ],
+        }
+        trace.persona_snapshot = {
+            **dict(payload),
+            "sources": dict(persona_sources),
+            "trait_overrides": dict(_as_dict(persona_sources.get("trait_overrides"))),
+            "addressing_source": dict(_as_dict(persona_sources.get("addressing_source"))),
+            "boundary_source": dict(_as_dict(persona_sources.get("boundary_source"))),
+            "emotional_handling_source": dict(_as_dict(persona_sources.get("emotional_handling_source"))),
+        }
+        trace.active_profile = dict(_as_dict(ctx.state.get("active_profile_snapshot")))
+        return payload
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
+        _ensure_debug_trace(ctx)
         if ctx.route != "chat":
             ctx.logs.append("stage=prompt_build skipped(route)")
             return ctx
@@ -653,6 +1166,8 @@ class PromptBuildStage(PipelineStage):
         prompt_state["context_tags"] = merged_tags
         if ctx.plan:
             prompt_state["plan"] = ctx.plan
+        prompt_state["active_task"] = dict(_as_dict(ctx.state.get("active_task")))
+        prompt_state["active_tasks"] = [dict(x) for x in list(_as_list(ctx.state.get("active_tasks"))) if isinstance(x, dict)]
         memory_context_for_prompt = _as_dict(ctx.memory_context)
         memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
         if memory_context_for_prompt:
@@ -690,8 +1205,8 @@ class PromptBuildStage(PipelineStage):
             if not isinstance(rules, list):
                 rules = [] if rules is None else [rules]
             rules.append(
-                "Р•СЃР»Рё РІРєР»СЋС‡С‘РЅ thinking mode вЂ” РїРёС€Рё РІРЅСѓС‚СЂРµРЅРЅРёРµ СЂР°СЃСЃСѓР¶РґРµРЅРёСЏ РўРћР›Р¬РљРћ РІРЅСѓС‚СЂРё С‚РµРіРѕРІ <think>...</think> "
-                "Рё С„РёРЅР°Р»СЊРЅС‹Р№ РѕС‚РІРµС‚ СЃРЅР°СЂСѓР¶Рё. РќРµ СѓРїРѕРјРёРЅР°Р№ СЌС‚Рё С‚РµРіРё РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ."
+                "Если включён thinking mode — пиши внутренние рассуждения ТОЛЬКО внутри тегов <think>...</think> "
+                "и финальный ответ снаружи. Не упоминай эти теги пользователю."
             )
             ctx.policies["rules"] = rules
 
@@ -932,6 +1447,7 @@ class PromptBuildStage(PipelineStage):
                 "Treat short follow-up as continuation of active task unless the user explicitly switches topic.",
             )
         ctx.retrieved_memories = list(retrieved_for_prompt)
+        self._build_persona_snapshot_payload(ctx=ctx, prompt_state=prompt_state)
         ctx.prompt_pack = self.character_runtime.build(
             state=prompt_state,
             user_msg=ctx.clean_user_msg,
@@ -964,6 +1480,20 @@ class PromptBuildStage(PipelineStage):
                     "context_isolation": dict(context_isolation_debug or {}),
                 },
             )
+        ctx.state["prompt_persona_block"] = {
+            "text": str(_as_dict(getattr(ctx.prompt_pack, "blocks", {})).get("persona") or "").strip(),
+            "token_estimate": int(_to_int(_as_dict(getattr(ctx.prompt_pack, "token_usage", {})).get("persona"), 0) or 0),
+            "active_character_id": str(
+                _pick_value(
+                    ctx.prompt_sections.get("active_character_id"),
+                    prompt_state.get("active_character_id"),
+                    prompt_state.get("active_personality_id"),
+                    ctx.state.get("active_character_id"),
+                    "",
+                )
+                or ""
+            ).strip(),
+        }
         ctx.logs.append("stage=prompt_build")
         return ctx
 
@@ -975,6 +1505,7 @@ class PromptEngineStage(PipelineStage):
         self.prompt_engine = prompt_engine
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
+        _ensure_debug_trace(ctx)
         if ctx.route != "chat":
             ctx.logs.append("stage=prompt_engine skipped(route)")
             return ctx
@@ -1001,6 +1532,65 @@ class PromptEngineStage(PipelineStage):
         )
         ctx.prompt_messages = list(result.messages)
         ctx.prompt_sections = dict(result.sections)
+        memory_context = _as_dict(ctx.memory_context)
+        memory_blocks = _as_dict(memory_context.get("blocks"))
+        prompt_memory_text = self.prompt_engine._build_memory_retrieval_block(
+            blocks=dict(getattr(ctx.prompt_pack, "blocks", {}) or {}),
+            memory_blocks=memory_blocks,
+            state_map=engine_state,
+        )
+        prompt_active_task_text = self.prompt_engine._render_active_task_block(
+            _as_dict(ctx.state.get("active_task"))
+        )
+        prompt_persona_text = str(_as_dict(getattr(ctx.prompt_pack, "blocks", {})).get("persona") or "").strip()
+        token_estimate = int(
+            _to_int(
+                _pick_value(
+                    ctx.prompt_sections.get("budget_total_tokens"),
+                    _as_dict(getattr(ctx.prompt_pack, "token_usage", {})).get("full_prompt"),
+                    0,
+                ),
+                0,
+            )
+            or 0
+        )
+        ctx.state["prompt_memory_block"] = {
+            "text": str(prompt_memory_text or "").strip(),
+            "block_keys": sorted(str(x) for x in list(memory_blocks.keys()) if str(x).strip()),
+            "selected_count": int(len(list(ctx.retrieved_memories or []))),
+        }
+        ctx.state["prompt_persona_block"] = {
+            "text": prompt_persona_text,
+            "active_character_id": str(ctx.prompt_sections.get("active_character_id") or "").strip(),
+            "token_estimate": int(_to_int(_as_dict(getattr(ctx.prompt_pack, "token_usage", {})).get("persona"), 0) or 0),
+        }
+        ctx.state["prompt_active_task_block"] = {
+            "text": str(prompt_active_task_text or "").strip(),
+            "status": str(_as_dict(ctx.state.get("active_task")).get("status") or "").strip(),
+        }
+        ctx.state["prompt_token_estimate"] = token_estimate
+        included_memory_blocks = _trace_prompt_block_titles(prompt_memory_text)
+        omitted_memory_blocks = _trace_prompt_omitted_blocks(
+            memory_blocks=memory_blocks,
+            active_task_block=prompt_active_task_text,
+            included_titles=included_memory_blocks,
+            context_isolation=_as_dict(ctx.meta.get("prompt_context_isolation")),
+        )
+        ctx.state["prompt_memory_block"] = {
+            **dict(ctx.state.get("prompt_memory_block") or {}),
+            "included_blocks": list(included_memory_blocks or []),
+            "omitted_blocks": [dict(x) for x in list(omitted_memory_blocks or []) if isinstance(x, dict)],
+        }
+        trace = _ensure_debug_trace(ctx)
+        trace.prompt_pack = {
+            "memory_block": dict(ctx.state.get("prompt_memory_block") or {}),
+            "persona_block": dict(ctx.state.get("prompt_persona_block") or {}),
+            "active_task_block": dict(ctx.state.get("prompt_active_task_block") or {}),
+            "included_memory_blocks": list(included_memory_blocks or []),
+            "omitted_memory_blocks": [dict(x) for x in list(omitted_memory_blocks or []) if isinstance(x, dict)],
+            "token_estimate": token_estimate,
+            "section_keys": sorted(str(x) for x in list(ctx.prompt_sections.keys()) if str(x).strip()),
+        }
         ctx.logs.append(f"stage=prompt_engine messages={len(ctx.prompt_messages)}")
         section_names = [str(x).strip() for x in list(ctx.prompt_sections.keys()) if str(x).strip()]
         token_usage = dict(getattr(ctx.prompt_pack, "token_usage", {}) or {})
@@ -1240,7 +1830,7 @@ class GenerateStage(PipelineStage):
 
         try:
             for chunk in stream(req):
-                # 1) thinking РёР· РїСЂРѕРІР°Р№РґРµСЂР° (Ollama РѕС‚РґР°С‘С‚ thinking_delta РѕС‚РґРµР»СЊРЅРѕ)
+                # 1) thinking из провайдера (Ollama отдаёт thinking_delta отдельно)
                 thinking_delta = str(getattr(chunk, "thinking_delta", "") or "")
                 if thinking_delta:
                     thinking_parts.append(thinking_delta)
@@ -1250,10 +1840,10 @@ class GenerateStage(PipelineStage):
                         except Exception:
                             pass
 
-                # 2) РѕР±С‹С‡РЅС‹Р№ С‚РµРєСЃС‚
+                # 2) обычный текст
                 text_delta = str(getattr(chunk, "text_delta", "") or "")
                 if text_delta:
-                    # РЅР° РІСЃСЏРєРёР№ СЃР»СѓС‡Р°Р№ С‚Р°РєР¶Рµ РїРѕРґРґРµСЂР¶РёРІР°РµРј <think>...</think> РІ СЃР°РјРѕРј С‚РµРєСЃС‚Рµ
+                    # на всякий случай также поддерживаем <think>...</think> в самом тексте
                     visible, thinking_from_text = parser.feed(text_delta)
                     if thinking_from_text:
                         thinking_parts.append(thinking_from_text)
@@ -2242,6 +2832,8 @@ class GenerateStage(PipelineStage):
                 prompt_state["context_tags"] = merged_tags
                 if ctx.plan:
                     prompt_state["plan"] = ctx.plan
+                prompt_state["active_task"] = dict(_as_dict(ctx.state.get("active_task")))
+                prompt_state["active_tasks"] = [dict(x) for x in list(_as_list(ctx.state.get("active_tasks"))) if isinstance(x, dict)]
                 web_intent = str(ctx.tags.get("web_query_intent") or "").strip().lower()
                 web_category = str(
                     _pick_value(
@@ -2319,6 +2911,7 @@ class GenerateStage(PipelineStage):
                     ctx.memory_context = {}
                     ctx.state.pop("memory_context", None)
                 ctx.retrieved_memories = list(retrieved_for_prompt)
+                self._build_persona_snapshot_payload(ctx=ctx, prompt_state=prompt_state)
                 ctx.prompt_pack = self.character_runtime.build(
                     state=prompt_state,
                     user_msg=ctx.clean_user_msg,
@@ -3027,6 +3620,7 @@ class ResponsePipeline:
                 character_runtime=self.character_engine,
             ),
             "memory_retrieve": MemoryRetrieveStage(memory_manager=memory_manager),
+            "episode_continuity": EpisodeContinuityStage(),
             "web_retrieve": WebStageV2(),
             "prompt_build": PromptBuildStage(character_runtime=self.character_runtime),
             "prompt_engine": PromptEngineStage(prompt_engine=self.prompt_engine),
@@ -3047,6 +3641,7 @@ class ResponsePipeline:
                 "mode_select",
                 "personality",
                 "memory_retrieve",
+                "episode_continuity",
                 "prompt_build",
                 "prompt_engine",
                 "generate",
@@ -3061,6 +3656,7 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "memory_retrieve",
+                "episode_continuity",
                 "web_retrieve",
                 "prompt_build",
                 "prompt_engine",
@@ -3077,6 +3673,7 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "memory_retrieve",
+                "episode_continuity",
                 "web_retrieve",
                 "prompt_build",
                 "prompt_engine",
@@ -3124,6 +3721,7 @@ class ResponsePipeline:
             ctx.meta["request_id"] = f"req_{int(time.time() * 1000)}_{turn_token}"
         if not str(ctx.meta.get("trace_id") or "").strip():
             ctx.meta["trace_id"] = f"trace_{int(time.time() * 1000)}_{int(_to_int(ctx.state.get('turn_id'), 0) or 0)}"
+        _ensure_debug_trace(ctx)
         trace_id = str(_pick(ctx.meta.get("trace_id"), ctx.state.get("conversation_id"), "-")).strip() or "-"
         request_id = str(_pick(ctx.meta.get("request_id"), ctx.meta.get("trace_id"), "")).strip()
         web_mode = _resolve_web_mode(ctx.meta, ctx.state)
@@ -3225,6 +3823,23 @@ class ResponsePipeline:
         compact_trace_file = str(ctx.meta.get("web_trace_compact_file_path") or "").strip()
         if compact_trace_file:
             ctx.logs.append(f"stage=web_trace compact_file={compact_trace_file}")
+        trace = _ensure_debug_trace(ctx)
+        trace.final_answer_meta = {
+            "route": str(ctx.route or ""),
+            "request_id": str(request_id or ""),
+            "trace_id": str(trace_id or ""),
+            "stage_profile": str(stage_profile or ""),
+            "web_mode": str(web_mode or ""),
+            "web_used": bool(web_used == "true"),
+            "factual_response_mode": str(ctx.meta.get("factual_response_mode") or ""),
+            "served_model": str(_as_dict(ctx.stats).get("served_model") or ""),
+            "output_len": int(output_len),
+            "output_preview": str(output_preview or ""),
+            "errors": [str(x).strip() for x in list(ctx.errors or []) if str(x).strip()],
+            "warnings": [str(x).strip() for x in list(_as_list(ctx.meta.get("turn_log_warnings"))) if str(x).strip()],
+        }
+        memory_debug_snapshot = build_memory_debug_snapshot(ctx)
+        ctx.state["memory_debug_snapshot"] = dict(memory_debug_snapshot or {})
         if isinstance(meta, dict):
             meta["trace_id"] = str(ctx.meta.get("trace_id") or "")
             meta["request_id"] = str(ctx.meta.get("request_id") or "")
@@ -3234,6 +3849,8 @@ class ResponsePipeline:
             meta["turn_log_warnings"] = [str(x).strip() for x in list(_as_list(ctx.meta.get("turn_log_warnings"))) if str(x).strip()]
             meta["web_trace_detail_file_path"] = detail_trace_file
             meta["web_trace_compact_file_path"] = compact_trace_file
+            meta["debug_trace"] = trace.to_dict()
+            meta["memory_debug_snapshot"] = dict(memory_debug_snapshot or {})
 
         return PipelineResult(
             text=str(ctx.text or ""),
@@ -3907,7 +4524,10 @@ def _render_memory_context_for_prompt(blocks: dict[str, Any]) -> str:
         ("UNRESOLVED_ITEMS", "unresolved_items"),
     ]
     chunks: list[str] = []
+    suppress_raw_episodic = bool(str(blocks.get("recalled_dialog") or "").strip())
     for title, key in order:
+        if key == "retrieved_episodic" and suppress_raw_episodic:
+            continue
         value = str(blocks.get(key) or "").strip()
         if not value:
             continue
@@ -6296,6 +6916,194 @@ def _pick_value(*values):
             continue
         return value
     return None
+
+
+def _ensure_debug_trace(ctx: PipelineContext) -> DebugTrace:
+    request_id = str(_pick(ctx.meta.get("request_id"), ctx.meta.get("trace_id"), "")).strip()
+    user_text = str(ctx.clean_user_msg or ctx.user_msg or "")
+    existing = ctx.state.get("debug_trace")
+    if isinstance(existing, DebugTrace):
+        existing.request_id = request_id
+        existing.user_text = user_text
+        return existing
+    trace = DebugTrace(
+        request_id=request_id,
+        user_text=user_text,
+    )
+    ctx.state["debug_trace"] = trace
+    return trace
+
+
+def _trace_compact_selected_memory(row: dict[str, Any] | None) -> dict[str, Any]:
+    item = dict(row or {})
+    meta = _as_dict(item.get("metadata"))
+    fact = _as_dict(meta.get("fact"))
+    claim = _as_dict(meta.get("claim"))
+    out = {
+        "id": str(item.get("id") or ""),
+        "memory_type": str(item.get("memory_type") or ""),
+        "score": float(_to_float(item.get("score"), 0.0) or 0.0),
+        "level": str(item.get("level") or ""),
+        "scope": str(item.get("scope") or ""),
+        "status": str(item.get("status") or ""),
+    }
+    reason = str(
+        _pick_value(
+            item.get("reason"),
+            item.get("match_reason"),
+            item.get("selection_reason"),
+            meta.get("reason"),
+            "",
+        )
+        or ""
+    ).strip()
+    source = str(
+        _pick_value(
+            item.get("source"),
+            item.get("source_kind"),
+            meta.get("source"),
+            meta.get("source_kind"),
+            "",
+        )
+        or ""
+    ).strip()
+    if reason:
+        out["reason"] = reason
+    if source:
+        out["source"] = source
+    if fact:
+        out["predicate"] = str(fact.get("predicate") or "")
+        out["value"] = fact.get("value")
+        out["subject"] = str(fact.get("subject") or "")
+    elif claim:
+        out["predicate"] = str(claim.get("predicate") or "")
+        out["value"] = claim.get("obj")
+        out["subject"] = str(claim.get("subject") or "")
+    else:
+        text = str(item.get("text") or "").strip()
+        if text:
+            out["text_preview"] = _text_preview(text, 120)
+    return out
+
+
+def _trace_compact_episode_hit(row: dict[str, Any] | None) -> dict[str, Any]:
+    item = dict(row or {})
+    episode = _as_dict(item.get("episode"))
+    summary_short = str(_pick_value(item.get("summary_short"), episode.get("summary_short"), "") or "").strip()
+    summary_reasoning = str(_pick_value(item.get("summary_reasoning"), episode.get("summary_reasoning"), "") or "").strip()
+    episode_id = str(_pick_value(item.get("record_id"), episode.get("id"), "") or "")
+    return {
+        "record_id": episode_id,
+        "episode_id": episode_id,
+        "score": float(_to_float(item.get("score"), 0.0) or 0.0),
+        "topic": str(episode.get("topic") or ""),
+        "summary_short": summary_short,
+        "summary_reasoning": summary_reasoning,
+        "status": str(episode.get("status") or ""),
+        "decisions": [str(x).strip() for x in list(_pick_value(item.get("decisions"), episode.get("decisions"), []) or []) if str(x).strip()],
+        "open_questions": [str(x).strip() for x in list(episode.get("open_questions") or []) if str(x).strip()],
+    }
+
+
+def _trace_compact_filtered_item(row: dict[str, Any] | None) -> dict[str, Any]:
+    item = dict(row or {})
+    return {
+        "id": str(_pick_value(item.get("id"), item.get("record_id"), "") or ""),
+        "reason": str(item.get("reason") or item.get("drop_reason") or ""),
+        "memory_type": str(item.get("memory_type") or ""),
+        "score": float(_to_float(item.get("score"), 0.0) or 0.0),
+    }
+
+
+def _trace_prompt_block_titles(text: str) -> list[str]:
+    src = str(text or "")
+    return [
+        str(x).strip()
+        for x in re.findall(r"^\[([A-Z0-9_]+)\]\s*$", src, flags=re.M)
+        if str(x).strip()
+    ]
+
+
+def _trace_prompt_omitted_blocks(
+    *,
+    memory_blocks: dict[str, Any] | None,
+    active_task_block: str,
+    included_titles: list[str] | None,
+    context_isolation: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    order = [
+        ("MEMORY_RECALL_MODE", "memory_recall_mode"),
+        ("ACTIVE_TASK", "__active_task__"),
+        ("SELF_FACTS", "self_facts"),
+        ("FACT_EXPECTATION_CHECK", "fact_expectation_check"),
+        ("RELEVANT_CLAIMS", "relevant_claims"),
+        ("RECALLED_DIALOG", "recalled_dialog"),
+        ("DOCUMENT_EVIDENCE", "document_evidence"),
+        ("EXACT_FACT_EVIDENCE", "exact_fact_evidence"),
+        ("SUPPORTING_MESSAGES", "supporting_messages"),
+        ("SUPPORTING_MESSAGE", "supporting_message"),
+        ("WORKING_MEMORY", "working_memory"),
+        ("SESSION_SUMMARY", "session_summary"),
+        ("SEMANTIC_FACTS", "retrieved_semantic"),
+        ("EPISODIC_MEMORIES", "retrieved_episodic"),
+        ("DOCUMENT_SNIPPETS", "retrieved_docs"),
+        ("TASK_TOOL_STATE", "active_tool_state"),
+        ("UNRESOLVED_ITEMS", "unresolved_items"),
+    ]
+    key_to_title = {key: title for title, key in order}
+    included = {str(x).strip().upper() for x in list(included_titles or []) if str(x).strip()}
+    isolation_rows = [
+        dict(x)
+        for x in list(_as_dict(context_isolation).get("dropped_memory_blocks") or [])
+        if isinstance(x, dict)
+    ]
+    dropped_by_title: dict[str, dict[str, Any]] = {}
+    for row in isolation_rows:
+        block_key = str(row.get("block") or "").strip()
+        title = key_to_title.get(block_key)
+        if not title:
+            continue
+        dropped_by_title[title] = {
+            "reason": str(row.get("reason") or ""),
+            "preview": str(row.get("preview") or ""),
+            "detected_category": str(row.get("detected_category") or ""),
+        }
+
+    out: list[dict[str, Any]] = []
+    for title, key in order:
+        if title in included:
+            continue
+        if key == "__active_task__":
+            text = str(active_task_block or "").strip()
+        else:
+            text = str(_as_dict(memory_blocks).get(key) or "").strip()
+        dropped = dict(dropped_by_title.get(title) or {})
+        if not text and not dropped:
+            continue
+        row = {
+            "block": title,
+            "reason": str(dropped.get("reason") or "not_rendered"),
+        }
+        preview = str(dropped.get("preview") or "").strip() or _preview_text(text, 160)
+        if preview:
+            row["preview"] = preview
+        detected_category = str(dropped.get("detected_category") or "").strip()
+        if detected_category:
+            row["detected_category"] = detected_category
+        out.append(row)
+    return out
+
+
+def _is_empty_string_list_or_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not bool(value.strip())
+    if isinstance(value, (list, tuple, set)):
+        return not any(str(x).strip() for x in list(value or []))
+    if isinstance(value, dict):
+        return not bool(value)
+    return False
 
 
 def _to_bool(value, default: bool = False) -> bool:

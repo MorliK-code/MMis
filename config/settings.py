@@ -240,6 +240,10 @@ class _LoggerPrefixFilter(logging.Filter):
 class AppSettings:
     app_name: str = "MMis"
     debug: bool = False
+    debug_memory_inspector_enabled: bool = True
+    debug_memory_inspector_show_raw_scores: bool = False
+    debug_memory_inspector_show_filtered_items: bool = False
+    debug_memory_inspector_show_prompt_blocks: bool = False
     locale: str = "ru_RU"
     default_language: str = "ru"
     startup_mode: str = "api"
@@ -745,6 +749,12 @@ def _default_config_tree() -> dict[str, Any]:
             "locale": "ru_RU",
             "default_language": "ru",
         },
+        "debug": {
+            "memory_inspector_enabled": True,
+            "show_raw_scores": False,
+            "show_filtered_items": False,
+            "show_prompt_blocks": False,
+        },
         "startup": {
             "mode": "api",
             "active_profile": "BALANCED",
@@ -1158,6 +1168,14 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
     settings = AppSettings(
         app_name=_norm_str(_get_dotted(row, "app.name") or "MMis"),
         debug=_to_bool(_get_dotted(row, "app.debug")),
+        debug_memory_inspector_enabled=_to_bool(_pick_value(_get_dotted(row, "debug.memory_inspector_enabled"), True)),
+        debug_memory_inspector_show_raw_scores=_to_bool(_pick_value(_get_dotted(row, "debug.show_raw_scores"), False)),
+        debug_memory_inspector_show_filtered_items=_to_bool(
+            _pick_value(_get_dotted(row, "debug.show_filtered_items"), False)
+        ),
+        debug_memory_inspector_show_prompt_blocks=_to_bool(
+            _pick_value(_get_dotted(row, "debug.show_prompt_blocks"), False)
+        ),
         locale=_norm_str(_get_dotted(row, "app.locale") or "ru_RU"),
         default_language=_norm_str(_get_dotted(row, "app.default_language") or "ru"),
         startup_mode=_norm_lower(_get_dotted(row, "startup.mode") or "api"),

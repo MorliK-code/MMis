@@ -564,9 +564,9 @@ class StudioGenerator:
         known_chars = self._known_character_ids()
         llm_profiles_enum = self._llm_profile_enum_for_prompt()
         system_prompt = (
-            "РўС‹ Р°РЅР°Р»РёР·РёСЂСѓРµС€СЊ Р·Р°РїСЂРѕСЃ РґР»СЏ Specs Studio. "
-            "Р’РµСЂРЅРё С‚РѕР»СЊРєРѕ JSON. Р‘РµР· РєРѕРјРјРµРЅС‚Р°СЂРёРµРІ. "
-            "Р¤РѕСЂРјР°С‚: "
+            "Ты анализируешь запрос для Specs Studio. "
+            "Верни только JSON. Без комментариев. "
+            "Формат: "
             "{"
             "\"operation_type\":\"create_character|update_character|update_modes|mixed|build_character_pack\","
             "\"targets\":{\"character_ids\":[],\"mode_ids\":[],\"scope\":\"global|character|mixed\"},"
@@ -1623,9 +1623,9 @@ class StudioGenerator:
         attempt: int,
     ) -> tuple[list[str], dict[str, Any]]:
         system_prompt = (
-            "РЎРіРµРЅРµСЂРёСЂСѓР№ 3-5 РІР°СЂРёР°РЅС‚РѕРІ РґР»СЏ С€Р°РіР° СЃС‚СѓРґРёРё. "
-            "Р’РµСЂРЅРё С‚РѕР»СЊРєРѕ JSON: {\"options\":[\"...\",\"...\",\"...\"]}. "
-            "РќРµ РґРѕР±Р°РІР»СЏР№ РїСѓРЅРєС‚ 'СЃРІРѕР№ РІР°СЂРёР°РЅС‚'."
+            "Сгенерируй 3-5 вариантов для шага студии. "
+            "Верни только JSON: {\"options\":[\"...\",\"...\",\"...\"]}. "
+            "Не добавляй пункт 'свой вариант'."
         )
         user_prompt = (
             f"question_id={question_id}\n"

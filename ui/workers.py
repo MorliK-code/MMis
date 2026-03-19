@@ -16,6 +16,8 @@ class ReplyResult:
     stats: dict
     thinking: str = ""
     model: str = ""
+    debug_trace: dict | None = None
+    memory_debug_snapshot: dict | None = None
 
 
 class ReplyWorker(QObject):
@@ -60,6 +62,8 @@ class ReplyWorker(QObject):
                     stats=reply.stats,
                     thinking=reply.thinking,
                     model=reply.model,
+                    debug_trace=reply.debug_trace,
+                    memory_debug_snapshot=reply.memory_debug_snapshot,
                 )
             )
         except ApiClientError as exc:

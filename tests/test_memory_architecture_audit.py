@@ -21,7 +21,14 @@ from memory import (
     DocumentSummary,
     GovernorDecision,
     GovernorProfileSnapshot,
+    IdentityCoreCandidate,
     MemoryGovernor,
+    MemoryLevel,
+    MemoryRecord,
+    MemoryScope,
+    MemoryType,
+    IdentityCoreWriteDecision,
+    build_memory_debug_snapshot,
     analyze_message_for_memory,
 )
 from memory.claim_extractor import promote_claim_candidates as legacy_promote_claim_candidates
@@ -36,6 +43,8 @@ def test_memory_layers_are_importable() -> None:
     assert MemoryGovernor is not None
     assert GovernorDecision is not None
     assert GovernorProfileSnapshot is not None
+    assert IdentityCoreCandidate is not None
+    assert IdentityCoreWriteDecision is not None
 
     assert DialogEpisode is not None
     assert DialogEpisodeBuilder is not None
@@ -48,6 +57,7 @@ def test_memory_layers_are_importable() -> None:
     assert DocumentChunker is not None
     assert DocumentIngestPipeline is not None
     assert DocumentRetriever is not None
+    assert build_memory_debug_snapshot is not None
 
 
 def test_claim_layer_is_connected_to_ingest() -> None:
@@ -78,3 +88,19 @@ def test_document_layers_have_explicit_roles() -> None:
     assert DOCUMENT_MEMORY_ROLE == "low_level_document_storage"
     assert DOCUMENT_INGEST_ROLE == "high_level_document_pipeline"
     assert LONG_MEMORY_ROLE == "thin_document_facade"
+
+
+def test_identity_core_memory_type_is_available_for_roundtrip() -> None:
+    row = MemoryRecord.from_dict(
+        {
+            "id": "identity-core:asya",
+            "text": "identity core snapshot",
+            "memory_type": MemoryType.IDENTITY_CORE.value,
+            "level": MemoryLevel.L3_SEMANTIC.value,
+            "scope": MemoryScope.CHARACTER.value,
+            "namespace": "asya",
+        }
+    )
+
+    assert row.memory_type == MemoryType.IDENTITY_CORE
+    assert row.to_dict()["memory_type"] == MemoryType.IDENTITY_CORE.value

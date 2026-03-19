@@ -21,6 +21,7 @@ __all__ = [
     "PROFILE_BALANCED",
     "PROFILE_QUALITY",
     "PROFILE_AUTONOMOUS",
+    "DebugTrace",
 ]
 
 _LAZY = {
@@ -42,6 +43,7 @@ _LAZY = {
     "PROFILE_BALANCED": "core.response_pipeline",
     "PROFILE_QUALITY": "core.response_pipeline",
     "PROFILE_AUTONOMOUS": "core.response_pipeline",
+    "DebugTrace": "core.debug_trace",
 }
 
 

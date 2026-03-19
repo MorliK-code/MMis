@@ -17,6 +17,8 @@ class ChatResponse(BaseModel):
     model: str
     parameters: dict | None = None
     summary: str | None = None
+    debug_trace: dict | None = None
+    memory_debug_snapshot: dict | None = None
 
 
 class HealthResponse(BaseModel):

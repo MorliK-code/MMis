@@ -5,6 +5,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from threading import RLock
+from types import SimpleNamespace
 from typing import Any
 
 from config.settings import load_config
@@ -12,6 +13,8 @@ from core.character_runtime import CharacterRuntime
 from core.response_pipeline import PipelineResult, ResponsePipeline
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
+from memory.debug_snapshot import build_memory_debug_snapshot
+from memory.identity_core import PROTECTED_IDENTITY_CORE_KEYS
 from memory.memory_manager import MemoryManager
 from memory.memory_models import MemoryEvent, MemoryScope, MemoryType
 from memory.text_sanitizer import (
@@ -682,6 +685,10 @@ class Brain:
                 )
             )
             self._capture_memory_ingest(summary, ingest_result, bucket="assistant_turn")
+        self._update_debug_trace_after_persist(
+            meta=meta,
+            conversation_id=conversation_id or "default",
+        )
         return summary
 
     def _append_turn_summaries(
@@ -891,6 +898,126 @@ class Brain:
         elif key == "web_memory_write":
             if stored_ids:
                 summary["web_memory_items_written"] = int(summary.get("web_memory_items_written") or 0) + 1
+
+    def _update_debug_trace_after_persist(
+        self,
+        *,
+        meta: dict[str, Any],
+        conversation_id: str,
+    ) -> None:
+        if not isinstance(meta, dict) or self.memory_manager is None:
+            return
+        trace = dict(meta.get("debug_trace") or {})
+        if not trace:
+            return
+        namespace = str(conversation_id or "default").strip() or "default"
+        request_id = str(meta.get("request_id") or "").strip()
+        snapshot = None
+        if hasattr(self.memory_manager, "get_governor_profile_snapshot"):
+            try:
+                snapshot = self.memory_manager.get_governor_profile_snapshot(namespace)
+            except Exception:
+                snapshot = None
+        decisions: list[dict[str, Any]] = []
+        if hasattr(self.memory_manager, "debug_recent_governor_events"):
+            try:
+                decisions = list(
+                    self.memory_manager.debug_recent_governor_events(
+                        namespace=namespace,
+                        request_id=request_id,
+                        limit=16,
+                    )
+                    or []
+                )
+            except Exception:
+                decisions = []
+        superseded: list[str] = []
+        superseded_rows: list[dict[str, Any]] = []
+        for row in list(decisions or []):
+            for record_id in list(dict(row).get("superseded_record_ids") or []):
+                token = str(record_id or "").strip()
+                if token and token not in superseded:
+                    superseded.append(token)
+            for event_row in list(dict(row).get("superseded_rows") or []):
+                compact = dict(event_row or {})
+                record_id = str(compact.get("record_id") or "").strip()
+                if not compact:
+                    continue
+                if record_id and any(str(x.get("record_id") or "").strip() == record_id for x in superseded_rows):
+                    continue
+                superseded_rows.append(compact)
+        conflicts = []
+        if snapshot is not None:
+            conflicts = [dict(x) for x in list(getattr(snapshot, "conflicts", []) or []) if isinstance(x, dict)]
+            trace["active_profile"] = {
+                "namespace": str(getattr(snapshot, "namespace", namespace) or namespace),
+                "active_facts": dict(getattr(snapshot, "active_facts", {}) or {}),
+                "conflicts": conflicts,
+                "updated_at": float(getattr(snapshot, "updated_at", 0.0) or 0.0),
+            }
+        trace["memory_governor"] = {
+            "decisions": [dict(x) for x in list(decisions or []) if isinstance(x, dict)],
+            "superseded": list(superseded),
+            "superseded_rows": [dict(x) for x in list(superseded_rows or []) if isinstance(x, dict)],
+            "conflicts": conflicts,
+        }
+        identity_core_snapshot = None
+        if hasattr(self.memory_manager, "get_identity_core_snapshot"):
+            try:
+                identity_core_snapshot = self.memory_manager.get_identity_core_snapshot(namespace)
+            except Exception:
+                identity_core_snapshot = None
+        identity_core_decisions: list[dict[str, Any]] = []
+        if hasattr(self.memory_manager, "debug_recent_identity_core_events"):
+            try:
+                identity_core_decisions = list(
+                    self.memory_manager.debug_recent_identity_core_events(
+                        namespace=namespace,
+                        request_id=request_id,
+                        limit=16,
+                    )
+                    or []
+                )
+            except Exception:
+                identity_core_decisions = []
+        identity_core_payload = (
+            identity_core_snapshot.to_dict()
+            if identity_core_snapshot is not None and hasattr(identity_core_snapshot, "to_dict")
+            else {}
+        )
+        pending_overrides = [
+            dict(x)
+            for x in list(identity_core_decisions or [])
+            if isinstance(x, dict)
+            and not bool(x.get("allow_write", False))
+            and str(x.get("reason") or "").strip() == "override_requires_confirmation"
+        ]
+        active_identity_keys = dict(dict(trace.get("identity_core") or {}).get("active_identity_keys") or {})
+        if not active_identity_keys and identity_core_payload:
+            active_identity_keys = {
+                "addressing": sorted(dict(identity_core_payload.get("addressing") or {}).keys()),
+                "interaction_style": sorted(dict(identity_core_payload.get("interaction_style") or {}).keys()),
+                "boundaries": sorted(dict(identity_core_payload.get("boundaries") or {}).keys()),
+                "emotional_rules": sorted(dict(identity_core_payload.get("emotional_rules") or {}).keys()),
+                "assistant_trait_baseline": sorted(dict(identity_core_payload.get("assistant_trait_baseline") or {}).keys()),
+            }
+        identity_trace = {
+            **dict(trace.get("identity_core") or {}),
+            "memory_snapshot": dict(identity_core_payload or {}),
+            "active_identity_keys": active_identity_keys,
+            "trait_baselines": dict(
+                dict(trace.get("identity_core") or {}).get("trait_baselines")
+                or dict(identity_core_payload.get("assistant_trait_baseline") or {})
+            ),
+            "protected_keys": list(PROTECTED_IDENTITY_CORE_KEYS),
+            "pending_overrides": pending_overrides,
+            "recent_decisions": [dict(x) for x in list(identity_core_decisions or []) if isinstance(x, dict)],
+        }
+        trace["identity_core"] = identity_trace
+        meta["debug_trace"] = trace
+        meta["memory_debug_snapshot"] = build_memory_debug_snapshot(
+            SimpleNamespace(state={"debug_trace": trace})
+        )
 
     @staticmethod
     def _merge_memory_write_summaries(*parts: dict[str, Any]) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from memory.fact_extractor import FactExtractor
 from memory.contextual_resolver import resolve_anchor_context
@@ -149,7 +149,7 @@ def test_fact_synthesis_prefers_current_os_over_past_os() -> None:
 
 
 def test_ingest_analysis_populates_memory_view_keys_from_entities_and_numeric_facts() -> None:
-    analysis = analyze_message_for_memory("РЈ РјРµРЅСЏ RTX 3050 Ti СЃ 4 GB VRAM Рё Python 3.11")
+    analysis = analyze_message_for_memory("У меня RTX 3050 Ti с 4 GB VRAM и Python 3.11")
 
     views = dict(analysis.memory_views or {})
     entity_keys = set(str(x or "") for x in list(views.get("entity_keys") or []))
@@ -165,7 +165,7 @@ def test_ingest_analysis_populates_memory_view_keys_from_entities_and_numeric_fa
 
 
 def test_fact_extractor_uses_ingest_analysis_structured_facts() -> None:
-    text = "РЈ РјРµРЅСЏ RTX 3050 Ti СЃ 4 GB VRAM Рё Python 3.11 РЅР° Windows."
+    text = "У меня RTX 3050 Ti с 4 GB VRAM и Python 3.11 на Windows."
     analysis = analyze_message_for_memory(text)
     rows = FactExtractor().extract_v2(
         text=text,
@@ -205,7 +205,7 @@ def test_fact_extractor_uses_entities_and_numeric_before_self_cues() -> None:
 
 
 def test_fact_extractor_dedupes_structured_python_fact() -> None:
-    text = "РЈ РјРµРЅСЏ Python 3.11"
+    text = "У меня Python 3.11"
     analysis = analyze_message_for_memory(text)
     rows = FactExtractor().extract_v2(
         text=text,
@@ -271,12 +271,12 @@ def test_person_name_does_not_match_im_emotion_or_action() -> None:
 
 
 def test_numeric_extractor_skips_non_age_matches() -> None:
-    facts = extract_numeric_facts("РјРЅРµ 32 РіР± RAM Рё i am 3 commits behind")
+    facts = extract_numeric_facts("мне 32 гб RAM и i am 3 commits behind")
     assert all(item.kind != "age_years" for item in facts)
 
 
 def test_gpu_short_match_does_not_invent_brand() -> None:
-    entities = resolve_entities("nvidia 3050 ti РІ РЅРѕСѓС‚Р±СѓРєРµ")
+    entities = resolve_entities("nvidia 3050 ti в ноутбуке")
     gpu_entities = [item for item in entities if item.type == "gpu_model"]
     assert any(item.canonical == "3050 Ti" for item in gpu_entities)
 

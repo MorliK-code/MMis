@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 
 from memory.dialog_episode_models import DialogEpisode
-from memory.memory_models import MemoryRecord, MemoryScope, MemoryType, RetrievalQuery
+from memory.memory_models import MemoryRecord, MemoryScope, MemoryStatus, MemoryType, RetrievalQuery
 from memory.vector_store import VectorStore
 from modules.nlu.normalizer import normalize_text
 
@@ -20,6 +20,10 @@ _DECISION_QUERY_RE = re.compile(
 )
 _OPEN_QUERY_RE = re.compile(
     r"(?:что\s+осталось|что\s+открыто|open\s+question|unresolved|что\s+не\s+закрыли)",
+    re.I,
+)
+_PLAN_QUERY_RE = re.compile(
+    r"(?:какой\s+(?:был|у\s+нас)\s+план|что\s+по\s+плану|next\s+steps?|plan\b)",
     re.I,
 )
 _QUERY_STOPWORDS = {
@@ -59,6 +63,7 @@ class DialogEpisodeQueryHints:
     decisions_preferred: bool = False
     open_questions_preferred: bool = False
     discussion_recall_preferred: bool = False
+    plan_preferred: bool = False
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,18 @@ class DialogEpisodeRetriever:
         )
 
         hints = self.build_query_hints(query)
-        rows = self._merge_hits(semantic_hits=semantic_hits, lexical_hits=lexical_hits)
+        anchor_hits = self._anchor_hits(
+            namespace=namespace_value,
+            scopes=scope_values,
+            include_stale=bool(query.include_stale),
+            hints=hints,
+            top_k=max(1, int(top_k_value * 3)),
+        )
+        rows = self._merge_hits(
+            semantic_hits=semantic_hits,
+            lexical_hits=lexical_hits,
+            anchor_hits=anchor_hits,
+        )
         out: list[DialogEpisodeHit] = []
         for row in rows:
             record = row.get("record")
@@ -154,7 +170,14 @@ class DialogEpisodeRetriever:
                 continue
             score = (
                 max(float(row.get("semantic_score") or 0.0), float(row.get("lexical_score") or 0.0))
-                + self.score_bonus(query=query, record=record, episode=episode, source=str(row.get("source") or "episode_channel"))
+                + float(row.get("anchor_score") or 0.0)
+                + self.score_bonus(
+                    query=query,
+                    record=record,
+                    episode=episode,
+                    source=str(row.get("source") or "episode_channel"),
+                    hints=hints,
+                )
                 + min(0.08, max(0.0, float(episode.salience or 0.0)) * 0.08)
             )
             supporting_turns = self._supporting_turns(
@@ -187,11 +210,12 @@ class DialogEpisodeRetriever:
         record: MemoryRecord,
         episode: DialogEpisode,
         source: str,
+        hints: DialogEpisodeQueryHints | None = None,
     ) -> float:
         _ = record
-        hints = self.build_query_hints(query)
+        hints = hints or self.build_query_hints(query)
         bonus = 0.08
-        if str(source or "") == "episode_channel":
+        if str(source or "") in {"episode_channel", "episode_anchor_channel"}:
             bonus += 0.05
         if hints.discussion_recall_preferred:
             bonus += 0.04
@@ -201,6 +225,8 @@ class DialogEpisodeRetriever:
             bonus += 0.12
         if hints.open_questions_preferred and list(episode.open_questions or []):
             bonus += 0.10
+        if hints.plan_preferred and (list(episode.decisions or []) or list(episode.open_questions or [])):
+            bonus += 0.12
 
         topic_overlap = len({str(x).strip().lower() for x in list(episode.topic_keys or []) if str(x).strip()}.intersection(hints.topic_keys))
         entity_overlap = len({str(x).strip().lower() for x in list(episode.entity_keys or []) if str(x).strip()}.intersection(hints.trigger_keys))
@@ -246,10 +272,92 @@ class DialogEpisodeRetriever:
             topic_keys=topic_keys,
             trigger_keys=trigger_keys,
             reasoning_preferred=bool(_WHY_QUERY_RE.search(query_text)),
-            decisions_preferred=bool(_DECISION_QUERY_RE.search(query_text)),
+            decisions_preferred=bool(_DECISION_QUERY_RE.search(query_text) or _PLAN_QUERY_RE.search(query_text)),
             open_questions_preferred=bool(_OPEN_QUERY_RE.search(query_text)),
             discussion_recall_preferred=bool(_DISCUSSION_QUERY_RE.search(query_text)),
+            plan_preferred=bool(_PLAN_QUERY_RE.search(query_text)),
         )
+
+    def _anchor_hits(
+        self,
+        *,
+        namespace: str,
+        scopes: list[MemoryScope],
+        include_stale: bool,
+        hints: DialogEpisodeQueryHints,
+        top_k: int,
+    ) -> list[tuple[MemoryRecord, float]]:
+        if not hasattr(self.store, "iter_records"):
+            return []
+
+        allowed_scopes = {str(x.value) for x in list(scopes or []) if hasattr(x, "value")}
+        out: list[tuple[MemoryRecord, float]] = []
+        for record in list(self.store.iter_records(namespace=namespace) or []):
+            if not isinstance(record, MemoryRecord):
+                continue
+            if record.memory_type != MemoryType.EPISODE:
+                continue
+            if record.scope == MemoryScope.PRIVATE_RUNTIME:
+                continue
+            if allowed_scopes and str(record.scope.value) not in allowed_scopes:
+                continue
+            if not include_stale and record.status in {MemoryStatus.STALE, MemoryStatus.ARCHIVED, MemoryStatus.DELETED}:
+                continue
+            episode = self._episode_from_record(record)
+            if episode is None:
+                continue
+            anchor_score = self._anchor_match_score(episode=episode, hints=hints)
+            if anchor_score <= 0.0:
+                continue
+            out.append((record, anchor_score))
+
+        out.sort(key=lambda item: float(item[1]), reverse=True)
+        return out[: max(1, int(top_k))]
+
+    def _anchor_match_score(
+        self,
+        *,
+        episode: DialogEpisode,
+        hints: DialogEpisodeQueryHints,
+    ) -> float:
+        topic_tokens = {
+            str(episode.topic or "").strip().lower(),
+            *[str(x).strip().lower() for x in list(episode.topic_keys or []) if str(x).strip()],
+        }
+        entity_tokens = {str(x).strip().lower() for x in list(episode.entity_keys or []) if str(x).strip()}
+        decision_tokens = self._text_tokens(list(episode.decisions or []))
+        open_question_tokens = self._text_tokens(list(episode.open_questions or []))
+        reasoning_tokens = self._text_tokens([episode.summary_reasoning])
+
+        topic_overlap = self._fuzzy_overlap(topic_tokens, hints.topic_keys)
+        entity_overlap = self._fuzzy_overlap(entity_tokens, hints.trigger_keys)
+        decision_overlap = self._fuzzy_overlap(decision_tokens, hints.trigger_keys)
+        open_overlap = self._fuzzy_overlap(open_question_tokens, hints.trigger_keys)
+        reasoning_overlap = self._fuzzy_overlap(reasoning_tokens, hints.trigger_keys)
+
+        score = 0.0
+        if topic_overlap:
+            score += min(0.16, 0.08 * topic_overlap)
+        if entity_overlap:
+            score += min(0.16, 0.08 * entity_overlap)
+        if decision_overlap:
+            score += min(0.18, 0.09 * decision_overlap)
+        if open_overlap:
+            score += min(0.16, 0.08 * open_overlap)
+        if reasoning_overlap:
+            score += min(0.12, 0.06 * reasoning_overlap)
+
+        if hints.discussion_recall_preferred and (topic_overlap or entity_overlap or decision_overlap or open_overlap):
+            score += 0.08
+        if hints.reasoning_preferred and (reasoning_overlap or decision_overlap or open_overlap):
+            score += 0.08
+        if hints.decisions_preferred and list(episode.decisions or []):
+            score += 0.10
+        if hints.open_questions_preferred and list(episode.open_questions or []):
+            score += 0.08
+        if hints.plan_preferred and (list(episode.decisions or []) or list(episode.open_questions or [])):
+            score += 0.10
+        return min(0.42, max(0.0, score))
 
     def _supporting_turns(
         self,
@@ -450,10 +558,21 @@ class DialogEpisodeRetriever:
         return tokens
 
     @staticmethod
+    def _text_tokens(texts: list[str]) -> set[str]:
+        tokens: set[str] = set()
+        for text in list(texts or []):
+            for part in re.split(r"\s+", normalize_text(str(text or "")).lower()):
+                token = str(part or "").strip()
+                if token and token not in _QUERY_STOPWORDS and len(token) >= 3:
+                    tokens.add(token)
+        return tokens
+
+    @staticmethod
     def _merge_hits(
         *,
         semantic_hits: list[tuple[MemoryRecord, float]],
         lexical_hits: list[tuple[MemoryRecord, float]],
+        anchor_hits: list[tuple[MemoryRecord, float]] | None = None,
     ) -> list[dict[str, object]]:
         merged: dict[str, dict[str, object]] = {}
         for record, score in semantic_hits:
@@ -461,6 +580,7 @@ class DialogEpisodeRetriever:
                 "record": record,
                 "semantic_score": float(score),
                 "lexical_score": 0.0,
+                "anchor_score": 0.0,
                 "source": "episode_channel",
             }
         for record, score in lexical_hits:
@@ -470,12 +590,34 @@ class DialogEpisodeRetriever:
                     "record": record,
                     "semantic_score": 0.0,
                     "lexical_score": 0.0,
+                    "anchor_score": 0.0,
                     "source": "episode_channel",
                 },
             )
             row["lexical_score"] = max(float(row.get("lexical_score") or 0.0), float(score))
+        for record, score in list(anchor_hits or []):
+            row = merged.setdefault(
+                record.id,
+                {
+                    "record": record,
+                    "semantic_score": 0.0,
+                    "lexical_score": 0.0,
+                    "anchor_score": 0.0,
+                    "source": "episode_anchor_channel",
+                },
+            )
+            row["anchor_score"] = max(float(row.get("anchor_score") or 0.0), float(score))
+            if not float(row.get("semantic_score") or 0.0) and not float(row.get("lexical_score") or 0.0):
+                row["source"] = "episode_anchor_channel"
         out = list(merged.values())
-        out.sort(key=lambda row: max(float(row.get("semantic_score") or 0.0), float(row.get("lexical_score") or 0.0)), reverse=True)
+        out.sort(
+            key=lambda row: max(
+                float(row.get("semantic_score") or 0.0),
+                float(row.get("lexical_score") or 0.0),
+                float(row.get("anchor_score") or 0.0),
+            ),
+            reverse=True,
+        )
         return out
 
     @staticmethod

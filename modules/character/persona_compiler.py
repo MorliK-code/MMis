@@ -31,6 +31,8 @@ def compile_system_persona(
     ))
     traits = dict(state.get("traits") or {})
     relation_state = dict(state.get("relation_state") or {})
+    boundaries = dict(state.get("boundaries") or {})
+    emotional_handling = dict(state.get("emotional_handling") or {})
     emotional_state = dict(state.get("emotional_state") or {})
     locks = dict(state.get("locks") or {})
     bans = [str(x).strip() for x in list(state.get("bans") or []) if str(x).strip()]
@@ -41,6 +43,8 @@ def compile_system_persona(
     identity_lines = _build_identity(spec=spec, character_id=cid, locks=locks)
     stable_trait_lines, stable_debug = _build_stable_traits_lines(spec=spec, traits=traits)
     relation_lines = _build_relation_state_lines(relation_state=relation_state)
+    boundary_lines = _build_boundary_lines(boundaries=boundaries)
+    emotional_handling_lines = _build_emotional_handling_lines(emotional_handling=emotional_handling)
     emotional_lines = _build_emotional_state_lines(emotional_state=emotional_state, mood=mood)
     addressing_lines = _build_addressing_lines(addressing=addressing)
     mode_lines, mode_debug = _build_mode_lines(spec=spec, mode=mode, character_id=cid)
@@ -50,6 +54,8 @@ def compile_system_persona(
         _render_block("PERSONA_IDENTITY", identity_lines),
         _render_block("PERSONA_STABLE_TRAITS", stable_trait_lines),
         _render_block("PERSONA_RELATION_STATE", relation_lines),
+        _render_block("PERSONA_BOUNDARIES", boundary_lines),
+        _render_block("PERSONA_EMOTIONAL_HANDLING", emotional_handling_lines),
         _render_block("PERSONA_EMOTIONAL_STATE", emotional_lines),
         _render_block("PERSONA_ADDRESSING", addressing_lines),
         _render_block("PERSONA_MODE", mode_lines),
@@ -61,6 +67,8 @@ def compile_system_persona(
         "mood": mood,
         "traits": stable_debug,
         "relation_state": dict(relation_state),
+        "boundaries": dict(boundaries),
+        "emotional_handling": dict(emotional_handling),
         "emotional_state": dict(emotional_state),
         "locks": dict(locks),
         "bans": list(bans),
@@ -69,6 +77,8 @@ def compile_system_persona(
             "identity": list(identity_lines),
             "stable_traits": list(stable_trait_lines),
             "relation_state": list(relation_lines),
+            "boundaries": list(boundary_lines),
+            "emotional_handling": list(emotional_handling_lines),
             "emotional_state": list(emotional_lines),
             "addressing": list(addressing_lines),
             "mode": list(mode_lines),
@@ -78,6 +88,8 @@ def compile_system_persona(
             "identity",
             "stable_traits",
             "relation_state",
+            "boundaries",
+            "emotional_handling",
             "emotional_state",
             "addressing",
             "mode",
@@ -103,6 +115,8 @@ def _merge_state(*, base: dict[str, Any], current: dict[str, Any]) -> dict[str, 
     merged.setdefault("traits", {})
     merged.setdefault("locks", {"feminine": True, "informal_you": True})
     merged.setdefault("relation_state", {})
+    merged.setdefault("boundaries", {})
+    merged.setdefault("emotional_handling", {})
     merged.setdefault("bans", [])
     merged.setdefault("mood", "neutral")
     return merged
@@ -114,6 +128,8 @@ def _sanitize_persona_state(value: dict[str, Any] | None) -> dict[str, Any]:
     row["traits"] = traits
     row["locks"] = dict(row.get("locks") or {"feminine": True, "informal_you": True})
     row["relation_state"] = _coerce_relation_state(row.get("relation_state"), traits=traits)
+    row["boundaries"] = _coerce_boundaries(row.get("boundaries"))
+    row["emotional_handling"] = _coerce_emotional_handling(row.get("emotional_handling"))
     row["bans"] = [str(x).strip() for x in list(row.get("bans") or []) if str(x).strip()]
     row["emotional_state"] = _coerce_emotional_state(
         row.get("emotional_state"),
@@ -195,6 +211,34 @@ def _build_relation_state_lines(*, relation_state: dict[str, Any]) -> list[str]:
         f"- teasing_permission: {_relation_descriptor('teasing_permission', row['teasing_permission'])}",
         f"- softness_bias: {_relation_descriptor('softness_bias', row['softness_bias'])}",
     ]
+
+
+def _build_boundary_lines(*, boundaries: dict[str, Any]) -> list[str]:
+    row = _coerce_boundaries(boundaries)
+    lines: list[str] = []
+    if bool(row.get("avoid_overloaded_intros")):
+        lines.append("- Do not overload replies with long intros or preambles.")
+    if bool(row.get("avoid_baby_talk")):
+        lines.append("- Do not use baby-talk, cutesy wording, or syrupy over-soft phrasing.")
+    if bool(row.get("avoid_overformal_tone")):
+        lines.append("- Do not drift into stiff or overly formal tone.")
+    if bool(row.get("do_not_invent_user_facts")):
+        lines.append("- Do not invent facts about the user; rely on memory, ask, or mark uncertainty.")
+    return lines or ["- no explicit long-term boundaries."]
+
+
+def _build_emotional_handling_lines(*, emotional_handling: dict[str, Any]) -> list[str]:
+    row = _coerce_emotional_handling(emotional_handling)
+    lines: list[str] = []
+    if bool(row.get("deescalate_on_irritation")):
+        lines.append("- If the user sounds irritated, de-escalate first and then move to solving.")
+    if bool(row.get("treat_short_replies_as_low_bandwidth")):
+        lines.append("- Treat short user replies as low bandwidth or fatigue by default, not as hostility.")
+    if float(row.get("warmth_upshift_on_user_distress") or 0.0) > 0.0:
+        lines.append("- Raise warmth when the user sounds frustrated, sad, anxious, or worn down.")
+    if float(row.get("playfulness_downshift_on_user_distress") or 0.0) > 0.0:
+        lines.append("- Reduce playfulness when tension, irritation, or overload is present.")
+    return lines or ["- rely on default emotional handling."]
 
 
 def _build_emotional_state_lines(*, emotional_state: dict[str, Any], mood: str) -> list[str]:
@@ -528,6 +572,36 @@ def _coerce_user_addressing(value: dict[str, Any] | None) -> dict[str, Any]:
         "use_name_by_default": bool(row.get("use_name_by_default", False)),
         "updated_at": str(row.get("updated_at") or "").strip(),
     }
+
+
+def _coerce_boundaries(value: dict[str, Any] | None) -> dict[str, Any]:
+    row = dict(value or {})
+    out: dict[str, Any] = {}
+    for key in (
+        "avoid_overloaded_intros",
+        "avoid_baby_talk",
+        "avoid_overformal_tone",
+        "do_not_invent_user_facts",
+    ):
+        if key in row:
+            out[key] = bool(row.get(key))
+    return out
+
+
+def _coerce_emotional_handling(value: dict[str, Any] | None) -> dict[str, Any]:
+    row = dict(value or {})
+    out: dict[str, Any] = {}
+    if "deescalate_on_irritation" in row:
+        out["deescalate_on_irritation"] = bool(row.get("deescalate_on_irritation"))
+    if "treat_short_replies_as_low_bandwidth" in row:
+        out["treat_short_replies_as_low_bandwidth"] = bool(row.get("treat_short_replies_as_low_bandwidth"))
+    if "warmth_upshift_on_user_distress" in row:
+        out["warmth_upshift_on_user_distress"] = _clamp01(_to_float(row.get("warmth_upshift_on_user_distress"), 0.0))
+    if "playfulness_downshift_on_user_distress" in row:
+        out["playfulness_downshift_on_user_distress"] = _clamp01(
+            _to_float(row.get("playfulness_downshift_on_user_distress"), 0.0)
+        )
+    return out
 
 
 def _clamp01(value: float) -> float:

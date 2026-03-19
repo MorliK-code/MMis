@@ -257,9 +257,10 @@ def chat(req: ChatRequest) -> ChatResponse:
             think=_runtime.thinking_enabled if req.think is None else bool(req.think),
             json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
         )
+        meta_map = _build_chat_meta(req=req, source="api")
         result = _runtime.brain.handle_message(
             text,
-            meta=_build_chat_meta(req=req, source="api"),
+            meta=meta_map,
         )
 
         answer_raw = str(result.text or "")
@@ -267,6 +268,8 @@ def chat(req: ChatRequest) -> ChatResponse:
         if not thinking.strip():
             thinking = str(getattr(result, "thinking", "") or "").strip()
         structured = dict(getattr(result, "structured_output", {}) or {})
+        debug_trace = dict(meta_map.get("debug_trace") or {}) if isinstance(meta_map, dict) else {}
+        memory_debug_snapshot = dict(meta_map.get("memory_debug_snapshot") or {}) if isinstance(meta_map, dict) else {}
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None
@@ -296,6 +299,8 @@ def chat(req: ChatRequest) -> ChatResponse:
             model=_runtime.model,
             parameters=parameters,
             summary=summary_text,
+            debug_trace=debug_trace or None,
+            memory_debug_snapshot=memory_debug_snapshot or None,
         )
 
 
@@ -335,7 +340,7 @@ def chat_stream(req: ChatRequest):
 
         events: queue.Queue[tuple[str, str]] = queue.Queue()
         done = threading.Event()
-        state: dict[str, Any] = {"result": None, "error": ""}
+        state: dict[str, Any] = {"result": None, "error": "", "meta": {}}
         sent_answer = 0
         sent_thinking = 0
 
@@ -361,16 +366,18 @@ def chat_stream(req: ChatRequest):
                         think=_runtime.thinking_enabled if req.think is None else bool(req.think),
                         json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                     )
+                    meta_map = _build_chat_meta(
+                        req=req,
+                        source="api",
+                        stream_on_answer_chunk=_on_answer,
+                        stream_on_thinking_chunk=_on_thinking,
+                    )
                     result = _runtime.brain.handle_message(
                         request_text,
-                        meta=_build_chat_meta(
-                            req=req,
-                            source="api",
-                            stream_on_answer_chunk=_on_answer,
-                            stream_on_thinking_chunk=_on_thinking,
-                        ),
+                        meta=meta_map,
                     )
                     state["result"] = result
+                    state["meta"] = meta_map
             except Exception as exc:
                 state["error"] = str(exc)
             finally:
@@ -406,6 +413,9 @@ def chat_stream(req: ChatRequest):
         if not thinking.strip():
             thinking = str(getattr(result, "thinking", "") or "").strip()
         structured = dict(getattr(result, "structured_output", {}) or {})
+        meta_map = dict(state.get("meta") or {})
+        debug_trace = dict(meta_map.get("debug_trace") or {}) if isinstance(meta_map, dict) else {}
+        memory_debug_snapshot = dict(meta_map.get("memory_debug_snapshot") or {}) if isinstance(meta_map, dict) else {}
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None
@@ -420,6 +430,8 @@ def chat_stream(req: ChatRequest):
             "model": _runtime.model,
             "parameters": parameters,
             "summary": summary_text,
+            "debug_trace": debug_trace or None,
+            "memory_debug_snapshot": memory_debug_snapshot or None,
         }
         _runtime.last_thinking = thinking
 

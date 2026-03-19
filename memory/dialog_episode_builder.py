@@ -18,7 +18,11 @@ _EXPLICIT_END_RE = re.compile(
     re.I,
 )
 _DECISION_RE = re.compile(
-    r"(?:\b(?:решили|договорились|будем|сделаем|следующим\s+шагом|next\s+step|we\s+will|let'?s)\b)",
+    r"(?:"
+    r"\b(?:решили|договорились|будем|сделаем|следующим\s+шагом|agreed|next\s+step|we\s+will|let'?s)\b"
+    r"|"
+    r"\b(?:сначала|сперва|first)\b.{0,120}\b(?:потом|затем|then)\b"
+    r")",
     re.I,
 )
 _QUESTIONISH_RE = re.compile(
@@ -26,6 +30,31 @@ _QUESTIONISH_RE = re.compile(
     re.I,
 )
 _WORD_RE = re.compile(r"[a-zа-яёіїєґ0-9_]{3,}", re.I)
+_SUMMARY_SPLIT_RE = re.compile(r"[\n\r]+|(?<=[.!?])\s+")
+_SUMMARY_DISCOURSE_PREFIX_RE = re.compile(
+    r"^(?:ну|ладно|ок(?:ей)?|хорошо|так|слушай|смотри|короче|в общем|итак|значит)\b[\s,:;-]*",
+    re.I,
+)
+_SUMMARY_NOISE_RE = re.compile(
+    r"^(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер|утро)|hello|hi|ага|угу|ок(?:ей)?|ясно|понятно|спасибо|thanks?)$",
+    re.I,
+)
+_BAD_TOPIC_TOKENS = {
+    "ага",
+    "да",
+    "нет",
+    "ок",
+    "окей",
+    "ладно",
+    "понял",
+    "поняла",
+    "привет",
+    "hello",
+    "hi",
+    "no",
+    "okay",
+    "yes",
+}
 _STOPWORDS = {
     "about",
     "after",
@@ -144,14 +173,28 @@ class DialogEpisodeBuilder:
         if len(rows) < max(1, int(self.min_turns_for_episode)):
             return None
 
-        topic = self._episode_topic(rows)
         decisions = self._extract_decisions(rows)
         open_questions = self._extract_open_questions(rows)
+        topic = self._episode_topic(
+            rows,
+            decisions=decisions,
+            open_questions=open_questions,
+        )
         participants = self._participants(rows)
         topic_keys = self._topic_keys(rows, topic=topic)
         entity_keys = self._entity_keys(rows)
-        summary_short = self._summary_short(topic=topic, decisions=decisions, open_questions=open_questions)
-        summary_reasoning = self._summary_reasoning(topic=topic, decisions=decisions, open_questions=open_questions)
+        summary_short = self._summary_short(
+            turns=rows,
+            topic=topic,
+            decisions=decisions,
+            open_questions=open_questions,
+        )
+        summary_reasoning = self._summary_reasoning(
+            turns=rows,
+            topic=topic,
+            decisions=decisions,
+            open_questions=open_questions,
+        )
         ts = float(now_ts or rows[-1].ts or time.time())
 
         return DialogEpisode(
@@ -171,7 +214,7 @@ class DialogEpisodeBuilder:
         )
 
     def _turn_topic(self, turn: DialogTurn) -> str:
-        explicit = str(turn.topic or "").strip().lower()
+        explicit = self._topic_candidate(turn.topic)
         if explicit:
             return explicit
 
@@ -179,35 +222,105 @@ class DialogEpisodeBuilder:
             token = str(tag or "").strip().lower()
             match = _TOPIC_TAG_RE.match(token)
             if match:
-                return str(match.group(1) or "").strip().lower()
+                candidate = self._topic_candidate(match.group(1))
+                if candidate:
+                    return candidate
 
         meta = dict(turn.metadata or {})
-        explicit_meta = str(meta.get("topic") or "").strip().lower()
+        explicit_meta = self._topic_candidate(meta.get("topic"))
         if explicit_meta:
             return explicit_meta
 
         for item in list(meta.get("topics") or []):
-            token = str(item or "").strip().lower().replace("topic_", "", 1)
-            if token:
-                return token
+            candidate = self._topic_candidate(str(item or "").strip().replace("topic_", "", 1))
+            if candidate:
+                return candidate
 
         return self._fallback_topic(str(turn.text or ""))
 
-    def _episode_topic(self, turns: list[DialogTurn]) -> str:
+    def _episode_topic(
+        self,
+        turns: list[DialogTurn],
+        *,
+        decisions: list[str] | None = None,
+        open_questions: list[str] | None = None,
+    ) -> str:
         topics = [self._turn_topic(turn) for turn in list(turns or [])]
         topics = [token for token in topics if token]
         if topics:
             return Counter(topics).most_common(1)[0][0]
 
+        signal_topics = self._topic_signal_candidates(turns)
+        if signal_topics:
+            return signal_topics[0]
+
+        dialog_signal_topic = self._fallback_topic(" ".join([*(decisions or []), *(open_questions or [])]).strip())
+        if dialog_signal_topic:
+            return dialog_signal_topic
+
         merged = " ".join(str(turn.text or "").strip() for turn in list(turns or []))
         fallback = self._fallback_topic(merged)
-        return fallback or "dialog_context"
+        return fallback or "general_dialog"
+
+    def _topic_signal_candidates(self, turns: list[DialogTurn]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+
+        def _add(value: Any) -> None:
+            token = self._topic_candidate(value)
+            if not token or token in seen:
+                return
+            seen.add(token)
+            out.append(token)
+
+        for turn in list(turns or []):
+            meta = dict(turn.metadata or {})
+            views = dict(meta.get("memory_views") or {})
+            for token in list(views.get("topic_keys") or []):
+                _add(token)
+            for token in list(meta.get("topic_keys") or []):
+                _add(token)
+            for token in list(views.get("entity_keys") or []):
+                _add(token)
+            for token in list(meta.get("entity_keys") or []):
+                _add(token)
+            for row in list(meta.get("memory_entities") or []):
+                if isinstance(row, dict):
+                    _add(row.get("canonical") or row.get("surface") or "")
+        return out
+
+    def _topic_candidate(self, value: Any) -> str:
+        token = self._normalize_topic_token(value)
+        if not token:
+            return ""
+        compact = token.replace("_", " ")
+        words = [item for item in _WORD_RE.findall(compact) if item]
+        if len(words) == 1 and words[0] in _STOPWORDS:
+            return ""
+        if self._is_bad_topic(token):
+            return ""
+        return token
+
+    def _normalize_topic_token(self, value: Any) -> str:
+        token = normalize_text(str(value or "")).strip().lower()
+        token = re.sub(r"\s+", " ", token)
+        return token
+
+    def _is_bad_topic(self, value: Any) -> bool:
+        token = self._normalize_topic_token(value)
+        if not token:
+            return False
+        compact = token.replace("_", " ")
+        if compact in _BAD_TOPIC_TOKENS:
+            return True
+        words = [item for item in _WORD_RE.findall(compact) if item]
+        return len(words) == 1 and words[0] in _BAD_TOPIC_TOKENS
 
     def _fallback_topic(self, text: str) -> str:
         tokens = [
             token
             for token in _WORD_RE.findall(normalize_text(str(text or "")))
-            if token and token not in _STOPWORDS
+            if token and token not in _STOPWORDS and token not in _BAD_TOPIC_TOKENS
         ]
         if not tokens:
             return ""
@@ -305,24 +418,300 @@ class DialogEpisodeBuilder:
             _add(str(token or ""))
         return out
 
-    def _summary_short(self, *, topic: str, decisions: list[str], open_questions: list[str]) -> str:
-        if decisions and open_questions:
-            return f"Discussed {topic}; made {len(decisions)} decision(s) and left {len(open_questions)} open question(s)."
-        if decisions:
-            return f"Discussed {topic}; made {len(decisions)} decision(s)."
-        if open_questions:
-            return f"Discussed {topic}; left {len(open_questions)} open question(s)."
-        return f"Discussed {topic}."
+    def _episode_text(self, rows: list[DialogTurn]) -> str:
+        return self._join_episode_fragments(
+            self._episode_fragments(rows),
+            maximum=520,
+        )
 
-    def _summary_reasoning(self, *, topic: str, decisions: list[str], open_questions: list[str]) -> str:
-        parts: list[str] = [f"The conversation focused on {topic}."]
+    def _episode_user_text(self, rows: list[DialogTurn]) -> str:
+        return self._join_episode_fragments(
+            self._episode_fragments(
+                rows,
+                include_assistant=False,
+            ),
+            maximum=420,
+        )
+
+    def _episode_compact_text(self, rows: list[DialogTurn]) -> str:
+        summary_rows = self._summary_source_turns(rows)
+        source_rows = summary_rows or list(rows or [])
+        compact_fragments = self._episode_fragments(
+            source_rows,
+            assistant_must_be_important=True,
+        )
+        if not compact_fragments:
+            compact_fragments = self._episode_fragments(source_rows)
+        return self._join_episode_fragments(compact_fragments, maximum=220)
+
+    def _summary_source_turns(self, rows: list[DialogTurn], *, maximum: int = 4) -> list[DialogTurn]:
+        meaningful: list[DialogTurn] = []
+        for turn in list(rows or []):
+            if self._is_noise_turn(turn):
+                continue
+            role = str(turn.role or "").strip().lower()
+            if role == "assistant" and not self._is_important_assistant_turn(turn):
+                continue
+            meaningful.append(turn)
+            if len(meaningful) >= maximum:
+                break
+        if meaningful:
+            return meaningful
+        return [
+            turn
+            for turn in list(rows or [])
+            if str(turn.text or "").strip()
+        ][:maximum]
+
+    def _episode_fragments(
+        self,
+        rows: list[DialogTurn],
+        *,
+        include_user: bool = True,
+        include_assistant: bool = True,
+        important_assistant_only: bool = False,
+        assistant_must_be_important: bool = False,
+    ) -> list[str]:
+        fragments: list[str] = []
+        for turn in list(rows or []):
+            role = str(turn.role or "").strip().lower()
+            if role == "user" and not include_user:
+                continue
+            if role == "assistant":
+                if not include_assistant:
+                    continue
+                if (important_assistant_only or assistant_must_be_important) and not self._is_important_assistant_turn(turn):
+                    continue
+            if role != "assistant" and important_assistant_only:
+                continue
+            for raw_fragment in self._split_summary_fragments(str(turn.text or "").strip()):
+                fragment = self._clean_summary_fragment(raw_fragment)
+                if not self._is_meaningful_summary_fragment(fragment):
+                    continue
+                fragments.append(fragment)
+        return self._dedupe_fragments(fragments)
+
+    def _dedupe_fragments(self, fragments: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for value in list(fragments or []):
+            item = self._clean_summary_fragment(value)
+            if not self._is_meaningful_summary_fragment(item):
+                continue
+            key = normalize_text(item)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(item)
+        return out
+
+    def _join_episode_fragments(self, fragments: list[str], *, maximum: int) -> str:
+        selected: list[str] = []
+        for value in list(fragments or []):
+            candidate = ". ".join([*selected, value]).strip()
+            if selected and len(candidate) > maximum:
+                break
+            selected.append(value)
+        return self._trim_summary_text(". ".join(selected).strip(), maximum=maximum)
+
+    def _is_noise_turn(self, turn: DialogTurn) -> bool:
+        text = self._clean_summary_fragment(str(turn.text or "").strip())
+        if not text:
+            return True
+        normalized = normalize_text(text)
+        if not normalized:
+            return True
+        if _SUMMARY_NOISE_RE.match(normalized):
+            return True
+        compact = re.sub(r"[^a-zа-яёіїєґ0-9_]+", " ", normalized, flags=re.I).strip()
+        if compact and all(token in _BAD_TOPIC_TOKENS for token in compact.split()):
+            return True
+        return not any(
+            self._is_meaningful_summary_fragment(self._clean_summary_fragment(raw_fragment))
+            for raw_fragment in self._split_summary_fragments(text)
+        )
+
+    def _is_important_assistant_turn(self, turn: DialogTurn) -> bool:
+        text = str(turn.text or "").strip()
+        if not text:
+            return False
+        if _DECISION_RE.search(text) or _QUESTIONISH_RE.search(text):
+            return True
+        fragment = self._clean_summary_fragment(text)
+        normalized = normalize_text(fragment)
+        words = [token for token in _WORD_RE.findall(normalized) if token]
+        if len(words) >= 6:
+            return True
+        return len(fragment) >= 44 and len(words) >= 4
+
+    def _summary_short(
+        self,
+        *,
+        turns: list[DialogTurn],
+        topic: str,
+        decisions: list[str],
+        open_questions: list[str],
+    ) -> str:
+        base = self._summary_seed_text(
+            turns,
+            decisions=decisions,
+            open_questions=open_questions,
+        )
+        if not base:
+            base = f"Discussed {topic}." if topic else "Discussed the conversation."
+        return base.strip()
+
+    def _summary_seed_text(
+        self,
+        turns: list[DialogTurn],
+        *,
+        decisions: list[str] | None = None,
+        open_questions: list[str] | None = None,
+    ) -> str:
+        summary_rows = self._summary_source_turns(turns)
+        source_rows = summary_rows or list(turns or [])
+        compact_source = self._episode_compact_text(source_rows)
+        user_source = self._episode_user_text(source_rows)
+        full_source = self._episode_text(source_rows)
+        source_text = compact_source or user_source or full_source
+        fragments = self._dedupe_fragments(
+            [
+                self._clean_summary_fragment(raw_fragment)
+                for raw_fragment in self._split_summary_fragments(source_text)
+            ]
+        )
+
+        if fragments:
+            selected: list[str] = []
+            seen: set[str] = set()
+
+            def _try_add(value: str) -> bool:
+                item = self._clean_summary_fragment(value)
+                if not self._is_meaningful_summary_fragment(item):
+                    return False
+                key = normalize_text(item)
+                if not key or key in seen:
+                    return False
+                candidate = ". ".join([*selected, item]).strip()
+                if selected and len(candidate) > 145:
+                    return False
+                selected.append(item)
+                seen.add(key)
+                return True
+
+            _try_add(fragments[0])
+            priority_fragments = [
+                self._clean_summary_fragment(str((decisions or [""])[0] or "").strip()),
+                self._clean_summary_fragment(str((open_questions or [""])[0] or "").strip()),
+            ]
+            for item in list(fragments[1:4]):
+                priority_fragments.append(item)
+            for item in priority_fragments:
+                if not item:
+                    continue
+                _try_add(item)
+                if len(". ".join(selected).strip()) >= 110:
+                    break
+            if selected:
+                return self._trim_summary_text(". ".join(selected).strip())
+
+        fallback = self._clean_summary_fragment(full_source)
+        return self._trim_summary_text(fallback)
+
+    def _split_summary_fragments(self, text: str) -> list[str]:
+        return [
+            str(chunk or "").strip()
+            for chunk in _SUMMARY_SPLIT_RE.split(str(text or ""))
+            if str(chunk or "").strip()
+        ]
+
+    def _clean_summary_fragment(self, text: str) -> str:
+        value = str(text or "").strip()
+        value = _SUMMARY_DISCOURSE_PREFIX_RE.sub("", value).strip()
+        value = re.sub(r"\s+", " ", value).strip(" \t\r\n-,:;.!?")
+        return value
+
+    def _is_meaningful_summary_fragment(self, text: str) -> bool:
+        value = str(text or "").strip()
+        if not value:
+            return False
+        normalized = normalize_text(value)
+        if not normalized:
+            return False
+        if _SUMMARY_NOISE_RE.match(normalized):
+            return False
+        words = [token for token in _WORD_RE.findall(normalized) if token]
+        if len(words) >= 4:
+            return True
+        if len(value) >= 28 and len(words) >= 3:
+            return True
+        if _DECISION_RE.search(value) or _QUESTIONISH_RE.search(value):
+            return True
+        return False
+
+    def _trim_summary_text(self, text: str, *, minimum: int = 100, maximum: int = 150) -> str:
+        value = re.sub(r"\s+", " ", str(text or "")).strip(" \t\r\n")
+        if not value:
+            return ""
+        if len(value) > maximum:
+            trimmed = value[:maximum].rstrip(" ,;:-")
+            if len(trimmed) > minimum:
+                parts = trimmed.rsplit(" ", 1)
+                if len(parts) == 2 and len(parts[0]) >= minimum:
+                    trimmed = parts[0]
+            value = trimmed.rstrip(" ,;:-")
+        if value and value[-1] not in ".!?":
+            value += "."
+        return value
+
+    def _trim_reasoning_text(self, text: str, *, minimum: int = 140, maximum: int = 280) -> str:
+        value = re.sub(r"\s+", " ", str(text or "")).strip(" \t\r\n")
+        if not value:
+            return ""
+        if len(value) > maximum:
+            trimmed = value[:maximum].rstrip(" ,;:-")
+            if len(trimmed) > minimum:
+                parts = trimmed.rsplit(" ", 1)
+                if len(parts) == 2 and len(parts[0]) >= minimum:
+                    trimmed = parts[0]
+            value = trimmed.rstrip(" ,;:-")
+        if value and value[-1] not in ".!?":
+            value += "."
+        return value
+
+    def _summary_reasoning(
+        self,
+        *,
+        turns: list[DialogTurn],
+        topic: str,
+        decisions: list[str],
+        open_questions: list[str],
+    ) -> str:
+        discussed = self._summary_seed_text(turns).rstrip(".")
+        parts: list[str] = []
+        if discussed:
+            parts.append(f"Discussed: {discussed}.")
+        elif topic:
+            parts.append(f"Discussed: {topic}.")
         if decisions:
-            parts.append("Decisions: " + "; ".join(list(decisions or [])[:2]) + ".")
+            decision_text = "; ".join(
+                self._clean_summary_fragment(item)
+                for item in list(decisions or [])[:2]
+                if self._clean_summary_fragment(item)
+            )
+            if decision_text:
+                parts.append(f"Decided: {decision_text}.")
         if open_questions:
-            parts.append("Open questions: " + "; ".join(list(open_questions or [])[:2]) + ".")
+            open_text = "; ".join(
+                self._clean_summary_fragment(item)
+                for item in list(open_questions or [])[:2]
+                if self._clean_summary_fragment(item)
+            )
+            if open_text:
+                parts.append(f"Open questions: {open_text}.")
         if not decisions and not open_questions:
-            parts.append("Turns clarified context and next steps.")
-        return " ".join(part.strip() for part in parts if part.strip())
+            parts.append("Context clarified next steps.")
+        return self._trim_reasoning_text(" ".join(part.strip() for part in parts if part.strip()))
 
     def _salience(self, turns: list[DialogTurn], *, decisions: list[str], open_questions: list[str]) -> float:
         turn_score = min(0.36, 0.08 * len(list(turns or [])))

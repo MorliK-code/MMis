@@ -8,7 +8,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TARGET_NAME = "studio_generator.py"
-MARKERS = ("С„", "С‚", "СЏ", "СЊ", "С€", "С‰", "С‡", "СЋ", "СЌ", "Р°", "Рѕ", "Рµ", "Рё")
+MARKERS = ("ф", "т", "я", "ь", "ш", "щ", "ч", "ю", "э", "а", "о", "е", "и")
 
 
 def is_mojibake_line(text: str) -> bool:

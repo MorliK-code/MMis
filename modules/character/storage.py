@@ -93,6 +93,10 @@ class CharacterStorage:
         cid = _safe_id(character_id)
         return (self.character_dir(cid) / "user_addressing.json").resolve()
 
+    def identity_core_runtime_path(self, character_id: str) -> Path:
+        cid = _safe_id(character_id)
+        return (self.character_dir(cid) / "identity_core.json").resolve()
+
     def ensure_defaults(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.spec_root.mkdir(parents=True, exist_ok=True)
@@ -159,6 +163,7 @@ class CharacterStorage:
         )
         _ensure_json(root / "emotion_state.json", _default_emotion_state())
         _ensure_json(root / "user_addressing.json", _default_user_addressing())
+        _ensure_json(root / "identity_core.json", _default_identity_core())
         _ensure_json(
             root / "traits" / "builtin.json",
             {
@@ -409,7 +414,29 @@ class CharacterStorage:
         cid = _safe_id(character_id)
         row = self.load_user_addressing(cid)
         row.update(dict(payload or {}))
-        _write_json(self.user_addressing_runtime_path(cid), _normalize_user_addressing_payload(row))
+        normalized = _normalize_user_addressing_payload(row)
+        _write_json(self.user_addressing_runtime_path(cid), normalized)
+        identity_core = self.load_identity_core(cid)
+        identity_core["addressing"] = dict(normalized)
+        if str(normalized.get("updated_at") or "").strip():
+            identity_core["updated_at"] = str(normalized.get("updated_at") or "").strip()
+        _write_json(self.identity_core_runtime_path(cid), _normalize_identity_core_payload(identity_core))
+
+    def load_identity_core(self, character_id: str) -> dict[str, Any]:
+        cid = _safe_id(character_id)
+        path = self.identity_core_runtime_path(cid)
+        payload = _read_json(path)
+        normalized = _normalize_identity_core_payload(payload if isinstance(payload, dict) else {})
+        if normalized != payload:
+            _write_json(path, normalized)
+        return normalized
+
+    def save_identity_core(self, character_id: str, payload: dict[str, Any]) -> None:
+        cid = _safe_id(character_id)
+        row = self.load_identity_core(cid)
+        row.update(dict(payload or {}))
+        normalized = _normalize_identity_core_payload(row)
+        _write_json(self.identity_core_runtime_path(cid), normalized)
 
     def load_builtin_traits(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
@@ -768,6 +795,18 @@ def _default_user_addressing() -> dict[str, Any]:
     }
 
 
+def _default_identity_core() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "addressing": _default_user_addressing(),
+        "interaction_style": {},
+        "boundaries": {},
+        "emotional_handling": {},
+        "assistant_trait_baseline": {},
+        "updated_at": "",
+    }
+
+
 def _write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -972,6 +1011,87 @@ def _normalize_user_addressing_payload(value: dict[str, Any] | None) -> dict[str
             payload["allowed_forms"].insert(0, payload["canonical_name"])
         payload["forbidden_forms"] = [x for x in payload["forbidden_forms"] if str(x).casefold() != canonical_key]
     return payload
+
+
+def _normalize_identity_core_payload(value: dict[str, Any] | None) -> dict[str, Any]:
+    row = dict(value or {})
+    addressing = _normalize_user_addressing_payload(row.get("addressing"))
+    payload = {
+        "schema_version": 1,
+        "addressing": addressing,
+        "interaction_style": _normalize_identity_core_interaction_style(row.get("interaction_style")),
+        "boundaries": _normalize_identity_core_boundaries(row.get("boundaries")),
+        "emotional_handling": _normalize_identity_core_emotional_handling(row.get("emotional_handling")),
+        "assistant_trait_baseline": _normalize_identity_core_assistant_trait_baseline(row.get("assistant_trait_baseline")),
+        "updated_at": str(
+            row.get("updated_at")
+            or dict(addressing or {}).get("updated_at")
+            or ""
+        ).strip(),
+    }
+    return payload
+
+
+def _normalize_identity_core_interaction_style(value: Any) -> dict[str, Any]:
+    row = dict(value or {})
+    out: dict[str, Any] = {}
+    if "prefers_directness" in row:
+        out["prefers_directness"] = float(_clamp01(_to_float(row.get("prefers_directness"), 0.0)))
+    if "prefers_short_answers" in row:
+        out["prefers_short_answers"] = float(_clamp01(_to_float(row.get("prefers_short_answers"), 0.0)))
+    if "allows_light_teasing" in row:
+        out["allows_light_teasing"] = bool(row.get("allows_light_teasing"))
+    style = str(row.get("technical_collaboration_style") or "").strip().lower()
+    if style in {"low", "medium", "high"}:
+        out["technical_collaboration_style"] = style
+    return out
+
+
+def _normalize_identity_core_boundaries(value: Any) -> dict[str, Any]:
+    row = dict(value or {})
+    out: dict[str, Any] = {}
+    for key in (
+        "avoid_overloaded_intros",
+        "avoid_baby_talk",
+        "avoid_overformal_tone",
+        "do_not_invent_user_facts",
+    ):
+        if key in row:
+            out[key] = bool(row.get(key))
+    return out
+
+
+def _normalize_identity_core_emotional_handling(value: Any) -> dict[str, Any]:
+    row = dict(value or {})
+    out: dict[str, Any] = {}
+    if "deescalate_on_irritation" in row:
+        out["deescalate_on_irritation"] = bool(row.get("deescalate_on_irritation"))
+    if "treat_short_replies_as_low_bandwidth" in row:
+        out["treat_short_replies_as_low_bandwidth"] = bool(row.get("treat_short_replies_as_low_bandwidth"))
+    if "warmth_upshift_on_user_distress" in row:
+        out["warmth_upshift_on_user_distress"] = float(
+            _clamp01(_to_float(row.get("warmth_upshift_on_user_distress"), 0.0))
+        )
+    if "playfulness_downshift_on_user_distress" in row:
+        out["playfulness_downshift_on_user_distress"] = float(
+            _clamp01(_to_float(row.get("playfulness_downshift_on_user_distress"), 0.0))
+        )
+    return out
+
+
+def _normalize_identity_core_assistant_trait_baseline(value: Any) -> dict[str, Any]:
+    row = dict(value or {})
+    out: dict[str, Any] = {}
+    for key in (
+        "warmth_baseline",
+        "directness_baseline",
+        "empathy_floor",
+        "professionalism_floor",
+        "sarcasm_ceiling",
+    ):
+        if key in row:
+            out[key] = float(_clamp01(_to_float(row.get(key), 0.0)))
+    return out
 
 
 def _normalize_name_form(value: Any) -> str:
