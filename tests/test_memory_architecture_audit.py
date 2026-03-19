@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import memory.claim_extractor as legacy_claim_extractor
+from memory.document_ingest import DOCUMENT_INGEST_ROLE
+from memory.document_memory import DOCUMENT_MEMORY_ROLE
+from memory.long_memory import LONG_MEMORY_ROLE
 from memory import (
     ClaimCandidate,
     ClaimPromotionDecision,
@@ -15,6 +19,9 @@ from memory import (
     DocumentRecord,
     DocumentRetriever,
     DocumentSummary,
+    GovernorDecision,
+    GovernorProfileSnapshot,
+    MemoryGovernor,
     analyze_message_for_memory,
 )
 from memory.claim_extractor import promote_claim_candidates as legacy_promote_claim_candidates
@@ -26,6 +33,9 @@ def test_memory_layers_are_importable() -> None:
     assert ClaimRecord is not None
     assert ClaimPromotionDecision is not None
     assert ClaimRetriever is not None
+    assert MemoryGovernor is not None
+    assert GovernorDecision is not None
+    assert GovernorProfileSnapshot is not None
 
     assert DialogEpisode is not None
     assert DialogEpisodeBuilder is not None
@@ -51,4 +61,20 @@ def test_claim_layer_is_connected_to_ingest() -> None:
 
 
 def test_claim_extractor_legacy_shim_points_to_claim_promoter() -> None:
-    assert legacy_promote_claim_candidates is promote_claim_candidates
+    assert legacy_claim_extractor.LEGACY_COMPAT_ONLY is True
+    assert legacy_claim_extractor.LEGACY_SHIM_NOTE == "Do not use this module in new code."
+    assert legacy_promote_claim_candidates(
+        [],
+        event_id="evt:test",
+        namespace="default",
+    ) == promote_claim_candidates(
+        [],
+        event_id="evt:test",
+        namespace="default",
+    )
+
+
+def test_document_layers_have_explicit_roles() -> None:
+    assert DOCUMENT_MEMORY_ROLE == "low_level_document_storage"
+    assert DOCUMENT_INGEST_ROLE == "high_level_document_pipeline"
+    assert LONG_MEMORY_ROLE == "thin_document_facade"

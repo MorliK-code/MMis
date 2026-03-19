@@ -14,6 +14,7 @@ from memory.document_retrieval import DocumentRetrievalHit, DocumentRetriever, D
 from memory.document_memory import DocumentMemory
 from memory.embedding_provider import build_embedding_provider
 from memory.fact_extractor import FactExtractor
+from memory.governor import GovernorDecision, GovernorProfileSnapshot, MemoryGovernor
 from memory.ingest_analyzer import (
     EntityItem,
     IngestAnalysis,
@@ -84,6 +85,9 @@ __all__ = [
     "EMBED_VERSION",
     "embed_text",
     "FactExtractor",
+    "MemoryGovernor",
+    "GovernorDecision",
+    "GovernorProfileSnapshot",
     "ClaimCandidate",
     "ClaimRecord",
     "ClaimPromotionDecision",

@@ -15,8 +15,18 @@ from memory.memory_models import DocumentIngestRequest, DocumentIngestResult, Me
 from memory.vector_store import VectorStore
 
 
+LONG_MEMORY_ROLE = "thin_document_facade"
+
+
 @dataclass
 class LongMemoryV2:
+    """Thin facade over document-memory services for legacy manager integration.
+
+    New document logic should live in:
+        DocumentMemory -> low-level chunk/document storage
+        DocumentIngestPipeline -> high-level analysis/summaries/claims pipeline
+    """
+
     store: VectorStore
     document_memory: DocumentMemory
 

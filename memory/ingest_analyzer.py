@@ -136,6 +136,23 @@ _ENVIRONMENT_ENTITY_TYPES = {
     "tool_name",
     "os_name",
 }
+_RUNTIME_DIALOG_METADATA_KEYS = {
+    "tags",
+    "metadata_tags",
+    "runtime_entities",
+    "entities",
+    "lang",
+    "intent",
+    "mood",
+    "emotion",
+    "topic",
+    "topics",
+    "active_mode",
+    "has_code",
+    "has_link",
+    "project_name",
+    "project",
+}
 
 
 def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> IngestAnalysis:
@@ -149,7 +166,10 @@ def analyze_message_for_memory(text: str, *, metadata: dict | None = None) -> In
     from memory.retrieval_projection import build_memory_views
 
     raw = str(text or "")
-    meta = dict(metadata or {})
+    # Long-term memory analysis must not depend on runtime/dialog metadata.
+    # Keep only neutral/internal fields and drop metadata/* truth-like payloads
+    # such as runtime entities, runtime tags, and dialog intent/topic hints.
+    meta = _memory_analysis_metadata(metadata)
     views = build_memory_views(raw, metadata=meta)
 
     anchors = extract_anchors(raw, metadata=meta)
@@ -278,6 +298,13 @@ def build_tags_from_analysis(
     return out
 
 
+def _memory_analysis_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    out = dict(metadata or {})
+    for key in _RUNTIME_DIALOG_METADATA_KEYS:
+        out.pop(key, None)
+    return out
+
+
 def _build_stable_facts(
     text: str,
     *,
@@ -286,9 +313,8 @@ def _build_stable_facts(
     metadata: dict[str, Any] | None = None,
 ) -> list[StableFact]:
     lower = str(text or "").lower()
-    meta = dict(metadata or {})
     self_context = _has_any(lower, _SELF_CUES)
-    project_context = _has_any(lower, _PROJECT_CUES) or bool(meta.get("project_name"))
+    project_context = _has_any(lower, _PROJECT_CUES)
 
     out: list[StableFact] = []
     seen: set[tuple[str, str, str]] = set()

@@ -24,6 +24,7 @@ from memory.dialog_episode_retriever import DialogEpisodeRetriever
 from memory.document_memory import ChunkingConfig, DocumentMemory
 from memory.document_retrieval import DocumentRetriever
 from memory.fact_extractor import FactExtractor
+from memory.governor import MemoryGovernor
 from memory.long_memory import LongMemoryV2
 from memory.memory_lifecycle import MemoryLifecycleManager
 from memory.memory_manager import MemoryManager
@@ -397,6 +398,7 @@ def _manager() -> MemoryManager:
     manager._fact_extractor = FactExtractor()
     manager._policy = MemoryPolicy()
     manager._lifecycle = _E2ELifecycle()
+    manager._governor = MemoryGovernor(lifecycle=manager._lifecycle)
     manager._retriever = HybridRetriever(
         store=manager._store,
         stale_after_days=30,

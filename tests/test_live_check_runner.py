@@ -88,12 +88,18 @@ def test_build_ad_hoc_scenario_attaches_expectations_to_last_turn(tmp_path: Path
 def test_builtin_suites_are_present() -> None:
     suites = _builtin_scenarios()
 
-    assert set(suites) == {"facts", "claims", "dialog", "documents", "all"}
+    assert set(suites) == {"facts", "claims", "dialog", "documents", "noise", "all"}
     assert any(row.name == "facts_exact_recall" for row in suites["facts"])
+    assert any(row.name == "facts_name_exact" for row in suites["facts"])
+    assert any(row.name == "facts_os_update_current_only" for row in suites["facts"])
     assert any(row.name == "claims_uses_recall" for row in suites["claims"])
-    assert any(row.name == "claims_owns_recall" for row in suites["claims"])
+    assert any(row.name == "claims_like_rose_eyes" for row in suites["claims"])
+    assert any(row.name == "claims_garbage_not_promoted" for row in suites["claims"])
     assert any(row.name == "dialog_contextual_recall" for row in suites["dialog"])
+    assert any(row.name == "dialog_reason_no_assistant_thoughts" for row in suites["dialog"])
     assert any(row.name == "document_code_recall" for row in suites["documents"])
+    assert any(row.name == "documents_do_not_override_self_facts" for row in suites["documents"])
+    assert any(row.name == "noise_old_assistant_miss_does_not_override_python_fact" for row in suites["noise"])
 
 
 def test_scenario_file_loader_supports_list_payload(tmp_path: Path) -> None:

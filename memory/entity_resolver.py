@@ -137,11 +137,6 @@ def resolve_entities(
         if name:
             out.append(EntityItem(type="person_name", surface=match.group(0), canonical=name, confidence=0.92))
 
-    meta = dict(metadata or {})
-    project_name = str(meta.get("project_name") or meta.get("project") or "").strip()
-    if project_name:
-        out.append(EntityItem(type="project_name", surface=project_name, canonical=project_name, confidence=0.86))
-
     return _dedupe_entities(out)
 
 

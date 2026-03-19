@@ -78,6 +78,27 @@ def test_contextual_resolver_marks_colloquial_python_and_os_mentions_present() -
     assert signals.get("os_present") is True
 
 
+def test_ingest_analysis_ignores_runtime_metadata_as_truth_source() -> None:
+    analysis = analyze_message_for_memory(
+        "привет",
+        metadata={
+            "runtime_entities": {"software": ["Python"], "os": ["Windows"]},
+            "entities": {"software": ["Python"], "os": ["Windows"]},
+            "tags": ["topic_python", "intent_chat"],
+            "topic": "python",
+            "intent": "code_help",
+            "project_name": "InjectedProject",
+        },
+    )
+
+    assert list(analysis.entities or []) == []
+    assert list(analysis.numeric_facts or []) == []
+    assert list(analysis.stable_facts or []) == []
+    assert list(analysis.claim_candidates or []) == []
+    assert list(analysis.memory_views.get("entity_keys") or []) == []
+    assert list(analysis.memory_views.get("numeric_keys") or []) == []
+
+
 def test_contextual_resolver_tracks_current_and_past_os_values() -> None:
     analysis = analyze_message_for_memory("сейчас windows 11, до этого linux")
 

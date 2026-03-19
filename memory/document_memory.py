@@ -31,7 +31,20 @@ _CODE_EXT_LANG = {
 }
 
 
+DOCUMENT_MEMORY_ROLE = "low_level_document_storage"
+
+
 class DocumentMemory:
+    """Low-level document/chunk storage layer.
+
+    Responsibilities:
+        - create document/chunk records
+        - chunk raw text
+        - persist low-level document rows into the vector store
+
+    Higher-level document analysis belongs in `DocumentIngestPipeline`.
+    """
+
     def __init__(self, *, store: VectorStore, chunking: ChunkingConfig | None = None):
         self.store = store
         self.chunking = chunking or ChunkingConfig()

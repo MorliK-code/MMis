@@ -40,7 +40,6 @@ def synthesize_stable_facts(
     metadata: dict[str, Any] | None = None,
 ) -> list[StableFact]:
     lower = str(text or "").lower()
-    meta = dict(metadata or {})
     resolution = dict(contextual_resolution or {})
     signals = dict(resolution.get("signals") or {})
     current_os_values = {
@@ -55,7 +54,7 @@ def synthesize_stable_facts(
     }
 
     self_context = _has_any(lower, _SELF_CUES) or bool(signals.get("age_present"))
-    project_context = _has_any(lower, _PROJECT_CUES) or bool(meta.get("project_name"))
+    project_context = _has_any(lower, _PROJECT_CUES)
 
     out: list[StableFact] = []
     seen: set[tuple[str, str, str]] = set()

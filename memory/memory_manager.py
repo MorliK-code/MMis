@@ -18,6 +18,7 @@ from memory.document_retrieval import DocumentRetrievalHit, DocumentRetriever
 from memory.embedding_provider import build_embedding_provider
 from memory.event_store import EventStore
 from memory.fact_extractor import FactExtractor
+from memory.governor import GovernorProfileSnapshot, MemoryGovernor
 from memory.ingest_analyzer import IngestAnalysis, analyze_message_for_memory
 from memory.long_memory import LongMemoryV2
 from memory.memory_debug import BasicMemoryDebugger
@@ -246,6 +247,10 @@ class MemoryManager:
                 getattr(self._cfg, "memory_promotion_smalltalk_penalty", 0.20) or 0.20
             ),
         )
+        self._governor = MemoryGovernor(
+            parallel_margin=float(getattr(self._lifecycle, "parallel_margin", 0.03) or 0.03),
+            lifecycle=self._lifecycle,
+        )
         self._retriever = HybridRetriever(
             store=self._store,
             stale_after_days=int(getattr(self._cfg, "memory_stale_after_days", 30) or 30),
@@ -294,6 +299,7 @@ class MemoryManager:
         self._current_decisions: list[str] = []
         self._active_preferences: list[str] = []
         self._private_runtime: dict[str, dict[str, Any]] = {}
+        self._governor_profile_snapshots: dict[str, GovernorProfileSnapshot] = {}
 
         self._temporary_ttl_sec = int(getattr(self._cfg, "memory_temporary_ttl_sec", 3600) or 3600)
         self._private_runtime_ttl_sec = int(getattr(self._cfg, "memory_private_runtime_ttl_sec", 900) or 900)
@@ -454,9 +460,15 @@ class MemoryManager:
             preview_claims: list[ClaimRecord] = []
             ingest_analysis: IngestAnalysis | None = None
             if memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY} and scope != MemoryScope.PRIVATE_RUNTIME:
+                # Long-term memory extraction must be text-first and memory-layer-owned.
+                # Do not feed runtime/dialog metadata from metadata/* into the memory truth path.
+                memory_analysis_metadata = {
+                    "event_id": event_id,
+                    "namespace": namespace,
+                }
                 ingest_analysis = analyze_message_for_memory(
                     text,
-                    metadata={"event_id": event_id, "namespace": namespace, **metadata},
+                    metadata=memory_analysis_metadata,
                 )
                 metadata = self._merge_ingest_analysis_into_metadata(metadata=metadata, analysis=ingest_analysis)
                 source_claim_records_allowed = self._policy.allow_claim_records_for_source(source_kind=source_kind)
@@ -470,7 +482,7 @@ class MemoryManager:
                 if source_fact_records_allowed:
                     preview_facts = self._fact_extractor.extract_v2(
                         text=text,
-                        metadata={"event_id": event_id, "namespace": namespace, **metadata},
+                        metadata=memory_analysis_metadata,
                         speaker=str(event.role or "user"),
                         scope=scope,
                         mode=str(metadata.get("quality_profile") or "BALANCED"),
@@ -494,6 +506,9 @@ class MemoryManager:
 
             assistant_write_decision = AssistantWriteDecision(reason="not_applicable")
             if str(event.role or "").strip().lower() == "assistant":
+                # Assistant replies should be explicitly marked as fact-record blocked
+                # even when no preview facts were extracted, so storage/debug state stays clear.
+                metadata["assistant_fact_records_blocked"] = True
                 assistant_write_decision = self._policy.decide_assistant_message_write(
                     text=text,
                     metadata=metadata,
@@ -516,12 +531,6 @@ class MemoryManager:
                     scope = assistant_write_decision.target_scope
                 if scope == MemoryScope.TEMPORARY:
                     metadata.setdefault("ttl_sec", int(self._temporary_ttl_sec))
-                if (
-                    not assistant_write_decision.allow_fact_records
-                    or not source_fact_records_allowed
-                    or (preview_facts and not source_preview_facts)
-                ):
-                    metadata["assistant_fact_records_blocked"] = True
 
             level = self._initial_level(memory_type)
             importance = self._importance_score(text=text, metadata=metadata, namespace=namespace)
@@ -1729,6 +1738,7 @@ class MemoryManager:
         with self._lock:
             # Runtime-only state should not survive session termination.
             self._private_runtime = {}
+            self._governor_profile_snapshots = {}
             self._save_state()
             self._store.close()
             if hasattr(self._embedding_provider, "close"):
@@ -1755,6 +1765,12 @@ class MemoryManager:
                 "updated_at": now_ts,
             }
             self._save_state()
+
+    def get_governor_profile_snapshot(self, namespace: str = "default") -> GovernorProfileSnapshot | None:
+        cache = getattr(self, "_governor_profile_snapshots", None)
+        if not isinstance(cache, dict):
+            return None
+        return cache.get(str(namespace or "default"))
 
     def _write_fact_records(
         self,
@@ -1810,39 +1826,91 @@ class MemoryManager:
                 source_event_id=event_id,
             )
 
-            if candidates and decision.allow_supersede:
+            governor_decision = self._governor.decide_for_fact(
+                new_record=record,
+                active_candidates=list(candidates or []),
+            )
+            self._record_governor_decision_event(
+                now_ts=now_ts,
+                namespace=namespace,
+                source_event_id=event_id,
+                fact_record=record,
+                governor_decision=governor_decision,
+                active_candidates=list(candidates or []),
+            )
+
+            if str(governor_decision.action or "").strip().lower() == "noop":
+                continue
+
+            record_metadata = {
+                **dict(record.metadata or {}),
+                "governor_reason": str(governor_decision.reason or ""),
+            }
+            if str(governor_decision.parallel_with_record_id or "").strip():
+                record_metadata["parallel_with"] = str(governor_decision.parallel_with_record_id or "").strip()
+            record = MemoryRecord(
+                id=record.id,
+                text=record.text,
+                memory_type=record.memory_type,
+                level=record.level,
+                scope=record.scope,
+                namespace=record.namespace,
+                metadata=self._strip_debug_metadata(record_metadata, memory_type=record.memory_type),
+                embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
+                importance=record.importance,
+                confidence=record.confidence,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+                expires_at=record.expires_at,
+                status=record.status,
+                version=record.version,
+                parent_id=record.parent_id,
+                chunk_index=record.chunk_index,
+                source_event_id=record.source_event_id,
+                embedding_model=record.embedding_model,
+                embedding_fingerprint=record.embedding_fingerprint,
+                embedding_version=record.embedding_version,
+            )
+
+            governor_action = str(governor_decision.action or "").strip().lower()
+            if candidates and governor_action in {"supersede_old", "archive_old"}:
+                target_status = MemoryStatus.SUPERSEDED if governor_action == "supersede_old" else MemoryStatus.ARCHIVED
                 for previous in list(candidates):
-                    superseded = self._status_transition(
+                    transitioned = self._status_transition(
                         previous,
-                        target=MemoryStatus.SUPERSEDED,
+                        target=target_status,
                         now_ts=now_ts,
-                        reason=str(decision.reason or "write_policy_supersede"),
+                        reason=str(governor_decision.reason or "governor_transition"),
                     )
-                    superseded = MemoryRecord(
-                        id=superseded.id,
-                        text=superseded.text,
-                        memory_type=superseded.memory_type,
-                        level=superseded.level,
-                        scope=superseded.scope,
-                        namespace=superseded.namespace,
-                        metadata=self._strip_debug_metadata(dict(superseded.metadata or {}), memory_type=superseded.memory_type),
-                        embedding=list(superseded.embedding or []) if isinstance(superseded.embedding, list) else None,
-                        importance=superseded.importance,
-                        confidence=superseded.confidence,
-                        created_at=superseded.created_at,
-                        updated_at=superseded.updated_at,
-                        expires_at=superseded.expires_at,
-                        status=superseded.status,
-                        version=superseded.version,
-                        parent_id=superseded.parent_id,
-                        chunk_index=superseded.chunk_index,
-                        source_event_id=superseded.source_event_id,
-                        embedding_model=superseded.embedding_model,
-                        embedding_fingerprint=superseded.embedding_fingerprint,
-                        embedding_version=superseded.embedding_version,
+                    transitioned = MemoryRecord(
+                        id=transitioned.id,
+                        text=transitioned.text,
+                        memory_type=transitioned.memory_type,
+                        level=transitioned.level,
+                        scope=transitioned.scope,
+                        namespace=transitioned.namespace,
+                        metadata=self._strip_debug_metadata(
+                            dict(transitioned.metadata or {}),
+                            memory_type=transitioned.memory_type,
+                        ),
+                        embedding=list(transitioned.embedding or []) if isinstance(transitioned.embedding, list) else None,
+                        importance=transitioned.importance,
+                        confidence=transitioned.confidence,
+                        created_at=transitioned.created_at,
+                        updated_at=transitioned.updated_at,
+                        expires_at=transitioned.expires_at,
+                        status=transitioned.status,
+                        version=transitioned.version,
+                        parent_id=transitioned.parent_id,
+                        chunk_index=transitioned.chunk_index,
+                        source_event_id=transitioned.source_event_id,
+                        embedding_model=transitioned.embedding_model,
+                        embedding_fingerprint=transitioned.embedding_fingerprint,
+                        embedding_version=transitioned.embedding_version,
                     )
-                    self._store.upsert(superseded)
-            if existing is not None and str(decision.action or "").strip().lower() == "parallel":
+                    self._store.upsert(transitioned)
+
+            if governor_action == "keep_parallel" and str(governor_decision.parallel_with_record_id or "").strip():
                 record = MemoryRecord(
                     id=record.id,
                     text=record.text,
@@ -1850,10 +1918,13 @@ class MemoryManager:
                     level=record.level,
                     scope=record.scope,
                     namespace=record.namespace,
-                    metadata={
-                        **dict(record.metadata or {}),
-                        "parallel_with": existing.id,
-                    },
+                    metadata=self._strip_debug_metadata(
+                        {
+                            **dict(record.metadata or {}),
+                            "parallel_with": str(governor_decision.parallel_with_record_id or "").strip(),
+                        },
+                        memory_type=record.memory_type,
+                    ),
                     embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
                     importance=record.importance,
                     confidence=record.confidence,
@@ -1862,7 +1933,7 @@ class MemoryManager:
                     expires_at=record.expires_at,
                     status=MemoryStatus.ACTIVE,
                     version=record.version,
-                    parent_id=(record.parent_id or existing.id),
+                    parent_id=(record.parent_id or str(governor_decision.parallel_with_record_id or "") or None),
                     chunk_index=record.chunk_index,
                     source_event_id=record.source_event_id,
                     embedding_model=record.embedding_model,
@@ -1872,6 +1943,8 @@ class MemoryManager:
 
             self._store.upsert(record)
             out.append(fact)
+        if facts:
+            self._refresh_governor_profile_snapshot(namespace=namespace)
         return out
 
     def _write_claim_records(
@@ -1936,7 +2009,7 @@ class MemoryManager:
         return ClaimPromotionDecision(action="allow", reason="claim_refresh", allow_write=True)
 
     def _find_active_fact_candidates_for_write(self, *, namespace: str, fact: FactRecordV2) -> list[MemoryRecord]:
-        rows = self._store.iter_records(namespace=namespace)
+        rows = self._latest_records(namespace=namespace)
         canonical = str(fact.canonical_key or f"{fact.subject}.{fact.predicate}").strip().lower()
         subject = str(fact.subject or "").strip().lower()
         group = str(self._policy.fact_group(str(fact.predicate or "")) or "").strip().lower()
@@ -1975,7 +2048,7 @@ class MemoryManager:
         return candidates[0] if candidates else None
 
     def _find_active_fact_by_canonical(self, *, namespace: str, canonical_key: str) -> MemoryRecord | None:
-        rows = self._store.iter_records(namespace=namespace)
+        rows = self._latest_records(namespace=namespace)
         key = str(canonical_key or "").strip().lower()
         if not key:
             return None
@@ -1990,7 +2063,7 @@ class MemoryManager:
         return None
 
     def _find_active_claim_by_canonical(self, *, namespace: str, canonical_key: str) -> MemoryRecord | None:
-        rows = self._store.iter_records(namespace=namespace)
+        rows = self._latest_records(namespace=namespace)
         key = str(canonical_key or "").strip().lower()
         if not key:
             return None
@@ -2096,6 +2169,110 @@ class MemoryManager:
                 continue
             out[str(key)] = row.get("value")
         return out
+
+    def _latest_records(self, *, namespace: str | None = None) -> list[MemoryRecord]:
+        latest_by_id: dict[str, MemoryRecord] = {}
+        order: list[str] = []
+        for row in list(self._store.iter_records(namespace=namespace) or []):
+            row_id = str(getattr(row, "id", "") or "")
+            if not row_id:
+                continue
+            if row_id not in latest_by_id:
+                order.append(row_id)
+            latest_by_id[row_id] = row
+        return [latest_by_id[row_id] for row_id in order if row_id in latest_by_id]
+
+    def _refresh_governor_profile_snapshot(self, *, namespace: str) -> GovernorProfileSnapshot | None:
+        governor = getattr(self, "_governor", None)
+        if governor is None:
+            return None
+        namespace_norm = str(namespace or "default")
+        active_rows = [
+            row
+            for row in self._latest_records(namespace=namespace_norm)
+            if row.memory_type == MemoryType.FACT and row.status == MemoryStatus.ACTIVE
+        ]
+        snapshot = governor.rebuild_profile_snapshot(
+            namespace=namespace_norm,
+            active_fact_rows=active_rows,
+        )
+        cache = getattr(self, "_governor_profile_snapshots", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._governor_profile_snapshots = cache
+        cache[namespace_norm] = snapshot
+        self._record_profile_snapshot_rebuilt_event(namespace=namespace_norm, snapshot=snapshot)
+        return snapshot
+
+    def _record_governor_decision_event(
+        self,
+        *,
+        now_ts: float,
+        namespace: str,
+        source_event_id: str,
+        fact_record: MemoryRecord,
+        governor_decision: Any,
+        active_candidates: list[MemoryRecord],
+    ) -> None:
+        fact_meta = dict(dict(fact_record.metadata or {}).get("fact") or {})
+        self._event_store.append(
+            {
+                "ts": now_ts,
+                "type": "memory_governor_decision",
+                "payload": {
+                    "namespace": str(namespace or "default"),
+                    "source_event_id": str(source_event_id or ""),
+                    "record_id": str(fact_record.id or ""),
+                    "canonical_key": str(dict(fact_record.metadata or {}).get("canonical_key") or ""),
+                    "predicate": str(fact_meta.get("predicate") or ""),
+                    "value": fact_meta.get("value"),
+                    "group": str(dict(governor_decision.debug or {}).get("group") or ""),
+                    "group_mode": str(dict(governor_decision.debug or {}).get("group_mode") or ""),
+                    "action": str(governor_decision.action or ""),
+                    "reason": str(governor_decision.reason or ""),
+                    "winner_record_id": str(governor_decision.winner_record_id or ""),
+                    "loser_record_id": str(governor_decision.loser_record_id or ""),
+                    "parallel_with_record_id": str(governor_decision.parallel_with_record_id or ""),
+                    "active_candidate_ids": [str(row.id or "") for row in list(active_candidates or [])],
+                    "superseded_record_ids": (
+                        [str(row.id or "") for row in list(active_candidates or [])]
+                        if str(governor_decision.action or "").strip().lower() == "supersede_old"
+                        else []
+                    ),
+                },
+                "tags": [
+                    "memory",
+                    "governor",
+                    str(namespace or "default"),
+                    str(governor_decision.action or "").strip().lower() or "unknown",
+                ],
+            }
+        )
+
+    def _record_profile_snapshot_rebuilt_event(
+        self,
+        *,
+        namespace: str,
+        snapshot: GovernorProfileSnapshot,
+    ) -> None:
+        self._event_store.append(
+            {
+                "ts": float(snapshot.updated_at or time.time()),
+                "type": "memory_profile_snapshot_rebuilt",
+                "payload": {
+                    "namespace": str(namespace or "default"),
+                    "rebuilt": True,
+                    "active_fact_count": len(dict(snapshot.active_facts or {})),
+                    "conflict_count": len(list(snapshot.conflicts or [])),
+                    "conflict_groups": [
+                        str(dict(item or {}).get("group") or "")
+                        for item in list(snapshot.conflicts or [])
+                        if str(dict(item or {}).get("group") or "").strip()
+                    ],
+                },
+                "tags": ["memory", "profile_snapshot", str(namespace or "default")],
+            }
+        )
 
     def _cleanup_expired(self) -> None:
         now_ts = float(time.time())

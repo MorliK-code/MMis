@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from memory.ingest_analyzer import IngestAnalysis, analyze_message_for_memory
 from memory.fact_extractor import FactExtractor
+from memory.governor import MemoryGovernor
 from memory.memory_lifecycle import MemoryLifecycleManager
 from memory.memory_manager import MemoryManager
 from memory.memory_models import (
@@ -105,6 +106,7 @@ def _manager() -> MemoryManager:
     manager._fact_extractor = FactExtractor()
     manager._policy = MemoryPolicy()
     manager._lifecycle = _ReplayLifecycle()
+    manager._governor = MemoryGovernor(lifecycle=manager._lifecycle)
     manager._working_records = []
     manager._session_summary = ""
     manager._open_questions = []

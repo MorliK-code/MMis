@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from memory.memory_policy import MemoryPolicy
 from memory.memory_models import MemorySourceKind
-from memory.storage_profile import compact_metadata_payload, storage_schema_for_memory_type
+from memory.storage_profile import compact_metadata_payload, prepare_storage_metadata, storage_schema_for_memory_type
 
 
 def test_compact_storage_profile_strips_raw_analysis_and_nested_debug_payloads() -> None:
@@ -111,13 +111,47 @@ def test_debug_storage_profile_keeps_raw_analysis_and_debug_payloads() -> None:
     assert dict(sanitized.get("write_policy") or {}).get("signals") == {"new_conf": 0.9}
 
 
+def test_prepare_storage_metadata_is_single_compact_entrypoint_for_write_path() -> None:
+    prepared = prepare_storage_metadata(
+        metadata={
+            "entities": {"software": ["Python"]},
+            "runtime_entities": {"os": ["Windows"]},
+            "tags": ["intent_chat", "topic_python"],
+            "thinking": "hidden reasoning",
+            "memory_analysis": {"anchors": [{"kind": "gpu"}]},
+            "memory_views": {
+                "entity_keys": ["python"],
+                "numeric_keys": ["version:3.11"],
+                "search_text": "python 3.11",
+            },
+        },
+        storage_profile="compact",
+        memory_type="message",
+        source_kind=MemorySourceKind.ASSISTANT_REPLY,
+        thinking="hidden reasoning",
+    )
+
+    assert "entities" not in prepared
+    assert "runtime_entities" not in prepared
+    assert "tags" not in prepared
+    assert "thinking" not in prepared
+    assert "memory_analysis" not in prepared
+    assert prepared["source_kind"] == "assistant_reply"
+    assert prepared["assistant_thinking_stripped"] is True
+    assert prepared["memory_views"] == {
+        "entity_keys": ["python"],
+        "numeric_keys": ["version:3.11"],
+    }
+
+
 def test_storage_schema_for_fact_claim_episode_and_document_chunk_is_frozen() -> None:
     fact_schema = storage_schema_for_memory_type("fact")
     claim_schema = storage_schema_for_memory_type("claim")
     episode_schema = storage_schema_for_memory_type("episode")
     chunk_schema = storage_schema_for_memory_type("document_chunk")
+    message_schema = storage_schema_for_memory_type("message")
 
-    assert fact_schema["always"] == ["canonical_key", "fact", "parallel_with", "relation", "write_policy"]
+    assert fact_schema["always"] == ["canonical_key", "fact", "governor_reason", "parallel_with", "relation", "write_policy"]
     assert claim_schema["always"] == [
         "canonical_key",
         "chunk_id",
@@ -160,8 +194,11 @@ def test_storage_schema_for_fact_claim_episode_and_document_chunk_is_frozen() ->
         "stable_facts",
         "title",
     ]
-    assert "assistant_noise_archived" in set(storage_schema_for_memory_type("message")["always"])
-    assert "lifecycle_reason" in set(storage_schema_for_memory_type("message")["always"])
+    assert "assistant_noise_archived" in set(message_schema["always"])
+    assert "lifecycle_reason" in set(message_schema["always"])
+    assert "runtime_entities" not in set(message_schema["always"])
+    assert "tags" not in set(message_schema["always"])
+    assert "entities" not in set(message_schema["always"])
     assert "memory_analysis" in set(fact_schema["debug_only"])
     assert "claim_candidates" in set(claim_schema["debug_only"])
 
@@ -176,6 +213,7 @@ def test_compact_storage_profile_enforces_fact_episode_and_document_chunk_schema
                 "confidence": 0.92,
             },
             "canonical_key": "user.environment_gpu_model",
+            "governor_reason": "singleton_group_higher_score",
             "relation": "environment",
             "write_policy": {"action": "allow", "reason": "new_fact", "signals": {"x": 1}},
             "memory_entities": [{"type": "gpu_model"}],
@@ -227,7 +265,7 @@ def test_compact_storage_profile_enforces_fact_episode_and_document_chunk_schema
         memory_type="document_chunk",
     )
 
-    assert set(fact.keys()) == {"fact", "canonical_key", "relation", "write_policy"}
+    assert set(fact.keys()) == {"fact", "canonical_key", "governor_reason", "relation", "write_policy"}
     assert set(episode.keys()) == {"dialog_episode", "topic", "summary_short", "summary_reasoning", "turn_ids"}
     assert set(chunk.keys()) == {
         "document_id",

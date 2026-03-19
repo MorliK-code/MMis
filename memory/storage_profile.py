@@ -50,7 +50,6 @@ DEBUG_ONLY_METADATA_FIELDS = {
     "decision_debug",
     "assistant_write_policy",
     "assistant_write_blocked",
-    "assistant_write_reason",
 }
 
 _TEXT_PROJECTION_FIELDS = {
@@ -186,6 +185,10 @@ _MESSAGE_METADATA_KEYS = {
     "meta",
     "source_kind",
     "source_role",
+    "source_fact_records_allowed",
+    "source_fact_records_blocked",
+    "assistant_fact_records_blocked",
+    "assistant_thinking_stripped",
     "assistant_reply_kind",
     "assistant_memory_help_noise",
     "assistant_write_reason",
@@ -200,6 +203,7 @@ _MESSAGE_METADATA_KEYS = {
 _FACT_METADATA_KEYS = {
     "fact",
     "canonical_key",
+    "governor_reason",
     "relation",
     "parallel_with",
     "write_policy",
@@ -373,6 +377,44 @@ def sanitize_storage_metadata(*, metadata: dict[str, Any] | None, storage_profil
     if profile == "compact":
         return compact_metadata_payload(out, memory_type=memory_type)
     return out
+
+
+def prepare_storage_metadata(
+    *,
+    metadata: dict[str, Any] | None,
+    storage_profile: str,
+    memory_type: Any = None,
+    source_kind: Any = None,
+    thinking: str = "",
+) -> dict[str, Any]:
+    """Single entry point for write-path metadata sanitation.
+
+    This helper normalizes write-time metadata first, then applies the
+    storage-profile compaction rules. The goal is to keep the storage contract
+    centralized in this module instead of scattering ad-hoc cleanups across the
+    write path.
+    """
+    out = dict(metadata or {})
+    hidden = str(thinking or out.get("thinking") or "").strip()
+    legacy_entities = out.pop("entities", None)
+    if legacy_entities and "runtime_entities" not in out:
+        out["runtime_entities"] = legacy_entities
+        out["legacy_runtime_entities_stripped"] = True
+    out.pop("thinking", None)
+    out.pop("tags", None)
+
+    source_value = getattr(source_kind, "value", source_kind)
+    source_token = str(source_value or "").strip().lower()
+    if source_token:
+        out["source_kind"] = source_token
+    if source_token in {"assistant_reply", "assistant_thought"} and hidden:
+        out["assistant_thinking_stripped"] = True
+
+    return sanitize_storage_metadata(
+        metadata=out,
+        storage_profile=storage_profile,
+        memory_type=memory_type,
+    )
 
 
 def _normalize_memory_type(memory_type: Any) -> str:

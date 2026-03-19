@@ -278,6 +278,26 @@ def _scenario_file_scenarios(path: Path) -> list[LiveCheckScenario]:
 
 
 def _builtin_scenarios() -> dict[str, list[LiveCheckScenario]]:
+    def scenario(
+        *,
+        name: str,
+        description: str,
+        conversation_id: str,
+        setup_turns: list[LiveCheckTurn] | None = None,
+        turns: list[LiveCheckTurn] | None = None,
+        documents: list[LiveCheckDocument] | None = None,
+    ) -> LiveCheckScenario:
+        return LiveCheckScenario(
+            name=name,
+            description=description,
+            conversation_id=conversation_id,
+            setup_turns=list(setup_turns or []),
+            turns=list(turns or []),
+            documents=list(documents or []),
+            fresh_brain_per_turn=True,
+            persist_query_turns=False,
+        )
+
     facts = LiveCheckScenario(
         name="facts_exact_recall",
         description="Exact self recall for name, age, GPU, RAM, Python and OS.",
@@ -406,12 +426,426 @@ def _builtin_scenarios() -> dict[str, list[LiveCheckScenario]]:
         fresh_brain_per_turn=True,
         persist_query_turns=False,
     )
+    facts_name_exact = scenario(
+        name="facts_name_exact",
+        description="A1: exact self recall for name.",
+        conversation_id="live-facts-name",
+        setup_turns=[LiveCheckTurn(text="меня Паша зовут")],
+        turns=[
+            LiveCheckTurn(
+                text="как меня зовут?",
+                expect_any_contains=["Паша"],
+                expect_not_contains=["вроде", "если не ошибаюсь", "не помню", "не вижу в памяти"],
+            )
+        ],
+    )
+    facts_age_exact = scenario(
+        name="facts_age_exact",
+        description="A2: exact self recall for age.",
+        conversation_id="live-facts-age",
+        setup_turns=[LiveCheckTurn(text="мне 21 год")],
+        turns=[
+            LiveCheckTurn(
+                text="сколько мне лет?",
+                expect_any_contains=["21"],
+                expect_not_contains=["вроде", "если не ошибаюсь", "не помню", "не вижу в памяти"],
+            )
+        ],
+    )
+    facts_gpu_exact = scenario(
+        name="facts_gpu_exact",
+        description="A3: exact self recall for GPU.",
+        conversation_id="live-facts-gpu",
+        setup_turns=[LiveCheckTurn(text="у меня rtx 3050 ti")],
+        turns=[
+            LiveCheckTurn(
+                text="какая у меня видеокарта?",
+                expect_any_contains=["RTX 3050 Ti", "3050 Ti", "RTX 3050"],
+                expect_not_contains=["не помню", "не вижу в памяти", "посмотри сам", "проверь сам", "wmic", "как посмотреть"],
+            )
+        ],
+    )
+    facts_hardware_colloquial = scenario(
+        name="facts_hardware_colloquial",
+        description="A4: colloquial hardware extraction and recall.",
+        conversation_id="live-facts-hardware-colloquial",
+        setup_turns=[LiveCheckTurn(text="у меня 3050ti с 4gb памяти и 32 гб озу")],
+        turns=[
+            LiveCheckTurn(
+                text="напомни что у меня по железу",
+                expect_any_contains=["3050 Ti", "RTX 3050 Ti", "RTX 3050"],
+                expect_contains=["4", "32"],
+                expect_not_contains=["не помню", "не вижу в памяти", "посмотри сам", "проверь сам"],
+                expect_regex=[r"(?i)(rtx\s*3050|3050\s*ti)"],
+            )
+        ],
+    )
+    facts_python_exact = scenario(
+        name="facts_python_exact",
+        description="A5: exact self recall for Python version.",
+        conversation_id="live-facts-python",
+        setup_turns=[LiveCheckTurn(text="сейчас на python 3.11 сижу")],
+        turns=[
+            LiveCheckTurn(
+                text="какой у меня питон?",
+                expect_any_contains=["3.11", "Python 3.11"],
+                expect_not_contains=["не помню", "не вижу в памяти", "python --version", "как посмотреть"],
+            )
+        ],
+    )
+    facts_os_exact = scenario(
+        name="facts_os_exact",
+        description="A6: exact self recall for OS.",
+        conversation_id="live-facts-os",
+        setup_turns=[LiveCheckTurn(text="щас на windows 11")],
+        turns=[
+            LiveCheckTurn(
+                text="какая у меня система?",
+                expect_any_contains=["Windows 11", "Windows"],
+                expect_not_contains=["не помню", "не вижу в памяти", "winver", "как посмотреть"],
+            )
+        ],
+    )
+    facts_os_update_current_only = scenario(
+        name="facts_os_update_current_only",
+        description="A7: updated OS should supersede old one.",
+        conversation_id="live-facts-os-update",
+        setup_turns=[
+            LiveCheckTurn(text="я на windows 11"),
+            LiveCheckTurn(text="теперь уже linux поставил"),
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="какая у меня сейчас ос?",
+                expect_any_contains=["Linux", "linux", "Линукс"],
+                expect_not_contains=["Windows 11", "Windows"],
+            )
+        ],
+    )
+    facts_python_update_current_only = scenario(
+        name="facts_python_update_current_only",
+        description="A8: updated Python should supersede old one.",
+        conversation_id="live-facts-python-update",
+        setup_turns=[
+            LiveCheckTurn(text="был python 3.10"),
+            LiveCheckTurn(text="теперь уже 3.12 поставил"),
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="какой у меня сейчас python?",
+                expect_any_contains=["3.12", "Python 3.12"],
+                expect_not_contains=["3.10", "python --version", "не помню"],
+            )
+        ],
+    )
+    claims_like_rose_eyes = scenario(
+        name="claims_like_rose_eyes",
+        description="B1: open claim recall for a specific liked thing.",
+        conversation_id="live-claims-rose-eyes",
+        setup_turns=[LiveCheckTurn(text="я люблю смотреть в глаза Розе")],
+        turns=[
+            LiveCheckTurn(
+                text="что я люблю в Розе?",
+                expect_any_contains=["глаз", "в глаза", "глаза Розы", "смотреть в глаза"],
+                expect_not_contains=["не помню"],
+            )
+        ],
+    )
+    claims_dislike_noisy_places = scenario(
+        name="claims_dislike_noisy_places",
+        description="B2: open claim recall for dislikes.",
+        conversation_id="live-claims-dislike-noise",
+        setup_turns=[LiveCheckTurn(text="я не люблю шумные места")],
+        turns=[
+            LiveCheckTurn(
+                text="что я не люблю?",
+                expect_any_contains=["шумные места", "шумные", "шум"],
+                expect_not_contains=["не помню"],
+            )
+        ],
+    )
+    claims_owns_fridge_brand = scenario(
+        name="claims_owns_fridge_brand",
+        description="B3: claim recall for appliance brand.",
+        conversation_id="live-claims-fridge",
+        setup_turns=[LiveCheckTurn(text="у меня холодильник Samsung")],
+        turns=[
+            LiveCheckTurn(
+                text="какой у меня холодильник?",
+                expect_any_contains=["Samsung"],
+                expect_not_contains=["не помню"],
+            )
+        ],
+    )
+    claims_preference_lotus_smell = scenario(
+        name="claims_preference_lotus_smell",
+        description="B4: preference recall should prefer the specific phrase.",
+        conversation_id="live-claims-lotus",
+        setup_turns=[LiveCheckTurn(text="мне нравится запах цветка лотоса")],
+        turns=[
+            LiveCheckTurn(
+                text="что мне нравится?",
+                expect_any_contains=["лотоса", "лотос", "запах цветка лотоса", "запах лотоса"],
+                expect_not_contains=["не помню"],
+            )
+        ],
+    )
+    claims_garbage_not_promoted = scenario(
+        name="claims_garbage_not_promoted",
+        description="B5: garbage phrase should not become a useful claim.",
+        conversation_id="live-claims-garbage",
+        setup_turns=[LiveCheckTurn(text="ну это как бы такое")],
+        turns=[
+            LiveCheckTurn(
+                text="что я люблю?",
+                expect_not_contains=["ну это", "как бы", "такое"],
+            )
+        ],
+    )
+    dialog_reason_no_assistant_thoughts = scenario(
+        name="dialog_reason_no_assistant_thoughts",
+        description="C1: dialog recall should explain why assistant thoughts were rejected.",
+        conversation_id="live-dialog-no-thoughts",
+        setup_turns=[
+            LiveCheckTurn(text="не думаю что надо хранить мысли ассистента"),
+            LiveCheckTurn(text="да, они шумят retrieval"),
+            LiveCheckTurn(text="тогда лучше хранить только решения и факты"),
+            LiveCheckTurn(text="ок, так и делаем"),
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="почему мы решили не хранить мысли ассистента?",
+                expect_any_contains=["шум", "retrieval", "шумят", "засор", "мешают"],
+                expect_contains=["мысли ассистента"],
+                expect_not_contains=["не помню"],
+            )
+        ],
+    )
+    dialog_memory_design_summary = scenario(
+        name="dialog_memory_design_summary",
+        description="C2: contextual dialog summary for memory discussion.",
+        conversation_id="live-dialog-memory-summary",
+        setup_turns=[
+            LiveCheckTurn(text="давай разделим память на facts и claims"),
+            LiveCheckTurn(text="да"),
+            LiveCheckTurn(text="и ещё отдельно эпизоды диалога"),
+            LiveCheckTurn(text="согласна"),
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="что мы обсуждали по памяти?",
+                expect_contains=["памят"],
+                expect_any_contains=["facts", "claims", "факты", "claims"],
+                expect_regex=[r"(?i)(эпиз|диалог|dialog)"],
+                expect_not_contains=["не помню"],
+            )
+        ],
+    )
+    dialog_plan_memory_before_web = scenario(
+        name="dialog_plan_memory_before_web",
+        description="C3: contextual dialog recall for agreed plan.",
+        conversation_id="live-dialog-plan",
+        setup_turns=[
+            LiveCheckTurn(text="сначала доделываем память, потом веб"),
+            LiveCheckTurn(text="ок"),
+            LiveCheckTurn(text="по вебу потом отдельно вернёмся"),
+            LiveCheckTurn(text="да"),
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="какой у нас план?",
+                expect_contains=["пам"],
+                expect_any_contains=["веб", "web"],
+                expect_not_contains=["не помню"],
+            )
+        ],
+    )
+    documents_character_death = scenario(
+        name="documents_character_death",
+        description="D1: answer should come from the loaded story text.",
+        conversation_id="live-doc-character-death",
+        documents=[
+            LiveCheckDocument(
+                source="story_excerpt.txt",
+                title="story_excerpt.txt",
+                text=(
+                    "Глава 3.\n"
+                    "Персонаж Арман умер, когда утонул в реке во время шторма.\n"
+                    "После этого деревня долго вспоминала тот шторм.\n"
+                ),
+                scope="project",
+                metadata={"path": "story_excerpt.txt"},
+            )
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="как умер персонаж?",
+                expect_any_contains=["утонул", "в реке", "во время шторма"],
+                expect_not_contains=["не знаю", "не вижу в тексте"],
+            )
+        ],
+    )
+    documents_code_ollama_call = scenario(
+        name="documents_code_ollama_call",
+        description="D2: answer should come from document/code retrieval.",
+        conversation_id="live-doc-code-ollama",
+        documents=[
+            LiveCheckDocument(
+                source="sample_ollama_client.py",
+                title="sample_ollama_client.py",
+                text=(
+                    "import ollama\n\n"
+                    "def call_ollama(prompt: str) -> str:\n"
+                    "    response = ollama.chat(model='qwen3:8b', messages=[{'role': 'user', 'content': prompt}])\n"
+                    "    return response['message']['content']\n"
+                ),
+                scope="project",
+                metadata={"path": "sample_ollama_client.py"},
+            )
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="где у меня вызывается ollama?",
+                expect_any_contains=["ollama.chat", "call_ollama", "sample_ollama_client.py"],
+                expect_not_contains=["не вижу в коде", "не нашёл", "не могу проверить"],
+            )
+        ],
+    )
+    documents_do_not_override_self_facts = scenario(
+        name="documents_do_not_override_self_facts",
+        description="D3: document mention must not override user self fact.",
+        conversation_id="live-doc-vs-self-fact",
+        documents=[
+            LiveCheckDocument(
+                source="runtime_notes.txt",
+                title="runtime_notes.txt",
+                text=(
+                    "Dev notes.\n"
+                    "The sample service in this repository still runs on Python 3.9.\n"
+                    "Migration to Python 3.11 is planned later.\n"
+                ),
+                scope="project",
+                metadata={"path": "runtime_notes.txt"},
+            )
+        ],
+        setup_turns=[LiveCheckTurn(text="я на python 3.11")],
+        turns=[
+            LiveCheckTurn(
+                text="какой у меня python?",
+                expect_any_contains=["3.11", "Python 3.11"],
+                expect_not_contains=["3.9", "python --version", "не помню"],
+            )
+        ],
+    )
+    noise_assistant_echo_does_not_dominate_gpu_recall = scenario(
+        name="noise_assistant_echo_does_not_dominate_gpu_recall",
+        description="E1: assistant echo reply must not become the main memory source.",
+        conversation_id="live-noise-assistant-echo",
+        setup_turns=[LiveCheckTurn(text="у меня rtx 3050 ti")],
+        turns=[
+            LiveCheckTurn(
+                text="какая у меня видеокарта?",
+                expect_any_contains=["RTX 3050 Ti", "3050 Ti", "RTX 3050"],
+                expect_not_contains=["не помню", "посмотри сам", "проверь сам"],
+            )
+        ],
+    )
+    noise_old_assistant_miss_does_not_override_python_fact = scenario(
+        name="noise_old_assistant_miss_does_not_override_python_fact",
+        description="E2: old assistant miss/help reply must not beat later exact fact.",
+        conversation_id="live-noise-assistant-miss",
+        setup_turns=[
+            LiveCheckTurn(text="какой у меня python?"),
+            LiveCheckTurn(text="у меня python 3.11"),
+        ],
+        turns=[
+            LiveCheckTurn(
+                text="какой у меня python?",
+                expect_any_contains=["3.11", "Python 3.11"],
+                expect_not_contains=["не помню", "python --version", "посмотри", "проверь"],
+            )
+        ],
+    )
+    noise_false_number_does_not_become_gpu = scenario(
+        name="noise_false_number_does_not_become_gpu",
+        description="E3: unrelated number must not become RAM/GPU fact.",
+        conversation_id="live-noise-false-number",
+        setup_turns=[LiveCheckTurn(text="у меня 3050 сообщений в логе")],
+        turns=[
+            LiveCheckTurn(
+                text="какая у меня видеокарта?",
+                expect_any_contains=["не вижу", "не помню", "нет точного", "не знаю", "не нахожу"],
+                expect_not_regex=[r"(?i)\brtx\s*3050\b", r"(?i)\b3050\s*ti\b", r"(?i)\b3050\b"],
+            )
+        ],
+    )
     return {
-        "facts": [facts],
-        "claims": [claim_uses, claim_owns],
-        "dialog": [dialog],
-        "documents": [documents],
-        "all": [facts, claim_uses, claim_owns, dialog, documents],
+        "facts": [
+            facts,
+            facts_name_exact,
+            facts_age_exact,
+            facts_gpu_exact,
+            facts_hardware_colloquial,
+            facts_python_exact,
+            facts_os_exact,
+            facts_os_update_current_only,
+            facts_python_update_current_only,
+        ],
+        "claims": [
+            claim_uses,
+            claim_owns,
+            claims_like_rose_eyes,
+            claims_dislike_noisy_places,
+            claims_owns_fridge_brand,
+            claims_preference_lotus_smell,
+            claims_garbage_not_promoted,
+        ],
+        "dialog": [
+            dialog,
+            dialog_reason_no_assistant_thoughts,
+            dialog_memory_design_summary,
+            dialog_plan_memory_before_web,
+        ],
+        "documents": [
+            documents,
+            documents_character_death,
+            documents_code_ollama_call,
+            documents_do_not_override_self_facts,
+        ],
+        "noise": [
+            noise_assistant_echo_does_not_dominate_gpu_recall,
+            noise_old_assistant_miss_does_not_override_python_fact,
+            noise_false_number_does_not_become_gpu,
+        ],
+        "all": [
+            facts,
+            facts_name_exact,
+            facts_age_exact,
+            facts_gpu_exact,
+            facts_hardware_colloquial,
+            facts_python_exact,
+            facts_os_exact,
+            facts_os_update_current_only,
+            facts_python_update_current_only,
+            claim_uses,
+            claim_owns,
+            claims_like_rose_eyes,
+            claims_dislike_noisy_places,
+            claims_owns_fridge_brand,
+            claims_preference_lotus_smell,
+            claims_garbage_not_promoted,
+            dialog,
+            dialog_reason_no_assistant_thoughts,
+            dialog_memory_design_summary,
+            dialog_plan_memory_before_web,
+            documents,
+            documents_character_death,
+            documents_code_ollama_call,
+            documents_do_not_override_self_facts,
+            noise_assistant_echo_does_not_dominate_gpu_recall,
+            noise_old_assistant_miss_does_not_override_python_fact,
+            noise_false_number_does_not_become_gpu,
+        ],
     }
 
 

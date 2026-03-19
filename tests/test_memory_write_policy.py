@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from core.brain import Brain
 from metadata.metadata_extractor import extract_message_metadata
+from memory.governor import MemoryGovernor
 from memory.ingest_analyzer import analyze_message_for_memory
 from memory.memory_manager import MemoryManager
 from memory.memory_models import (
@@ -82,6 +83,11 @@ class _FakeFactExtractor:
 
 
 class _FakeLifecycle:
+    def __init__(self) -> None:
+        from memory.memory_lifecycle import MemoryLifecycleManager
+
+        self._delegate = MemoryLifecycleManager()
+
     def decide(self, record, *, now_ts):
         return LifecycleDecision(
             promote_to=MemoryLevel.L2_EPISODIC,
@@ -91,7 +97,7 @@ class _FakeLifecycle:
         )
 
     def resolve_conflict(self, old, new):
-        raise AssertionError("Fact conflict resolution should not be called in these tests")
+        return self._delegate.resolve_conflict(old=old, new=new)
 
 
 class MemoryWritePolicyTests(unittest.TestCase):
@@ -129,6 +135,7 @@ class MemoryWritePolicyTests(unittest.TestCase):
         manager._fact_extractor = _FakeFactExtractor()
         manager._policy = MemoryPolicy()
         manager._lifecycle = _FakeLifecycle()
+        manager._governor = MemoryGovernor(lifecycle=manager._lifecycle)
         manager._working_records = []
         manager._session_summary = ""
         manager._open_questions = []
@@ -523,6 +530,258 @@ class MemoryWritePolicyTests(unittest.TestCase):
             str(dict(dict(superseded_facts[0].metadata or {}).get("fact") or {}).get("predicate") or ""),
             "environment_memory_gb",
         )
+        self.assertEqual(str(dict(active_facts[0].metadata or {}).get("governor_reason") or ""), "singleton_group_higher_score")
+
+    def test_governor_keeps_project_name_facts_parallel(self) -> None:
+        manager = self._manager()
+
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="project_name",
+                    value="MMis",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.76,
+                    importance=0.68,
+                    evidence="project is MMis",
+                    source_event_id="evt:project-1",
+                    canonical_key="user.project_name",
+                    relation="project",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-direct-project",
+            now_ts=1.0,
+            event_id="evt:project-1",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="project_name",
+                    value="AnotherProject",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.83,
+                    importance=0.72,
+                    evidence="project is AnotherProject",
+                    source_event_id="evt:project-2",
+                    canonical_key="user.project_name",
+                    relation="project",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-direct-project",
+            now_ts=2.0,
+            event_id="evt:project-2",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        latest_by_id = {}
+        for row in manager._store.records:
+            if getattr(row, "memory_type", None) == MemoryType.FACT:
+                latest_by_id[str(getattr(row, "id", ""))] = row
+        final_rows = [row for row in latest_by_id.values() if str(getattr(row, "namespace", "")) == "conv-direct-project"]
+        active_facts = [row for row in final_rows if getattr(row, "status", None) == MemoryStatus.ACTIVE]
+
+        self.assertEqual(len(active_facts), 2)
+        self.assertEqual(
+            {str(dict(row.metadata or {}).get("governor_reason") or "") for row in active_facts},
+            {"no_active_conflict", "multi_value_group_allowed"},
+        )
+        self.assertEqual(
+            sorted(str(dict(dict(row.metadata or {}).get("fact") or {}).get("value") or "") for row in active_facts),
+            ["AnotherProject", "MMis"],
+        )
+
+    def test_governor_snapshot_rebuilds_after_singleton_fact_write(self) -> None:
+        manager = self._manager()
+
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="environment_runtime_python",
+                    value="python 3.10",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.74,
+                    importance=0.66,
+                    evidence="python 3.10",
+                    source_event_id="evt:python-1",
+                    canonical_key="user.environment_runtime_python",
+                    relation="environment",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-snapshot-python",
+            now_ts=1.0,
+            event_id="evt:python-1",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="environment_runtime_python",
+                    value="python 3.12",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.91,
+                    importance=0.78,
+                    evidence="python 3.12",
+                    source_event_id="evt:python-2",
+                    canonical_key="user.environment_runtime_python",
+                    relation="environment",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-snapshot-python",
+            now_ts=2.0,
+            event_id="evt:python-2",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        snapshot = manager.get_governor_profile_snapshot("conv-snapshot-python")
+
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.namespace, "conv-snapshot-python")
+        self.assertEqual(snapshot.conflicts, [])
+        self.assertEqual(len(snapshot.active_facts), 1)
+        only_fact = next(iter(snapshot.active_facts.values()))
+        self.assertEqual(only_fact["predicate"], "environment_runtime_python")
+        self.assertEqual(only_fact["value"], "python 3.12")
+        self.assertEqual(only_fact["group"], "environment.python")
+
+    def test_governor_snapshot_keeps_multi_value_project_facts(self) -> None:
+        manager = self._manager()
+
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="project_name",
+                    value="MMis",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.76,
+                    importance=0.68,
+                    evidence="project is MMis",
+                    source_event_id="evt:project-1",
+                    canonical_key="user.project_name",
+                    relation="project",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                ),
+                FactRecordV2(
+                    subject="user",
+                    predicate="project_name",
+                    value="AnotherProject",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.83,
+                    importance=0.72,
+                    evidence="project is AnotherProject",
+                    source_event_id="evt:project-2",
+                    canonical_key="user.project_name",
+                    relation="project",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                ),
+            ],
+            namespace="conv-snapshot-project",
+            now_ts=2.0,
+            event_id="evt:project-2",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        snapshot = manager.get_governor_profile_snapshot("conv-snapshot-project")
+
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.namespace, "conv-snapshot-project")
+        self.assertEqual(snapshot.conflicts, [])
+        self.assertEqual(len(snapshot.active_facts), 2)
+        self.assertEqual(
+            sorted(str(item.get("value") or "") for item in snapshot.active_facts.values()),
+            ["AnotherProject", "MMis"],
+        )
+        self.assertEqual(
+            {str(item.get("group_mode") or "") for item in snapshot.active_facts.values()},
+            {"multi"},
+        )
+
+    def test_governor_events_are_recorded_for_decision_and_snapshot(self) -> None:
+        manager = self._manager()
+
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="environment_memory_gb",
+                    value="16",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.74,
+                    importance=0.66,
+                    evidence="16 gb memory",
+                    source_event_id="evt:ram-1",
+                    canonical_key="user.environment_memory_gb",
+                    relation="environment",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-governor-events",
+            now_ts=1.0,
+            event_id="evt:ram-1",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="environment_ram_gb",
+                    value="32",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.89,
+                    importance=0.78,
+                    evidence="32 gb ram",
+                    source_event_id="evt:ram-2",
+                    canonical_key="user.environment_ram_gb",
+                    relation="environment",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-governor-events",
+            now_ts=2.0,
+            event_id="evt:ram-2",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        governor_events = [
+            row for row in list(manager._event_store.entries or [])
+            if str(dict(row).get("type") or "") == "memory_governor_decision"
+        ]
+        snapshot_events = [
+            row for row in list(manager._event_store.entries or [])
+            if str(dict(row).get("type") or "") == "memory_profile_snapshot_rebuilt"
+        ]
+
+        self.assertEqual(len(governor_events), 2)
+        self.assertEqual(len(snapshot_events), 2)
+
+        latest_governor = dict(governor_events[-1].get("payload") or {})
+        self.assertEqual(latest_governor["group"], "environment.ram")
+        self.assertEqual(latest_governor["group_mode"], "singleton")
+        self.assertEqual(latest_governor["action"], "supersede_old")
+        self.assertEqual(latest_governor["winner_record_id"][:5], "fact:")
+        self.assertEqual(len(list(latest_governor.get("superseded_record_ids") or [])), 1)
+
+        latest_snapshot = dict(snapshot_events[-1].get("payload") or {})
+        self.assertEqual(latest_snapshot["namespace"], "conv-governor-events")
+        self.assertTrue(bool(latest_snapshot["rebuilt"]))
+        self.assertEqual(latest_snapshot["active_fact_count"], 1)
+        self.assertEqual(latest_snapshot["conflict_count"], 0)
 
     def test_ingest_analysis_tags_are_stored_separately_from_runtime_tags(self) -> None:
         manager = self._manager()
@@ -607,6 +866,36 @@ class MemoryWritePolicyTests(unittest.TestCase):
         self.assertNotIn("entities", payload)
         tags = [str(x).strip().lower() for x in list(payload.get("tags") or []) if str(x).strip()]
         self.assertFalse(any(tag.startswith("entity_") for tag in tags))
+
+    def test_message_ingest_does_not_take_long_term_truth_from_runtime_metadata(self) -> None:
+        manager = self._manager()
+
+        result = manager.ingest_event(
+            MemoryEvent(
+                role="user",
+                text="привет",
+                namespace="conv-runtime-boundary",
+                scope=MemoryScope.CONVERSATION,
+                memory_type=MemoryType.MESSAGE,
+                metadata={
+                    "runtime_entities": {"software": ["Python"], "os": ["Windows"]},
+                    "entities": {"software": ["Python"], "os": ["Windows"]},
+                    "tags": ["topic_python", "intent_chat"],
+                    "topic": "python",
+                    "intent": "code_help",
+                    "project_name": "InjectedProject",
+                },
+            )
+        )
+
+        self.assertEqual(len(result.stored_ids), 1)
+        self.assertFalse(any(str(row.predicate or "") == "project_name" for row in list(result.extracted_facts or [])))
+        stored = manager._store.records[0]
+        self.assertNotIn("runtime_entities", stored.metadata)
+        self.assertNotIn("entities", stored.metadata)
+        self.assertNotIn("tags", stored.metadata)
+        self.assertNotIn("InjectedProject", str(stored.metadata))
+        self.assertNotIn("project_name", str(stored.metadata))
 
     def test_brain_extracts_compact_web_verification_meta_for_assistant_write_policy(self) -> None:
         payload = Brain._assistant_memory_web_meta(

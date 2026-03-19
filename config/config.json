@@ -117,7 +117,7 @@
         "ollama": {
           "num_thread": 6,
           "num_ctx": 8192,
-          "num_gpu": 20,
+          "num_gpu": 25,
           "num_batch": 128,
           "keep_alive": "5m"
         },
@@ -502,7 +502,6 @@
     "db_path": "{dir_path}\\data\\memory_storage\\memory.db",
     "version": "v2",
     "backend": "chroma",
-    "storage_profile": "compact",
     "embedding": {
       "backend": "sentence_transformers",
       "model": "all-MiniLM-L6-v2",
@@ -580,7 +579,8 @@
     "migration": {
       "auto_on_start": true,
       "schema_version": 2
-    }
+    },
+    "storage_profile": "compact"
   },
   "dialog": {
     "new_session_after_min": 360,

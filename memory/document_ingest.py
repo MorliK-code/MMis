@@ -15,6 +15,7 @@ from memory.vector_store import VectorStore
 
 
 _FILE_ENCODINGS = ("utf-8", "utf-8-sig", "cp1251", "latin-1")
+DOCUMENT_INGEST_ROLE = "high_level_document_pipeline"
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,17 @@ class DocumentIngestArtifacts:
 
 @dataclass
 class DocumentIngestPipeline:
+    """High-level document pipeline over `DocumentMemory`.
+
+    Responsibilities:
+        - parse/load text
+        - run chunk-level analysis
+        - build section summaries / outline / document claims
+        - store enriched document artifacts
+
+    This is intentionally separate from low-level chunk storage.
+    """
+
     store: VectorStore
     chunking: ChunkingConfig | None = None
     storage_profile: str = DEFAULT_STORAGE_PROFILE

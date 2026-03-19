@@ -7,7 +7,7 @@ from typing import Any
 from modules.nlu.normalizer import normalize_text
 from modules.nlu.types import Fact
 from memory.memory_models import FactRecordV2, MemoryRecord, MemoryScope, MemorySourceKind, MemoryType
-from memory.storage_profile import compact_metadata_payload, sanitize_storage_metadata
+from memory.storage_profile import compact_metadata_payload, prepare_storage_metadata, sanitize_storage_metadata
 
 
 def _is_empty_value(value: Any) -> bool:
@@ -636,6 +636,14 @@ class MemoryPolicy:
         debug profile:
             - Keep all fields for debugging
         """
+        if compact_for_storage:
+            return prepare_storage_metadata(
+                metadata=metadata,
+                storage_profile=storage_profile,
+                memory_type=memory_type,
+                source_kind=source_kind,
+                thinking=thinking,
+            )
         out = dict(metadata or {})
         hidden = str(thinking or out.get("thinking") or "").strip()
         legacy_entities = out.pop("entities", None)
@@ -643,18 +651,10 @@ class MemoryPolicy:
             out["runtime_entities"] = legacy_entities
             out["legacy_runtime_entities_stripped"] = True
         out.pop("thinking", None)
-        # Tags stored at top-level, not in metadata
         out.pop("tags", None)
         out["source_kind"] = str(source_kind.value)
         if source_kind in {MemorySourceKind.ASSISTANT_REPLY, MemorySourceKind.ASSISTANT_THOUGHT} and hidden:
             out["assistant_thinking_stripped"] = True
-
-        if compact_for_storage:
-            return sanitize_storage_metadata(
-                metadata=out,
-                storage_profile=storage_profile,
-                memory_type=memory_type,
-            )
         return out
 
     @staticmethod
