@@ -129,13 +129,155 @@ _COMPACT_CLAIM_LIST_KEYS = {
     "confidence",
 }
 
+_DIALOG_EPISODE_KEYS = {
+    "id",
+    "topic",
+    "turn_ids",
+    "summary_short",
+    "summary_reasoning",
+    "decisions",
+    "open_questions",
+    "participants",
+    "salience",
+    "topic_keys",
+    "entity_keys",
+    "created_at",
+    "updated_at",
+}
+
+_DOCUMENT_SUMMARY_KEYS = {
+    "id",
+    "document_id",
+    "text",
+    "summary_kind",
+    "source_chunk_ids",
+    "topic_keys",
+    "entity_keys",
+    "confidence",
+    "salience",
+    "status",
+}
+
+_DOCUMENT_CLAIM_KEYS = {
+    "id",
+    "document_id",
+    "chunk_id",
+    "subject",
+    "predicate",
+    "obj",
+    "subject_type",
+    "object_type",
+    "object_surface",
+    "confidence",
+    "salience",
+    "topic_keys",
+    "trigger_keys",
+    "status",
+}
+
+_MESSAGE_METADATA_KEYS = {
+    "memory_views",
+    "memory_entities",
+    "numeric_facts",
+    "stable_facts",
+    "claims",
+    "emotion_profile",
+    "memory_tags",
+    "meta",
+    "source_kind",
+    "source_role",
+    "assistant_reply_kind",
+    "assistant_memory_help_noise",
+    "assistant_write_reason",
+    "assistant_noise_archived",
+    "previous_status",
+    "lifecycle_reason",
+    "write_policy",
+    "fact_relations",
+    "facts_count",
+}
+
+_FACT_METADATA_KEYS = {
+    "fact",
+    "canonical_key",
+    "relation",
+    "parallel_with",
+    "write_policy",
+}
+
+_CLAIM_METADATA_KEYS = {
+    "claim",
+    "canonical_key",
+    "topic_keys",
+    "trigger_keys",
+    "write_policy",
+    "document_id",
+    "doc_id",
+    "chunk_id",
+    "document_claim",
+}
+
+_EPISODE_METADATA_KEYS = {
+    "dialog_episode",
+    "topic",
+    "summary_short",
+    "summary_reasoning",
+    "decisions",
+    "open_questions",
+    "participants",
+    "turn_ids",
+    "topic_keys",
+    "entity_keys",
+    "salience",
+}
+
+_DOCUMENT_METADATA_KEYS = {
+    "title",
+    "path",
+    "source_path",
+    "filename",
+    "extension",
+    "document_outline",
+    "section_summary_ids",
+    "document_claim_ids",
+}
+
+_DOCUMENT_CHUNK_METADATA_KEYS = {
+    "document_id",
+    "doc_id",
+    "chunk_id",
+    "chunk_index",
+    "section_label",
+    "memory_views",
+    "memory_entities",
+    "numeric_facts",
+    "stable_facts",
+    "claims",
+    "memory_tags",
+    "title",
+    "path",
+    "source_path",
+    "filename",
+    "extension",
+}
+
 
 def normalize_storage_profile(profile: str) -> str:
     token = str(profile or "").strip().lower()
     return token if token in VALID_STORAGE_PROFILES else DEFAULT_STORAGE_PROFILE
 
 
-def compact_metadata_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
+def storage_schema_for_memory_type(memory_type: Any) -> dict[str, Any]:
+    token = _normalize_memory_type(memory_type)
+    always = sorted(_allowed_top_level_keys(token, {}))
+    return {
+        "memory_type": token,
+        "always": always,
+        "debug_only": sorted(DEBUG_ONLY_METADATA_FIELDS | _TEXT_PROJECTION_FIELDS),
+    }
+
+
+def compact_metadata_payload(metadata: dict[str, Any] | None, *, memory_type: Any = None) -> dict[str, Any]:
     out = dict(metadata or {})
 
     for field in DEBUG_ONLY_METADATA_FIELDS:
@@ -170,6 +312,14 @@ def compact_metadata_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
         out["fact"] = _compact_dict(out["fact"], _FACT_KEYS)
     if isinstance(out.get("claim"), dict):
         out["claim"] = _compact_dict(out["claim"], _CLAIM_KEYS)
+    if isinstance(out.get("dialog_episode"), dict):
+        out["dialog_episode"] = _compact_dict(out["dialog_episode"], _DIALOG_EPISODE_KEYS)
+    if isinstance(out.get("document_outline"), dict):
+        out["document_outline"] = _compact_dict(out["document_outline"], _DOCUMENT_SUMMARY_KEYS)
+    if isinstance(out.get("document_summary"), dict):
+        out["document_summary"] = _compact_dict(out["document_summary"], _DOCUMENT_SUMMARY_KEYS)
+    if isinstance(out.get("document_claim"), dict):
+        out["document_claim"] = _compact_dict(out["document_claim"], _DOCUMENT_CLAIM_KEYS)
 
     claims = out.get("claims")
     if isinstance(claims, list):
@@ -208,15 +358,61 @@ def compact_metadata_payload(metadata: dict[str, Any] | None) -> dict[str, Any]:
         else:
             out.pop("meta", None)
 
+    out = {key: value for key, value in out.items() if not _is_empty_value(value)}
+
+    allowed_keys = _allowed_top_level_keys(_normalize_memory_type(memory_type), out)
+    if allowed_keys:
+        out = _compact_dict(out, allowed_keys)
+
     return {key: value for key, value in out.items() if not _is_empty_value(value)}
 
 
-def sanitize_storage_metadata(*, metadata: dict[str, Any] | None, storage_profile: str) -> dict[str, Any]:
+def sanitize_storage_metadata(*, metadata: dict[str, Any] | None, storage_profile: str, memory_type: Any = None) -> dict[str, Any]:
     profile = normalize_storage_profile(storage_profile)
     out = dict(metadata or {})
     if profile == "compact":
-        return compact_metadata_payload(out)
+        return compact_metadata_payload(out, memory_type=memory_type)
     return out
+
+
+def _normalize_memory_type(memory_type: Any) -> str:
+    if memory_type is None:
+        return ""
+    value = getattr(memory_type, "value", memory_type)
+    return str(value or "").strip().lower()
+
+
+def _allowed_top_level_keys(memory_type: str, metadata: dict[str, Any]) -> set[str]:
+    token = str(memory_type or "").strip().lower()
+    if token == "message":
+        return set(_MESSAGE_METADATA_KEYS)
+    if token == "fact":
+        return set(_FACT_METADATA_KEYS)
+    if token == "claim":
+        return set(_CLAIM_METADATA_KEYS)
+    if token == "episode":
+        return set(_EPISODE_METADATA_KEYS)
+    if token == "document":
+        return set(_DOCUMENT_METADATA_KEYS)
+    if token == "document_chunk":
+        return set(_DOCUMENT_CHUNK_METADATA_KEYS)
+    if token == "summary" and any(key in dict(metadata or {}) for key in {"document_summary", "document_id", "doc_id"}):
+        return {
+            "document_id",
+            "doc_id",
+            "summary_kind",
+            "source_chunk_ids",
+            "topic_keys",
+            "entity_keys",
+            "document_summary",
+            "section_label",
+            "title",
+            "path",
+            "source_path",
+            "filename",
+            "extension",
+        }
+    return set()
 
 
 def _compact_dict(row: dict[str, Any], allowed_keys: set[str]) -> dict[str, Any]:

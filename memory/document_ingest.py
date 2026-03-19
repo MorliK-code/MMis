@@ -483,6 +483,7 @@ class DocumentIngestPipeline:
                     metadata=sanitize_storage_metadata(
                         metadata=dict(record.metadata or {}),
                         storage_profile=self.storage_profile,
+                        memory_type=record.memory_type,
                     ),
                     embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
                     importance=record.importance,

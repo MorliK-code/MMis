@@ -612,6 +612,7 @@ class MemoryPolicy:
         *,
         metadata: dict[str, Any] | None,
         source_kind: MemorySourceKind,
+        memory_type: Any = None,
         thinking: str = "",
         storage_profile: str = "compact",
         compact_for_storage: bool = True,
@@ -649,13 +650,17 @@ class MemoryPolicy:
             out["assistant_thinking_stripped"] = True
 
         if compact_for_storage:
-            return sanitize_storage_metadata(metadata=out, storage_profile=storage_profile)
+            return sanitize_storage_metadata(
+                metadata=out,
+                storage_profile=storage_profile,
+                memory_type=memory_type,
+            )
         return out
 
     @staticmethod
-    def _compact_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    def _compact_metadata(metadata: dict[str, Any], *, memory_type: Any = None) -> dict[str, Any]:
         """Compact metadata for storage by removing duplicates and debug-only fields."""
-        return compact_metadata_payload(metadata)
+        return compact_metadata_payload(metadata, memory_type=memory_type)
 
     @staticmethod
     def allow_fact_records_for_source(*, source_kind: MemorySourceKind) -> bool:

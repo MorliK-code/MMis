@@ -5,6 +5,17 @@ from dataclasses import dataclass
 
 from memory.memory_models import MemoryLevel, MemoryRecord, MemoryType
 
+RECALL_MODE_EXACT = "exact"
+RECALL_MODE_CONTEXTUAL = "contextual"
+RECALL_MODE_AMBIENT = "ambient"
+RECALL_MODE_DOCUMENT = "document"
+
+_VALID_CLAIM_RECALL_MODES = {
+    RECALL_MODE_EXACT,
+    RECALL_MODE_CONTEXTUAL,
+    RECALL_MODE_AMBIENT,
+    RECALL_MODE_DOCUMENT,
+}
 
 _SELF_QUERY_RE = re.compile(
     r"(?:какая|какой|какое|напомни|подскажи|скажи|what(?:'s| is)|remind me)[^?.!\n]{0,56}(?:у меня|мой|мою|моя|моё|my)\b",
@@ -68,6 +79,31 @@ class QueryRecallProfile:
     spontaneous_claim: bool = False
 
 
+def normalize_claim_recall_mode(mode: str, *, fallback: str = RECALL_MODE_CONTEXTUAL) -> str:
+    value = str(mode or "").strip().lower()
+    if value in _VALID_CLAIM_RECALL_MODES:
+        return value
+    return str(fallback or RECALL_MODE_CONTEXTUAL).strip().lower() or RECALL_MODE_CONTEXTUAL
+
+
+def default_claim_recall_mode(*, predicate: str, promotion_level: str = "") -> str:
+    predicate_norm = str(predicate or "").strip().lower()
+    promotion_norm = str(promotion_level or "").strip().lower()
+    if predicate_norm in {"owns", "uses"}:
+        return RECALL_MODE_EXACT
+    if predicate_norm in {"likes", "dislikes"}:
+        if promotion_norm == "strong_claim":
+            return RECALL_MODE_AMBIENT
+        return RECALL_MODE_CONTEXTUAL
+    return RECALL_MODE_CONTEXTUAL
+
+
+def default_claim_spontaneous_recall(*, predicate: str, promotion_level: str = "") -> bool:
+    predicate_norm = str(predicate or "").strip().lower()
+    promotion_norm = str(promotion_level or "").strip().lower()
+    return predicate_norm in {"likes", "dislikes"} and promotion_norm == "strong_claim"
+
+
 def classify_query_recall_profile(query_text: str) -> QueryRecallProfile:
     text = str(query_text or "").strip()
     low = text.lower()
@@ -104,68 +140,79 @@ def record_recall_mode(record: MemoryRecord) -> str:
         MemoryType.DOCUMENT,
         MemoryType.DOCUMENT_CHUNK,
     }:
-        return "document"
+        return RECALL_MODE_DOCUMENT
 
     meta = dict(record.metadata or {})
     if record.memory_type == MemoryType.CLAIM:
         claim = dict(meta.get("claim") or {})
-        return str(claim.get("recall_mode") or "contextual").strip().lower() or "contextual"
+        return normalize_claim_recall_mode(claim.get("recall_mode"), fallback=RECALL_MODE_CONTEXTUAL)
 
     if record.memory_type == MemoryType.EPISODE:
-        return "contextual"
+        return RECALL_MODE_CONTEXTUAL
 
     if record.memory_type == MemoryType.FACT:
         fact = dict(meta.get("fact") or {})
         predicate = str(fact.get("predicate") or "").strip().lower()
         if predicate in _CONTEXTUAL_FACT_PREDICATES:
-            return "contextual"
-        return "exact"
+            return RECALL_MODE_CONTEXTUAL
+        return RECALL_MODE_EXACT
 
     if record.memory_type in {MemoryType.MESSAGE, MemoryType.SUMMARY, MemoryType.SEMANTIC}:
-        return "contextual"
+        return RECALL_MODE_CONTEXTUAL
 
-    return "contextual"
+    return RECALL_MODE_CONTEXTUAL
 
 
 def recall_policy_adjustment(*, profile: QueryRecallProfile, record: MemoryRecord) -> float:
     mode = record_recall_mode(record)
+    is_claim = record.memory_type == MemoryType.CLAIM
+    is_episode = record.memory_type == MemoryType.EPISODE
+    is_fact = record.memory_type == MemoryType.FACT
 
-    if mode == "document":
-        return 0.20 if profile.document_query else -0.30
+    if mode == RECALL_MODE_DOCUMENT:
+        return 0.22 if profile.document_query else -0.36
 
-    if mode == "exact":
-        if profile.mode == "exact_fact_recall":
-            return 0.08
+    if mode == RECALL_MODE_EXACT:
+        if is_fact and profile.mode == "exact_fact_recall":
+            return 0.10
+        if is_claim and profile.claim_like:
+            return 0.10
         if profile.document_query:
-            return -0.18
+            return -0.24
         if profile.contextual_dialog:
-            return -0.14
-        return -0.04
+            return -0.20
+        if profile.self_like:
+            return -0.18 if is_claim else -0.08
+        if profile.claim_like:
+            return -0.16 if is_fact else 0.0
+        return -0.10 if is_claim else -0.06
 
-    if mode == "contextual":
-        if record.memory_type == MemoryType.EPISODE:
+    if mode == RECALL_MODE_CONTEXTUAL:
+        if is_episode:
             if profile.contextual_dialog:
-                return 0.16
+                return 0.18
             if profile.document_query or profile.self_like:
-                return -0.22
-            return -0.04
-        if record.memory_type == MemoryType.CLAIM:
+                return -0.26
             if profile.claim_like:
-                return 0.08
+                return -0.10
+            return -0.06
+        if is_claim:
+            if profile.claim_like:
+                return 0.10
             if profile.contextual_dialog or profile.document_query or profile.self_like:
-                return -0.12
-            return -0.04
+                return -0.18
+            return -0.08
         if profile.contextual_dialog:
             return 0.08
         if profile.document_query or profile.self_like:
-            return -0.10
+            return -0.12
         return 0.0
 
-    if mode == "ambient":
+    if mode == RECALL_MODE_AMBIENT:
         if profile.spontaneous_claim or profile.claim_like:
             return 0.04
         if profile.document_query or profile.contextual_dialog or profile.self_like:
-            return -0.20
-        return -0.08
+            return -0.24
+        return -0.12
 
     return 0.0

@@ -598,7 +598,7 @@ class MemoryManager:
                     level=record.level,
                     scope=record.scope,
                     namespace=record.namespace,
-                    metadata=self._strip_debug_metadata(record.metadata),
+                    metadata=self._strip_debug_metadata(record.metadata, memory_type=record.memory_type),
                     embedding=list(record.embedding or []) if isinstance(record.embedding, list) else None,
                     importance=record.importance,
                     confidence=record.confidence,
@@ -635,7 +635,7 @@ class MemoryManager:
                     level=status_row.level,
                     scope=status_row.scope,
                     namespace=status_row.namespace,
-                    metadata=self._strip_debug_metadata(status_row.metadata),
+                    metadata=self._strip_debug_metadata(status_row.metadata, memory_type=status_row.memory_type),
                     embedding=list(status_row.embedding or []) if isinstance(status_row.embedding, list) else None,
                     importance=status_row.importance,
                     confidence=status_row.confidence,
@@ -662,7 +662,7 @@ class MemoryManager:
                     level=promoted.level,
                     scope=promoted.scope,
                     namespace=promoted.namespace,
-                    metadata=self._strip_debug_metadata(promoted.metadata),
+                    metadata=self._strip_debug_metadata(promoted.metadata, memory_type=promoted.memory_type),
                     embedding=list(promoted.embedding or []) if isinstance(promoted.embedding, list) else None,
                     importance=promoted.importance,
                     confidence=promoted.confidence,
@@ -1798,7 +1798,8 @@ class MemoryManager:
                         "canonical_key": canonical,
                         "relation": fact.relation,
                         "write_policy": decision.to_dict(),
-                    }
+                    },
+                    memory_type=MemoryType.FACT,
                 ),
                 importance=float(fact.importance),
                 confidence=float(fact.confidence),
@@ -1824,7 +1825,7 @@ class MemoryManager:
                         level=superseded.level,
                         scope=superseded.scope,
                         namespace=superseded.namespace,
-                        metadata=self._strip_debug_metadata(dict(superseded.metadata or {})),
+                        metadata=self._strip_debug_metadata(dict(superseded.metadata or {}), memory_type=superseded.memory_type),
                         embedding=list(superseded.embedding or []) if isinstance(superseded.embedding, list) else None,
                         importance=superseded.importance,
                         confidence=superseded.confidence,
@@ -1900,7 +1901,8 @@ class MemoryManager:
                         "topic_keys": list(claim.topic_keys or []),
                         "trigger_keys": list(claim.trigger_keys or []),
                         "write_policy": decision.to_dict(),
-                    }
+                    },
+                    memory_type=MemoryType.CLAIM,
                 ),
                 importance=float(claim.salience or 0.0),
                 confidence=float(claim.confidence or 0.0),
@@ -2137,7 +2139,7 @@ class MemoryManager:
                     level=next_row.level,
                     scope=next_row.scope,
                     namespace=next_row.namespace,
-                    metadata=self._strip_debug_metadata(next_row.metadata),
+                    metadata=self._strip_debug_metadata(next_row.metadata, memory_type=next_row.memory_type),
                     embedding=list(next_row.embedding or []) if isinstance(next_row.embedding, list) else None,
                     importance=next_row.importance,
                     confidence=next_row.confidence,
@@ -2153,7 +2155,7 @@ class MemoryManager:
         if changed:
             self._store.batch_upsert(changed)
 
-    def _strip_debug_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+    def _strip_debug_metadata(self, metadata: dict[str, Any], *, memory_type: Any = None) -> dict[str, Any]:
         """Remove debug/runtime fields from metadata before storage.
 
         In compact profile, also apply full compaction via MemoryPolicy._compact_metadata().
@@ -2163,6 +2165,7 @@ class MemoryManager:
         return sanitize_storage_metadata(
             metadata=dict(metadata or {}),
             storage_profile=self._storage_profile,
+            memory_type=memory_type,
         )
 
     def _default_retrieval_scopes(self) -> list[MemoryScope]:

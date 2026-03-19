@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+"""Promote claim candidates into persistent claim records.
+
+This module is intentionally separate from claim extraction:
+    claim_candidate_extractor -> finds candidates in text
+    claim_promoter -> decides promotion level and builds ClaimRecord rows
+"""
+
 from memory.claim_models import ClaimCandidate, ClaimPromotionDecision, ClaimRecord
 from memory.claim_promotion_policy import decide_claim_promotion_level
+from memory.recall_policy import default_claim_recall_mode, default_claim_spontaneous_recall
 
 
 def decide_claim_promotion(candidate: ClaimCandidate, *, repetition_count: int = 0) -> ClaimPromotionDecision:
+    """Decide whether a candidate becomes episodic, weak, or strong claim memory."""
     return decide_claim_promotion_level(candidate, repetition_count=repetition_count)
 
 
@@ -15,6 +24,7 @@ def promote_claim_candidates(
     namespace: str,
     scope: str = "conversation",
 ) -> list[ClaimRecord]:
+    """Convert write-allowed claim candidates into compact `ClaimRecord` objects."""
     out: list[ClaimRecord] = []
     counts = _candidate_repetition_counts(candidates)
     for candidate in list(candidates or []):
@@ -47,8 +57,14 @@ def promote_claim_candidates(
         elif promotion_level == "weak_claim":
             salience = min(1.0, salience * 0.82)
 
-        spontaneous = promotion_level == "strong_claim" and predicate in {"likes", "dislikes"}
-        recall_mode = "ambient" if promotion_level == "strong_claim" and predicate in {"likes", "dislikes"} else "contextual"
+        spontaneous = default_claim_spontaneous_recall(
+            predicate=predicate,
+            promotion_level=promotion_level,
+        )
+        recall_mode = default_claim_recall_mode(
+            predicate=predicate,
+            promotion_level=promotion_level,
+        )
         out.append(
             ClaimRecord(
                 subject=str(candidate.subject or "").strip().lower(),

@@ -164,7 +164,11 @@ def backfill_record(
             next_meta["assistant_noise_archived"] = True
             updated = _replace_record(
                 updated,
-                metadata=sanitize_storage_metadata(metadata=next_meta, storage_profile=storage_profile),
+                metadata=sanitize_storage_metadata(
+                    metadata=next_meta,
+                    storage_profile=storage_profile,
+                    memory_type=updated.memory_type,
+                ),
                 status=MemoryStatus.ARCHIVED,
                 updated_at=float(time.time()),
                 version=int(updated.version) + 1,
@@ -198,6 +202,7 @@ def rebuild_record_metadata(
     return policy.sanitize_metadata_for_storage(
         metadata=meta,
         source_kind=source_kind,
+        memory_type=record.memory_type,
         thinking="",
         storage_profile=storage_profile,
         compact_for_storage=True,

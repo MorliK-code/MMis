@@ -431,6 +431,110 @@ def test_exact_self_fact_query_does_not_promote_unrelated_claim_noise() -> None:
     assert [item.record.id for item in result.candidates][:1] == ["fact-gpu"]
 
 
+def test_exact_claim_query_prefers_exact_ownership_claim_over_unrelated_flower_claim() -> None:
+    owns_claim = _record(
+        "claim-own-fridge",
+        "user.owns=fridge samsung",
+        metadata=ensure_memory_views(
+            "user.owns=fridge samsung",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "owns",
+                    "obj": "fridge samsung",
+                    "object_surface": "Samsung fridge",
+                    "topic_keys": ["owns", "ownership", "appliance"],
+                    "trigger_keys": ["owns", "fridge", "samsung"],
+                    "recall_mode": "exact",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.owns.fridge_samsung",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    flower_claim = _record(
+        "claim-like-lotus",
+        "user.likes=запах цветка лотоса",
+        metadata=ensure_memory_views(
+            "user.likes=запах цветка лотоса",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "obj": "запах цветка лотоса",
+                    "object_surface": "запах цветка лотоса",
+                    "topic_keys": ["likes", "preference", "flower"],
+                    "trigger_keys": ["likes", "запах", "лотоса"],
+                    "recall_mode": "contextual",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.likes.lotus_smell",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(flower_claim, 0.76), (owns_claim, 0.64)],
+        lexical_hits=[(flower_claim, 0.74), (owns_claim, 0.67)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="what do i own?",
+            search_text="what do i own",
+            top_k=4,
+        )
+    )
+
+    assert [item.record.id for item in result.candidates][:1] == ["claim-own-fridge"]
+
+
+def test_exact_python_fact_query_demotes_old_dialog_episode_noise() -> None:
+    fact_record = _record(
+        "fact-python",
+        "user.environment_runtime_python=3.11",
+        metadata=ensure_memory_views(
+            "user.environment_runtime_python=3.11",
+            metadata={
+                "fact": {"predicate": "environment_runtime_python", "subject": "user", "value": "3.11"},
+                "canonical_key": "user.environment_runtime_python",
+            },
+        ),
+        memory_type=MemoryType.FACT,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    episode_record = _record(
+        "episode-python-discussion",
+        "We discussed Python migration for memory ingestion.",
+        metadata=ensure_memory_views(
+            "We discussed Python migration for memory ingestion.",
+            metadata={"episode": {"topic": "python migration"}},
+        ),
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(episode_record, 0.80), (fact_record, 0.58)],
+        lexical_hits=[(episode_record, 0.77), (fact_record, 0.60)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="what is my python?",
+            search_text="python 3.11",
+            entity_keys=["python", "python_3_11"],
+            top_k=4,
+        )
+    )
+
+    assert [item.record.id for item in result.candidates][:1] == ["fact-python"]
+
+
 def test_claim_retrieval_skips_document_level_claims_for_generic_claim_queries() -> None:
     live_claim = _record(
         "claim-use-vscode",

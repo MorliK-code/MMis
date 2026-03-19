@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -7,7 +8,15 @@ from threading import RLock
 from types import SimpleNamespace
 
 from core.character_runtime import CharacterRuntime
-from core.response_pipeline import PROFILE_BALANCED, PipelineContext, PromptBuildStage, PromptEngineStage
+from core.response_pipeline import (
+    PROFILE_BALANCED,
+    GenerateStage,
+    PipelineContext,
+    PostprocessStage,
+    PromptBuildStage,
+    PromptEngineStage,
+)
+from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, ModelInfo, ProviderHealth
 from llm.tokenizer import create_tokenizer
 from memory.context_builder import ContextBuilderV2
 from memory.dialog_episode_builder import DialogEpisodeBuilder, DialogTurn
@@ -36,6 +45,130 @@ from memory.retrieval import HybridRetriever
 from memory.retrieval_projection import record_search_text
 from modules.nlu.normalizer import normalize_text
 from prompt_engine.prompt_engine import PromptEngine
+
+
+class _PromptAwareProvider(LLMProviderBase):
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    def generate(self, req: LLMRequest) -> LLMResponse:
+        self.requests.append(req)
+        system_prompt = "\n\n".join(str(msg.content or "") for msg in req.messages if msg.role == "system")
+        user_message = ""
+        for msg in reversed(list(req.messages or [])):
+            if msg.role == "user":
+                user_message = str(msg.content or "")
+                break
+        return LLMResponse(
+            text=self._answer_for_prompt(system_prompt=system_prompt, user_message=user_message),
+            model="fake-e2e-model",
+        )
+
+    def healthcheck(self) -> ProviderHealth:
+        return ProviderHealth(ok=True, provider="fake-e2e", detail="ok", model="fake-e2e-model")
+
+    def model_info(self, model: str = "") -> ModelInfo:
+        return ModelInfo(provider="fake-e2e", model=model or "fake-e2e-model")
+
+    def list_models(self) -> list[str]:
+        return ["fake-e2e-model"]
+
+    @classmethod
+    def _answer_for_prompt(cls, *, system_prompt: str, user_message: str) -> str:
+        user_norm = normalize_text(str(user_message or "")).lower()
+        self_facts = cls._extract_block(system_prompt, "SELF_FACTS")
+        claims = cls._extract_block(system_prompt, "RELEVANT_CLAIMS")
+        recalled_dialog = cls._extract_block(system_prompt, "RECALLED_DIALOG")
+        document_evidence = cls._extract_block(system_prompt, "DOCUMENT_EVIDENCE")
+        supporting_messages = cls._extract_block(system_prompt, "SUPPORTING_MESSAGES")
+
+        if "gpu" in user_norm or "videocard" in user_norm or "graphics" in user_norm:
+            gpu = cls._fact_value(self_facts, "environment_gpu_model")
+            if gpu:
+                return f"Your GPU is {gpu}."
+            return "I do not see the exact GPU fact in memory."
+
+        if "what do i use" in user_norm or "what i use" in user_norm:
+            match = re.search(r"-\s*user\s+uses\s+(.+)", claims, re.I)
+            if match:
+                return f"You use {match.group(1).strip()}."
+            return "I do not see a confirmed use-claim in memory."
+
+        if "what did we discuss" in user_norm or "discuss about memory" in user_norm:
+            summary = cls._line_value(recalled_dialog, "Summary")
+            decisions = cls._section_bullets(recalled_dialog, "Decisions:")
+            if "assistant thoughts" in (recalled_dialog + "\n" + supporting_messages).lower() and decisions:
+                return f"We discussed assistant thoughts in memory design and decided that {decisions[0]}."
+            if summary and decisions:
+                return f"{summary} We decided that {decisions[0]}."
+            if summary:
+                return summary
+            return "I do not see a recalled dialog episode for that topic."
+
+        if "where in code" in user_norm or "ollama" in user_norm:
+            title = cls._line_value(document_evidence, "Document")
+            function_name = cls._document_function_name(document_evidence)
+            chunk_text = document_evidence
+            if title and chunk_text:
+                function_name = function_name or "the shown function"
+                return f"In {title}, ollama is called in {function_name} via ollama.chat(...)."
+            return "I do not see matching document evidence for that code question."
+
+        return "I do not have a scripted answer for this test."
+
+    @staticmethod
+    def _extract_block(prompt: str, label: str) -> str:
+        lines = str(prompt or "").splitlines()
+        header = f"[{label}]"
+        capture = False
+        out: list[str] = []
+        for raw_line in lines:
+            line = str(raw_line or "")
+            stripped = line.strip()
+            if stripped == header:
+                capture = True
+                continue
+            if capture and re.match(r"^\[[A-Z_]+\]$", stripped):
+                break
+            if capture:
+                out.append(line.rstrip())
+        return "\n".join(out).strip()
+
+    @staticmethod
+    def _fact_value(block: str, predicate: str) -> str:
+        match = re.search(rf"-\s*{re.escape(predicate)}:\s*(.+)", str(block or ""), re.I)
+        return str(match.group(1) if match else "").strip()
+
+    @staticmethod
+    def _line_value(block: str, label: str) -> str:
+        match = re.search(rf"^{re.escape(label)}:\s*(.+)$", str(block or ""), re.I | re.M)
+        return str(match.group(1) if match else "").strip()
+
+    @staticmethod
+    def _section_bullets(block: str, header: str) -> list[str]:
+        lines = str(block or "").splitlines()
+        capture = False
+        out: list[str] = []
+        for raw_line in lines:
+            stripped = str(raw_line or "").strip()
+            if stripped == str(header or "").strip():
+                capture = True
+                continue
+            if capture and stripped.endswith(":") and not stripped.startswith("-"):
+                break
+            if capture and stripped.startswith("-"):
+                out.append(stripped.removeprefix("-").strip())
+        return out
+
+    @staticmethod
+    def _first_chunk_text(block: str) -> str:
+        match = re.search(r"^Chunk(?:\s+\d+)?:\s*(.+)$", str(block or ""), re.I | re.M)
+        return str(match.group(1) if match else "").strip()
+
+    @staticmethod
+    def _document_function_name(block: str) -> str:
+        match = re.search(r"\bdef\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", str(block or ""))
+        return str(match.group(1) if match else "").strip()
 
 
 def _record(
@@ -364,6 +497,15 @@ def _system_prompt(ctx: PipelineContext) -> str:
     return str(ctx.prompt_sections.get("system") or "")
 
 
+def _generate_answer(ctx: PipelineContext) -> tuple[PipelineContext, _PromptAwareProvider]:
+    provider = _PromptAwareProvider()
+    generate_stage = GenerateStage(provider=provider, character_runtime=CharacterRuntime())
+    postprocess_stage = PostprocessStage()
+    ctx = generate_stage.run(ctx)
+    ctx = postprocess_stage.run(ctx)
+    return ctx, provider
+
+
 def test_golden_e2e_fact_recall_survives_assistant_noise() -> None:
     manager = _manager()
     namespace = "golden-fact"
@@ -398,6 +540,11 @@ def test_golden_e2e_fact_recall_survives_assistant_noise() -> None:
     assert "Check it yourself" not in system_prompt
     assert "don't remember your GPU" not in system_prompt.lower()
     assert str(ctx.tags.get("self_memory_exact") or "").lower() == "true"
+    ctx, provider = _generate_answer(ctx)
+    assert len(provider.requests) == 1
+    assert ctx.text == "Your GPU is RTX 3050 Ti."
+    assert "device manager" not in ctx.text.lower()
+    assert "check it yourself" not in ctx.text.lower()
 
 
 def test_golden_e2e_claim_recall_promotes_and_surfaces_relevant_claims() -> None:
@@ -427,6 +574,10 @@ def test_golden_e2e_claim_recall_promotes_and_surfaces_relevant_claims() -> None
     assert "Samsung fridge" not in str(result.blocks["relevant_claims"])
     system_prompt = _system_prompt(ctx)
     assert "[RELEVANT_CLAIMS]\n- user uses VS Code" in system_prompt
+    ctx, provider = _generate_answer(ctx)
+    assert len(provider.requests) == 1
+    assert ctx.text == "You use VS Code."
+    assert "Samsung fridge" not in ctx.text
 
 
 def test_golden_e2e_dialog_episode_recall_builds_episode_and_prompt_block() -> None:
@@ -500,6 +651,11 @@ def test_golden_e2e_dialog_episode_recall_builds_episode_and_prompt_block() -> N
     assert "[RECALLED_DIALOG]" in system_prompt
     assert "assistant thoughts" in system_prompt.lower()
     assert "[SUPPORTING_MESSAGES]" in system_prompt
+    ctx, provider = _generate_answer(ctx)
+    assert len(provider.requests) == 1
+    assert "assistant thoughts" in ctx.text.lower()
+    assert "debug logs" in ctx.text.lower()
+    assert "decided" in ctx.text.lower()
 
 
 def test_golden_e2e_document_recall_surfaces_document_evidence() -> None:
@@ -538,3 +694,8 @@ def test_golden_e2e_document_recall_surfaces_document_evidence() -> None:
     system_prompt = _system_prompt(ctx)
     assert "[DOCUMENT_EVIDENCE]" in system_prompt
     assert "ollama.chat" in system_prompt
+    ctx, provider = _generate_answer(ctx)
+    assert len(provider.requests) == 1
+    assert "llm_helpers.py" in ctx.text
+    assert "call_ollama" in ctx.text
+    assert "ollama.chat" in ctx.text

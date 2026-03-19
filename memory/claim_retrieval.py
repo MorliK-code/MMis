@@ -152,8 +152,12 @@ class ClaimRetriever:
             bonus += 0.04
         if hints.subjects and subject in hints.subjects:
             bonus += 0.06
+        elif hints.subjects and subject not in hints.subjects:
+            bonus -= 0.10
         if hints.predicates and predicate in hints.predicates:
             bonus += 0.10
+        elif hints.predicates and predicate not in hints.predicates:
+            bonus -= 0.18
 
         topic_overlap = len(topic_keys.intersection(hints.topic_keys))
         trigger_overlap = len(trigger_keys.intersection(hints.trigger_keys))
@@ -167,13 +171,15 @@ class ClaimRetriever:
 
         if obj and (obj in hints.query_text or self._text_matches_query_tokens(obj, hints.trigger_keys)):
             bonus += 0.06
+        if recall_mode == "exact" and hints.predicates and predicate in hints.predicates:
+            bonus += 0.12
         if recall_mode == "ambient" and hints.spontaneous_recall_preferred:
             bonus += 0.08
         elif recall_mode == "contextual":
             bonus += 0.01
         if spontaneous_recall and hints.spontaneous_recall_preferred:
             bonus += 0.06
-        return min(0.44, max(0.0, bonus))
+        return min(0.48, max(-0.24, bonus))
 
     def build_query_hints(self, query: RetrievalQuery) -> ClaimQueryHints:
         query_text = normalize_text(str(query.query_text or query.search_text or "")).lower()
@@ -190,7 +196,7 @@ class ClaimRetriever:
         if _DISLIKES_QUERY_RE.search(query_text):
             predicates.add("dislikes")
             topic_keys.add("preference")
-        if _OWNS_QUERY_RE.search(query_text):
+        if _OWNS_QUERY_RE.search(query_text) or re.search(r"\bown(?:ed)?\b", query_text):
             predicates.add("owns")
             topic_keys.add("ownership")
         if _USES_QUERY_RE.search(query_text):

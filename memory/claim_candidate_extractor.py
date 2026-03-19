@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+"""Extract pre-promotion claim candidates from raw text.
+
+This module is the claim-ingest layer for open-claim memory.
+Its job is only:
+    raw text -> bounded ClaimCandidate objects
+
+It does not decide persistence level and does not write claim records.
+That promotion step lives in `memory.claim_promoter`.
+"""
+
 import re
 from typing import Any
 
@@ -117,6 +127,7 @@ def extract_claim_candidates(
     anchors: list[IngestAnchor] | None = None,
     context: dict[str, Any] | None = None,
 ) -> list[ClaimCandidate]:
+    """Extract bounded `ClaimCandidate` items for later promotion."""
     src = str(text or "").strip()
     if not src:
         return []

@@ -385,6 +385,78 @@ def test_promote_claim_candidates_skips_episodic_only_and_marks_levels() -> None
 
     assert len(records) == 1
     assert records[0].promotion_level == "weak_claim"
+    assert records[0].recall_mode == "contextual"
+
+
+def test_promote_claim_candidates_assigns_exact_recall_to_owns_and_uses() -> None:
+    uses_candidate = ClaimCandidate(
+        subject="user",
+        predicate="uses",
+        object_surface="VS Code",
+        object_type="tool",
+        head="VS Code",
+        normalized_object="vs code",
+        alternatives=["VS Code", "Code"],
+        confidence=0.86,
+        specificity=0.82,
+        evidence_text="I use VS Code.",
+        topic_keys=["uses", "tool", "usage"],
+        trigger_keys=["uses", "vs", "code"],
+    )
+    owns_candidate = ClaimCandidate(
+        subject="user",
+        predicate="owns",
+        object_surface="fridge Samsung",
+        object_type="appliance",
+        head="fridge",
+        normalized_object="fridge samsung",
+        alternatives=["fridge Samsung", "Samsung"],
+        confidence=0.88,
+        specificity=0.80,
+        evidence_text="I have a Samsung fridge.",
+        topic_keys=["owns", "appliance", "ownership"],
+        trigger_keys=["owns", "fridge", "samsung"],
+    )
+
+    records = promote_claim_candidates(
+        [uses_candidate, owns_candidate],
+        event_id="evt:claim-recall",
+        namespace="claims",
+    )
+
+    recall_modes = {
+        str(item.predicate or ""): str(item.recall_mode or "")
+        for item in list(records or [])
+    }
+    assert recall_modes["uses"] == "exact"
+    assert recall_modes["owns"] == "exact"
+
+
+def test_promote_claim_candidates_assigns_ambient_recall_to_strong_like_claims() -> None:
+    strong_like = ClaimCandidate(
+        subject="user",
+        predicate="likes",
+        object_surface="смотреть в глаза Розе",
+        object_type="activity",
+        head="смотреть",
+        normalized_object="смотреть в глаза розе",
+        alternatives=["смотреть в глаза Розе", "Розе"],
+        confidence=0.84,
+        specificity=1.0,
+        evidence_text="Я люблю смотреть в глаза Розе.",
+        topic_keys=["likes", "activity", "preference"],
+        trigger_keys=["likes", "смотреть", "розе"],
+    )
+
+    records = promote_claim_candidates(
+        [strong_like],
+        event_id="evt:strong-like",
+        namespace="claims",
+    )
+
+    assert len(records) == 1
+    assert records[0].recall_mode == "ambient"
+    assert records[0].spontaneous_recall is True
 
 
 def test_claim_candidate_extractor_extracts_entity_backed_tool_usage() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from memory.memory_policy import MemoryPolicy
 from memory.memory_models import MemorySourceKind
-from memory.storage_profile import compact_metadata_payload
+from memory.storage_profile import compact_metadata_payload, storage_schema_for_memory_type
 
 
 def test_compact_storage_profile_strips_raw_analysis_and_nested_debug_payloads() -> None:
@@ -109,3 +109,136 @@ def test_debug_storage_profile_keeps_raw_analysis_and_debug_payloads() -> None:
     assert sanitized["search_text"] == "gpu rtx 3050 ti"
     assert dict(sanitized.get("memory_views") or {}).get("search_text") == "gpu rtx 3050 ti"
     assert dict(sanitized.get("write_policy") or {}).get("signals") == {"new_conf": 0.9}
+
+
+def test_storage_schema_for_fact_claim_episode_and_document_chunk_is_frozen() -> None:
+    fact_schema = storage_schema_for_memory_type("fact")
+    claim_schema = storage_schema_for_memory_type("claim")
+    episode_schema = storage_schema_for_memory_type("episode")
+    chunk_schema = storage_schema_for_memory_type("document_chunk")
+
+    assert fact_schema["always"] == ["canonical_key", "fact", "parallel_with", "relation", "write_policy"]
+    assert claim_schema["always"] == [
+        "canonical_key",
+        "chunk_id",
+        "claim",
+        "doc_id",
+        "document_claim",
+        "document_id",
+        "topic_keys",
+        "trigger_keys",
+        "write_policy",
+    ]
+    assert episode_schema["always"] == [
+        "decisions",
+        "dialog_episode",
+        "entity_keys",
+        "open_questions",
+        "participants",
+        "salience",
+        "summary_reasoning",
+        "summary_short",
+        "topic",
+        "topic_keys",
+        "turn_ids",
+    ]
+    assert chunk_schema["always"] == [
+        "chunk_id",
+        "chunk_index",
+        "claims",
+        "doc_id",
+        "document_id",
+        "extension",
+        "filename",
+        "memory_entities",
+        "memory_tags",
+        "memory_views",
+        "numeric_facts",
+        "path",
+        "section_label",
+        "source_path",
+        "stable_facts",
+        "title",
+    ]
+    assert "assistant_noise_archived" in set(storage_schema_for_memory_type("message")["always"])
+    assert "lifecycle_reason" in set(storage_schema_for_memory_type("message")["always"])
+    assert "memory_analysis" in set(fact_schema["debug_only"])
+    assert "claim_candidates" in set(claim_schema["debug_only"])
+
+
+def test_compact_storage_profile_enforces_fact_episode_and_document_chunk_schema() -> None:
+    fact = compact_metadata_payload(
+        {
+            "fact": {
+                "subject": "user",
+                "predicate": "environment_gpu_model",
+                "value": "RTX 3050 Ti",
+                "confidence": 0.92,
+            },
+            "canonical_key": "user.environment_gpu_model",
+            "relation": "environment",
+            "write_policy": {"action": "allow", "reason": "new_fact", "signals": {"x": 1}},
+            "memory_entities": [{"type": "gpu_model"}],
+            "memory_analysis": {"anchors": [{"kind": "gpu"}]},
+        },
+        memory_type="fact",
+    )
+    episode = compact_metadata_payload(
+        {
+            "dialog_episode": {
+                "id": "episode:1",
+                "topic": "memory design",
+                "turn_ids": ["t1", "t2"],
+                "summary_short": "Discussed memory design.",
+                "summary_reasoning": "Compared storage options.",
+                "decisions": ["keep assistant thoughts debug-only"],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.8,
+                "topic_keys": ["memory"],
+                "entity_keys": ["assistant_thoughts"],
+                "metadata": {"raw": True},
+            },
+            "topic": "memory design",
+            "summary_short": "Discussed memory design.",
+            "summary_reasoning": "Compared storage options.",
+            "turn_ids": ["t1", "t2"],
+            "memory_views": {"entity_keys": ["should_drop"]},
+            "memory_analysis": {"anchors": [{"kind": "topic"}]},
+        },
+        memory_type="episode",
+    )
+    chunk = compact_metadata_payload(
+        {
+            "document_id": "doc:1",
+            "chunk_id": "chunk:1",
+            "chunk_index": 0,
+            "section_label": "LLM helpers",
+            "memory_views": {"entity_keys": ["ollama"], "numeric_keys": ["version:3.11"], "search_text": "raw"},
+            "claims": [{"subject": "document", "predicate": "uses", "obj": "ollama", "debug": True}],
+            "memory_entities": [{"type": "tool_name", "canonical": "ollama"}],
+            "numeric_facts": [{"kind": "python_version", "value": "3.11"}],
+            "stable_facts": [{"kind": "tool", "value": "ollama"}],
+            "memory_tags": ["topic_code"],
+            "search_text": "raw chunk",
+            "memory_analysis": {"anchors": [{"kind": "tool"}]},
+            "weird_extra": True,
+        },
+        memory_type="document_chunk",
+    )
+
+    assert set(fact.keys()) == {"fact", "canonical_key", "relation", "write_policy"}
+    assert set(episode.keys()) == {"dialog_episode", "topic", "summary_short", "summary_reasoning", "turn_ids"}
+    assert set(chunk.keys()) == {
+        "document_id",
+        "chunk_id",
+        "chunk_index",
+        "section_label",
+        "memory_views",
+        "claims",
+        "memory_entities",
+        "numeric_facts",
+        "stable_facts",
+        "memory_tags",
+    }
+    assert chunk["memory_views"] == {"entity_keys": ["ollama"], "numeric_keys": ["version:3.11"]}

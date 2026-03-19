@@ -339,6 +339,8 @@ class HybridRetriever:
                 fact_bonus += 0.06
             if record_subject == "user":
                 fact_bonus += 0.08
+            elif self._is_self_like_query(query):
+                fact_bonus -= 0.18
             if record_predicate and record_predicate in expected:
                 fact_bonus += 0.40
             elif self._is_self_like_query(query) and record_predicate and record_subject == "user":
