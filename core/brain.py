@@ -17,6 +17,7 @@ from memory.debug_snapshot import build_memory_debug_snapshot
 from memory.identity_core import PROTECTED_IDENTITY_CORE_KEYS
 from memory.memory_manager import MemoryManager
 from memory.memory_models import MemoryEvent, MemoryScope, MemoryType
+from memory.summary_quality import sanitize_session_summary_text
 from memory.text_sanitizer import (
     clean_assistant_text_for_memory,
     contains_memory_service_sections,
@@ -362,7 +363,7 @@ class Brain:
                     except Exception:
                         pass
             elif key == "conversation_summary":
-                text = str(op.get("text") or "").strip()
+                text = sanitize_session_summary_text(op.get("text") or "")
                 if text:
                     self.state_manager.set_dialog_summary(text)
                     try:

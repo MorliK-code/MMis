@@ -8,6 +8,7 @@ from config.settings import load_config
 from core.character_runtime import CharacterRuntime
 from core.spec_registry import load_spec
 from llm.provider_base import Message
+from memory.summary_quality import sanitize_session_summary_text
 from prompt_engine.prompt_registry import PromptRegistry
 from prompt_engine.token_budget_manager import ContextBlock, TokenBudgetManager
 
@@ -503,7 +504,11 @@ class PromptEngine:
             if key == "__active_task__":
                 text = str(active_task_block or "").strip()
             else:
-                text = str(memory_blocks.get(key) or "").strip()
+                text = (
+                    sanitize_session_summary_text(memory_blocks.get(key) or "")
+                    if key == "session_summary"
+                    else str(memory_blocks.get(key) or "").strip()
+                )
             if not text:
                 continue
             parts.append(f"[{title}]\n{text}")

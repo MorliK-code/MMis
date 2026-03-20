@@ -22,6 +22,7 @@ from typing import Any
 from config.settings import load_config
 from core.mode_selector import normalize_mode_name
 from metadata.taxonomy import normalize_emotion
+from memory.summary_quality import is_meaningful_summary_turn, sanitize_session_summary_text
 from modules.character.composer import CharacterComposeResult, CharacterComposer, compute_context_trait_modifiers
 from modules.character.dialog_policies import (
     local_date_kyiv as dialog_local_date,
@@ -3642,11 +3643,12 @@ class CharacterRuntime:
         dropped_tail: int,
     ) -> str:
         """Построить блок long summary."""
-        explicit = _normalize_text(
+        explicit = sanitize_session_summary_text(
             state.get("long_summary")
             or state.get("rolling_summary")
             or state.get("dialog_summary")
             or "",
+            max_chars=max(64, int(budgets.long_summary_tokens * 6)),
         )
         if explicit:
             clipped, _ = _clip_to_tokens(explicit, budgets.long_summary_tokens)
@@ -3660,12 +3662,35 @@ class CharacterRuntime:
         older = history[: max(0, len(history) - budgets.tail_turns)]
         if not older:
             return "- none"
-        points = []
-        for row in older[:4]:
-            points.append(f"- {row['role']}: {row['content']}")
-        if len(older) > 4:
-            points.append(f"- ... {len(older) - 4} older turns compressed")
-        text = "\n".join(points)
+        meaningful: list[dict[str, str]] = []
+        for row in older:
+            content = _normalize_text(row["content"])
+            if not is_meaningful_summary_turn(content):
+                continue
+            meaningful.append({"role": row["role"], "content": content})
+            if len(meaningful) >= 4:
+                break
+        if not meaningful:
+            return "- none"
+
+        parts: list[str] = []
+        for row in meaningful:
+            role = str(row.get("role") or "").strip().lower()
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "assistant":
+                parts.append(f"Assistant replied: {content}")
+            elif role == "tool":
+                parts.append(f"Tool result: {content}")
+            else:
+                parts.append(f"User said: {content}")
+        if not parts:
+            return "- none"
+
+        text = "Earlier context: " + " ".join(parts)
+        if len(older) > len(meaningful):
+            text += f" ({len(older) - len(meaningful)} more earlier turns compressed.)"
         clipped, _ = _clip_to_tokens(text, budgets.long_summary_tokens)
         return clipped if clipped else "- none"
 

@@ -191,6 +191,19 @@ def test_claim_candidate_extractor_keeps_cleaned_sensory_like_phrase() -> None:
     assert "лотоса" in list(item.alternatives or [])
 
 
+def test_claim_candidate_extractor_rejects_event_like_owns_fragments_from_narrative() -> None:
+    candidates = _extract_candidates(
+        "У меня есть подруга Таня. У меня случился нервный срыв на вечерней. У меня стало пусто в голове."
+    )
+
+    owns = [item for item in list(candidates or []) if str(item.predicate or "") == "owns"]
+    surfaces = [str(item.object_surface or "") for item in owns]
+
+    assert "подруга Таня" in surfaces
+    assert all("случился нервный срыв" not in item.lower() for item in surfaces)
+    assert all("стало пусто" not in item.lower() for item in surfaces)
+
+
 def test_claim_normalizer_trims_discourse_tail_and_canonicalizes_windows() -> None:
     item = normalize_claim_object("windows 11. кстати")
 

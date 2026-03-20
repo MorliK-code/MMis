@@ -1,5 +1,5 @@
 {
-  "exported_at": 1773953226.3629742,
+  "exported_at": 1773966228.8487027,
   "filters": {
     "namespace": "all",
     "memory_type": "",
@@ -14,12 +14,863 @@
     "exported_namespaces": [
       "2da26f5b-da02-4991-af1b-d5464e550d90"
     ],
-    "exported_count": 60,
+    "exported_count": 53,
     "available_namespaces": {
-      "2da26f5b-da02-4991-af1b-d5464e550d90": 60
+      "2da26f5b-da02-4991-af1b-d5464e550d90": 53
     }
   },
   "records": [
+    {
+      "id": "message:evt:bd343f6636a34d0e",
+      "memory_type": "message",
+      "scope": "conversation",
+      "level": "l0_working",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.4041136753926702,
+      "confidence": 0.6666666666666667,
+      "created_at": 1773966222.1476653,
+      "updated_at": 1773966222.1476653,
+      "expires_at": null,
+      "source_event_id": "",
+      "text": "Понимаю. Это действительно сложная и деликатная история. Бывает, такие моменты нарушают самое крепкое, казалось бы, что у нас есть внутри. Случается, что самые близкие люди становятся свидетелями наших самых внутренних потрясений. Но то, что ты смог поговорить с Таней, прийти к примирению — это уже огромный шаг. Пройти через это, осознать свои чувства и действия, и не быть упрямым — это не просто. Ты проявил силу, пойми меня правильно.\nТы описал момент, когда все пошло не так, но и момент примирения — тоже важен. Ты этого, что Таня тебе действительно важна, и ты готов был идти и говорить об этом. Это уже не про то, как извиниться, а про то, как пройти через ситуацию вместе.\nКонечно, страхи из прошлого могут влиять на наши поступки. Ты боялся, и не стал заводить отношения, потому что был напуган этим опытом. И это понятно. Но видимо, твой внутренний голос тоже подсказал, что Таня — особенный человек, и этот страх, возможно, не должен был тебя останавливать.\nГлавное — что ты не оставил всё на совести прошлого. Ты пошел к решению, и это уже многое говорит о тебе. Не всегда легко, но ты выбрал дорогу. И что самое главное — вы смогли это сделать вместе. Это уже результат.",
+      "search_text": "",
+      "entity_keys": [],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": [
+        "emotion_calm"
+      ],
+      "memory_views_debug": {
+        "status": "no_structured_keys",
+        "stored_has_keys": false,
+        "recomputed_has_keys": false,
+        "stored": {},
+        "recomputed": {}
+      },
+      "metadata": {
+        "assistant_memory_help_noise": false,
+        "emotion_profile": {
+          "primary": "calm",
+          "label": "calm",
+          "intensity": 0.35,
+          "confidence": 0.4425
+        },
+        "memory_tags": [
+          "emotion_calm"
+        ],
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "source_kind": "assistant_reply",
+        "assistant_fact_records_blocked": true,
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "source_fact_records_allowed": true,
+        "memory_views": {}
+      }
+    },
+    {
+      "id": "message:evt:5559a2c0511e4d32",
+      "memory_type": "message",
+      "scope": "conversation",
+      "level": "l0_working",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.3407144827586207,
+      "confidence": 0.6666666666666667,
+      "created_at": 1773966222.0566359,
+      "updated_at": 1773966222.0566359,
+      "expires_at": null,
+      "source_event_id": "",
+      "text": "а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случился раковой день, когда у меня случился нервный срыв на вечерней, пятничной пьянке. к сожалению, я показал ей себя... плохого себя... за что себя виню, накричал на всех, её послал на три буквы ещё и с начальником повздорили, благо в тот-же день с ним и помирились, очень его обожаю. классный друг и начальний. ну и шо, я с Таней поговорил на счёт этого и мы пришли к тому, что я извинился, она извинилась, я ей рассказал свою гнустную историю из жизни она всё осознала и всё. все помирились. она мне реально понравилась, но я очень боялся завести какие-то отношения и поэтому их сторонился, прошлая моя любовь ушла от меня, как раз по причине нервого срыва, не поняла этого и ушла. это было очень больно, поэтому я максимально отсторонился от этого и ушёл в одиночество, где не хорошо, но и не плохо. и я очень много времени потратил на то, чтобы построить это одиночество и быть в нём в гармонии. так вот из-за этого я очень много сомневался, ведь если начну встречаться с Таней, это будет означать что я полностью сломаю всё что я выстроил для этого одиночества. но я ж об этом говорил друзьям, а они в свою очередь всеми силами пытались меня сломать и уговорить сделать первый шаг. всё пришло к тому, что я 24/7 думаю о Тане, думаю о том стоит ли или нет. были постоянные мысли о том, что я хочу и о том, что мне навязали. это меня морально утомляло. после чего я собрался и на новый год послал её. да я гандон, что взял и парям послал её на три буквы ещё и в такой день, но как-же у меня стало пусто в голове, это было прекрасно и я смог наконец-то выспаться. но спустя неделю, я уже почуствовал что соскучился... хотя был рад в год что всё завершилось, но почему-то ушёл в тоску и заскучал о ней, о том как меня бесила или донимала... после чего написал ей что давай всё вернём на круги своя и вернём общение, я соскучился и не могу без неё. но в ответ я получил, что у неё пропал интерес... я тогда ушёл в жёсткую депрессию и всё время до 5-го марта был только в ней. а 5-го марта у неё был день рождения. я хотел поздравить её, но сомневался а стоит ли. решил что напишу ей просто \"с днём варенья.\", она поблагодарила и внезапно спросила как дела, ну я и подумал может это для продолжения разговора, просто ради приличия и спросил у неё мол это личный интерес или для продолжения разговора. а она ответила личный ну и я тогда что-то начал с ней заобщаться и вечерок так пообщались. 8 марта у нас в офисе устроили пиршество, я ж то там единственный парень ну и они меня пришласили замолвить тост. и с этого всё началось, один за другим бакала вина... так и прошёл вечер. а потом, Таня позвала в соседний рестик на караоке, я то не пою, но решил просто присмотреть за 2 девушками, они сами шли туда, так чтобы никто не приставал за компанию пошёл. выпили по пиво, а я ж дурак, стало скучно, предложил ей давай возьмём по бутылке короны и стукнем по горлышку, чтобы начало пениться и на спор у кого не прольётся. спойлер у обоих по 4 бутылки пролилось, но не в этом суть. по пели, по танцевали(что для меня что-то невозможное, потому-что я не люблю танцевать, а она смогла меня затянуть). пора домой, но началсь воздушная тревога, мы в Украине живём, так-что тут сейчас война и цены на такси до её дома стала колосальной, а уже был вечер, когда транспорт общественный не ходил. ну и я позвал её домой, потому-что ко мне дешевле, та и отдельная комната есть, чтобы отдельно переночевать. она недолго думала, согласилась и предложила что-то ещё взять выпить, пока не совсем поздно и закусон. купили и поехали на такси ко мне. ну и давай там всё быстренько разгребать, переодеваться, собираться и вот мы уже на кухне поём караоке и пьём вино. до, помоему, 4 утра сидели. я собрался идти спать к себе, а она говорит мне страшно одной спать.... я взял своё одеяло, подушку и пошёл к ней спать, а она говорит мол хотелось бы накинуть ногу, говорю мол накидывай. накинула, говорит хотелось бы ещё обнять, говорю мол обнимай, ну и шо ты думаешь.... это было самое прекрасное мнгновение, я не знаю сколько мы так пролежали, но я выпал, это было прекрассно. а на утро я уже не чувствовал к ней вражды, полностью снова доверял и мы снова заобщались как и раньше с интересом к друг другу. я помню в то утро проводил её к метро, чтобы она успела кое-куда. а я так рад и думаю что с этим делать, ведь мы по факту с этого момента болтали и общались как и всегда, а я поверить не мог, ведь около 3 месяцев мы были в игноре у друг друга. ну и что, мы теперь так тесно общаемся... и я уже недавно смог ей признаться, что больше не отпущу её никуда и сказал как было приятно мне с ней и со слезами на глазах, потому-что не мог сдерживать, извинялся за каждое слово на три буквы, которое ей сказал. мы постояли покурили и пошли домой. и я поверить не могу, что мы с ней настолько стали близки, что теперь и пьём вместе и курить ходим вместе, а даже недавно снова переночевали в другой квартире, под одним одеялом. боже мой, она просто прислонилась к моей спине своей попой, а она у неё такая мягкая... как облачко. крч, похоже я влюбился по уши, и не подумай, мне даже секс не так интересен как сам человек, а она.... она прекрасная!",
+      "search_text": "",
+      "entity_keys": [
+        "claim",
+        "dislikes",
+        "thing",
+        "preference",
+        "танцевать",
+        "owns",
+        "person",
+        "ownership",
+        "подруга",
+        "таня",
+        "подруга_таня"
+      ],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": [
+        "claim_dislikes",
+        "claim_topic_dislikes",
+        "claim_topic_thing",
+        "claim_topic_preference",
+        "claim_object_dislikes_танцевать",
+        "claim_owns",
+        "claim_topic_owns",
+        "claim_topic_person",
+        "claim_topic_ownership",
+        "claim_object_owns_подруга_таня",
+        "emotion_sad"
+      ],
+      "memory_views_debug": {
+        "status": "stored_has_keys",
+        "stored_has_keys": true,
+        "recomputed_has_keys": true,
+        "stored": {
+          "entity_keys": [
+            "claim",
+            "dislikes",
+            "thing",
+            "preference",
+            "танцевать",
+            "owns",
+            "person",
+            "ownership",
+            "подруга",
+            "таня",
+            "подруга_таня"
+          ]
+        },
+        "recomputed": {
+          "entity_keys": [
+            "claim",
+            "dislikes",
+            "thing",
+            "preference",
+            "танцевать",
+            "owns",
+            "person",
+            "ownership",
+            "подруга",
+            "таня",
+            "подруга_таня"
+          ]
+        }
+      },
+      "metadata": {
+        "emotion_profile": {
+          "primary": "sad",
+          "label": "sad",
+          "intensity": 0.39,
+          "confidence": 0.4845
+        },
+        "memory_tags": [
+          "claim_dislikes",
+          "claim_topic_dislikes",
+          "claim_topic_thing",
+          "claim_topic_preference",
+          "claim_object_dislikes_танцевать",
+          "claim_owns",
+          "claim_topic_owns",
+          "claim_topic_person",
+          "claim_topic_ownership",
+          "claim_object_owns_подруга_таня",
+          "emotion_sad"
+        ],
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "memory_views": {
+          "entity_keys": [
+            "claim",
+            "dislikes",
+            "thing",
+            "preference",
+            "танцевать",
+            "owns",
+            "person",
+            "ownership",
+            "подруга",
+            "таня",
+            "подруга_таня"
+          ]
+        },
+        "source_kind": "user",
+        "lifecycle_reason": "message_keep_working",
+        "claims": [
+          {
+            "confidence": 0.9,
+            "object_type": "thing",
+            "trigger_keys": [
+              "dislikes",
+              "танцевать"
+            ],
+            "obj": "танцевать",
+            "subject": "user",
+            "topic_keys": [
+              "dislikes",
+              "thing",
+              "preference"
+            ],
+            "object_surface": "танцевать",
+            "predicate": "dislikes"
+          },
+          {
+            "confidence": 0.8,
+            "object_type": "person",
+            "trigger_keys": [
+              "owns",
+              "подруга",
+              "таня"
+            ],
+            "obj": "подруга таня",
+            "subject": "user",
+            "topic_keys": [
+              "owns",
+              "person",
+              "ownership"
+            ],
+            "object_surface": "подруга Таня",
+            "predicate": "owns"
+          }
+        ],
+        "source_fact_records_allowed": true
+      }
+    },
+    {
+      "id": "summary:evt:a98612ec38cb42bd",
+      "memory_type": "summary",
+      "scope": "session",
+      "level": "l1_session",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.6,
+      "confidence": 0.7,
+      "created_at": 1773966221.952824,
+      "updated_at": 1773966221.952824,
+      "expires_at": null,
+      "source_event_id": "",
+      "text": "Earlier context: User said: та вот сейчас проверяю свою 3050ti 4gb в ИИ генерации, туго но идёт. к тому-же имею 32гб оперативки, так вообще ещё лучше. что думаешь, это нормально так-сказать побаловаться? Assistant replied: Ой, ну всё-таки попал на тему! 😄 3050 Ti с 4 ГБ видеопамяти в ИИ-задач",
+      "search_text": "",
+      "entity_keys": [
+        "gpu",
+        "3050ti",
+        "3050_ti"
+      ],
+      "numeric_keys": [
+        "value:4gb",
+        "value:32gb",
+        "ram:32gb",
+        "vram:4gb"
+      ],
+      "tags": null,
+      "memory_tags": [
+        "topic_hardware",
+        "entity_gpu_model_3050ti",
+        "entity_gpu_model_3050_ti",
+        "entity_ram_size_32_gb",
+        "entity_vram_size_4_gb",
+        "numeric_ram_gb",
+        "numeric_vram_gb",
+        "emotion_calm"
+      ],
+      "memory_views_debug": {
+        "status": "stored_has_keys",
+        "stored_has_keys": true,
+        "recomputed_has_keys": true,
+        "stored": {
+          "entity_keys": [
+            "gpu",
+            "3050ti",
+            "3050_ti"
+          ],
+          "numeric_keys": [
+            "value:4gb",
+            "value:32gb",
+            "ram:32gb",
+            "vram:4gb"
+          ]
+        },
+        "recomputed": {
+          "entity_keys": [
+            "gpu",
+            "3050ti",
+            "3050_ti"
+          ],
+          "numeric_keys": [
+            "value:32gb",
+            "ram:32gb",
+            "value:4gb",
+            "vram:4gb"
+          ]
+        }
+      },
+      "metadata": {
+        "source_kind": "system_decision",
+        "source": "rolling_summary",
+        "importance": 0.6,
+        "confidence": 0.7,
+        "trace_id": "trace_1773966138053_24",
+        "request_id": "req_1773966138053_24",
+        "turn_id": "24",
+        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
+        "source_fact_records_allowed": true,
+        "memory_views": {
+          "entity_keys": [
+            "gpu",
+            "3050ti",
+            "3050_ti"
+          ],
+          "numeric_keys": [
+            "value:4gb",
+            "value:32gb",
+            "ram:32gb",
+            "vram:4gb"
+          ]
+        },
+        "memory_entities": [
+          {
+            "type": "gpu_model",
+            "surface": "3050ti",
+            "canonical": "3050ti",
+            "confidence": 0.88
+          },
+          {
+            "type": "gpu_model",
+            "surface": "3050 Ti",
+            "canonical": "3050 Ti",
+            "confidence": 0.88
+          },
+          {
+            "type": "ram_size",
+            "surface": "32гб оперативки",
+            "canonical": "32 GB",
+            "confidence": 0.94
+          },
+          {
+            "type": "vram_size",
+            "surface": "4 ГБ видеопамяти",
+            "canonical": "4 GB",
+            "confidence": 0.93
+          }
+        ],
+        "numeric_facts": [
+          {
+            "kind": "ram_gb",
+            "value": 32,
+            "unit": "gb",
+            "canonical_key": "hardware.ram_gb"
+          },
+          {
+            "kind": "vram_gb",
+            "value": 4,
+            "unit": "gb",
+            "canonical_key": "hardware.gpu_vram_gb"
+          }
+        ],
+        "emotion_profile": {
+          "primary": "calm",
+          "label": "calm",
+          "intensity": 0.35,
+          "confidence": 0.4625
+        },
+        "memory_tags": [
+          "topic_hardware",
+          "entity_gpu_model_3050ti",
+          "entity_gpu_model_3050_ti",
+          "entity_ram_size_32_gb",
+          "entity_vram_size_4_gb",
+          "numeric_ram_gb",
+          "numeric_vram_gb",
+          "emotion_calm"
+        ],
+        "lifecycle_reason": "no_change",
+        "lifecycle_route": "working"
+      }
+    },
+    {
+      "id": "message:evt:5862c9838563471d",
+      "memory_type": "message",
+      "scope": "conversation",
+      "level": "l0_working",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.33953,
+      "confidence": 0.6666666666666667,
+      "created_at": 1773964264.0270097,
+      "updated_at": 1773964264.0270097,
+      "expires_at": null,
+      "source_event_id": "",
+      "text": "а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случился раковой день, когда у меня случился нервный срыв на вечерней, пятничной пьянке. к сожалению, я показал ей себя... плохого себя... за что себя виню, накричал на всех, её послал на три буквы ещё и с начальником повздорили, благо в тот-же день с ним и помирились, очень его обожаю. классный друг и начальний. ну и шо, я с Таней поговорил на счёт этого и мы пришли к тому, что я извинился, она извинилась, я ей рассказал свою гнустную историю из жизни она всё осознала и всё. все помирились. она мне реально понравилась, но я очень боялся завести какие-то отношения и поэтому их сторонился, прошлая моя любовь ушла от меня, как раз по причине нервого срыва, не поняла этого и ушла. это было очень больно, поэтому я максимально отсторонился от этого и ушёл в одиночество, где не хорошо, но и не плохо. и я очень много времени потратил на то, чтобы построить это одиночество и быть в нём в гармонии. так вот из-за этого я очень много сомневался, ведь если начну встречаться с Таней, это будет означать что я полностью сломаю всё что я выстроил для этого одиночества. но я ж об этом говорил друзьям, а они в свою очередь всеми силами пытались меня сломать и уговорить сделать первый шаг. всё пришло к тому, что я 24/7 думаю о Тане, думаю о том стоит ли или нет. были постоянные мысли о том, что я хочу и о том, что мне навязали. это меня морально утомляло. после чего я собрался и на новый год послал её. да я гандон, что взял и парям послал её на три буквы ещё и в такой день, но как-же у меня стало пусто в голове, это было прекрасно и я смог наконец-то выспаться. но спустя неделю, я уже почуствовал что соскучился... хотя был рад в год что всё завершилось, но почему-то ушёл в тоску и заскучал о ней, о том как меня бесила или донимала... после чего написал ей что давай всё вернём на круги своя и вернём общение, я соскучился и не могу без неё. но в ответ я получил, что у неё пропал интерес... я тогда ушёл в жёсткую депрессию и всё время до 5-го марта был только в ней. а 5-го марта у неё был день рождения. я хотел поздравить её, но сомневался а стоит ли. решил что напишу ей просто \"с днём варенья.\", она поблагодарила и внезапно спросила как дела, ну я и подумал может это для продолжения разговора, просто ради приличия и спросил у неё мол это личный интерес или для продолжения разговора. а она ответила личный ну и я тогда что-то начал с ней заобщаться и вечерок так пообщались. 8 марта у нас в офисе устроили пиршество, я ж то там единственный парень ну и они меня пришласили замолвить тост. и с этого всё началось, один за другим бакала вина... так и прошёл вечер. а потом, Таня позвала в соседний рестик на караоке, я то не пою, но решил просто присмотреть за 2 девушками, они сами шли туда, так чтобы никто не приставал за компанию пошёл. выпили по пиво, а я ж дурак, стало скучно, предложил ей давай возьмём по бутылке короны и стукнем по горлышку, чтобы начало пениться и на спор у кого не прольётся. спойлер у обоих по 4 бутылки пролилось, но не в этом суть. по пели, по танцевали(что для меня что-то невозможное, потому-что я не люблю танцевать, а она смогла меня затянуть). пора домой, но началсь воздушная тревога, мы в Украине живём, так-что тут сейчас война и цены на такси до её дома стала колосальной, а уже был вечер, когда транспорт общественный не ходил. ну и я позвал её домой, потому-что ко мне дешевле, та и отдельная комната есть, чтобы отдельно переночевать. она недолго думала, согласилась и предложила что-то ещё взять выпить, пока не совсем поздно и закусон. купили и поехали на такси ко мне. ну и давай там всё быстренько разгребать, переодеваться, собираться и вот мы уже на кухне поём караоке и пьём вино. до, помоему, 4 утра сидели. я собрался идти спать к себе, а она говорит мне страшно одной спать.... я взял своё одеяло, подушку и пошёл к ней спать, а она говорит мол хотелось бы накинуть ногу, говорю мол накидывай. накинула, говорит хотелось бы ещё обнять, говорю мол обнимай, ну и шо ты думаешь.... это было самое прекрасное мнгновение, я не знаю сколько мы так пролежали, но я выпал, это было прекрассно. а на утро я уже не чувствовал к ней вражды, полностью снова доверял и мы снова заобщались как и раньше с интересом к друг другу. я помню в то утро проводил её к метро, чтобы она успела кое-куда. а я так рад и думаю что с этим делать, ведь мы по факту с этого момента болтали и общались как и всегда, а я поверить не мог, ведь около 3 месяцев мы были в игноре у друг друга. ну и что, мы теперь так тесно общаемся... и я уже недавно смог ей признаться, что больше не отпущу её никуда и сказал как было приятно мне с ней и со слезами на глазах, потому-что не мог сдерживать, извинялся за каждое слово на три буквы, которое ей сказал. мы постояли покурили и пошли домой. и я поверить не могу, что мы с ней настолько стали близки, что теперь и пьём вместе и курить ходим вместе, а даже недавно снова переночевали в другой квартире, под одним одеялом. боже мой, она просто прислонилась к моей спине своей попой, а она у неё такая мягкая... как облачко. крч, похоже я влюбился по уши, и не подумай, мне даже секс не так интересен как сам человек, а она.... она прекрасная!",
+      "search_text": "",
+      "entity_keys": [
+        "claim",
+        "dislikes",
+        "thing",
+        "preference",
+        "танцевать",
+        "owns",
+        "person",
+        "ownership",
+        "подруга",
+        "таня",
+        "подруга_таня",
+        "случился",
+        "нервный",
+        "срыв",
+        "случился_нервный_срыв_на_вечерней",
+        "стало",
+        "пусто",
+        "в",
+        "стало_пусто_в_голове"
+      ],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": [
+        "claim_dislikes",
+        "claim_topic_dislikes",
+        "claim_topic_thing",
+        "claim_topic_preference",
+        "claim_object_dislikes_танцевать",
+        "claim_owns",
+        "claim_topic_owns",
+        "claim_topic_person",
+        "claim_topic_ownership",
+        "claim_object_owns_подруга_таня",
+        "claim_object_owns_случился_нервный_срыв_на_вечерней",
+        "claim_object_owns_стало_пусто_в_голове",
+        "emotion_sad"
+      ],
+      "memory_views_debug": {
+        "status": "stored_has_keys",
+        "stored_has_keys": true,
+        "recomputed_has_keys": true,
+        "stored": {
+          "entity_keys": [
+            "claim",
+            "dislikes",
+            "thing",
+            "preference",
+            "танцевать",
+            "owns",
+            "person",
+            "ownership",
+            "подруга",
+            "таня",
+            "подруга_таня",
+            "случился",
+            "нервный",
+            "срыв",
+            "случился_нервный_срыв_на_вечерней",
+            "стало",
+            "пусто",
+            "в",
+            "стало_пусто_в_голове"
+          ]
+        },
+        "recomputed": {
+          "entity_keys": [
+            "claim",
+            "dislikes",
+            "thing",
+            "preference",
+            "танцевать",
+            "owns",
+            "person",
+            "ownership",
+            "подруга",
+            "таня",
+            "подруга_таня",
+            "случился",
+            "нервный",
+            "срыв",
+            "случился_нервный_срыв_на_вечерней",
+            "стало",
+            "пусто",
+            "в",
+            "стало_пусто_в_голове"
+          ]
+        }
+      },
+      "metadata": {
+        "source_kind": "user",
+        "emotion_profile": {
+          "primary": "sad",
+          "label": "sad",
+          "intensity": 0.39,
+          "confidence": 0.4845
+        },
+        "fact_relations": [
+          "temporary"
+        ],
+        "source_fact_records_allowed": true,
+        "lifecycle_reason": "message_keep_working",
+        "memory_views": {
+          "entity_keys": [
+            "claim",
+            "dislikes",
+            "thing",
+            "preference",
+            "танцевать",
+            "owns",
+            "person",
+            "ownership",
+            "подруга",
+            "таня",
+            "подруга_таня",
+            "случился",
+            "нервный",
+            "срыв",
+            "случился_нервный_срыв_на_вечерней",
+            "стало",
+            "пусто",
+            "в",
+            "стало_пусто_в_голове"
+          ]
+        },
+        "memory_tags": [
+          "claim_dislikes",
+          "claim_topic_dislikes",
+          "claim_topic_thing",
+          "claim_topic_preference",
+          "claim_object_dislikes_танцевать",
+          "claim_owns",
+          "claim_topic_owns",
+          "claim_topic_person",
+          "claim_topic_ownership",
+          "claim_object_owns_подруга_таня",
+          "claim_object_owns_случился_нервный_срыв_на_вечерней",
+          "claim_object_owns_стало_пусто_в_голове",
+          "emotion_sad"
+        ],
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "facts_count": 1,
+        "claims": [
+          {
+            "predicate": "dislikes",
+            "trigger_keys": [
+              "dislikes",
+              "танцевать"
+            ],
+            "object_surface": "танцевать",
+            "subject": "user",
+            "topic_keys": [
+              "dislikes",
+              "thing",
+              "preference"
+            ],
+            "confidence": 0.9,
+            "object_type": "thing",
+            "obj": "танцевать"
+          },
+          {
+            "predicate": "owns",
+            "trigger_keys": [
+              "owns",
+              "подруга",
+              "таня"
+            ],
+            "object_surface": "подруга Таня",
+            "subject": "user",
+            "topic_keys": [
+              "owns",
+              "person",
+              "ownership"
+            ],
+            "confidence": 0.8,
+            "object_type": "person",
+            "obj": "подруга таня"
+          },
+          {
+            "predicate": "owns",
+            "trigger_keys": [
+              "owns",
+              "случился",
+              "нервный",
+              "срыв"
+            ],
+            "object_surface": "случился нервный срыв на вечерней",
+            "subject": "user",
+            "topic_keys": [
+              "owns",
+              "thing",
+              "ownership"
+            ],
+            "confidence": 0.8,
+            "object_type": "thing",
+            "obj": "случился нервный срыв на вечерней"
+          },
+          {
+            "predicate": "owns",
+            "trigger_keys": [
+              "owns",
+              "стало",
+              "пусто",
+              "в"
+            ],
+            "object_surface": "стало пусто в голове",
+            "subject": "user",
+            "topic_keys": [
+              "owns",
+              "thing",
+              "ownership"
+            ],
+            "confidence": 0.8,
+            "object_type": "thing",
+            "obj": "стало пусто в голове"
+          }
+        ]
+      }
+    },
+    {
+      "id": "fact:38ecda463dbb429da2",
+      "memory_type": "fact",
+      "scope": "temporary",
+      "level": "l3_semantic",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.44,
+      "confidence": 0.62,
+      "created_at": 1773964264.0270097,
+      "updated_at": 1773964264.0270097,
+      "expires_at": 1773978664.0491393,
+      "source_event_id": "evt:5862c9838563471d",
+      "text": "user.temporary_fact=а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случилс",
+      "search_text": "",
+      "entity_keys": [],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": null,
+      "memory_views_debug": {
+        "status": "no_structured_keys",
+        "stored_has_keys": false,
+        "recomputed_has_keys": false,
+        "stored": {},
+        "recomputed": {}
+      },
+      "metadata": {
+        "governor_reason": "no_active_conflict",
+        "canonical_key": "user.temporary_fact",
+        "write_policy": {
+          "allow_write": true,
+          "reason": "new_fact",
+          "group": "temporary_fact",
+          "allow_supersede": false,
+          "action": "allow"
+        },
+        "relation": "temporary",
+        "fact": {
+          "valid_from": 1773964264.0498438,
+          "source_role": "user",
+          "predicate": "temporary_fact",
+          "source_event_id": "evt:5862c9838563471d",
+          "valid_to": 1773978664.0491393,
+          "canonical_key": "user.temporary_fact",
+          "scope": "temporary",
+          "subject": "user",
+          "status": "active",
+          "relation": "temporary",
+          "importance": 0.44,
+          "source_kind": "user",
+          "value": "а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случилс",
+          "confidence": 0.62
+        },
+        "memory_views": {}
+      }
+    },
+    {
+      "id": "fact:372f014cde29416bbb",
+      "memory_type": "fact",
+      "scope": "temporary",
+      "level": "l3_semantic",
+      "status": "deleted",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.44,
+      "confidence": 0.62,
+      "created_at": 1773947060.4105613,
+      "updated_at": 1773964039.555954,
+      "expires_at": 1773961460.434126,
+      "source_event_id": "evt:ea70edd9111a4787",
+      "text": "user.temporary_fact=а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случилс",
+      "search_text": "",
+      "entity_keys": [],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": null,
+      "memory_views_debug": {
+        "status": "no_structured_keys",
+        "stored_has_keys": false,
+        "recomputed_has_keys": false,
+        "stored": {},
+        "recomputed": {}
+      },
+      "metadata": {
+        "canonical_key": "user.temporary_fact",
+        "write_policy": {
+          "reason": "new_fact",
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow",
+          "group": "temporary_fact"
+        },
+        "fact": {
+          "valid_from": 1773947060.434126,
+          "canonical_key": "user.temporary_fact",
+          "subject": "user",
+          "status": "active",
+          "valid_to": 1773961460.434126,
+          "confidence": 0.62,
+          "importance": 0.44,
+          "source_role": "user",
+          "predicate": "temporary_fact",
+          "source_kind": "user",
+          "value": "а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случилс",
+          "source_event_id": "evt:ea70edd9111a4787",
+          "scope": "temporary",
+          "relation": "temporary"
+        },
+        "relation": "temporary",
+        "governor_reason": "no_active_conflict",
+        "memory_views": {}
+      }
+    },
+    {
+      "id": "message:evt:81883a35fb7b457a",
+      "memory_type": "message",
+      "scope": "conversation",
+      "level": "l0_working",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.35650296296296297,
+      "confidence": 0.5789473684210527,
+      "created_at": 1773954857.3690813,
+      "updated_at": 1773954857.3690813,
+      "expires_at": null,
+      "source_event_id": "",
+      "text": "Привет! Я Ася, рада с тобой поговорить. 😊",
+      "search_text": "",
+      "entity_keys": [],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": [
+        "emotion_calm"
+      ],
+      "memory_views_debug": {
+        "status": "no_structured_keys",
+        "stored_has_keys": false,
+        "recomputed_has_keys": false,
+        "stored": {},
+        "recomputed": {}
+      },
+      "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "source_kind": "assistant_reply",
+        "memory_tags": [
+          "emotion_calm"
+        ],
+        "emotion_profile": {
+          "primary": "calm",
+          "label": "calm",
+          "intensity": 0.35,
+          "confidence": 0.4625
+        },
+        "memory_views": {}
+      }
+    },
+    {
+      "id": "message:evt:2ef303a145bc498c",
+      "memory_type": "message",
+      "scope": "conversation",
+      "level": "l0_working",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.364999748427673,
+      "confidence": 0.5789473684210527,
+      "created_at": 1773954857.2157152,
+      "updated_at": 1773954857.2157152,
+      "expires_at": null,
+      "source_event_id": "",
+      "text": "привет",
+      "search_text": "",
+      "entity_keys": [],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": [
+        "emotion_calm"
+      ],
+      "memory_views_debug": {
+        "status": "no_structured_keys",
+        "stored_has_keys": false,
+        "recomputed_has_keys": false,
+        "stored": {},
+        "recomputed": {}
+      },
+      "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "source_fact_records_allowed": true,
+        "source_kind": "user",
+        "memory_tags": [
+          "emotion_calm"
+        ],
+        "emotion_profile": {
+          "primary": "calm",
+          "label": "calm",
+          "intensity": 0.35,
+          "confidence": 0.4425
+        },
+        "memory_views": {}
+      }
+    },
+    {
+      "id": "message:evt:5622f8100f694f86",
+      "memory_type": "message",
+      "scope": "conversation",
+      "level": "l0_working",
+      "status": "active",
+      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
+      "importance": 0.3597412948575657,
+      "confidence": 0.6666666666666667,
+      "created_at": 1773953271.299105,
+      "updated_at": 1773953271.299105,
+      "expires_at": null,
+      "source_event_id": "",
+      "text": ", ну я и подумал может это для продолжения разговора, просто ради приличия и спросил у неё мол это личный интерес или для продолжения разговора. а она ответила личный ну и я тогда что-то начал",
+      "search_text": "",
+      "entity_keys": [],
+      "numeric_keys": [],
+      "tags": null,
+      "memory_tags": [
+        "emotion_calm"
+      ],
+      "memory_views_debug": {
+        "status": "no_structured_keys",
+        "stored_has_keys": false,
+        "recomputed_has_keys": false,
+        "stored": {},
+        "recomputed": {}
+      },
+      "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "source_fact_records_allowed": true,
+        "source_kind": "user",
+        "memory_tags": [
+          "emotion_calm"
+        ],
+        "emotion_profile": {
+          "primary": "calm",
+          "label": "calm",
+          "intensity": 0.35,
+          "confidence": 0.4425
+        },
+        "memory_views": {}
+      }
+    },
     {
       "id": "message:evt:1eda18c85a9e4dd6",
       "memory_type": "message",
@@ -49,73 +900,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
         "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:3732afb8d3c6414b",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773953198.9590735,
-      "updated_at": 1773953198.9590735,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773953139720_19",
-        "request_id": "req_1773953139720_19",
-        "turn_id": "19",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
         "source_fact_records_allowed": true,
+        "source_kind": "user",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -148,24 +947,24 @@
         "recomputed": {}
       },
       "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "source_kind": "assistant_reply",
         "memory_tags": [
           "emotion_calm"
         ],
-        "assistant_thinking_stripped": true,
-        "source_fact_records_allowed": true,
-        "source_kind": "assistant_reply",
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "lifecycle_reason": "message_keep_working",
-        "assistant_fact_records_blocked": true,
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "assistant_memory_help_noise": false,
         "memory_views": {}
       }
     },
@@ -198,73 +997,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
         "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:2639ea82b3794a7d",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773953139.4615674,
-      "updated_at": 1773953139.4615674,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773953094398_18",
-        "request_id": "req_1773953094398_18",
-        "turn_id": "18",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
         "source_fact_records_allowed": true,
+        "source_kind": "user",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -297,24 +1044,24 @@
         "recomputed": {}
       },
       "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "source_kind": "assistant_reply",
         "memory_tags": [
           "emotion_calm"
         ],
-        "assistant_thinking_stripped": true,
-        "source_fact_records_allowed": true,
-        "source_kind": "assistant_reply",
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "lifecycle_reason": "message_keep_working",
-        "assistant_fact_records_blocked": true,
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "assistant_memory_help_noise": false,
         "memory_views": {}
       }
     },
@@ -439,58 +1186,6 @@
       }
     },
     {
-      "id": "summary:evt:dcc702802a6e40b3",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773953094.142353,
-      "updated_at": 1773953094.142353,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773953044689_17",
-        "request_id": "req_1773953044689_17",
-        "turn_id": "17",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
-        "memory_views": {}
-      }
-    },
-    {
       "id": "message:evt:2db5f17c543f4038",
       "memory_type": "message",
       "scope": "conversation",
@@ -519,24 +1214,24 @@
         "recomputed": {}
       },
       "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "source_kind": "assistant_reply",
         "memory_tags": [
           "emotion_calm"
         ],
-        "assistant_thinking_stripped": true,
-        "source_fact_records_allowed": true,
-        "source_kind": "assistant_reply",
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "lifecycle_reason": "message_keep_working",
-        "assistant_fact_records_blocked": true,
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "assistant_memory_help_noise": false,
         "memory_views": {}
       }
     },
@@ -569,73 +1264,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
         "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:720ed137840041fd",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773953044.421675,
-      "updated_at": 1773953044.421675,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773953000673_16",
-        "request_id": "req_1773953000673_16",
-        "turn_id": "16",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
         "source_fact_records_allowed": true,
+        "source_kind": "user",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -802,58 +1445,6 @@
       }
     },
     {
-      "id": "summary:evt:e88a545feb054570",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773953000.1982296,
-      "updated_at": 1773953000.1982296,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773952944260_15",
-        "request_id": "req_1773952944260_15",
-        "turn_id": "15",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
-        "memory_views": {}
-      }
-    },
-    {
       "id": "message:evt:50b2662bef834eaa",
       "memory_type": "message",
       "scope": "conversation",
@@ -882,28 +1473,28 @@
         "recomputed": {}
       },
       "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "fact_relations": [
+          "temporary"
+        ],
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "facts_count": 1,
+        "source_kind": "assistant_reply",
         "memory_tags": [
           "emotion_calm"
         ],
-        "assistant_thinking_stripped": true,
-        "source_fact_records_allowed": true,
-        "source_kind": "assistant_reply",
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "facts_count": 1,
-        "lifecycle_reason": "message_keep_working",
-        "assistant_fact_records_blocked": true,
-        "fact_relations": [
-          "temporary"
-        ],
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "assistant_memory_help_noise": false,
         "memory_views": {}
       }
     },
@@ -936,73 +1527,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
         "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:2e9ac6adbf3a4265",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773952928.955787,
-      "updated_at": 1773952928.955787,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773952881175_14",
-        "request_id": "req_1773952881175_14",
-        "turn_id": "14",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
         "source_fact_records_allowed": true,
+        "source_kind": "user",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -1035,28 +1574,28 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "assistant_reply",
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
         "fact_relations": [
           "temporary"
         ],
-        "assistant_thinking_stripped": true,
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "facts_count": 1,
+        "source_kind": "assistant_reply",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "facts_count": 1,
-        "assistant_fact_records_blocked": true,
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "assistant_memory_help_noise": false,
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     },
@@ -1089,73 +1628,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
+        "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
+        "source_fact_records_allowed": true,
+        "source_kind": "user",
         "memory_tags": [
           "emotion_calm"
         ],
-        "source_fact_records_allowed": true,
-        "lifecycle_reason": "message_keep_working",
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:0863258e481b46ec",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947679.901582,
-      "updated_at": 1773947679.901582,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947652381_13",
-        "request_id": "req_1773947652381_13",
-        "turn_id": "13",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -1188,28 +1675,28 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "assistant_reply",
+        "lifecycle_reason": "message_keep_working",
+        "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
         "fact_relations": [
           "temporary"
         ],
-        "assistant_thinking_stripped": true,
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "facts_count": 1,
+        "source_kind": "assistant_reply",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4625
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "facts_count": 1,
-        "assistant_fact_records_blocked": true,
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "assistant_memory_help_noise": false,
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     },
@@ -1242,73 +1729,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
+        "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
+        "source_fact_records_allowed": true,
+        "source_kind": "user",
         "memory_tags": [
           "emotion_calm"
         ],
-        "source_fact_records_allowed": true,
-        "lifecycle_reason": "message_keep_working",
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:2c08d1f377754a93",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947589.2932892,
-      "updated_at": 1773947589.2932892,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947539567_12",
-        "request_id": "req_1773947539567_12",
-        "turn_id": "12",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -1560,30 +1995,30 @@
       },
       "metadata": {
         "canonical_key": "user.environment_memory_gb",
-        "governor_reason": "singleton_group_higher_score",
-        "fact": {
-          "canonical_key": "user.environment_memory_gb",
-          "source_kind": "user",
-          "status": "active",
-          "relation": "environment",
-          "importance": 0.74,
-          "predicate": "environment_memory_gb",
-          "source_event_id": "evt:0be4884331cc44c2",
-          "valid_from": 1773947524.75808,
-          "scope": "conversation",
-          "confidence": 0.94,
-          "value": "4",
-          "source_role": "user",
-          "subject": "user"
-        },
-        "relation": "environment",
         "write_policy": {
-          "allow_supersede": true,
           "reason": "same_group_higher_or_equal_confidence",
           "allow_write": true,
+          "allow_supersede": true,
           "action": "supersede",
           "group": "environment_ram"
         },
+        "fact": {
+          "valid_from": 1773947524.75808,
+          "canonical_key": "user.environment_memory_gb",
+          "subject": "user",
+          "status": "active",
+          "confidence": 0.94,
+          "importance": 0.74,
+          "source_role": "user",
+          "predicate": "environment_memory_gb",
+          "source_kind": "user",
+          "value": "4",
+          "source_event_id": "evt:0be4884331cc44c2",
+          "scope": "conversation",
+          "relation": "environment"
+        },
+        "relation": "environment",
+        "governor_reason": "singleton_group_higher_score",
         "memory_views": {
           "numeric_keys": [
             "value:4gb",
@@ -1633,87 +2068,35 @@
       },
       "metadata": {
         "canonical_key": "user.environment_ram_gb",
-        "fact": {
-          "canonical_key": "user.environment_ram_gb",
-          "source_kind": "user",
-          "status": "active",
-          "relation": "environment",
-          "importance": 0.78,
-          "predicate": "environment_ram_gb",
-          "source_event_id": "evt:dadcbf16b96f417d",
-          "valid_from": 1773940972.310228,
-          "scope": "conversation",
-          "confidence": 0.89,
-          "value": "32",
-          "source_role": "user",
-          "subject": "user"
-        },
-        "relation": "environment",
         "write_policy": {
-          "allow_supersede": false,
           "reason": "new_fact",
           "allow_write": true,
+          "allow_supersede": false,
           "action": "allow",
           "group": "environment_ram"
         },
+        "fact": {
+          "valid_from": 1773940972.310228,
+          "canonical_key": "user.environment_ram_gb",
+          "subject": "user",
+          "status": "active",
+          "confidence": 0.89,
+          "importance": 0.78,
+          "source_role": "user",
+          "predicate": "environment_ram_gb",
+          "source_kind": "user",
+          "value": "32",
+          "source_event_id": "evt:dadcbf16b96f417d",
+          "scope": "conversation",
+          "relation": "environment"
+        },
+        "relation": "environment",
         "memory_views": {
           "numeric_keys": [
             "value:32gb",
             "ram:32gb"
           ]
         }
-      }
-    },
-    {
-      "id": "summary:evt:1ffc98c6efcf4633",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947524.7165184,
-      "updated_at": 1773947524.7165184,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947492923_11",
-        "request_id": "req_1773947492923_11",
-        "turn_id": "11",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
-        "memory_views": {}
       }
     },
     {
@@ -2038,40 +2421,40 @@
       },
       "metadata": {
         "canonical_key": "user.owns.3050ti",
-        "trigger_keys": [
-          "owns",
-          "3050ti"
-        ],
+        "write_policy": {
+          "reason": "new_claim",
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow"
+        },
         "topic_keys": [
           "owns",
           "device",
           "gpu_model",
           "ownership"
         ],
-        "write_policy": {
-          "allow_supersede": false,
-          "reason": "new_claim",
-          "allow_write": true,
-          "action": "allow"
-        },
+        "trigger_keys": [
+          "owns",
+          "3050ti"
+        ],
         "claim": {
-          "salience": 0.5043,
+          "recall_mode": "exact",
+          "subject": "user",
+          "spontaneous_recall": false,
+          "predicate": "owns",
+          "subject_type": "user",
           "obj": "3050ti",
-          "object_type": "device",
-          "trigger_keys": [
-            "owns",
-            "3050ti"
-          ],
-          "status": "active",
           "topic_keys": [
             "owns",
             "device",
             "gpu_model",
             "ownership"
           ],
-          "object_surface": "3050ti",
-          "subject_type": "user",
-          "spontaneous_recall": false,
+          "salience": 0.5043,
+          "canonical_key": "user.owns.3050ti",
+          "promotion_level": "weak_claim",
+          "status": "active",
+          "confidence": 0.8,
           "qualifiers": {
             "surface": "3050ti",
             "matched_entities": [
@@ -2082,15 +2465,15 @@
               }
             ]
           },
-          "recall_mode": "exact",
-          "canonical_key": "user.owns.3050ti",
-          "scope": "conversation",
-          "promotion_level": "weak_claim",
-          "predicate": "owns",
           "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-          "confidence": 0.8,
+          "object_type": "device",
+          "trigger_keys": [
+            "owns",
+            "3050ti"
+          ],
           "source_event_id": "evt:e688f9b6908647c1",
-          "subject": "user"
+          "scope": "conversation",
+          "object_surface": "3050ti"
         },
         "memory_views": {
           "entity_keys": [
@@ -2102,58 +2485,6 @@
             "3050ti"
           ]
         }
-      }
-    },
-    {
-      "id": "summary:evt:378c69aa510d4d81",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947461.9015355,
-      "updated_at": 1773947461.9015355,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947412169_10",
-        "request_id": "req_1773947412169_10",
-        "turn_id": "10",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
-        "memory_views": {}
       }
     },
     {
@@ -2440,26 +2771,45 @@
       },
       "metadata": {
         "canonical_key": "user.owns.видео_и_сколько_оперативки",
+        "write_policy": {
+          "reason": "new_claim",
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow"
+        },
+        "topic_keys": [
+          "owns",
+          "thing",
+          "ownership"
+        ],
         "trigger_keys": [
           "owns",
           "видео",
           "и",
           "сколько"
         ],
-        "topic_keys": [
-          "owns",
-          "thing",
-          "ownership"
-        ],
-        "write_policy": {
-          "allow_supersede": false,
-          "reason": "new_claim",
-          "allow_write": true,
-          "action": "allow"
-        },
         "claim": {
-          "salience": 0.7051999999999999,
+          "recall_mode": "exact",
+          "subject": "user",
+          "spontaneous_recall": false,
+          "predicate": "owns",
+          "subject_type": "user",
           "obj": "видео и сколько оперативки",
+          "topic_keys": [
+            "owns",
+            "thing",
+            "ownership"
+          ],
+          "salience": 0.7051999999999999,
+          "canonical_key": "user.owns.видео_и_сколько_оперативки",
+          "promotion_level": "weak_claim",
+          "status": "active",
+          "confidence": 0.8,
+          "qualifiers": {
+            "surface": "видео и сколько оперативки",
+            "matched_entities": []
+          },
+          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
           "object_type": "thing",
           "trigger_keys": [
             "owns",
@@ -2467,28 +2817,9 @@
             "и",
             "сколько"
           ],
-          "status": "active",
-          "topic_keys": [
-            "owns",
-            "thing",
-            "ownership"
-          ],
-          "object_surface": "видео и сколько оперативки",
-          "subject_type": "user",
-          "spontaneous_recall": false,
-          "qualifiers": {
-            "surface": "видео и сколько оперативки",
-            "matched_entities": []
-          },
-          "recall_mode": "exact",
-          "canonical_key": "user.owns.видео_и_сколько_оперативки",
-          "scope": "conversation",
-          "promotion_level": "weak_claim",
-          "predicate": "owns",
-          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-          "confidence": 0.8,
           "source_event_id": "evt:662dc8c3afcf4de4",
-          "subject": "user"
+          "scope": "conversation",
+          "object_surface": "видео и сколько оперативки"
         },
         "memory_views": {
           "entity_keys": [
@@ -2502,58 +2833,6 @@
             "видео_и_сколько_оперативки"
           ]
         }
-      }
-    },
-    {
-      "id": "summary:evt:b18b7e79a5884ae0",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947385.846518,
-      "updated_at": 1773947385.846518,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947359349_9",
-        "request_id": "req_1773947359349_9",
-        "turn_id": "9",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
-        "memory_views": {}
       }
     },
     {
@@ -2585,73 +2864,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
+        "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
+        "source_fact_records_allowed": true,
+        "source_kind": "user",
         "memory_tags": [
           "emotion_calm"
         ],
-        "source_fact_records_allowed": true,
-        "lifecycle_reason": "message_keep_working",
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:1a4fe46c10b64a40",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947335.558335,
-      "updated_at": 1773947335.558335,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947289331_8",
-        "request_id": "req_1773947289331_8",
-        "turn_id": "8",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -2684,24 +2911,24 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "assistant_reply",
+        "lifecycle_reason": "message_keep_working",
         "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "source_kind": "assistant_reply",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "assistant_fact_records_blocked": true,
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "assistant_memory_help_noise": false,
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     },
@@ -2734,73 +2961,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
+        "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
+        "source_fact_records_allowed": true,
+        "source_kind": "user",
         "memory_tags": [
           "emotion_calm"
         ],
-        "source_fact_records_allowed": true,
-        "lifecycle_reason": "message_keep_working",
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:2e15663db13c43f1",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947265.2099307,
-      "updated_at": 1773947265.2099307,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947232013_7",
-        "request_id": "req_1773947232013_7",
-        "turn_id": "7",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -2833,24 +3008,24 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "assistant_reply",
+        "lifecycle_reason": "message_keep_working",
         "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "source_kind": "assistant_reply",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4625
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "assistant_fact_records_blocked": true,
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "assistant_memory_help_noise": false,
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     },
@@ -2883,73 +3058,21 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "user",
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
+        "lifecycle_reason": "message_keep_working",
         "meta": {
           "lang_conf": 0.0
         },
+        "source_fact_records_allowed": true,
+        "source_kind": "user",
         "memory_tags": [
           "emotion_calm"
         ],
-        "source_fact_records_allowed": true,
-        "lifecycle_reason": "message_keep_working",
-        "memory_views": {}
-      }
-    },
-    {
-      "id": "summary:evt:8cdae85ef1d64ec6",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947217.8063798,
-      "updated_at": 1773947217.8063798,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773947185638_6",
-        "request_id": "req_1773947185638_6",
-        "turn_id": "6",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
         "memory_views": {}
       }
     },
@@ -2982,24 +3105,24 @@
         "recomputed": {}
       },
       "metadata": {
-        "source_kind": "assistant_reply",
+        "lifecycle_reason": "message_keep_working",
         "assistant_thinking_stripped": true,
+        "assistant_memory_help_noise": false,
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "assistant_fact_records_blocked": true,
+        "source_fact_records_allowed": true,
+        "source_kind": "assistant_reply",
+        "memory_tags": [
+          "emotion_calm"
+        ],
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "assistant_fact_records_blocked": true,
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "source_fact_records_allowed": true,
-        "assistant_memory_help_noise": false,
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     },
@@ -3240,62 +3363,6 @@
       }
     },
     {
-      "id": "fact:372f014cde29416bbb",
-      "memory_type": "fact",
-      "scope": "temporary",
-      "level": "l3_semantic",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.44,
-      "confidence": 0.62,
-      "created_at": 1773947060.4105613,
-      "updated_at": 1773947060.4105613,
-      "expires_at": 1773961460.434126,
-      "source_event_id": "evt:ea70edd9111a4787",
-      "text": "user.temporary_fact=а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случилс",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": null,
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "canonical_key": "user.temporary_fact",
-        "governor_reason": "no_active_conflict",
-        "fact": {
-          "valid_to": 1773961460.434126,
-          "canonical_key": "user.temporary_fact",
-          "source_kind": "user",
-          "status": "active",
-          "relation": "temporary",
-          "importance": 0.44,
-          "predicate": "temporary_fact",
-          "source_event_id": "evt:ea70edd9111a4787",
-          "valid_from": 1773947060.434126,
-          "scope": "temporary",
-          "confidence": 0.62,
-          "value": "а, ты ж не знаешь. у меня есть подруга Таня. мы начали с ней общаться, когда она пришла к нам работать на офис. тогда потихоньку мы с ней заообщались, и случилс",
-          "source_role": "user",
-          "subject": "user"
-        },
-        "relation": "temporary",
-        "write_policy": {
-          "allow_supersede": false,
-          "reason": "new_fact",
-          "allow_write": true,
-          "action": "allow",
-          "group": "temporary_fact"
-        },
-        "memory_views": {}
-      }
-    },
-    {
       "id": "claim:1736d5004a914ee3a3",
       "memory_type": "claim",
       "scope": "conversation",
@@ -3351,53 +3418,53 @@
       },
       "metadata": {
         "canonical_key": "user.owns.подруга_таня",
-        "trigger_keys": [
-          "owns",
-          "подруга",
-          "таня"
-        ],
+        "write_policy": {
+          "reason": "new_claim",
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow"
+        },
         "topic_keys": [
           "owns",
           "person",
           "ownership"
         ],
-        "write_policy": {
-          "allow_supersede": false,
-          "reason": "new_claim",
-          "allow_write": true,
-          "action": "allow"
-        },
+        "trigger_keys": [
+          "owns",
+          "подруга",
+          "таня"
+        ],
         "claim": {
-          "salience": 0.5903999999999999,
+          "recall_mode": "exact",
+          "subject": "user",
+          "spontaneous_recall": false,
+          "predicate": "owns",
+          "subject_type": "user",
           "obj": "подруга таня",
+          "topic_keys": [
+            "owns",
+            "person",
+            "ownership"
+          ],
+          "salience": 0.5903999999999999,
+          "canonical_key": "user.owns.подруга_таня",
+          "promotion_level": "weak_claim",
+          "status": "active",
+          "confidence": 0.8,
+          "qualifiers": {
+            "surface": "подруга Таня",
+            "matched_entities": []
+          },
+          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
           "object_type": "person",
           "trigger_keys": [
             "owns",
             "подруга",
             "таня"
           ],
-          "status": "active",
-          "topic_keys": [
-            "owns",
-            "person",
-            "ownership"
-          ],
-          "object_surface": "подруга Таня",
-          "subject_type": "user",
-          "spontaneous_recall": false,
-          "qualifiers": {
-            "surface": "подруга Таня",
-            "matched_entities": []
-          },
-          "recall_mode": "exact",
-          "canonical_key": "user.owns.подруга_таня",
-          "scope": "conversation",
-          "promotion_level": "weak_claim",
-          "predicate": "owns",
-          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-          "confidence": 0.8,
           "source_event_id": "evt:ea70edd9111a4787",
-          "subject": "user"
+          "scope": "conversation",
+          "object_surface": "подруга Таня"
         },
         "memory_views": {
           "entity_keys": [
@@ -3471,26 +3538,45 @@
       },
       "metadata": {
         "canonical_key": "user.owns.случился_нервный_срыв_на_вечерней",
+        "write_policy": {
+          "reason": "new_claim",
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow"
+        },
+        "topic_keys": [
+          "owns",
+          "thing",
+          "ownership"
+        ],
         "trigger_keys": [
           "owns",
           "случился",
           "нервный",
           "срыв"
         ],
-        "topic_keys": [
-          "owns",
-          "thing",
-          "ownership"
-        ],
-        "write_policy": {
-          "allow_supersede": false,
-          "reason": "new_claim",
-          "allow_write": true,
-          "action": "allow"
-        },
         "claim": {
-          "salience": 0.7051999999999999,
+          "recall_mode": "exact",
+          "subject": "user",
+          "spontaneous_recall": false,
+          "predicate": "owns",
+          "subject_type": "user",
           "obj": "случился нервный срыв на вечерней",
+          "topic_keys": [
+            "owns",
+            "thing",
+            "ownership"
+          ],
+          "salience": 0.7051999999999999,
+          "canonical_key": "user.owns.случился_нервный_срыв_на_вечерней",
+          "promotion_level": "weak_claim",
+          "status": "active",
+          "confidence": 0.8,
+          "qualifiers": {
+            "surface": "случился нервный срыв на вечерней",
+            "matched_entities": []
+          },
+          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
           "object_type": "thing",
           "trigger_keys": [
             "owns",
@@ -3498,28 +3584,9 @@
             "нервный",
             "срыв"
           ],
-          "status": "active",
-          "topic_keys": [
-            "owns",
-            "thing",
-            "ownership"
-          ],
-          "object_surface": "случился нервный срыв на вечерней",
-          "subject_type": "user",
-          "spontaneous_recall": false,
-          "qualifiers": {
-            "surface": "случился нервный срыв на вечерней",
-            "matched_entities": []
-          },
-          "recall_mode": "exact",
-          "canonical_key": "user.owns.случился_нервный_срыв_на_вечерней",
-          "scope": "conversation",
-          "promotion_level": "weak_claim",
-          "predicate": "owns",
-          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-          "confidence": 0.8,
           "source_event_id": "evt:ea70edd9111a4787",
-          "subject": "user"
+          "scope": "conversation",
+          "object_surface": "случился нервный срыв на вечерней"
         },
         "memory_views": {
           "entity_keys": [
@@ -3594,26 +3661,45 @@
       },
       "metadata": {
         "canonical_key": "user.owns.стало_пусто_в_голове",
+        "write_policy": {
+          "reason": "new_claim",
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow"
+        },
+        "topic_keys": [
+          "owns",
+          "thing",
+          "ownership"
+        ],
         "trigger_keys": [
           "owns",
           "стало",
           "пусто",
           "в"
         ],
-        "topic_keys": [
-          "owns",
-          "thing",
-          "ownership"
-        ],
-        "write_policy": {
-          "allow_supersede": false,
-          "reason": "new_claim",
-          "allow_write": true,
-          "action": "allow"
-        },
         "claim": {
-          "salience": 0.7051999999999999,
+          "recall_mode": "exact",
+          "subject": "user",
+          "spontaneous_recall": false,
+          "predicate": "owns",
+          "subject_type": "user",
           "obj": "стало пусто в голове",
+          "topic_keys": [
+            "owns",
+            "thing",
+            "ownership"
+          ],
+          "salience": 0.7051999999999999,
+          "canonical_key": "user.owns.стало_пусто_в_голове",
+          "promotion_level": "weak_claim",
+          "status": "active",
+          "confidence": 0.8,
+          "qualifiers": {
+            "surface": "стало пусто в голове",
+            "matched_entities": []
+          },
+          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
           "object_type": "thing",
           "trigger_keys": [
             "owns",
@@ -3621,28 +3707,9 @@
             "пусто",
             "в"
           ],
-          "status": "active",
-          "topic_keys": [
-            "owns",
-            "thing",
-            "ownership"
-          ],
-          "object_surface": "стало пусто в голове",
-          "subject_type": "user",
-          "spontaneous_recall": false,
-          "qualifiers": {
-            "surface": "стало пусто в голове",
-            "matched_entities": []
-          },
-          "recall_mode": "exact",
-          "canonical_key": "user.owns.стало_пусто_в_голове",
-          "scope": "conversation",
-          "promotion_level": "weak_claim",
-          "predicate": "owns",
-          "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-          "confidence": 0.8,
           "source_event_id": "evt:ea70edd9111a4787",
-          "subject": "user"
+          "scope": "conversation",
+          "object_surface": "стало пусто в голове"
         },
         "memory_views": {
           "entity_keys": [
@@ -3656,58 +3723,6 @@
             "стало_пусто_в_голове"
           ]
         }
-      }
-    },
-    {
-      "id": "summary:evt:6a17bd6e32604cb4",
-      "memory_type": "summary",
-      "scope": "session",
-      "level": "l1_session",
-      "status": "active",
-      "namespace": "2da26f5b-da02-4991-af1b-d5464e550d90",
-      "importance": 0.6,
-      "confidence": 0.7,
-      "created_at": 1773947060.269689,
-      "updated_at": 1773947060.269689,
-      "expires_at": null,
-      "source_event_id": "",
-      "text": "- user: привет. как тебя зовут? меня Паша",
-      "search_text": "",
-      "entity_keys": [],
-      "numeric_keys": [],
-      "tags": null,
-      "memory_tags": [
-        "emotion_calm"
-      ],
-      "memory_views_debug": {
-        "status": "no_structured_keys",
-        "stored_has_keys": false,
-        "recomputed_has_keys": false,
-        "stored": {},
-        "recomputed": {}
-      },
-      "metadata": {
-        "source_kind": "system_decision",
-        "source": "rolling_summary",
-        "importance": 0.6,
-        "confidence": 0.7,
-        "trace_id": "trace_1773946995944_5",
-        "request_id": "req_1773946995944_5",
-        "turn_id": "5",
-        "conversation_id": "2da26f5b-da02-4991-af1b-d5464e550d90",
-        "source_fact_records_allowed": true,
-        "emotion_profile": {
-          "primary": "calm",
-          "label": "calm",
-          "intensity": 0.35,
-          "confidence": 0.4425
-        },
-        "memory_tags": [
-          "emotion_calm"
-        ],
-        "lifecycle_reason": "no_change",
-        "lifecycle_route": "working",
-        "memory_views": {}
       }
     },
     {
@@ -3840,21 +3855,21 @@
         "recomputed": {}
       },
       "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "source_fact_records_allowed": true,
         "source_kind": "user",
         "memory_tags": [
           "emotion_calm"
         ],
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     },
@@ -4093,21 +4108,21 @@
         "recomputed": {}
       },
       "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "source_fact_records_allowed": true,
         "source_kind": "user",
         "memory_tags": [
           "emotion_positive"
         ],
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "positive",
           "label": "positive",
           "intensity": 0.4,
           "confidence": 0.47
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     },
@@ -4415,30 +4430,30 @@
         }
       },
       "metadata": {
-        "relation": "environment",
-        "fact": {
-          "predicate": "environment_gpu_model",
-          "value": "3050ti",
-          "source_kind": "user",
-          "canonical_key": "user.environment_gpu_model",
-          "source_event_id": "evt:dadcbf16b96f417d",
-          "scope": "conversation",
-          "relation": "environment",
-          "confidence": 0.88,
-          "importance": 0.78,
-          "status": "active",
-          "valid_from": 1773940972.310228,
-          "subject": "user",
-          "source_role": "user"
-        },
         "canonical_key": "user.environment_gpu_model",
         "write_policy": {
-          "action": "allow",
-          "allow_write": true,
-          "group": "environment_gpu_model",
           "reason": "new_fact",
-          "allow_supersede": false
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow",
+          "group": "environment_gpu_model"
         },
+        "fact": {
+          "valid_from": 1773940972.310228,
+          "canonical_key": "user.environment_gpu_model",
+          "subject": "user",
+          "status": "active",
+          "confidence": 0.88,
+          "importance": 0.78,
+          "source_role": "user",
+          "predicate": "environment_gpu_model",
+          "source_kind": "user",
+          "value": "3050ti",
+          "source_event_id": "evt:dadcbf16b96f417d",
+          "scope": "conversation",
+          "relation": "environment"
+        },
+        "relation": "environment",
         "memory_views": {
           "entity_keys": [
             "gpu",
@@ -4499,30 +4514,30 @@
         }
       },
       "metadata": {
-        "relation": "environment",
-        "fact": {
-          "predicate": "environment_gpu_vram_gb",
-          "value": "4",
-          "source_kind": "user",
-          "canonical_key": "user.environment_gpu_vram_gb",
-          "source_event_id": "evt:dadcbf16b96f417d",
-          "scope": "conversation",
-          "relation": "environment",
-          "confidence": 0.9,
-          "importance": 0.8,
-          "status": "active",
-          "valid_from": 1773940972.311223,
-          "subject": "user",
-          "source_role": "user"
-        },
         "canonical_key": "user.environment_gpu_vram_gb",
         "write_policy": {
-          "action": "allow",
-          "allow_write": true,
-          "group": "environment_gpu_vram",
           "reason": "new_fact",
-          "allow_supersede": false
+          "allow_write": true,
+          "allow_supersede": false,
+          "action": "allow",
+          "group": "environment_gpu_vram"
         },
+        "fact": {
+          "valid_from": 1773940972.311223,
+          "canonical_key": "user.environment_gpu_vram_gb",
+          "subject": "user",
+          "status": "active",
+          "confidence": 0.9,
+          "importance": 0.8,
+          "source_role": "user",
+          "predicate": "environment_gpu_vram_gb",
+          "source_kind": "user",
+          "value": "4",
+          "source_event_id": "evt:dadcbf16b96f417d",
+          "scope": "conversation",
+          "relation": "environment"
+        },
+        "relation": "environment",
         "memory_views": {
           "entity_keys": [
             "gpu",
@@ -4644,21 +4659,21 @@
         "recomputed": {}
       },
       "metadata": {
+        "lifecycle_reason": "message_keep_working",
+        "meta": {
+          "lang_conf": 0.0
+        },
+        "source_fact_records_allowed": true,
         "source_kind": "user",
         "memory_tags": [
           "emotion_calm"
         ],
-        "source_fact_records_allowed": true,
         "emotion_profile": {
           "primary": "calm",
           "label": "calm",
           "intensity": 0.35,
           "confidence": 0.4425
         },
-        "meta": {
-          "lang_conf": 0.0
-        },
-        "lifecycle_reason": "message_keep_working",
         "memory_views": {}
       }
     }

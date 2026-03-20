@@ -116,6 +116,41 @@ _ENVIRONMENT_USE_PREFIXES = (
     "gtx ",
     "rx ",
 )
+_OWNS_EVENT_HEADS = {
+    "случился",
+    "случилась",
+    "случилось",
+    "случились",
+    "стало",
+    "стал",
+    "стала",
+    "стали",
+    "было",
+    "был",
+    "была",
+    "были",
+    "произошел",
+    "произошло",
+    "произошла",
+    "начался",
+    "началась",
+    "началось",
+    "felt",
+    "happened",
+    "started",
+    "became",
+}
+_QUESTIONISH_OBJECT_PREFIXES = (
+    "что ",
+    "какой ",
+    "какая ",
+    "какие ",
+    "какое ",
+    "сколько ",
+    "which ",
+    "what ",
+    "how much ",
+)
 
 
 def extract_claim_candidates(
@@ -407,6 +442,14 @@ def _should_keep_candidate(
     if predicate == "owns" and len(normalized.split()) < 2:
         head = normalized.split()[0] if normalized.split() else ""
         if head not in _OWNABLE_HEAD_TYPES and not matched_entities:
+            return False
+    if predicate == "owns":
+        head = normalized.split()[0] if normalized.split() else ""
+        if head in _OWNS_EVENT_HEADS:
+            return False
+        if normalized.startswith(_QUESTIONISH_OBJECT_PREFIXES):
+            return False
+        if len(normalized.split()) > 5 and head not in _OWNABLE_HEAD_TYPES and not matched_entities:
             return False
 
     return True

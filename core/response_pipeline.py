@@ -32,6 +32,7 @@ from llm.task_router import run_task_model
 from llm.tokenizer import estimate_tokens
 from memory import EpisodePlanner, build_memory_debug_snapshot
 from memory.memory_models import ContextBuildRequest, MemoryScope
+from memory.summary_quality import is_low_quality_session_summary, sanitize_session_summary_text
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
 from modules.studio.studio_generator import StudioGenerator
@@ -531,7 +532,7 @@ class MemoryRetrieveStage(PipelineStage):
                 ),
                 scopes=list(scopes),
                 top_k=max(1, int(k)),
-                session_summary=str(_pick_value(ctx.state.get("dialog_summary"), "")),
+                session_summary=sanitize_session_summary_text(_pick_value(ctx.state.get("dialog_summary"), "")),
                 tool_state=_as_dict(ctx.state.get("last_tool_result")),
                 unresolved_items=[str(x) for x in list(_as_list(ctx.state.get("open_questions"))) if str(x).strip()],
                 context_budget_total=_pick_int(
@@ -575,6 +576,7 @@ class MemoryRetrieveStage(PipelineStage):
             ctx.logs.append("stage=memory_retrieve skipped(invalid_pack)")
             return ctx
 
+        pack = _strip_low_quality_session_summary_from_pack(pack)
         ctx.memory_context = dict(pack)
         ctx.state["memory_context"] = dict(pack)
         active_profile_snapshot: dict[str, Any] = {}
@@ -603,9 +605,11 @@ class MemoryRetrieveStage(PipelineStage):
             ctx.retrieved_memories = retrieved
 
         blocks = _as_dict(pack.get("blocks"))
-        session_summary = str(blocks.get("session_summary") or "").strip()
+        session_summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
         if session_summary:
             ctx.state["dialog_summary"] = session_summary
+        else:
+            ctx.state.pop("dialog_summary", None)
 
         truncation_log = list(_as_list(pack.get("truncation_log")))
         dropped = list(_as_list(pack.get("dropped")))
@@ -1313,7 +1317,7 @@ class PromptBuildStage(PipelineStage):
         prompt_state.pop("long_summary", None)
         prompt_state.pop("dialog_summary", None)
         prompt_state.pop("last_tool_result", None)
-        summary_hint = str(_pick_value(memory_blocks.get("session_summary"), memory_blocks.get("working_memory"), ""))
+        summary_hint = sanitize_session_summary_text(memory_blocks.get("session_summary") or "")
         if summary_hint:
             prompt_state["long_summary"] = summary_hint
             prompt_state["dialog_summary"] = summary_hint
@@ -2903,7 +2907,7 @@ class GenerateStage(PipelineStage):
                     ctx.state["memory_context"] = dict(memory_context_for_prompt)
                     prompt_state["memory_context"] = dict(memory_context_for_prompt)
                     context_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
-                    summary_hint = str(_pick_value(context_blocks.get("session_summary"), context_blocks.get("working_memory"), ""))
+                    summary_hint = sanitize_session_summary_text(context_blocks.get("session_summary") or "")
                     if summary_hint:
                         prompt_state["long_summary"] = summary_hint
                         prompt_state["dialog_summary"] = summary_hint
@@ -3560,7 +3564,7 @@ class MemoryWriteStage(PipelineStage):
                 }
             )
             long_summary = str(ctx.prompt_pack.blocks.get("long_summary") or "").strip()
-            if long_summary and long_summary != "- none":
+            if long_summary and not is_low_quality_session_summary(long_summary):
                 ctx.memory_ops.append(
                     {
                         "op": "conversation_summary",
@@ -4373,7 +4377,7 @@ def _apply_memory_context_to_prompt_pack(
     if conversation_tail_hint:
         merged["conversation_tail"] = conversation_tail_hint
 
-    summary = str(blocks.get("session_summary") or "").strip()
+    summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
     if summary:
         merged["long_summary"] = summary
     user_msg = str(blocks.get("user_message") or "").strip()
@@ -6916,6 +6920,18 @@ def _pick_value(*values):
             continue
         return value
     return None
+
+
+def _strip_low_quality_session_summary_from_pack(pack: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(pack or {})
+    blocks = _as_dict(payload.get("blocks"))
+    session_summary = str(blocks.get("session_summary") or "").strip()
+    if not is_low_quality_session_summary(session_summary):
+        return payload
+    next_blocks = dict(blocks)
+    next_blocks.pop("session_summary", None)
+    payload["blocks"] = next_blocks
+    return payload
 
 
 def _ensure_debug_trace(ctx: PipelineContext) -> DebugTrace:

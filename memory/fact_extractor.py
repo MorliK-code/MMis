@@ -1347,8 +1347,12 @@ class FactExtractor:
         self, text: str, *, segments: list[str], subject: str, scope: MemoryScope, event_id: str, namespace: str
     ) -> list[FactRecordV2]:
         low = str(text or "").lower()
-        _ = segments
-        if not any(token in low for token in ("for now", "temporarily", "временно", "пока", "пока что")):
+        segment_count = len([str(x).strip() for x in list(segments or []) if str(x).strip()])
+        if not any(token in low for token in ("for now", "temporarily", "временно", "пока что")):
+            return []
+        if len(str(text or "").strip()) > 220:
+            return []
+        if segment_count > 2:
             return []
         return [
             self._mk(

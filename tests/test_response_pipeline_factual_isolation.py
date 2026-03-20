@@ -3,12 +3,13 @@ from __future__ import annotations
 import unittest
 
 from core import DebugTrace
-from core.character_runtime import CharacterRuntime, PromptPack
+from core.character_runtime import CharacterRuntime, PromptBudgets, PromptPack
 from prompt_engine.prompt_engine import PromptEngine
 from core.response_pipeline import (
     EpisodeContinuityStage,
     PROFILE_BALANCED,
     MemoryRetrieveStage,
+    MemoryWriteStage,
     PipelineContext,
     PipelineStage,
     PromptBuildStage,
@@ -143,6 +144,41 @@ class ResponsePipelineFactualIsolationTests(unittest.TestCase):
             ["identity_name"],
         )
         self.assertEqual(dict(trace.active_profile or {}).get("namespace"), "conv-profile")
+
+    def test_memory_retrieve_strips_transcript_like_session_summary(self) -> None:
+        class _Result:
+            def to_dict(self):
+                return {
+                    "blocks": {
+                        "session_summary": "- user: привет. как тебя зовут? меня Паша",
+                        "working_memory": "keep this",
+                    },
+                    "selected": [],
+                    "dropped": [],
+                    "truncation_log": [],
+                }
+
+        class _Manager:
+            def build_context(self, _request):
+                return _Result()
+
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="что мы обсуждали?",
+            clean_user_msg="что мы обсуждали?",
+            state={"conversation_id": "conv-summary-filter"},
+            meta={"conversation_id": "conv-summary-filter"},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+        )
+
+        ctx = MemoryRetrieveStage(memory_manager=_Manager()).run(ctx)
+
+        self.assertNotIn("dialog_summary", ctx.state)
+        self.assertNotIn("session_summary", dict(dict(ctx.memory_context or {}).get("blocks") or {}))
 
     def _legacy_test_memory_retrieve_resolves_active_task_into_state(self) -> None:
         class _Result:
@@ -527,6 +563,18 @@ class ResponsePipelineFactualIsolationTests(unittest.TestCase):
         self.assertLess(block.index("[FACT_EXPECTATION_CHECK]"), block.index("[SEMANTIC_FACTS]"))
         self.assertLess(block.index("[RELEVANT_CLAIMS]"), block.index("[WORKING_MEMORY]"))
         self.assertLess(block.index("[RECALLED_DIALOG]"), block.index("[SEMANTIC_FACTS]"))
+
+    def test_prompt_engine_omits_transcript_like_session_summary_block(self) -> None:
+        block = PromptEngine._build_memory_retrieval_block(
+            blocks={},
+            memory_blocks={
+                "session_summary": "- user: привет. как тебя зовут? меня Паша",
+                "working_memory": "keep this",
+            },
+        )
+
+        self.assertNotIn("[SESSION_SUMMARY]", block)
+        self.assertIn("[WORKING_MEMORY]\nkeep this", block)
 
     def test_prompt_engine_prefers_recalled_dialog_over_raw_episodic_snippets(self) -> None:
         block = PromptEngine._build_memory_retrieval_block(
@@ -1420,6 +1468,60 @@ class ActiveTaskPromptTests(unittest.TestCase):
                 and dict(row).get("reason") == "self_memory_exact_noise"
                 for row in omitted
             )
+        )
+
+
+class SummaryQualityTests(unittest.TestCase):
+    def test_character_runtime_ignores_transcript_like_explicit_long_summary(self) -> None:
+        runtime = CharacterRuntime()
+        block = runtime._build_long_summary_block(
+            {
+                "long_summary": "- user: привет. как тебя зовут? меня Паша",
+                "history": [
+                    {"role": "user", "content": "привет. как тебя зовут? меня Паша"},
+                    {"role": "assistant", "content": "Привет, Паша. Я Ася."},
+                    {"role": "user", "content": "Давай разделим память на facts и claims."},
+                    {"role": "assistant", "content": "И отдельно эпизоды диалога, чтобы помнить решения."},
+                    {"role": "user", "content": "Ок, потом добьем retrieval."},
+                ],
+            },
+            PromptBudgets(long_summary_tokens=120, tail_turns=2),
+            dropped_tail=2,
+        )
+
+        self.assertNotIn("- user:", block)
+        self.assertNotIn("как тебя зовут", block.lower())
+        self.assertIn("Earlier context:", block)
+        self.assertIn("facts", block.lower())
+        self.assertIn("claims", block.lower())
+
+    def test_memory_write_skips_transcript_like_conversation_summary(self) -> None:
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="continue",
+            clean_user_msg="continue",
+            state={},
+            meta={"store_turn": True},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            prompt_pack=PromptPack(
+                system_prompt="",
+                user_message="continue",
+                full_prompt="",
+                messages=[],
+                blocks={"long_summary": "- user: привет. как тебя зовут? меня Паша"},
+                token_usage={},
+                budgets={},
+            ),
+        )
+
+        ctx = MemoryWriteStage().run(ctx)
+
+        self.assertFalse(
+            any(str(item.get("op") or "") == "conversation_summary" for item in list(ctx.memory_ops or []))
         )
 
 

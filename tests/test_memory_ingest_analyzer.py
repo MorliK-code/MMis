@@ -306,6 +306,24 @@ def test_ingest_analysis_understands_gpu_short_form_with_memory_phrase() -> None
     assert any(item.kind == "vram_gb" and str(item.value) == "4" for item in analysis.numeric_facts)
     assert all(not (item.kind == "ram_gb" and str(item.value) == "4") for item in analysis.numeric_facts)
 
+def test_fact_extractor_does_not_create_temporary_fact_from_long_narrative_with_plain_poka() -> None:
+    text = (
+        "Это длинная история. Я долго сомневался, пока друзья уговаривали меня сделать первый шаг. "
+        "Потом стало пусто в голове и я наконец выспался."
+    )
+    analysis = analyze_message_for_memory(text)
+    rows = FactExtractor().extract_v2(
+        text=text,
+        metadata={"event_id": "evt:narrative-poka", "namespace": "default"},
+        speaker="user",
+        scope=MemoryScope.CONVERSATION,
+        mode="BALANCED",
+        analysis=analysis,
+    )
+
+    assert all(row.predicate != "temporary_fact" for row in rows)
+
+
 def test_singleton_fact_rules_cover_structured_environment_predicates() -> None:
     assert MemoryManager._is_singleton_fact_canonical("user.environment_os")
     assert MemoryManager._is_singleton_fact_canonical("user.environment_runtime_python")

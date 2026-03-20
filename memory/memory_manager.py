@@ -65,6 +65,7 @@ from memory.memory_scoring import (
     build_salience_score,
 )
 from memory.recall_policy import classify_query_recall_profile
+from memory.summary_quality import sanitize_session_summary_text
 from memory.storage_profile import (
     DEBUG_ONLY_METADATA_FIELDS,
     DEFAULT_STORAGE_PROFILE,
@@ -940,7 +941,7 @@ class MemoryManager:
             namespace=request.namespace,
             scopes=list(request.scopes or []),
             top_k=request.top_k,
-            session_summary=request.session_summary or self._session_summary,
+            session_summary=sanitize_session_summary_text(request.session_summary or self._session_summary),
             working_memory=working,
             tool_state=dict(request.tool_state or {}),
             unresolved_items=list(request.unresolved_items or self._open_questions),
@@ -3297,7 +3298,19 @@ class MemoryManager:
             return
 
         if record.scope == MemoryScope.SESSION and record.memory_type == MemoryType.SUMMARY:
-            self._session_summary = text[:2400]
+            cleaned = sanitize_session_summary_text(text)
+            if cleaned:
+                self._session_summary = cleaned[:2400]
+            else:
+                self._session_summary = ""
+            return
+
+        if record.memory_type != MemoryType.MESSAGE:
+            return
+
+        source_kind = str(dict(record.metadata or {}).get("source_kind") or "").strip().lower()
+        if source_kind in {"assistant_reply", "assistant", "system_decision"}:
+            return
 
         low = text.lower()
         if "?" in text and len(text) <= 220:
@@ -3334,7 +3347,7 @@ class MemoryManager:
             payload = json.loads(self._state_path.read_text(encoding="utf-8-sig") or "{}")
         except Exception:
             return
-        self._session_summary = str(payload.get("session_summary") or "")
+        self._session_summary = sanitize_session_summary_text(payload.get("session_summary") or "")
         self._open_questions = [str(x) for x in list(payload.get("open_questions") or []) if str(x).strip()]
         self._current_decisions = [str(x) for x in list(payload.get("current_decisions") or []) if str(x).strip()]
         self._active_preferences = [str(x) for x in list(payload.get("active_preferences") or []) if str(x).strip()]
@@ -3350,7 +3363,7 @@ class MemoryManager:
 
     def _save_state(self) -> None:
         payload = {
-            "session_summary": self._session_summary,
+            "session_summary": sanitize_session_summary_text(self._session_summary),
             "open_questions": list(self._open_questions or []),
             "current_decisions": list(self._current_decisions or []),
             "active_preferences": list(self._active_preferences or []),

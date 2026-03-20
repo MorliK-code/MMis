@@ -17,6 +17,7 @@ from memory.memory_models import (
     LifecycleDecision,
     MemoryEvent,
     MemoryLevel,
+    MemoryRecord,
     MemoryScope,
     MemorySourceKind,
     MemoryStatus,
@@ -189,6 +190,24 @@ class MemoryWritePolicyTests(unittest.TestCase):
             manager._event_store.entries[-1]["payload"]["reason"],
             "assistant_factual_unverified_no_web",
         )
+
+    def test_session_state_ignores_transcript_like_summary(self) -> None:
+        manager = self._manager()
+
+        manager._update_session_state_from_event(
+            MemoryRecord(
+                id="summary:bad",
+                text="- user: привет. как тебя зовут? меня Паша",
+                memory_type=MemoryType.SUMMARY,
+                level=MemoryLevel.L1_SESSION,
+                scope=MemoryScope.SESSION,
+                namespace="conv-summary",
+                metadata={"source_kind": "system_decision", "source": "rolling_summary"},
+            )
+        )
+
+        self.assertEqual(manager._session_summary, "")
+        self.assertEqual(manager._open_questions, [])
 
     def test_verified_assistant_fx_claim_is_temporary_only(self) -> None:
         manager = self._manager()
