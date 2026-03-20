@@ -19,7 +19,7 @@ _EXPLICIT_END_RE = re.compile(
 )
 _DECISION_RE = re.compile(
     r"(?:"
-    r"\b(?:решили|договорились|будем|сделаем|следующим\s+шагом|agreed|next\s+step|we\s+will|let'?s)\b"
+    r"\b(?:решили|договорились|будем|сделаем|следующим\s+шагом|agreed|decided|next\s+step|we\s+will|let'?s)\b"
     r"|"
     r"\b(?:сначала|сперва|first)\b.{0,120}\b(?:потом|затем|then)\b"
     r")",
@@ -29,6 +29,44 @@ _QUESTIONISH_RE = re.compile(
     r"(?:\?|(?:\b(?:непонятно|не\s+ясно|что\s+дальше|осталось\s+понять|open\s+question|todo)\b))",
     re.I,
 )
+_REASON_SPLIT_RE = re.compile(
+    r"\b(?:because|since|so\s+that|потому\s+что|так\s+как|чтобы)\b",
+    re.I,
+)
+_REASON_HINT_RE = re.compile(
+    r"(?:"
+    r"\bpollut(?:e|es|ed|ing)\s+retrieval\b|"
+    r"\bnois(?:e|y)\b|"
+    r"\bself[- ]loops?\b|"
+    r"\bclean\s+retrieval\b|"
+    r"\bstale\s+evidence\s+bleed\b|"
+    r"\bkeep\s+one\s+active\b|"
+    r"\bactive\s+canonical\b|"
+    r"\bcanonical\b|"
+    r"\bisolat(?:e|ed|ion)\b|"
+    r"\bavoid\b|"
+    r"\bprevent\b|"
+    r"\bleak(?:s|ed|ing)?\b|"
+    r"\bbleed\b|"
+    r"\bdrift\b|"
+    r"\bclean\b|"
+    r"\bactive\s+fact\b|"
+    r"\bactive\s+value\b|"
+    r"\bcanonical\s+value\b|"
+    r"шум\w*|"
+    r"изолир\w*|"
+    r"канонич\w*|"
+    r"избеж\w*|"
+    r"загрязн\w*|"
+    r"самоцикл\w*|"
+    r"ретрив\w*"
+    r")",
+    re.I,
+)
+_REASON_PREFIX_RE = re.compile(
+    r"^(?:because|since|so\s+that|right|exactly|yes|потому\s+что|так\s+как|чтобы|да|именно\s+поэтому)[\s,:-]*",
+    re.I,
+)
 _WORD_RE = re.compile(r"[a-zа-яёіїєґ0-9_]{3,}", re.I)
 _SUMMARY_SPLIT_RE = re.compile(r"[\n\r]+|(?<=[.!?])\s+")
 _SUMMARY_DISCOURSE_PREFIX_RE = re.compile(
@@ -36,7 +74,7 @@ _SUMMARY_DISCOURSE_PREFIX_RE = re.compile(
     re.I,
 )
 _SUMMARY_NOISE_RE = re.compile(
-    r"^(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер|утро)|hello|hi|ага|угу|ок(?:ей)?|ясно|понятно|спасибо|thanks?)$",
+    r"^(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер|утро)|hello|hi|ага|угу|ок(?:ей)?|да|ясно|понятно|понял|поняла|спасибо|thanks?)$",
     re.I,
 )
 _BAD_TOPIC_TOKENS = {
@@ -62,6 +100,7 @@ _STOPWORDS = {
     "because",
     "been",
     "from",
+    "into",
     "that",
     "this",
     "with",
@@ -173,27 +212,44 @@ class DialogEpisodeBuilder:
         if len(rows) < max(1, int(self.min_turns_for_episode)):
             return None
 
+        semantic_rows = self._semantic_source_turns(rows)
+        summary_rows = semantic_rows or rows
+        semantic_entity_keys = self._entity_keys(semantic_rows) if semantic_rows else []
         decisions = self._extract_decisions(rows)
         open_questions = self._extract_open_questions(rows)
         topic = self._episode_topic(
-            rows,
+            semantic_rows,
             decisions=decisions,
             open_questions=open_questions,
         )
         participants = self._participants(rows)
-        topic_keys = self._topic_keys(rows, topic=topic)
         entity_keys = self._entity_keys(rows)
+        summary_seed = self._summary_seed_text(summary_rows, maximum=180)
         summary_short = self._summary_short(
-            turns=rows,
-            topic=topic,
+            turns=summary_rows,
             decisions=decisions,
             open_questions=open_questions,
         )
         summary_reasoning = self._summary_reasoning(
             turns=rows,
-            topic=topic,
             decisions=decisions,
             open_questions=open_questions,
+        )
+        focus_keys = self._focus_keys(
+            semantic_rows,
+            entity_keys=semantic_entity_keys,
+            summary_seed=summary_seed,
+            decisions=decisions,
+            open_questions=open_questions,
+        )
+        topic_keys = self._topic_keys(
+            semantic_rows,
+            topic=topic,
+            summary_short=summary_short,
+            summary_seed=summary_seed,
+            decisions=decisions,
+            open_questions=open_questions,
+            focus_keys=focus_keys,
         )
         ts = float(now_ts or rows[-1].ts or time.time())
 
@@ -209,6 +265,7 @@ class DialogEpisodeBuilder:
             salience=self._salience(rows, decisions=decisions, open_questions=open_questions),
             topic_keys=topic_keys,
             entity_keys=entity_keys,
+            focus_keys=focus_keys,
             created_at=ts,
             updated_at=ts,
         )
@@ -367,7 +424,17 @@ class DialogEpisodeBuilder:
             out.append(token)
         return out
 
-    def _topic_keys(self, turns: list[DialogTurn], *, topic: str) -> list[str]:
+    def _topic_keys(
+        self,
+        turns: list[DialogTurn],
+        *,
+        topic: str,
+        summary_short: str = "",
+        summary_seed: str = "",
+        decisions: list[str] | None = None,
+        open_questions: list[str] | None = None,
+        focus_keys: list[str] | None = None,
+    ) -> list[str]:
         seen: set[str] = set()
         out: list[str] = []
 
@@ -379,6 +446,8 @@ class DialogEpisodeBuilder:
             out.append(token)
 
         _add(topic)
+        for token in list(focus_keys or []):
+            _add(str(token or "").strip().lower())
         for turn in list(turns or []):
             _add(self._turn_topic(turn))
             for tag in list(turn.tags or []):
@@ -386,7 +455,200 @@ class DialogEpisodeBuilder:
                 match = _TOPIC_TAG_RE.match(raw)
                 if match:
                     _add(str(match.group(1) or "").strip().lower())
+        for token in self._semantic_topic_tokens(
+            [
+                str(summary_seed or "").strip(),
+                str(summary_short or "").strip(),
+                *[str(x).strip() for x in list(decisions or []) if str(x).strip()],
+                *[str(x).strip() for x in list(open_questions or []) if str(x).strip()],
+            ],
+            limit=10,
+        ):
+            _add(token)
         return out
+
+    def _semantic_topic_tokens(
+        self,
+        texts: list[str],
+        *,
+        limit: int = 8,
+        extra_stopwords: set[str] | None = None,
+    ) -> list[str]:
+        extra_stopwords = {
+            "build",
+            "context",
+            "decide",
+            "decided",
+            "doing",
+            "discussion",
+            "discuss",
+            "discussed",
+            "episode",
+            "finish",
+            "keep",
+            "make",
+            "need",
+            "next",
+            "open",
+            "plan",
+            "question",
+            "questions",
+            "return",
+            "separate",
+            "should",
+            "split",
+            "step",
+            "steps",
+            "store",
+            "stabilize",
+            "then",
+            "they",
+            "using",
+            "want",
+            "were",
+            "what",
+            "when",
+            "which",
+            "will",
+            "with",
+            "would",
+            "your",
+        }.union(set(extra_stopwords or set()))
+        seen: set[str] = set()
+        out: list[str] = []
+        for text in list(texts or []):
+            normalized = normalize_text(str(text or "")).lower()
+            if not normalized:
+                continue
+            for token in _WORD_RE.findall(normalized):
+                item = str(token or "").strip().lower()
+                if (
+                    not item
+                    or len(item) < 4
+                    or item.isdigit()
+                    or item in seen
+                    or item in _STOPWORDS
+                    or item in extra_stopwords
+                    or item in _BAD_TOPIC_TOKENS
+                ):
+                    continue
+                seen.add(item)
+                out.append(item)
+                if len(out) >= max(1, int(limit)):
+                    return out
+        return out
+
+    def _focus_keys(
+        self,
+        turns: list[DialogTurn],
+        *,
+        entity_keys: list[str] | None = None,
+        summary_seed: str = "",
+        decisions: list[str] | None = None,
+        open_questions: list[str] | None = None,
+    ) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+
+        def _add(value: str) -> None:
+            token = str(value or "").strip().lower()
+            if not token or token in seen:
+                return
+            seen.add(token)
+            out.append(token)
+
+        def _add_many(values: list[str]) -> None:
+            for value in list(values or []):
+                _add(str(value or "").strip().lower())
+
+        for turn in list(turns or []):
+            meta = dict(turn.metadata or {})
+            for row in list(meta.get("memory_entities") or []):
+                if isinstance(row, dict):
+                    _add_many(self._focus_keys_from_entity_row(row))
+            for row in list(meta.get("stable_facts") or []):
+                if isinstance(row, dict):
+                    _add_many(self._focus_keys_from_fact_row(row))
+            fact_row = meta.get("fact")
+            if isinstance(fact_row, dict):
+                _add_many(self._focus_keys_from_fact_row(fact_row))
+
+        _add_many(
+            self._semantic_topic_tokens(
+                [
+                    str(summary_seed or "").strip(),
+                    *[str(x).strip() for x in list(decisions or []) if str(x).strip()],
+                    *[str(x).strip() for x in list(open_questions or []) if str(x).strip()],
+                ],
+                limit=16,
+            )
+        )
+
+        for turn in list(turns or []):
+            meta = dict(turn.metadata or {})
+            claim_rows = [
+                *[row for row in list(meta.get("claims") or []) if isinstance(row, dict)],
+                *[row for row in list(meta.get("claim_candidates") or []) if isinstance(row, dict)],
+            ]
+            claim_row = meta.get("claim")
+            if isinstance(claim_row, dict):
+                claim_rows.append(claim_row)
+            for row in claim_rows:
+                _add_many(self._focus_keys_from_claim_row(row))
+
+        for token in list(entity_keys or []):
+            _add_many(self._semantic_topic_tokens([str(token or "").replace("_", " ")], limit=3))
+        return out[:16]
+
+    def _focus_keys_from_entity_row(self, row: dict[str, Any]) -> list[str]:
+        entity_type = normalize_text(str(row.get("type") or "")).strip().lower()
+        base_keys = {
+            "cpu_model": ["hardware"],
+            "gpu_model": ["hardware"],
+            "llm_model": ["environment"],
+            "os_name": ["environment"],
+            "person_name": ["identity"],
+            "project_name": ["project"],
+            "python_version": ["python", "environment"],
+            "ram_size": ["hardware"],
+            "tool_name": ["environment"],
+            "vram_size": ["hardware"],
+        }.get(entity_type, [])
+        surface = str(row.get("canonical") or row.get("surface") or "").strip()
+        return [
+            *base_keys,
+            *self._semantic_topic_tokens([surface], limit=3),
+        ]
+
+    def _focus_keys_from_fact_row(self, row: dict[str, Any]) -> list[str]:
+        relation = str(row.get("relation") or "").strip().lower()
+        predicate = str(row.get("predicate") or "").strip()
+        value = str(row.get("value") or "").strip()
+        return [
+            *([relation] if relation else []),
+            *self._semantic_topic_tokens(
+                [predicate.replace("_", " ").replace(".", " ")],
+                limit=4,
+                extra_stopwords={"model", "name", "runtime", "size", "value", "version"},
+            ),
+            *self._semantic_topic_tokens([value], limit=2),
+        ]
+
+    def _focus_keys_from_claim_row(self, row: dict[str, Any]) -> list[str]:
+        predicate = str(row.get("predicate") or "").strip()
+        object_type = str(row.get("object_type") or "").strip().lower()
+        object_value = str(
+            row.get("normalized_object")
+            or row.get("obj")
+            or row.get("object_surface")
+            or ""
+        ).strip()
+        return [
+            *self._semantic_topic_tokens([predicate.replace("_", " ").replace(".", " ")], limit=3),
+            *[str(x).strip().lower() for x in list(row.get("topic_keys") or []) if str(x).strip()],
+            *([object_type] if object_type else []),
+            *self._semantic_topic_tokens([object_value], limit=2),
+        ]
 
     def _entity_keys(self, turns: list[DialogTurn]) -> list[str]:
         seen: set[str] = set()
@@ -418,16 +680,58 @@ class DialogEpisodeBuilder:
             _add(str(token or ""))
         return out
 
-    def _episode_text(self, rows: list[DialogTurn]) -> str:
+    def _is_noise_determiner_turn(self, turn: DialogTurn) -> bool:
+        text = self._clean_summary_fragment(str(turn.text or "").strip())
+        if not text:
+            return True
+        normalized = normalize_text(text)
+        if not normalized:
+            return True
+        if _SUMMARY_NOISE_RE.match(normalized):
+            return True
+        tokens = [
+            token
+            for token in re.sub(r"[^a-zа-яёіїєґ0-9_]+", " ", normalized, flags=re.I).split()
+            if token
+        ]
+        if tokens and len(tokens) <= 3 and all(token in _BAD_TOPIC_TOKENS for token in tokens):
+            return True
+        return False
+
+    def _semantic_source_turns(self, rows: list[DialogTurn]) -> list[DialogTurn]:
+        return [
+            turn
+            for turn in list(rows or [])
+            if str(turn.text or "").strip() and not self._is_noise_determiner_turn(turn)
+        ]
+
+    def _episode_text_turns(self, rows: list[DialogTurn]) -> list[DialogTurn]:
+        out: list[DialogTurn] = []
+        for turn in self._semantic_source_turns(rows):
+            role = str(turn.role or "").strip().lower()
+            if role == "assistant" and not self._is_important_assistant_turn(turn):
+                continue
+            if role in {"user", "assistant"}:
+                out.append(turn)
+        return out
+
+    def episode_text(self, rows: list[DialogTurn], *, maximum: int = 520) -> str:
+        source_rows = self._episode_text_turns(rows)
+        if not source_rows:
+            return ""
         return self._join_episode_fragments(
-            self._episode_fragments(rows),
-            maximum=520,
+            self._episode_fragments(source_rows),
+            maximum=maximum,
         )
 
+    def _episode_text(self, rows: list[DialogTurn]) -> str:
+        return self.episode_text(rows)
+
     def _episode_user_text(self, rows: list[DialogTurn]) -> str:
+        source_rows = self._semantic_source_turns(rows) or list(rows or [])
         return self._join_episode_fragments(
             self._episode_fragments(
-                rows,
+                source_rows,
                 include_assistant=False,
             ),
             maximum=420,
@@ -435,7 +739,7 @@ class DialogEpisodeBuilder:
 
     def _episode_compact_text(self, rows: list[DialogTurn]) -> str:
         summary_rows = self._summary_source_turns(rows)
-        source_rows = summary_rows or list(rows or [])
+        source_rows = summary_rows or self._semantic_source_turns(rows) or list(rows or [])
         compact_fragments = self._episode_fragments(
             source_rows,
             assistant_must_be_important=True,
@@ -445,10 +749,9 @@ class DialogEpisodeBuilder:
         return self._join_episode_fragments(compact_fragments, maximum=220)
 
     def _summary_source_turns(self, rows: list[DialogTurn], *, maximum: int = 4) -> list[DialogTurn]:
+        source_rows = self._semantic_source_turns(rows)
         meaningful: list[DialogTurn] = []
-        for turn in list(rows or []):
-            if self._is_noise_turn(turn):
-                continue
+        for turn in source_rows:
             role = str(turn.role or "").strip().lower()
             if role == "assistant" and not self._is_important_assistant_turn(turn):
                 continue
@@ -457,11 +760,7 @@ class DialogEpisodeBuilder:
                 break
         if meaningful:
             return meaningful
-        return [
-            turn
-            for turn in list(rows or [])
-            if str(turn.text or "").strip()
-        ][:maximum]
+        return source_rows[:maximum]
 
     def _episode_fragments(
         self,
@@ -548,75 +847,500 @@ class DialogEpisodeBuilder:
         self,
         *,
         turns: list[DialogTurn],
-        topic: str,
         decisions: list[str],
         open_questions: list[str],
     ) -> str:
-        base = self._summary_seed_text(
+        lang = self._episode_language(turns)
+        structured = self._structured_summary_short(
             turns,
             decisions=decisions,
             open_questions=open_questions,
+            lang=lang,
         )
-        if not base:
-            base = f"Discussed {topic}." if topic else "Discussed the conversation."
-        return base.strip()
+        if structured:
+            return structured
+        open_sentence = self._open_question_summary_sentence(open_questions=open_questions, lang=lang)
+        base = self._summary_seed_text(
+            turns,
+            maximum=90 if open_sentence and not decisions else 120,
+        )
+        if base:
+            prefix = "Обсудили: " if lang == "ru" else "Discussed: "
+            context_sentence = self._trim_summary_text(
+                prefix + base,
+                maximum=90 if open_sentence and not decisions else 120,
+            )
+            if open_sentence and not decisions:
+                return self._trim_summary_text(f"{context_sentence} {open_sentence}")
+            return context_sentence
+        if open_sentence and not decisions:
+            return self._trim_summary_text(open_sentence)
+        return "Обсудили рабочий эпизод." if lang == "ru" else "Discussed a work episode."
+
+    def _structured_summary_short(
+        self,
+        turns: list[DialogTurn],
+        *,
+        decisions: list[str],
+        open_questions: list[str],
+        lang: str,
+    ) -> str:
+        catalog = self._summary_anchor_catalog(turns)
+        summary_seed = self._summary_seed_text(turns, maximum=180)
+        summary_text = normalize_text(
+            " ".join(
+                [
+                    str(summary_seed or "").strip(),
+                    *[str(x).strip() for x in list(decisions or []) if str(x).strip()],
+                    *[str(x).strip() for x in list(open_questions or []) if str(x).strip()],
+                ]
+            )
+        ).lower()
+        signal_tokens = {
+            str(x).strip().lower()
+            for x in self._semantic_topic_tokens([summary_text], limit=18)
+            if str(x).strip()
+        }
+
+        anchor_sentence = self._structured_anchor_sentence(
+            catalog=catalog,
+            signal_tokens=signal_tokens,
+            lang=lang,
+        )
+        decision_sentence = self._decision_summary_sentence(decisions=decisions, lang=lang)
+        open_sentence = self._open_question_summary_sentence(open_questions=open_questions, lang=lang)
+        if decision_sentence and anchor_sentence:
+            merged = f"{decision_sentence} {anchor_sentence}".strip()
+            if len(merged) <= 150:
+                return self._trim_summary_text(merged)
+            return self._trim_summary_text(decision_sentence)
+        if decision_sentence:
+            return self._trim_summary_text(decision_sentence)
+        if open_sentence:
+            context_sentence = self._summary_context_sentence(
+                anchor_sentence=anchor_sentence,
+                summary_seed=summary_seed,
+                lang=lang,
+            )
+            if context_sentence:
+                return self._trim_summary_text(f"{context_sentence} {open_sentence}")
+            return self._trim_summary_text(open_sentence)
+        if anchor_sentence:
+            return self._trim_summary_text(anchor_sentence)
+        return ""
+
+    def _summary_context_sentence(self, *, anchor_sentence: str, summary_seed: str, lang: str) -> str:
+        if anchor_sentence:
+            return self._trim_summary_text(anchor_sentence, maximum=90)
+        seed = str(summary_seed or "").rstrip(".!?")
+        if not seed:
+            return ""
+        prefix = "Обсудили: " if lang == "ru" else "Discussed: "
+        return self._trim_summary_text(prefix + seed, maximum=90)
+
+    def _structured_anchor_sentence(
+        self,
+        *,
+        catalog: dict[str, list[str]],
+        signal_tokens: set[str],
+        lang: str,
+    ) -> str:
+        memory_items = self._memory_anchor_items(catalog=catalog, signal_tokens=signal_tokens)
+        if len(memory_items) >= 2:
+            subject = "Обсудили архитектуру памяти" if lang == "ru" else "Discussed memory architecture"
+            return f"{subject}: {self._join_anchor_items(memory_items, lang=lang)}."
+
+        environment_items = list(catalog.get("environment_labels") or [])
+        if environment_items:
+            subject = "Обсудили окружение пользователя" if lang == "ru" else "Discussed the user's environment"
+            return f"{subject}: {self._join_anchor_items(environment_items[:3], lang=lang)}."
+
+        preference_items = list(catalog.get("claim_objects") or [])
+        preference_topics = {str(x).strip().lower() for x in list(catalog.get("claim_topics") or []) if str(x).strip()}
+        if preference_items and preference_topics.intersection({"preference", "relationship"}):
+            if lang == "ru":
+                if {"preference", "relationship"}.issubset(preference_topics):
+                    subject = "Обсудили предпочтения и отношения"
+                elif "relationship" in preference_topics:
+                    subject = "Обсудили отношения"
+                else:
+                    subject = "Обсудили предпочтения пользователя"
+            else:
+                if {"preference", "relationship"}.issubset(preference_topics):
+                    subject = "Discussed preferences and relationships"
+                elif "relationship" in preference_topics:
+                    subject = "Discussed relationships"
+                else:
+                    subject = "Discussed user preferences"
+            return f"{subject}: {self._join_anchor_items(preference_items[:3], lang=lang)}."
+
+        generic_items = self._generic_anchor_items(catalog=catalog, signal_tokens=signal_tokens)
+        if generic_items:
+            subject = "Обсудили ключевые детали" if lang == "ru" else "Discussed the key details"
+            return f"{subject}: {self._join_anchor_items(generic_items[:3], lang=lang)}."
+        return ""
+
+    def _summary_anchor_catalog(self, turns: list[DialogTurn]) -> dict[str, list[str]]:
+        entity_labels: list[str] = []
+        environment_labels: list[str] = []
+        claim_objects: list[str] = []
+        claim_topics: list[str] = []
+        fact_values: list[str] = []
+        fact_relations: list[str] = []
+        topic_labels: list[str] = []
+
+        def _push(target: list[str], value: str) -> None:
+            item = self._summary_anchor_label(value)
+            if not item or item in target:
+                return
+            target.append(item)
+
+        for turn in list(turns or []):
+            meta = dict(turn.metadata or {})
+            topic_value = self._turn_topic(turn)
+            if topic_value and topic_value not in topic_labels:
+                topic_labels.append(topic_value)
+            for row in list(meta.get("memory_entities") or []):
+                if not isinstance(row, dict):
+                    continue
+                label = str(row.get("canonical") or row.get("surface") or "").strip()
+                entity_type = normalize_text(str(row.get("type") or "")).strip().lower()
+                _push(entity_labels, label)
+                if entity_type in {"python_version", "os_name", "tool_name", "llm_model", "gpu_model", "cpu_model", "ram_size", "vram_size"}:
+                    _push(environment_labels, label)
+
+            fact_rows = [row for row in list(meta.get("stable_facts") or []) if isinstance(row, dict)]
+            fact_row = meta.get("fact")
+            if isinstance(fact_row, dict):
+                fact_rows.append(fact_row)
+            for row in fact_rows:
+                relation = str(row.get("relation") or "").strip().lower()
+                if relation:
+                    _push(fact_relations, relation)
+                value = str(row.get("value") or "").strip()
+                if value:
+                    _push(fact_values, value)
+                    if relation == "environment":
+                        _push(environment_labels, value)
+
+            claim_rows = [row for row in list(meta.get("claims") or []) if isinstance(row, dict)]
+            claim_row = meta.get("claim")
+            if isinstance(claim_row, dict):
+                claim_rows.append(claim_row)
+            for row in claim_rows:
+                obj = str(row.get("object_surface") or row.get("obj") or row.get("normalized_object") or "").strip()
+                if obj:
+                    _push(claim_objects, obj)
+                for token in list(row.get("topic_keys") or []):
+                    value = str(token or "").strip().lower()
+                    if value and value not in claim_topics:
+                        claim_topics.append(value)
+
+        return {
+            "entity_labels": entity_labels,
+            "environment_labels": environment_labels,
+            "claim_objects": claim_objects,
+            "claim_topics": claim_topics,
+            "fact_values": fact_values,
+            "fact_relations": fact_relations,
+            "topic_labels": topic_labels,
+        }
+
+    def _memory_anchor_items(self, *, catalog: dict[str, list[str]], signal_tokens: set[str]) -> list[str]:
+        normalized_text = " ".join(sorted(signal_tokens))
+        topic_labels = {str(x).strip().lower() for x in list(catalog.get("topic_labels") or []) if str(x).strip()}
+        items: list[str] = []
+
+        def _has_token(*markers: str) -> bool:
+            for marker in markers:
+                marker_value = str(marker or "").strip().lower()
+                if not marker_value:
+                    continue
+                if marker_value in signal_tokens or marker_value in normalized_text:
+                    return True
+                if any(str(token).startswith(marker_value) for token in signal_tokens):
+                    return True
+            return False
+
+        def _has_memory_context() -> bool:
+            if "memory" in topic_labels:
+                return True
+            if "memory" in signal_tokens:
+                return True
+            return any(token.startswith("памят") for token in signal_tokens)
+
+        if _has_token("facts", "fact", "факт", "факты"):
+            items.append("facts")
+        if _has_token("claims", "claim", "клейм"):
+            items.append("claims")
+        if (_has_token("dialog") and _has_token("episodes", "episode")) or (_has_token("диалог") and _has_token("эпизод")):
+            items.append("dialog episodes")
+        elif _has_token("episodes", "episode", "эпизод", "эпизоды"):
+            items.append("episodes")
+        if _has_token("document") and (_has_token("memory") or _has_memory_context()):
+            items.append("document memory")
+        if not _has_memory_context() and "memory" not in {x.lower() for x in list(catalog.get("fact_relations") or [])}:
+            return []
+        out: list[str] = []
+        for item in items:
+            if item not in out:
+                out.append(item)
+            if len(out) >= 3:
+                break
+        return out
+
+    def _generic_anchor_items(self, *, catalog: dict[str, list[str]], signal_tokens: set[str]) -> list[str]:
+        items: list[str] = []
+        for value in [
+            *list(catalog.get("entity_labels") or []),
+            *list(catalog.get("claim_objects") or []),
+            *list(catalog.get("fact_values") or []),
+        ]:
+            label = self._summary_anchor_label(value)
+            if not label or label in items:
+                continue
+            items.append(label)
+            if len(items) >= 3:
+                break
+        if items:
+            return items
+        return [
+            str(x).strip()
+            for x in list(signal_tokens or [])
+            if str(x).strip()
+        ][:3]
+
+    def _summary_anchor_label(self, value: str) -> str:
+        item = self._clean_summary_fragment(str(value or "").replace("_", " ").replace(".", " "))
+        if not item:
+            return ""
+        words = [token for token in re.split(r"\s+", item) if token]
+        return " ".join(words[:4]).strip()
+
+    def _decision_summary_sentence(self, *, decisions: list[str], lang: str) -> str:
+        if not decisions:
+            return ""
+        ranked = self._ordered_decisions(decisions)
+        if not ranked:
+            return ""
+        value = self._decision_summary_fragment(str(ranked[0] or "").strip())
+        if not value:
+            return ""
+        if lang == "ru":
+            return f"Решили: {value}."
+        return f"Decision: {value}."
+
+    def _decision_summary_fragment(self, text: str) -> str:
+        value = self._clean_summary_fragment(text)
+        if not value:
+            return ""
+        value = re.sub(
+            r"^(?:we\s+decided(?:\s+to)?|decided(?:\s+to)?|agreed(?:\s+to)?|we\s+agreed(?:\s+to)?|решили|договорились|следующим\s+шагом|будем|сделаем|we\s+will)\b[\s,:-]*",
+            "",
+            value,
+            flags=re.I,
+        ).strip()
+        return value or self._clean_summary_fragment(text)
+
+    def _ordered_decisions(self, decisions: list[str]) -> list[str]:
+        scored: list[tuple[int, int, str]] = []
+        for idx, item in enumerate(list(decisions or [])):
+            value = str(item or "").strip()
+            if not value:
+                continue
+            explicit = re.search(
+                r"^(?:we\s+decided|decided|we\s+agreed|agreed|решили|договорились|we\s+will|будем|сделаем)\b",
+                value,
+                flags=re.I,
+            )
+            next_step = re.search(r"\b(?:next\s+step|следующим\s+шагом)\b", value, flags=re.I)
+            proposal = re.search(r"^(?:let'?s|давай)\b", value, flags=re.I)
+            sequence = re.search(r"\b(?:first|сначала)\b.{0,120}\b(?:then|потом|затем)\b", value, flags=re.I)
+            if explicit:
+                priority = 0
+            elif next_step:
+                priority = 1
+            elif proposal:
+                priority = 2
+            elif sequence:
+                priority = 3
+            else:
+                priority = 4
+            scored.append((priority, idx, value))
+        scored.sort(key=lambda item: (item[0], item[1]))
+        return [value for _, _, value in scored]
+
+    def _reasoning_decision_text(self, decisions: list[str]) -> str:
+        fragments: list[str] = []
+        seen: set[str] = set()
+        for item in self._ordered_decisions(decisions)[:2]:
+            fragment = self._decision_without_reason(str(item or ""))
+            if not fragment:
+                continue
+            key = normalize_text(fragment)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            fragments.append(fragment)
+        return "; ".join(fragments)
+
+    def _reasoning_open_text(self, open_questions: list[str]) -> str:
+        fragments: list[str] = []
+        seen: set[str] = set()
+        for item in list(open_questions or [])[:2]:
+            fragment = self._clean_summary_fragment(str(item or ""))
+            if not fragment:
+                continue
+            key = normalize_text(fragment)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            fragments.append(fragment)
+        return "; ".join(fragments)
+
+    def _open_question_summary_sentence(self, *, open_questions: list[str], lang: str) -> str:
+        open_text = self._reasoning_open_text(open_questions)
+        if not open_text:
+            return ""
+        if lang == "ru":
+            return f"Открытым осталось: {open_text}."
+        return f"Still open: {open_text}."
+
+    def _summary_reason_fragment(self, *, turns: list[DialogTurn], decisions: list[str]) -> str:
+        seen: set[str] = set()
+        candidates: list[str] = []
+        for text in [*list(decisions or []), *(str(turn.text or "") for turn in list(turns or []))]:
+            candidate = self._reason_candidate_from_text(text)
+            if not candidate:
+                continue
+            key = normalize_text(candidate)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+        return candidates[0] if candidates else ""
+
+    def _reason_candidate_from_text(self, text: str) -> str:
+        value = self._clean_summary_fragment(text)
+        if not value or _QUESTIONISH_RE.search(value):
+            return ""
+        explicit = self._explicit_reason_fragment(value)
+        if explicit:
+            return explicit
+        if _DECISION_RE.search(value):
+            return ""
+        normalized = normalize_text(value)
+        if not normalized or not _REASON_HINT_RE.search(normalized):
+            return ""
+        return self._clean_reason_fragment(value)
+
+    def _explicit_reason_fragment(self, text: str) -> str:
+        value = self._clean_summary_fragment(text)
+        if not value:
+            return ""
+        match = _REASON_SPLIT_RE.search(value)
+        if not match:
+            return ""
+        return self._clean_reason_fragment(value[match.end() :])
+
+    def _decision_without_reason(self, text: str) -> str:
+        value = self._decision_summary_fragment(text)
+        if not value:
+            return ""
+        match = _REASON_SPLIT_RE.search(value)
+        if not match:
+            return value
+        trimmed = value[: match.start()].rstrip(" ,;:-")
+        return trimmed or value
+
+    def _clean_reason_fragment(self, text: str) -> str:
+        value = self._clean_summary_fragment(text)
+        if not value:
+            return ""
+        value = _REASON_PREFIX_RE.sub("", value).strip()
+        value = re.sub(r"^(?:that)\s+", "", value, flags=re.I)
+        return value.strip(" \t\r\n,;:-")
+
+    def _join_anchor_items(self, items: list[str], *, lang: str) -> str:
+        values = [self._summary_anchor_label(x) for x in list(items or []) if self._summary_anchor_label(x)]
+        if not values:
+            return ""
+        if len(values) == 1:
+            return values[0]
+        if len(values) == 2:
+            joiner = " и " if lang == "ru" else " and "
+            return f"{values[0]}{joiner}{values[1]}"
+        joiner = " и " if lang == "ru" else " and "
+        return f"{', '.join(values[:-1])}{joiner}{values[-1]}"
+
+    def _episode_language(self, turns: list[DialogTurn]) -> str:
+        cyrillic = 0
+        latin = 0
+        for turn in list(turns or []):
+            text = str(turn.text or "")
+            cyrillic += len(re.findall(r"[а-яёіїєґ]", text, flags=re.I))
+            latin += len(re.findall(r"[a-z]", text, flags=re.I))
+        return "ru" if cyrillic >= latin else "en"
 
     def _summary_seed_text(
         self,
         turns: list[DialogTurn],
         *,
-        decisions: list[str] | None = None,
-        open_questions: list[str] | None = None,
+        maximum: int = 150,
     ) -> str:
-        summary_rows = self._summary_source_turns(turns)
-        source_rows = summary_rows or list(turns or [])
-        compact_source = self._episode_compact_text(source_rows)
-        user_source = self._episode_user_text(source_rows)
-        full_source = self._episode_text(source_rows)
-        source_text = compact_source or user_source or full_source
-        fragments = self._dedupe_fragments(
-            [
-                self._clean_summary_fragment(raw_fragment)
-                for raw_fragment in self._split_summary_fragments(source_text)
-            ]
-        )
-
+        fragments = self._summary_seed_fragments(turns)
         if fragments:
-            selected: list[str] = []
-            seen: set[str] = set()
+            return self._join_episode_fragments(fragments[:6], maximum=maximum)
 
-            def _try_add(value: str) -> bool:
-                item = self._clean_summary_fragment(value)
-                if not self._is_meaningful_summary_fragment(item):
-                    return False
-                key = normalize_text(item)
-                if not key or key in seen:
-                    return False
-                candidate = ". ".join([*selected, item]).strip()
-                if selected and len(candidate) > 145:
-                    return False
-                selected.append(item)
-                seen.add(key)
-                return True
+        fallback = self._fallback_summary_text(turns, maximum=maximum)
+        if fallback:
+            return fallback
+        return ""
 
-            _try_add(fragments[0])
-            priority_fragments = [
-                self._clean_summary_fragment(str((decisions or [""])[0] or "").strip()),
-                self._clean_summary_fragment(str((open_questions or [""])[0] or "").strip()),
-            ]
-            for item in list(fragments[1:4]):
-                priority_fragments.append(item)
-            for item in priority_fragments:
-                if not item:
+    def _summary_seed_fragments(self, turns: list[DialogTurn]) -> list[str]:
+        summary_rows = self._summary_source_turns(turns)
+        row_groups: list[list[DialogTurn]] = []
+        if summary_rows:
+            row_groups.append(summary_rows)
+        all_rows = list(turns or [])
+        if all_rows and all_rows != summary_rows:
+            row_groups.append(all_rows)
+
+        fragments: list[str] = []
+        for rows in row_groups:
+            fragments.extend(
+                self._episode_fragments(
+                    rows,
+                    assistant_must_be_important=True,
+                )
+            )
+            fragments.extend(
+                self._episode_fragments(
+                    rows,
+                    include_assistant=False,
+                )
+            )
+            fragments.extend(self._episode_fragments(rows))
+        return self._dedupe_fragments(fragments)
+
+    def _fallback_summary_text(self, turns: list[DialogTurn], *, maximum: int) -> str:
+        fragments: list[str] = []
+        for turn in self._semantic_source_turns(turns):
+            text = str(turn.text or "").strip()
+            if not text:
+                continue
+            for raw_fragment in self._split_summary_fragments(text):
+                fragment = self._clean_summary_fragment(raw_fragment)
+                if not fragment:
                     continue
-                _try_add(item)
-                if len(". ".join(selected).strip()) >= 110:
-                    break
-            if selected:
-                return self._trim_summary_text(". ".join(selected).strip())
-
-        fallback = self._clean_summary_fragment(full_source)
-        return self._trim_summary_text(fallback)
+                normalized = normalize_text(fragment)
+                if not normalized or _SUMMARY_NOISE_RE.match(normalized):
+                    continue
+                fragments.append(fragment)
+        cleaned = self._dedupe_fragments(fragments)
+        if not cleaned:
+            return ""
+        return self._join_episode_fragments(cleaned[:4], maximum=maximum)
 
     def _split_summary_fragments(self, text: str) -> list[str]:
         return [
@@ -683,34 +1407,40 @@ class DialogEpisodeBuilder:
         self,
         *,
         turns: list[DialogTurn],
-        topic: str,
         decisions: list[str],
         open_questions: list[str],
     ) -> str:
-        discussed = self._summary_seed_text(turns).rstrip(".")
+        lang = self._episode_language(turns)
+        decision_text = self._reasoning_decision_text(decisions)
+        reason_text = self._summary_reason_fragment(turns=turns, decisions=decisions)
+        open_text = self._reasoning_open_text(open_questions)
+        summary_seed = self._summary_seed_text(turns, maximum=190).rstrip(".!?")
         parts: list[str] = []
-        if discussed:
-            parts.append(f"Discussed: {discussed}.")
-        elif topic:
-            parts.append(f"Discussed: {topic}.")
-        if decisions:
-            decision_text = "; ".join(
-                self._clean_summary_fragment(item)
-                for item in list(decisions or [])[:2]
-                if self._clean_summary_fragment(item)
-            )
-            if decision_text:
-                parts.append(f"Decided: {decision_text}.")
-        if open_questions:
-            open_text = "; ".join(
-                self._clean_summary_fragment(item)
-                for item in list(open_questions or [])[:2]
-                if self._clean_summary_fragment(item)
-            )
-            if open_text:
-                parts.append(f"Open questions: {open_text}.")
-        if not decisions and not open_questions:
-            parts.append("Context clarified next steps.")
+        if decision_text and reason_text:
+            if lang == "ru":
+                parts.append(f"Решили {decision_text}, потому что {reason_text}.")
+            else:
+                parts.append(f"We decided: {decision_text} because {reason_text}.")
+        elif decision_text:
+            if lang == "ru":
+                parts.append(f"Решили {decision_text}.")
+            else:
+                parts.append(f"We decided: {decision_text}.")
+        elif summary_seed:
+            if lang == "ru":
+                parts.append(f"Зафиксировали направление: {summary_seed}.")
+            else:
+                parts.append(f"Current direction: {summary_seed}.")
+        if open_text:
+            if lang == "ru":
+                parts.append(f"Открытым осталось: {open_text}.")
+            else:
+                parts.append(f"Still open: {open_text}.")
+        if not parts:
+            if lang == "ru":
+                parts.append("Зафиксировали эпизод диалога.")
+            else:
+                parts.append("Captured the dialog episode.")
         return self._trim_reasoning_text(" ".join(part.strip() for part in parts if part.strip()))
 
     def _salience(self, turns: list[DialogTurn], *, decisions: list[str], open_questions: list[str]) -> float:

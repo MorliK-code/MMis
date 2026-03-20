@@ -267,6 +267,7 @@ def rebuild_episode_record(
     next_meta["turn_ids"] = list(rebuilt.turn_ids or [])
     next_meta["topic_keys"] = list(rebuilt.topic_keys or [])
     next_meta["entity_keys"] = list(rebuilt.entity_keys or [])
+    next_meta["focus_keys"] = list(rebuilt.focus_keys or [])
     next_meta["salience"] = float(rebuilt.salience or 0.0)
 
     changed_fields: list[str] = []

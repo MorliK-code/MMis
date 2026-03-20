@@ -261,3 +261,5 @@ def test_final_backfill_rebuilds_legacy_episode_summary_from_turns() -> None:
     assert "facts, claims и dialog episodes" in str(metadata.get("summary_short") or "").lower()
     assert str(metadata.get("topic") or "") == "memory"
     assert str(episode.get("topic") or "") == "memory"
+    assert list(metadata.get("focus_keys") or [])
+    assert "memory" in [str(x).lower() for x in list(metadata.get("focus_keys") or [])]

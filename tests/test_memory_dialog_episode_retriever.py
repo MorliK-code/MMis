@@ -380,3 +380,196 @@ def test_dialog_episode_retriever_anchor_score_can_beat_weaker_summary_match() -
     assert rows
     assert rows[0].record.id == "episode-python-policy"
     assert "singleton latest wins" in rows[0].summary_reasoning.lower()
+
+
+def test_dialog_episode_retriever_uses_focus_keys_for_anchor_matching() -> None:
+    target_episode = _record(
+        "episode-environment-plan",
+        "Dialog episode captured.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-environment-plan",
+                "topic": "general_dialog",
+                "turn_ids": ["evt:f1", "evt:f2"],
+                "summary_short": "Dialog episode captured.",
+                "summary_reasoning": "Context: We aligned the python environment on windows.",
+                "decisions": ["Keep one python environment path on windows."],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.87,
+                "topic_keys": [],
+                "entity_keys": [],
+                "focus_keys": ["python", "windows", "environment"],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    distractor_episode = _record(
+        "episode-other-plan",
+        "Dialog episode captured.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-other-plan",
+                "topic": "general_dialog",
+                "turn_ids": ["evt:o1", "evt:o2"],
+                "summary_short": "Dialog episode captured.",
+                "summary_reasoning": "Context: We discussed generic planning.",
+                "decisions": ["Keep the roadmap visible."],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.7,
+                "topic_keys": [],
+                "entity_keys": [],
+                "focus_keys": ["roadmap"],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    store = _StoreSpy(records=[target_episode, distractor_episode])
+    retriever = DialogEpisodeRetriever(store=store)
+
+    rows = retriever.retrieve(
+        query=RetrievalQuery(
+            query_text="What did we decide about the python environment on windows?",
+            search_text="python windows environment",
+            top_k=2,
+        )
+    )
+
+    assert rows
+    assert rows[0].record.id == "episode-environment-plan"
+
+
+def test_dialog_episode_retriever_uses_entity_keys_for_episode_lookup() -> None:
+    target_episode = _record(
+        "episode-python-env",
+        "Dialog episode captured.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-python-env",
+                "topic": "general_dialog",
+                "turn_ids": ["evt:e1", "evt:e2"],
+                "summary_short": "Dialog episode captured.",
+                "summary_reasoning": "We aligned one python environment path on windows.",
+                "decisions": ["Keep one python environment path on windows."],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.84,
+                "topic_keys": [],
+                "entity_keys": ["environment_python_path", "windows"],
+                "focus_keys": [],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    distractor_episode = _record(
+        "episode-memory-overview",
+        "Discussed memory setup.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-memory-overview",
+                "topic": "memory",
+                "turn_ids": ["evt:m1", "evt:m2"],
+                "summary_short": "Discussed memory setup.",
+                "summary_reasoning": "We talked broadly about memory setup.",
+                "decisions": [],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.7,
+                "topic_keys": ["memory"],
+                "entity_keys": [],
+                "focus_keys": [],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    store = _StoreSpy(records=[target_episode, distractor_episode])
+    retriever = DialogEpisodeRetriever(store=store)
+
+    rows = retriever.retrieve(
+        query=RetrievalQuery(
+            query_text="What did we decide about the python path on windows?",
+            search_text="python path windows",
+            top_k=2,
+        )
+    )
+
+    assert rows
+    assert rows[0].record.id == "episode-python-env"
+
+
+def test_dialog_episode_retriever_uses_open_questions_for_continuity_queries() -> None:
+    target_episode = _record(
+        "episode-open-fusion",
+        "Dialog episode captured.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-open-fusion",
+                "topic": "memory",
+                "turn_ids": ["evt:o1", "evt:o2"],
+                "summary_short": "Dialog episode captured.",
+                "summary_reasoning": "Current direction: memory fusion retrieval.",
+                "decisions": [],
+                "open_questions": ["How should fusion retrieval combine episodes and facts?"],
+                "participants": ["user", "assistant"],
+                "salience": 0.81,
+                "topic_keys": ["memory"],
+                "entity_keys": ["fusion_retrieval"],
+                "focus_keys": ["memory", "fusion", "retrieval"],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    distractor_episode = _record(
+        "episode-closed-web",
+        "Adjusted web verification.",
+        memory_type=MemoryType.EPISODE,
+        level=MemoryLevel.L2_EPISODIC,
+        metadata={
+            "dialog_episode": {
+                "id": "episode-closed-web",
+                "topic": "web",
+                "turn_ids": ["evt:w1", "evt:w2"],
+                "summary_short": "Adjusted web verification.",
+                "summary_reasoning": "We isolated stale evidence bleed.",
+                "decisions": ["Keep verify_only for unstable numeric turns."],
+                "open_questions": [],
+                "participants": ["user", "assistant"],
+                "salience": 0.76,
+                "topic_keys": ["web"],
+                "entity_keys": [],
+                "focus_keys": ["verification"],
+                "created_at": 100.0,
+                "updated_at": 120.0,
+            }
+        },
+    )
+    store = _StoreSpy(records=[target_episode, distractor_episode])
+    retriever = DialogEpisodeRetriever(store=store)
+
+    rows = retriever.retrieve(
+        query=RetrievalQuery(
+            query_text="Что осталось открытым по fusion retrieval?",
+            search_text="open question fusion retrieval",
+            top_k=2,
+        )
+    )
+
+    assert rows
+    assert rows[0].record.id == "episode-open-fusion"
+    assert rows[0].episode.open_questions == ["How should fusion retrieval combine episodes and facts?"]

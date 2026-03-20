@@ -16,6 +16,7 @@ def test_dialog_episode_roundtrip() -> None:
         salience=0.84,
         topic_keys=["memory", "architecture"],
         entity_keys=["memory_manager", "retrieval"],
+        focus_keys=["memory", "facts", "claims", "episodes"],
         created_at=100.0,
         updated_at=120.0,
     )

@@ -149,6 +149,7 @@ _DIALOG_EPISODE_KEYS = {
     "salience",
     "topic_keys",
     "entity_keys",
+    "focus_keys",
     "created_at",
     "updated_at",
 }
@@ -249,6 +250,7 @@ _EPISODE_METADATA_KEYS = {
     "turn_ids",
     "topic_keys",
     "entity_keys",
+    "focus_keys",
     "salience",
 }
 

@@ -175,6 +175,7 @@ def test_storage_schema_for_fact_claim_episode_and_document_chunk_is_frozen() ->
         "decisions",
         "dialog_episode",
         "entity_keys",
+        "focus_keys",
         "open_questions",
         "participants",
         "salience",
@@ -243,12 +244,14 @@ def test_compact_storage_profile_enforces_fact_episode_and_document_chunk_schema
                 "salience": 0.8,
                 "topic_keys": ["memory"],
                 "entity_keys": ["assistant_thoughts"],
+                "focus_keys": ["memory", "assistant_thoughts", "debug"],
                 "metadata": {"raw": True},
             },
             "topic": "memory design",
             "summary_short": "Discussed memory design.",
             "summary_reasoning": "Compared storage options.",
             "turn_ids": ["t1", "t2"],
+            "focus_keys": ["memory", "assistant_thoughts", "debug"],
             "memory_views": {"entity_keys": ["should_drop"]},
             "memory_analysis": {"anchors": [{"kind": "topic"}]},
         },
@@ -293,7 +296,7 @@ def test_compact_storage_profile_enforces_fact_episode_and_document_chunk_schema
     )
 
     assert set(fact.keys()) == {"fact", "canonical_key", "governor_reason", "relation", "write_policy"}
-    assert set(episode.keys()) == {"dialog_episode", "topic", "summary_short", "summary_reasoning", "turn_ids"}
+    assert set(episode.keys()) == {"dialog_episode", "topic", "summary_short", "summary_reasoning", "turn_ids", "focus_keys"}
     assert set(chunk.keys()) == {
         "document_id",
         "chunk_id",

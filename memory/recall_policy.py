@@ -49,12 +49,18 @@ _EXACT_FACT_RECALL_HINT_RE = re.compile(
 )
 _CONTEXTUAL_RECALL_RULES: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:о чем|о ч[её]м|what did we|what were we|what did we discuss)", re.I),
-    re.compile(r"(?:что мы обсуждали|что обсуждали|что решили|what we decided|what did we decide)", re.I),
+    re.compile(
+        r"(?:что мы обсуждали|что обсуждали|что решили|к чему пришли|what we decided|what did we decide|what conclusion did we reach)",
+        re.I,
+    ),
     re.compile(
         r"(?:почему (?:так сделали|(?:мы\s+)?(?:решили|выбрали))|why did we (?:do that|decide|choose)|why we (?:did that|decided|chose))",
         re.I,
     ),
-    re.compile(r"(?:какой (?:был|у нас) план|что по плану|what was our plan|what is our plan|next steps?)", re.I),
+    re.compile(
+        r"(?:какой у нас был план|какой (?:был|у нас) план|что по плану|what was our plan|what was the plan|what is our plan|next steps?)",
+        re.I,
+    ),
     re.compile(r"(?:что ты советовала|what did you suggest|what did you advise)", re.I),
 )
 _DOCUMENT_RECALL_RULES: tuple[re.Pattern[str], ...] = (

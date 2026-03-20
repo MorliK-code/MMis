@@ -793,6 +793,22 @@ def test_memory_recall_mode_detects_contextual_recall() -> None:
     assert mode == "contextual_recall"
 
 
+def test_memory_recall_mode_detects_contextual_recall_for_conclusion_query() -> None:
+    manager = _manager()
+
+    mode = manager._classify_memory_recall_mode(query_text="к чему пришли по памяти?")
+
+    assert mode == "contextual_recall"
+
+
+def test_memory_recall_mode_detects_contextual_recall_for_plan_query_variant() -> None:
+    manager = _manager()
+
+    mode = manager._classify_memory_recall_mode(query_text="какой у нас был план по памяти?")
+
+    assert mode == "contextual_recall"
+
+
 def test_memory_recall_mode_detects_document_recall() -> None:
     manager = _manager()
 

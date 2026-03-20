@@ -18,6 +18,7 @@ class DialogEpisode:
     salience: float
     topic_keys: list[str]
     entity_keys: list[str]
+    focus_keys: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=lambda: float(time.time()))
     updated_at: float = field(default_factory=lambda: float(time.time()))
 
@@ -38,6 +39,11 @@ class DialogEpisode:
             salience=float(row.get("salience") or 0.0),
             topic_keys=[str(x).strip().lower() for x in list(row.get("topic_keys") or []) if str(x).strip()],
             entity_keys=[str(x).strip().lower() for x in list(row.get("entity_keys") or []) if str(x).strip()],
+            focus_keys=[
+                str(x).strip().lower()
+                for x in list(row.get("focus_keys") or row.get("topic_keys") or [])
+                if str(x).strip()
+            ],
             created_at=float(row.get("created_at") or time.time()),
             updated_at=float(row.get("updated_at") or time.time()),
         )
