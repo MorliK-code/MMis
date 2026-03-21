@@ -253,6 +253,56 @@ def test_claim_retrieval_prefers_matching_predicate_and_subject() -> None:
     assert [item.record.id for item in result.candidates][:1] == ["claim-like-rose"]
 
 
+def test_claim_retrieval_prefers_russian_self_memory_preference_claim_over_recent_summary_noise() -> None:
+    likes_claim = _record(
+        "claim-like-rose",
+        "user.likes=смотреть в глаза розе",
+        metadata=ensure_memory_views(
+            "user.likes=смотреть в глаза розе",
+            metadata={
+                "claim": {
+                    "subject": "user",
+                    "predicate": "likes",
+                    "obj": "смотреть в глаза розе",
+                    "object_surface": "смотреть в глаза Розе",
+                    "topic_keys": ["likes", "preference", "activity"],
+                    "trigger_keys": ["likes", "розе", "смотреть"],
+                    "recall_mode": "contextual",
+                    "spontaneous_recall": False,
+                },
+                "canonical_key": "user.likes.rose_eyes",
+            },
+        ),
+        memory_type=MemoryType.CLAIM,
+        level=MemoryLevel.L3_SEMANTIC,
+    )
+    summary_record = _record(
+        "summary-gpu",
+        "Earlier context: User said: та вот сейчас проверяю свою 3050ti 4gb в ИИ генерации.",
+        metadata=ensure_memory_views(
+            "Earlier context: User said: та вот сейчас проверяю свою 3050ti 4gb в ИИ генерации.",
+            metadata={"source_kind": "summary"},
+        ),
+        memory_type=MemoryType.SUMMARY,
+        level=MemoryLevel.L1_SESSION,
+    )
+    store = _StoreSpy(
+        semantic_hits=[(summary_record, 0.76), (likes_claim, 0.60)],
+        lexical_hits=[(summary_record, 0.74), (likes_claim, 0.58)],
+    )
+    retriever = HybridRetriever(store=store)
+
+    result = retriever.retrieve(
+        RetrievalQuery(
+            query_text="ну не скажи, я тебе говорил кто мне нравиться",
+            search_text="кто мне нравиться",
+            top_k=4,
+        )
+    )
+
+    assert [item.record.id for item in result.candidates][:1] == ["claim-like-rose"]
+
+
 def test_claim_retrieval_uses_topic_and_trigger_keys() -> None:
     rose_claim = _record(
         "claim-like-rose",

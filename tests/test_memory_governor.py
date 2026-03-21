@@ -15,6 +15,9 @@ def _fact_record(
     canonical_key: str | None = None,
     namespace: str = "default",
     status: MemoryStatus = MemoryStatus.ACTIVE,
+    relation: str = "",
+    source_role: str = "user",
+    source_kind: str = "structured_fact",
 ) -> MemoryRecord:
     now = time.time()
     return MemoryRecord(
@@ -31,7 +34,10 @@ def _fact_record(
                 "predicate": predicate,
                 "value": value,
                 "confidence": confidence,
+                "source_role": source_role,
+                "source_kind": source_kind,
             },
+            "relation": relation,
         },
         importance=0.7,
         confidence=confidence,
@@ -168,3 +174,64 @@ def test_governor_soft_singleton_allows_parallel_on_close_scores() -> None:
     assert decision.action == "keep_parallel"
     assert decision.reason == "soft_singleton_scores_close_parallel"
     assert decision.parallel_with_record_id == "fact:old"
+
+
+def test_governor_rebuild_profile_snapshot_splits_stable_and_volatile_layers() -> None:
+    governor = MemoryGovernor()
+    directness = _fact_record(
+        "fact:direct",
+        predicate="assistant_directness",
+        value="0.82",
+        confidence=0.86,
+        namespace="profile-layers",
+    )
+    editor = _fact_record(
+        "fact:editor",
+        predicate="preferred_editor",
+        value="vscode",
+        confidence=0.80,
+        namespace="profile-layers",
+    )
+    project = _fact_record(
+        "fact:project",
+        predicate="project_name",
+        value="MMis",
+        confidence=0.78,
+        namespace="profile-layers",
+    )
+
+    snapshot = governor.rebuild_profile_snapshot(
+        namespace="profile-layers",
+        active_fact_rows=[directness, editor, project],
+    )
+
+    assert list(snapshot.persistent_traits.keys()) == ["user.assistant_directness"]
+    assert list(snapshot.volatile_preferences.keys()) == ["user.preferred_editor"]
+    assert list(snapshot.session_preferences.keys()) == ["user.project_name"]
+    assert snapshot.resolved_profile["assistant_directness"] == "0.82"
+    assert snapshot.resolved_profile["preferred_editor"] == "vscode"
+    assert snapshot.resolved_profile["project_name"] == ["MMis"]
+
+
+def test_governor_blocks_protected_identity_override_without_confirmation() -> None:
+    governor = MemoryGovernor()
+    old_record = _fact_record(
+        "fact:old",
+        predicate="identity_name",
+        value="Pasha",
+        confidence=0.91,
+        relation="identity",
+    )
+    new_record = _fact_record(
+        "fact:new",
+        predicate="identity_name",
+        value="Pashka",
+        confidence=0.94,
+        relation="identity",
+    )
+
+    decision = governor.decide_for_fact(new_record=new_record, active_candidates=[old_record])
+
+    assert decision.action == "noop"
+    assert decision.reason == "protected_profile_requires_confirmation"
+    assert decision.winner_record_id == "fact:old"

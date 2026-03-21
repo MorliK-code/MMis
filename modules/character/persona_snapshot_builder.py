@@ -3,12 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from memory.profile_evolution import flatten_governor_profile_snapshot
+
 
 @dataclass(frozen=True)
 class PersonaSnapshot:
     character_id: str
     mood: str
     relation_state: dict[str, Any] = field(default_factory=dict)
+    active_task: dict[str, Any] = field(default_factory=dict)
+    relation_continuity: dict[str, Any] = field(default_factory=dict)
+    recent_user_state: dict[str, Any] = field(default_factory=dict)
     user_addressing: dict[str, Any] = field(default_factory=dict)
     stable_traits: dict[str, float] = field(default_factory=dict)
     response_bias: dict[str, float] = field(default_factory=dict)
@@ -48,6 +53,7 @@ class PersonaSnapshotBuilder:
         memory = dict(memory_context or {})
         state_map = dict(state or {})
         meta_map = dict(meta or {})
+        memory_block_keys = self._extract_memory_block_keys(memory)
         persistent_profile_keys = sorted(profile.keys())
         character_trait_defaults = self._normalize_trait_defaults(
             state_map.get("character_trait_defaults") or meta_map.get("character_trait_defaults") or {}
@@ -113,6 +119,10 @@ class PersonaSnapshotBuilder:
             user_profile_hints["technical_collaboration_style"] = str(
                 identity_core_interaction.get("technical_collaboration_style") or ""
             ).strip().lower()
+        if "prefers_examples_on_user_code" in identity_core_interaction:
+            user_profile_hints["prefers_examples_on_user_code"] = bool(
+                identity_core_interaction.get("prefers_examples_on_user_code")
+            )
         user_profile_hints = {key: value for key, value in user_profile_hints.items() if not self._is_empty(value)}
         profile_hint_fields = sorted(user_profile_hints.keys())
 
@@ -405,10 +415,31 @@ class PersonaSnapshotBuilder:
             for x in list(meta_map.get("metadata_tags") or [])
             if str(x).strip()
         ]
+        active_task = self._build_active_task_summary(state_map.get("active_task") or meta_map.get("active_task"))
+        relation_continuity = self._build_relation_continuity(
+            meta_map=meta_map,
+            active_task=active_task,
+        )
+        emotional_handling = {
+            key: identity_core_emotional_handling.get(key)
+            for key in (
+                "deescalate_on_irritation",
+                "treat_short_replies_as_low_bandwidth",
+                "warmth_upshift_on_user_distress",
+                "playfulness_downshift_on_user_distress",
+            )
+            if key in identity_core_emotional_handling
+        }
+        recent_user_state = self._build_recent_user_state(
+            meta_map=meta_map,
+            mood=mood,
+            metadata_tags=metadata_tags,
+            emotional_handling=emotional_handling,
+        )
         response_bias = {
             "technical_mode": 1.0 if bool(meta_map.get("is_technical")) else 0.0,
-            "needs_short_answer": 1.0 if "needs_short_answer" in metadata_tags else 0.0,
-            "frustration_softening": 1.0 if mood in {"frustrated", "angry", "sad"} else 0.0,
+            "needs_short_answer": 1.0 if bool(recent_user_state.get("low_bandwidth")) else 0.0,
+            "frustration_softening": 1.0 if bool(recent_user_state.get("frustrated")) else 0.0,
         }
         dynamic_trait_modifiers = {
             "warmth_delta": 0.0,
@@ -425,19 +456,9 @@ class PersonaSnapshotBuilder:
             dynamic_trait_modifiers["sarcasm_delta"] -= 0.08
         if response_bias["needs_short_answer"] > 0.0:
             dynamic_trait_modifiers["verbosity_delta"] -= 0.18
-        emotional_handling = {
-            key: identity_core_emotional_handling.get(key)
-            for key in (
-                "deescalate_on_irritation",
-                "treat_short_replies_as_low_bandwidth",
-                "warmth_upshift_on_user_distress",
-                "playfulness_downshift_on_user_distress",
-            )
-            if key in identity_core_emotional_handling
-        }
-        if bool(emotional_handling.get("deescalate_on_irritation")) and mood in {"frustrated", "angry", "sad", "anxious", "tired"}:
+        if bool(emotional_handling.get("deescalate_on_irritation")) and bool(recent_user_state.get("frustrated")):
             response_bias["frustration_softening"] = 1.0
-        if mood in {"frustrated", "angry", "sad", "anxious", "tired"}:
+        if bool(recent_user_state.get("frustrated")):
             dynamic_trait_modifiers["warmth_delta"] += 0.10
             dynamic_trait_modifiers["empathy_delta"] += 0.08
             dynamic_trait_modifiers["sarcasm_delta"] -= 0.10
@@ -473,9 +494,9 @@ class PersonaSnapshotBuilder:
             [
                 key for key, include in (
                     ("meta.is_technical", bool(meta_map.get("is_technical"))),
-                    ("meta.metadata_tags.needs_short_answer", "needs_short_answer" in metadata_tags),
-                    ("mood.frustration_softening", mood in {"frustrated", "angry", "sad"}),
-                    ("identity_core.deescalate_on_irritation", bool(emotional_handling.get("deescalate_on_irritation")) and mood in {"frustrated", "angry", "sad", "anxious", "tired"}),
+                    ("recent_user_state.low_bandwidth", bool(recent_user_state.get("low_bandwidth"))),
+                    ("recent_user_state.frustrated", bool(recent_user_state.get("frustrated"))),
+                    ("identity_core.deescalate_on_irritation", bool(emotional_handling.get("deescalate_on_irritation")) and bool(recent_user_state.get("frustrated"))),
                     ("identity_core.warmth_upshift_on_user_distress", "warmth_upshift" in response_bias),
                     ("identity_core.playfulness_downshift_on_user_distress", "playfulness_downshift" in response_bias),
                 )
@@ -486,6 +507,12 @@ class PersonaSnapshotBuilder:
             [
                 "mood",
                 "active_mode",
+                *(
+                    ["recent_user_state.frustrated"] if bool(recent_user_state.get("frustrated")) else []
+                ),
+                *(
+                    ["recent_user_state.low_bandwidth"] if bool(recent_user_state.get("low_bandwidth")) else []
+                ),
                 *(
                     ["response_bias.technical_mode"] if response_bias["technical_mode"] > 0.0 else []
                 ),
@@ -518,6 +545,9 @@ class PersonaSnapshotBuilder:
             character_id=str(character_id or "assistant").strip() or "assistant",
             mood=mood,
             relation_state=relation_state,
+            active_task=active_task,
+            relation_continuity=relation_continuity,
+            recent_user_state=recent_user_state,
             user_addressing=user_addressing,
             stable_traits=stable_traits,
             response_bias=response_bias,
@@ -527,7 +557,7 @@ class PersonaSnapshotBuilder:
             active_mode=active_mode,
             debug={
                 "profile_keys": sorted(profile.keys()),
-                "memory_blocks": sorted(dict(memory.get("blocks") or {}).keys()),
+                "memory_blocks": memory_block_keys,
                 "sources": {
                     "persistent_profile_keys": persistent_profile_keys,
                     "profile_hint_fields": profile_hint_fields,
@@ -570,6 +600,9 @@ class PersonaSnapshotBuilder:
                     "interaction_style_source": {
                         "prefers_directness": ("identity_core" if "prefers_directness" in identity_core_interaction else "default"),
                         "prefers_short_answers": ("identity_core" if "prefers_short_answers" in identity_core_interaction else "default"),
+                        "prefers_examples_on_user_code": (
+                            "identity_core" if "prefers_examples_on_user_code" in identity_core_interaction else "default"
+                        ),
                         "allow_light_teasing": (
                             "identity_core"
                             if ("allow_light_teasing" in identity_core_interaction or "allows_light_teasing" in identity_core_interaction)
@@ -606,30 +639,24 @@ class PersonaSnapshotBuilder:
                     "active_mode_source": active_mode_source,
                     "response_bias_sources": response_bias_sources,
                     "turn_local_fields": turn_local_fields,
+                    "active_task_source": str(active_task.get("source") or "default"),
+                    "relation_continuity_sources": list(relation_continuity.get("sources") or []),
+                    "recent_user_state_sources": list(recent_user_state.get("sources") or []),
+                    "memory_input_mode": str(memory.get("input_mode") or "raw"),
                 },
             },
         )
 
     def _flatten_profile_snapshot(self, snapshot: dict[str, Any] | None) -> dict[str, Any]:
-        flat = dict(snapshot or {})
-        active_facts = dict(flat.get("active_facts") or {})
-        for item in active_facts.values():
-            if not isinstance(item, dict):
-                continue
-            predicate = str(item.get("predicate") or "").strip().lower()
-            value = item.get("value")
-            if self._is_empty(value):
-                continue
-            if predicate in flat:
-                existing = flat.get(predicate)
-                if isinstance(existing, list):
-                    if value not in existing:
-                        flat[predicate] = [*existing, value]
-                elif existing != value:
-                    flat[predicate] = [existing, value]
-            else:
-                flat[predicate] = value
-        return flat
+        row = dict(snapshot or {})
+        has_layered_snapshot = any(
+            isinstance(row.get(layer_name), dict) and bool(dict(row.get(layer_name) or {}))
+            for layer_name in ("persistent_traits", "volatile_preferences", "session_preferences")
+        )
+        return flatten_governor_profile_snapshot(
+            row,
+            include_active_facts=not has_layered_snapshot,
+        )
 
     @staticmethod
     def _normalize_trait_defaults(value: Any) -> dict[str, float]:
@@ -650,6 +677,116 @@ class PersonaSnapshotBuilder:
         return out
 
     @staticmethod
+    def _extract_memory_block_keys(memory: dict[str, Any]) -> list[str]:
+        explicit = PersonaSnapshotBuilder._to_clean_list(memory.get("block_keys"))
+        if explicit:
+            return sorted(dict.fromkeys(explicit))
+        return sorted(dict(dict(memory.get("blocks") or {})).keys())
+
+    @staticmethod
+    def _build_active_task_summary(value: Any) -> dict[str, Any]:
+        row = dict(value or {})
+        if not row:
+            return {}
+        summary = str(
+            row.get("current_goal")
+            or row.get("summary_short")
+            or row.get("topic")
+            or ""
+        ).strip()
+        out = {
+            "task_id": str(row.get("task_id") or "").strip(),
+            "topic": str(row.get("topic") or "").strip(),
+            "status": str(row.get("status") or "").strip().lower(),
+            "summary": summary,
+            "current_goal": str(row.get("current_goal") or "").strip(),
+            "next_steps": PersonaSnapshotBuilder._to_clean_list(row.get("next_steps")),
+            "open_questions": PersonaSnapshotBuilder._to_clean_list(row.get("open_questions")),
+            "source_episode_id": str(row.get("source_episode_id") or "").strip(),
+            "confidence": PersonaSnapshotBuilder._clamp01(
+                PersonaSnapshotBuilder._to_float(row.get("confidence"), 0.0)
+            ) if "confidence" in row else 0.0,
+            "source": "state.active_task",
+        }
+        return {
+            key: value
+            for key, value in out.items()
+            if not PersonaSnapshotBuilder._is_empty(value)
+        }
+
+    @staticmethod
+    def _build_relation_continuity(*, meta_map: dict[str, Any], active_task: dict[str, Any]) -> dict[str, Any]:
+        continuation_ref = str(meta_map.get("continuation_ref") or "").strip()
+        context_confidence = PersonaSnapshotBuilder._clamp01(
+            PersonaSnapshotBuilder._to_float(meta_map.get("context_confidence"), 0.0)
+        )
+        same_calendar_day = PersonaSnapshotBuilder._to_bool(meta_map.get("same_calendar_day"), default=False)
+        minutes_since_previous = PersonaSnapshotBuilder._to_int(meta_map.get("minutes_since_previous"), None)
+        has_active_task = bool(active_task)
+        is_followup = bool(
+            (continuation_ref and context_confidence >= 0.35)
+            or (has_active_task and same_calendar_day and minutes_since_previous is not None and minutes_since_previous < 180)
+        )
+        sources: list[str] = []
+        if continuation_ref:
+            sources.append("meta.continuation_ref")
+        if has_active_task:
+            sources.append("state.active_task")
+        if same_calendar_day and minutes_since_previous is not None:
+            sources.append("meta.recent_turn_window")
+        out = {
+            "is_followup": is_followup,
+            "continuation_ref": continuation_ref,
+            "context_confidence": context_confidence,
+            "same_calendar_day": same_calendar_day,
+            "minutes_since_previous": minutes_since_previous,
+            "active_task_attached": has_active_task,
+            "task_id": str(active_task.get("task_id") or "").strip(),
+            "sources": sources,
+        }
+        return {
+            key: value
+            for key, value in out.items()
+            if not PersonaSnapshotBuilder._is_empty(value) or value is False
+        }
+
+    @staticmethod
+    def _build_recent_user_state(
+        *,
+        meta_map: dict[str, Any],
+        mood: str,
+        metadata_tags: list[str],
+        emotional_handling: dict[str, Any],
+    ) -> dict[str, Any]:
+        message = str(meta_map.get("current_user_message") or "").strip()
+        token_count = len([part for part in message.split() if part.strip()])
+        char_count = len(message)
+        frustrated = mood in {"frustrated", "angry", "sad", "anxious", "tired"}
+        short_reply = bool(message) and (token_count <= 6 or char_count <= 48)
+        low_bandwidth = bool(
+            "needs_short_answer" in metadata_tags
+            or "low_bandwidth" in metadata_tags
+            or (bool(emotional_handling.get("treat_short_replies_as_low_bandwidth")) and short_reply)
+        )
+        sources: list[str] = []
+        if frustrated:
+            sources.append("mood")
+        if "needs_short_answer" in metadata_tags:
+            sources.append("meta.metadata_tags.needs_short_answer")
+        if "low_bandwidth" in metadata_tags:
+            sources.append("meta.metadata_tags.low_bandwidth")
+        if bool(emotional_handling.get("treat_short_replies_as_low_bandwidth")) and short_reply:
+            sources.append("identity_core.short_reply_low_bandwidth")
+        return {
+            "frustrated": frustrated,
+            "low_bandwidth": low_bandwidth,
+            "short_reply": short_reply,
+            "message_char_count": char_count,
+            "message_token_count": token_count,
+            "sources": sources,
+        }
+
+    @staticmethod
     def _to_float(value: Any, default: float) -> float:
         try:
             return float(value)
@@ -663,6 +800,28 @@ class PersonaSnapshotBuilder:
     @staticmethod
     def _to_clean_list(value: Any) -> list[str]:
         return [str(x).strip() for x in list(value or []) if str(x).strip()]
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return bool(default)
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+
+    @staticmethod
+    def _to_int(value: Any, default: int | None = 0) -> int | None:
+        if value is None:
+            return default
+        try:
+            return int(float(value))
+        except Exception:
+            return default
 
     @staticmethod
     def _is_empty(value: Any) -> bool:

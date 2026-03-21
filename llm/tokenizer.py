@@ -23,6 +23,13 @@ class Tokenizer(ABC):
                 total += self.count(str(msg.name))
             if msg.tool_call_id:
                 total += self.count(str(msg.tool_call_id))
+            for call in list(msg.tool_calls or []):
+                total += self.count(str(call.id or ""))
+                total += self.count(str(call.name or ""))
+                if call.raw_arguments:
+                    total += self.count(str(call.raw_arguments))
+                elif call.arguments:
+                    total += self.count(str(call.arguments))
             total += 2
         return total
 
@@ -89,6 +96,7 @@ class ApproxTokenizer(Tokenizer):
                 content=self.truncate_text(last.content, max(8, limit // 2)),
                 name=last.name,
                 tool_call_id=last.tool_call_id,
+                tool_calls=list(last.tool_calls),
             )
         return out
 
@@ -105,7 +113,14 @@ class ApproxTokenizer(Tokenizer):
                 drop_idx = 1
             out.pop(drop_idx)
         if out and self.count_messages(out) > limit:
-            out[-1] = Message(role=out[-1].role, content=self.truncate_text(out[-1].content, max(8, limit // 2)))
+            last = out[-1]
+            out[-1] = Message(
+                role=last.role,
+                content=self.truncate_text(last.content, max(8, limit // 2)),
+                name=last.name,
+                tool_call_id=last.tool_call_id,
+                tool_calls=list(last.tool_calls),
+            )
         return out
 
     def _truncate_compress_middle(self, rows: list[Message], limit: int) -> list[Message]:
@@ -118,7 +133,13 @@ class ApproxTokenizer(Tokenizer):
             if mid - 1 >= 0:
                 prev = out[mid - 1]
                 compressed = self.truncate_text(f"{prev.content}\n[...snip...]", max(12, self.count(prev.content) // 2))
-                out[mid - 1] = Message(role=prev.role, content=compressed, name=prev.name, tool_call_id=prev.tool_call_id)
+                out[mid - 1] = Message(
+                    role=prev.role,
+                    content=compressed,
+                    name=prev.name,
+                    tool_call_id=prev.tool_call_id,
+                    tool_calls=list(prev.tool_calls),
+                )
         if self.count_messages(out) > limit:
             return self._truncate_drop_oldest(out, limit)
         return out

@@ -9,6 +9,15 @@ from typing import Any
 from memory.memory_lifecycle import MemoryLifecycleManager
 from memory.memory_models import MemoryRecord, MemoryStatus, MemoryType
 from memory.memory_policy import MemoryPolicy
+from memory.profile_evolution import (
+    PROFILE_FACT_GROUPS,
+    PROFILE_GROUP_POLICY,
+    build_profile_entry,
+    flatten_governor_profile_snapshot,
+    profile_fact_rule,
+    protected_profile_override_reason,
+    resolve_snapshot_now_ts,
+)
 
 FACT_GROUPS = {
     "identity_name": "identity.name",
@@ -24,6 +33,7 @@ FACT_GROUPS = {
     "preferred_tool": "preferences.tool",
     "interest": "profile.interests",
     "project_name": "project.name",
+    **PROFILE_FACT_GROUPS,
 }
 
 GROUP_POLICY = {
@@ -39,6 +49,7 @@ GROUP_POLICY = {
     "preferences.tool": "multi",
     "profile.interests": "multi",
     "project.name": "multi",
+    **PROFILE_GROUP_POLICY,
 }
 
 
@@ -55,9 +66,27 @@ class GovernorDecision:
 @dataclass(frozen=True)
 class GovernorProfileSnapshot:
     namespace: str
-    active_facts: dict[str, dict[str, Any]]
-    conflicts: list[dict[str, Any]]
-    updated_at: float
+    active_facts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+    persistent_traits: dict[str, dict[str, Any]] = field(default_factory=dict)
+    volatile_preferences: dict[str, dict[str, Any]] = field(default_factory=dict)
+    session_preferences: dict[str, dict[str, Any]] = field(default_factory=dict)
+    resolved_profile: dict[str, Any] = field(default_factory=dict)
+    debug: dict[str, Any] = field(default_factory=dict)
+    updated_at: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "namespace": str(self.namespace or "default"),
+            "active_facts": dict(self.active_facts or {}),
+            "conflicts": [dict(item) for item in list(self.conflicts or []) if isinstance(item, dict)],
+            "persistent_traits": dict(self.persistent_traits or {}),
+            "volatile_preferences": dict(self.volatile_preferences or {}),
+            "session_preferences": dict(self.session_preferences or {}),
+            "resolved_profile": dict(self.resolved_profile or {}),
+            "debug": dict(self.debug or {}),
+            "updated_at": float(self.updated_at or 0.0),
+        }
 
 
 class MemoryGovernor:
@@ -142,6 +171,25 @@ class MemoryGovernor:
         legacy_decision = self._lifecycle.resolve_conflict(old=incumbent, new=new_record)
         new_conf = self._coerce_float(new_fact["confidence"] or new_record.confidence)
         incumbent_conf = self._coerce_float(incumbent_fact["confidence"] or incumbent.confidence)
+        protected_override_reason = protected_profile_override_reason(
+            new_record=new_record,
+            incumbent=incumbent,
+        )
+        if protected_override_reason:
+            return GovernorDecision(
+                action="noop",
+                reason=protected_override_reason,
+                winner_record_id=str(incumbent.id or "") or None,
+                loser_record_id=str(new_record.id or "") or None,
+                debug={
+                    "group": new_fact["group"],
+                    "group_mode": new_fact["group_mode"],
+                    "new_conf": new_conf,
+                    "old_conf": incumbent_conf,
+                    "protected_profile": True,
+                    "legacy_conflict": self._conflict_to_debug(legacy_decision),
+                },
+            )
 
         if new_fact["value_norm"] and new_fact["value_norm"] == incumbent_fact["value_norm"]:
             if new_conf > incumbent_conf:
@@ -210,6 +258,7 @@ class MemoryGovernor:
         active_fact_rows: list[MemoryRecord],
     ) -> GovernorProfileSnapshot:
         namespace_norm = str(namespace or "default")
+        now_ts = resolve_snapshot_now_ts(list(active_fact_rows or []))
         active_rows = [
             row for row in list(active_fact_rows or [])
             if (
@@ -219,6 +268,9 @@ class MemoryGovernor:
             )
         ]
         active_facts: dict[str, dict[str, Any]] = {}
+        persistent_traits: dict[str, dict[str, Any]] = {}
+        volatile_preferences: dict[str, dict[str, Any]] = {}
+        session_preferences: dict[str, dict[str, Any]] = {}
         grouped: dict[str, list[dict[str, Any]]] = {}
 
         for row in active_rows:
@@ -226,18 +278,18 @@ class MemoryGovernor:
             key = str(fact["canonical_key"] or row.id or "").strip() or str(row.id or "")
             if key in active_facts:
                 key = f"{key}#{row.id}"
-            active_facts[key] = {
-                "record_id": str(row.id or ""),
-                "canonical_key": str(fact["canonical_key"] or ""),
-                "group": str(fact["group"] or ""),
-                "group_mode": str(fact["group_mode"] or ""),
-                "predicate": str(fact["predicate"] or ""),
-                "value": fact["value"],
-                "confidence": self._coerce_float(fact["confidence"] or row.confidence),
-                "status": str(row.status.value),
-            }
+            entry = build_profile_entry(row, now_ts=now_ts)
+            entry["canonical_key"] = str(fact["canonical_key"] or "")
+            active_facts[key] = entry
+            profile_type = str(entry.get("profile_type") or profile_fact_rule(str(fact["predicate"] or "")).profile_type)
+            if profile_type == "persistent_traits":
+                persistent_traits[key] = dict(entry)
+            elif profile_type == "volatile_preferences":
+                volatile_preferences[key] = dict(entry)
+            elif profile_type == "session_preferences":
+                session_preferences[key] = dict(entry)
             if str(fact["group"] or "").strip() and str(fact["group_mode"] or "") == "singleton":
-                grouped.setdefault(str(fact["group"] or ""), []).append(active_facts[key])
+                grouped.setdefault(str(fact["group"] or ""), []).append(dict(entry))
 
         conflicts: list[dict[str, Any]] = []
         for group, rows in grouped.items():
@@ -256,11 +308,35 @@ class MemoryGovernor:
                 }
             )
 
+        snapshot_seed = {
+            "namespace": namespace_norm,
+            "active_facts": active_facts,
+            "persistent_traits": persistent_traits,
+            "volatile_preferences": volatile_preferences,
+            "session_preferences": session_preferences,
+        }
+        resolved_profile = flatten_governor_profile_snapshot(
+            snapshot_seed,
+            include_active_facts=False,
+        )
+
         return GovernorProfileSnapshot(
             namespace=namespace_norm,
             active_facts=active_facts,
             conflicts=conflicts,
-            updated_at=float(time.time()),
+            persistent_traits=persistent_traits,
+            volatile_preferences=volatile_preferences,
+            session_preferences=session_preferences,
+            resolved_profile=resolved_profile,
+            debug={
+                "layer_counts": {
+                    "persistent_traits": len(persistent_traits),
+                    "volatile_preferences": len(volatile_preferences),
+                    "session_preferences": len(session_preferences),
+                },
+                "resolved_profile_keys": sorted(resolved_profile.keys()),
+            },
+            updated_at=float(now_ts or time.time()),
         )
 
     @staticmethod

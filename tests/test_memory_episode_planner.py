@@ -284,3 +284,74 @@ def test_episode_planner_closes_existing_task_when_matching_episode_is_done() ->
     assert task is not None
     assert task.status == "done"
     assert task.updated_at == 100.0
+
+
+def test_episode_planner_restores_previous_task_from_task_history() -> None:
+    planner = EpisodePlanner()
+
+    task = planner.resolve_active_task(
+        user_text="return to previous task",
+        memory_context={
+            "task_continuity": {
+                "active_task": {
+                    "task_id": "task:current-web",
+                    "topic": "web isolation",
+                    "status": "active",
+                    "current_goal": "Finish web isolation cleanup.",
+                },
+                "task_history": [
+                    {
+                        "task_id": "task:memory-loop",
+                        "topic": "memory loop",
+                        "status": "blocked",
+                        "current_goal": "Finish Memory -> Persona -> Prompt wiring.",
+                        "next_steps": ["stabilize persona snapshot"],
+                        "open_questions": ["how to update task continuity after replies"],
+                        "decisions": ["use episode planner as continuity source"],
+                    }
+                ],
+            }
+        },
+        state={},
+        meta={"now_ts": 120.0},
+    )
+
+    assert task is not None
+    assert task.task_id == "task:memory-loop"
+    assert task.status == "blocked"
+    assert task.current_goal == "Finish Memory -> Persona -> Prompt wiring."
+    assert task.planner_source == "task_history"
+    assert task.planner_reason == "return_to_previous_task"
+
+
+def test_episode_planner_updates_active_task_from_assistant_reply() -> None:
+    planner = EpisodePlanner()
+
+    task = planner.update_active_task_after_assistant_reply(
+        assistant_text=(
+            "Let's continue the memory loop.\n"
+            "1. Stabilize episode continuity writes.\n"
+            "2. Sync task continuity into memory manager."
+        ),
+        active_task={
+            "task_id": "task:memory-loop",
+            "topic": "memory loop",
+            "status": "waiting_user",
+            "current_goal": "Need a continuity plan.",
+            "open_questions": ["how do we persist task state?"],
+            "decisions": ["keep episode planner central"],
+        },
+        meta={"now_ts": 130.0},
+    )
+
+    assert task is not None
+    assert task.task_id == "task:memory-loop"
+    assert task.status == "active"
+    assert task.next_steps == [
+        "Stabilize episode continuity writes",
+        "Sync task continuity into memory manager",
+    ]
+    assert "keep episode planner central" in list(task.decisions or [])
+    assert task.open_questions == []
+    assert task.planner_source == "assistant_reply"
+    assert task.planner_reason == "assistant_progress_update"

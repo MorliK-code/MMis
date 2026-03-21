@@ -358,3 +358,101 @@ def test_persona_snapshot_builder_keeps_identity_core_emotional_handling() -> No
     sources = dict(snapshot.debug.get("sources") or {})
     assert "deescalate_on_irritation" in list(sources.get("emotional_handling_fields_from_identity_core") or [])
     assert dict(sources.get("emotional_handling_source") or {}).get("deescalate_on_irritation") == "identity_core"
+
+
+def test_persona_snapshot_builder_uses_layered_governor_snapshot_without_personality_jumps() -> None:
+    builder = PersonaSnapshotBuilder()
+
+    snapshot = builder.build(
+        character_id="asya",
+        active_profile_snapshot={
+            "persistent_traits": {
+                "user.assistant_directness": {
+                    "predicate": "assistant_directness",
+                    "value": 0.82,
+                    "group_mode": "soft_singleton",
+                    "effective_confidence": 0.86,
+                }
+            },
+            "volatile_preferences": {
+                "user.preferred_editor": {
+                    "predicate": "preferred_editor",
+                    "value": "vscode",
+                    "group_mode": "soft_singleton",
+                    "effective_confidence": 0.80,
+                }
+            },
+            "session_preferences": {
+                "user.assistant_directness": {
+                    "predicate": "assistant_directness",
+                    "value": 0.18,
+                    "group_mode": "soft_singleton",
+                    "effective_confidence": 0.95,
+                },
+                "user.project_name": {
+                    "predicate": "project_name",
+                    "value": "MMis",
+                    "group_mode": "multi",
+                    "effective_confidence": 0.78,
+                },
+            },
+        },
+        memory_context={},
+        state={},
+        meta={},
+    )
+
+    assert snapshot.stable_traits["directness"] == 0.82
+    assert snapshot.user_profile_hints["preferred_editor"] == "vscode"
+    assert snapshot.user_profile_hints["project_name"] == ["MMis"]
+
+
+def test_persona_snapshot_builder_adds_active_task_continuity_and_recent_user_state() -> None:
+    builder = PersonaSnapshotBuilder()
+
+    snapshot = builder.build(
+        character_id="asya",
+        active_profile_snapshot={},
+        identity_core_snapshot={
+            "emotional_handling": {
+                "treat_short_replies_as_low_bandwidth": True,
+            }
+        },
+        memory_context={
+            "input_mode": "distilled",
+            "block_keys": ["self_facts", "working_memory"],
+        },
+        state={
+            "active_task": {
+                "task_id": "task:memory-loop",
+                "topic": "memory loop",
+                "status": "active",
+                "current_goal": "Finish Memory -> Persona -> Prompt wiring.",
+                "next_steps": ["stabilize persona snapshot"],
+                "open_questions": ["how much raw memory to expose"],
+            }
+        },
+        meta={
+            "emotion": "tired",
+            "continuation_ref": "task:memory-loop",
+            "context_confidence": 0.82,
+            "same_calendar_day": "true",
+            "minutes_since_previous": "12",
+            "current_user_message": "ok",
+        },
+    )
+
+    assert snapshot.active_task["task_id"] == "task:memory-loop"
+    assert snapshot.active_task["summary"] == "Finish Memory -> Persona -> Prompt wiring."
+    assert snapshot.relation_continuity["is_followup"] is True
+    assert snapshot.relation_continuity["continuation_ref"] == "task:memory-loop"
+    assert snapshot.recent_user_state["frustrated"] is True
+    assert snapshot.recent_user_state["low_bandwidth"] is True
+    assert snapshot.response_bias["needs_short_answer"] == 1.0
+    assert snapshot.response_bias["frustration_softening"] == 1.0
+    assert snapshot.debug["memory_blocks"] == ["self_facts", "working_memory"]
+    sources = dict(snapshot.debug.get("sources") or {})
+    assert sources.get("active_task_source") == "state.active_task"
+    assert "meta.continuation_ref" in list(sources.get("relation_continuity_sources") or [])
+    assert "identity_core.short_reply_low_bandwidth" in list(sources.get("recent_user_state_sources") or [])
+    assert sources.get("memory_input_mode") == "distilled"

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from memory.profile_evolution import flatten_governor_profile_snapshot
+
 
 @dataclass(frozen=True)
 class IdentityCore:
@@ -75,6 +77,7 @@ class IdentityCoreBuilder:
         interaction_sources = {
             "prefers_directness": "default",
             "prefers_short_answers": "default",
+            "prefers_examples_on_user_code": "default",
             "allows_light_teasing": "default",
             "technical_collaboration_style": "default",
         }
@@ -163,7 +166,13 @@ class IdentityCoreBuilder:
             or ""
         ).strip()
 
-        for key in ("prefers_directness", "prefers_short_answers", "allows_light_teasing", "technical_collaboration_style"):
+        for key in (
+            "prefers_directness",
+            "prefers_short_answers",
+            "prefers_examples_on_user_code",
+            "allows_light_teasing",
+            "technical_collaboration_style",
+        ):
             if key in stored_interaction_style:
                 interaction_style[key] = stored_interaction_style.get(key)
                 interaction_sources[key] = "identity_core"
@@ -381,23 +390,16 @@ class IdentityCoreBuilder:
 
     @staticmethod
     def _flatten_profile_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
-        flat = dict(snapshot or {})
-        active_facts = dict(flat.get("active_facts") or {})
-        for item in active_facts.values():
-            if not isinstance(item, dict):
-                continue
-            predicate = str(item.get("predicate") or "").strip().lower()
-            value = item.get("value")
-            if not predicate:
-                continue
-            if predicate in flat and isinstance(flat.get(predicate), list):
-                if value not in list(flat.get(predicate) or []):
-                    flat[predicate] = [*list(flat.get(predicate) or []), value]
-            elif predicate in flat and flat.get(predicate) != value:
-                flat[predicate] = [flat.get(predicate), value]
-            else:
-                flat[predicate] = value
-        return flat
+        row = dict(snapshot or {})
+        has_layered_snapshot = any(
+            isinstance(row.get(layer_name), dict) and bool(dict(row.get(layer_name) or {}))
+            for layer_name in ("persistent_traits", "volatile_preferences", "session_preferences")
+        )
+        return flatten_governor_profile_snapshot(
+            row,
+            layer_priority=("persistent_traits",),
+            include_active_facts=not has_layered_snapshot,
+        )
 
     @staticmethod
     def _profile_addressing(profile: dict[str, Any]) -> dict[str, Any]:
@@ -429,7 +431,22 @@ class IdentityCoreBuilder:
             out["prefers_directness"] = IdentityCoreBuilder._clamp01(
                 IdentityCoreBuilder._to_float(profile.get("assistant_directness"), 0.74)
             )
-        if "assistant_sarcasm" in profile:
+        if "preferred_answer_brevity" in profile:
+            out["prefers_short_answers"] = IdentityCoreBuilder._clamp01(
+                IdentityCoreBuilder._to_float(profile.get("preferred_answer_brevity"), 0.0)
+            )
+        elif "assistant_verbosity" in profile:
+            verbosity = IdentityCoreBuilder._clamp01(
+                IdentityCoreBuilder._to_float(profile.get("assistant_verbosity"), 0.55)
+            )
+            out["prefers_short_answers"] = IdentityCoreBuilder._clamp01(1.0 - verbosity)
+        if "prefers_examples_on_user_code" in profile:
+            out["prefers_examples_on_user_code"] = bool(profile.get("prefers_examples_on_user_code"))
+        if "assistant_teasing" in profile:
+            out["allows_light_teasing"] = bool(
+                IdentityCoreBuilder._to_float(profile.get("assistant_teasing"), 0.0) >= 0.22
+            )
+        elif "assistant_sarcasm" in profile:
             out["allows_light_teasing"] = bool(
                 IdentityCoreBuilder._to_float(profile.get("assistant_sarcasm"), 0.0) >= 0.22
             )

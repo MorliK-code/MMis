@@ -531,6 +531,106 @@ class ResponsePipelineFactualIsolationTests(unittest.TestCase):
         self.assertEqual(str(dict(trace.active_task or {}).get("source") or ""), "runtime_hints")
         self.assertEqual(str(dict(trace.active_task or {}).get("reason") or ""), "runtime_open_questions_fallback")
 
+    def test_episode_continuity_uses_persisted_task_continuity_when_state_missing(self) -> None:
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="continue",
+            clean_user_msg="continue",
+            state={"conversation_id": "conv-persisted-task"},
+            meta={"conversation_id": "conv-persisted-task", "now_ts": 190.0},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            memory_context={
+                "task_continuity": {
+                    "active_task": {
+                        "task_id": "task:memory-loop",
+                        "topic": "memory loop",
+                        "status": "active",
+                        "current_goal": "Finish Memory -> Persona -> Prompt wiring.",
+                        "decisions": ["keep episode planner central"],
+                    },
+                    "task_history": [],
+                }
+            },
+        )
+
+        ctx = EpisodeContinuityStage().run(ctx)
+
+        active_task = dict(ctx.state.get("active_task") or {})
+        self.assertEqual(active_task.get("task_id"), "task:memory-loop")
+        self.assertEqual(active_task.get("status"), "active")
+        self.assertEqual(ctx.state.get("active_goal"), "Finish Memory -> Persona -> Prompt wiring.")
+        self.assertEqual(list(ctx.state.get("current_decisions") or []), ["keep episode planner central"])
+        trace = ctx.state.get("debug_trace")
+        self.assertIsInstance(trace, DebugTrace)
+        self.assertEqual(str(dict(trace.active_task or {}).get("source") or ""), "continuation")
+
+    def test_memory_write_updates_task_continuity_after_assistant_reply(self) -> None:
+        class _Manager:
+            def __init__(self) -> None:
+                self.snapshot = {}
+
+            def update_task_continuity(self, *, namespace, active_task, previous_active_task, source, now_ts):
+                self.snapshot = {
+                    "namespace": namespace,
+                    "active_task": dict(active_task or {}),
+                    "previous_active_task": dict(previous_active_task or {}),
+                    "source": source,
+                    "updated_at": now_ts,
+                    "task_history": [],
+                }
+                return dict(self.snapshot)
+
+        manager = _Manager()
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="continue",
+            clean_user_msg="continue",
+            state={
+                "conversation_id": "conv-assistant-task-update",
+                "active_task": {
+                    "task_id": "task:memory-loop",
+                    "topic": "memory loop",
+                    "status": "waiting_user",
+                    "current_goal": "Need a continuity plan.",
+                    "open_questions": ["how do we persist task state?"],
+                    "decisions": ["keep episode planner central"],
+                },
+            },
+            meta={"conversation_id": "conv-assistant-task-update", "now_ts": 200.0},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            raw_output=(
+                "Let's continue the memory loop.\n"
+                "1. Stabilize episode continuity writes.\n"
+                "2. Sync task continuity into memory manager."
+            ),
+            text=(
+                "Let's continue the memory loop.\n"
+                "1. Stabilize episode continuity writes.\n"
+                "2. Sync task continuity into memory manager."
+            ),
+        )
+
+        ctx = MemoryWriteStage(memory_manager=manager).run(ctx)
+
+        active_task = dict(ctx.state.get("active_task") or {})
+        self.assertEqual(active_task.get("status"), "active")
+        self.assertEqual(
+            list(active_task.get("next_steps") or []),
+            ["Stabilize episode continuity writes", "Sync task continuity into memory manager"],
+        )
+        self.assertEqual(list(ctx.state.get("open_questions") or []), [])
+        self.assertEqual(str(dict(manager.snapshot.get("active_task") or {}).get("planner_source") or ""), "assistant_reply")
+        self.assertEqual(str(manager.snapshot.get("source") or ""), "assistant_reply")
+        self.assertTrue(any(str(dict(op).get("op") or "") == "task_continuity" for op in list(ctx.memory_ops or [])))
+
     def test_prompt_engine_memory_block_puts_self_facts_before_general_memory(self) -> None:
         block = PromptEngine._build_memory_retrieval_block(
             blocks={},
@@ -972,6 +1072,82 @@ class ResponsePipelineFactualIsolationTests(unittest.TestCase):
         self.assertIn("de-escalate first and then move to solving", persona_block)
         self.assertGreaterEqual(float(dict(persona_snapshot.get("stable_traits") or {}).get("directness") or 0.0), 0.82)
 
+    def test_prompt_build_requires_persona_snapshot_and_applies_continuity_policies(self) -> None:
+        runtime = CharacterRuntime()
+        runtime.storage.save_identity_core(
+            "asya",
+            {
+                "emotional_handling": {
+                    "treat_short_replies_as_low_bandwidth": True,
+                },
+            },
+        )
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="ok",
+            clean_user_msg="ok",
+            state={
+                "active_character_id": "asya",
+                "active_profile_snapshot": {
+                    "prefers_examples_on_user_code": True,
+                },
+                "active_task": {
+                    "task_id": "task:memory-loop",
+                    "topic": "memory loop",
+                    "status": "active",
+                    "current_goal": "Finish Memory -> Persona -> Prompt wiring.",
+                    "next_steps": ["stabilize persona snapshot"],
+                },
+            },
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            memory_context={
+                "blocks": {
+                    "relevant_claims": "- current topic: memory loop",
+                    "working_memory": "old working note",
+                },
+                "selected": [],
+            },
+            meta={
+                "emotion": "tired",
+                "continuation_ref": "task:memory-loop",
+                "context_confidence": 0.88,
+                "same_calendar_day": "true",
+                "minutes_since_previous": "15",
+            },
+        )
+
+        ctx = PromptBuildStage(character_runtime=runtime).run(ctx)
+
+        self.assertTrue(bool(ctx.state.get("persona_snapshot_required")))
+        self.assertTrue(bool(ctx.meta.get("persona_snapshot_required")))
+        self.assertEqual(str(ctx.tags.get("persona_snapshot_required") or ""), "true")
+        persona_snapshot = dict(ctx.state.get("persona_snapshot") or {})
+        self.assertEqual(
+            dict(persona_snapshot.get("active_task") or {}).get("summary"),
+            "Finish Memory -> Persona -> Prompt wiring.",
+        )
+        self.assertTrue(bool(dict(persona_snapshot.get("relation_continuity") or {}).get("is_followup")))
+        self.assertTrue(bool(dict(persona_snapshot.get("recent_user_state") or {}).get("frustrated")))
+        self.assertTrue(bool(dict(persona_snapshot.get("recent_user_state") or {}).get("low_bandwidth")))
+        self.assertEqual(
+            dict(persona_snapshot.get("debug") or {}).get("memory_blocks"),
+            ["relevant_claims", "working_memory"],
+        )
+        rules = [str(x) for x in list(ctx.policies.get("rules") or [])]
+        self.assertTrue(any("primary continuity anchors" in rule for rule in rules))
+        self.assertTrue(any("follow-up" in rule for rule in rules))
+        self.assertTrue(any("low-bandwidth" in rule for rule in rules))
+        self.assertTrue(any("current code or task" in rule for rule in rules))
+        trace = ctx.state.get("debug_trace")
+        self.assertIsInstance(trace, DebugTrace)
+        self.assertIn("active_task", dict(trace.persona_snapshot or {}))
+        self.assertIn("relation_continuity", dict(trace.persona_snapshot or {}))
+        self.assertIn("recent_user_state", dict(trace.persona_snapshot or {}))
+
     def test_resolves_price_and_historical_factual_modes(self) -> None:
         self.assertEqual(
             _resolve_web_factual_response_mode(
@@ -1404,7 +1580,7 @@ class ActiveTaskPromptTests(unittest.TestCase):
             },
         )
 
-        ctx = PromptBuildStage(character_runtime=CharacterRuntime()).run(ctx)
+        ctx = PromptBuildStage(character_runtime=CharacterRuntime(autosave=False)).run(ctx)
         ctx = PromptEngineStage(prompt_engine=PromptEngine()).run(ctx)
 
         system_prompt = str(ctx.prompt_messages[0].content if ctx.prompt_messages else "")
@@ -1455,7 +1631,7 @@ class ActiveTaskPromptTests(unittest.TestCase):
             },
         )
 
-        ctx = PromptBuildStage(character_runtime=CharacterRuntime()).run(ctx)
+        ctx = PromptBuildStage(character_runtime=CharacterRuntime(autosave=False)).run(ctx)
         ctx = PromptEngineStage(prompt_engine=PromptEngine()).run(ctx)
 
         trace = ctx.state.get("debug_trace")
@@ -1469,6 +1645,175 @@ class ActiveTaskPromptTests(unittest.TestCase):
                 for row in omitted
             )
         )
+
+    def test_prompt_build_prefers_relevant_claims_over_summary_for_self_memory_preference_query(self) -> None:
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="ну не скажи, я тебе говорил кто мне нравиться",
+            clean_user_msg="ну не скажи, я тебе говорил кто мне нравиться",
+            state={},
+            meta={},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            memory_context={
+                "blocks": {
+                    "relevant_claims": "- user likes смотреть в глаза Розе",
+                    "working_memory": "Current task: discuss RTX 3050 Ti limits.",
+                    "session_summary": "Earlier context: User said: та вот сейчас проверяю свою 3050ti 4gb в ИИ генерации.",
+                },
+                "selected": [],
+            },
+        )
+
+        ctx = PromptBuildStage(character_runtime=CharacterRuntime(autosave=False)).run(ctx)
+
+        prompt_blocks = dict(getattr(ctx.prompt_pack, "blocks", {}) or {})
+        self.assertIn("user likes", str(prompt_blocks.get("retrieved_memories") or ""))
+        self.assertNotIn("3050ti", str(prompt_blocks.get("long_summary") or "").lower())
+        self.assertEqual(
+            dict(ctx.meta.get("self_memory_claim_guard") or {}).get("reason"),
+            "self_memory_claim_prefers_relevant_claims",
+        )
+        self.assertIn(
+            "If RELEVANT_CLAIMS is present for a self-memory preference or usage question",
+            "\n".join(str(x) for x in list(ctx.policies.get("rules") or [])),
+        )
+
+
+    def test_prompt_engine_lifts_session_summary_once_into_long_summary(self) -> None:
+        summary_text = "Earlier context: User said: testing RTX 3050 Ti memory limits."
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="continue",
+            clean_user_msg="continue",
+            state={},
+            meta={},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            memory_context={
+                "blocks": {
+                    "session_summary": summary_text,
+                    "working_memory": "keep this",
+                },
+                "selected": [],
+            },
+        )
+
+        ctx = PromptBuildStage(character_runtime=CharacterRuntime(autosave=False)).run(ctx)
+        ctx = PromptEngineStage(prompt_engine=PromptEngine()).run(ctx)
+
+        system_prompt = str(ctx.prompt_sections.get("system") or "")
+        self.assertEqual(system_prompt.count(summary_text), 1)
+        self.assertIn("<<<LONG_SUMMARY>>>", system_prompt)
+        self.assertNotIn("[SESSION_SUMMARY]", system_prompt)
+        self.assertIn("[WORKING_MEMORY]\nkeep this", system_prompt)
+
+    def test_prompt_engine_recent_chat_keeps_only_user_lines_when_long_summary_present(self) -> None:
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="who do i like then?",
+            clean_user_msg="who do i like then?",
+            state={
+                "history": [
+                    {"role": "user", "content": "I told you who I like."},
+                    {"role": "assistant", "content": "Looks like we are back on the topic."},
+                    {"role": "user", "content": "Who do I like then?"},
+                ]
+            },
+            meta={},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            memory_context={
+                "blocks": {
+                    "session_summary": "Earlier context: You discussed personal preferences.",
+                },
+                "selected": [],
+            },
+        )
+
+        ctx = PromptBuildStage(character_runtime=CharacterRuntime(autosave=False)).run(ctx)
+        ctx = PromptEngineStage(prompt_engine=PromptEngine()).run(ctx)
+
+        system_prompt = str(ctx.prompt_sections.get("system") or "")
+        self.assertIn("<<<RECENT_CHAT>>>", system_prompt)
+        self.assertIn("- user: I told you who I like.", system_prompt)
+        self.assertIn("- user: Who do I like then?", system_prompt)
+        self.assertNotIn("- assistant: Looks like we are back on the topic.", system_prompt)
+
+    def test_prompt_engine_omits_recent_chat_when_only_assistant_tail_and_long_summary_present(self) -> None:
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="continue",
+            clean_user_msg="continue",
+            state={
+                "history": [
+                    {"role": "assistant", "content": "Looks like we are back on the topic."},
+                ]
+            },
+            meta={},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            memory_context={
+                "blocks": {
+                    "session_summary": "Earlier context: You discussed personal preferences.",
+                },
+                "selected": [],
+            },
+        )
+
+        ctx = PromptBuildStage(character_runtime=CharacterRuntime(autosave=False)).run(ctx)
+        ctx = PromptEngineStage(prompt_engine=PromptEngine()).run(ctx)
+
+        system_prompt = str(ctx.prompt_sections.get("system") or "")
+        self.assertNotIn("<<<RECENT_CHAT>>>", system_prompt)
+        self.assertNotIn("Looks like we are back on the topic.", system_prompt)
+
+    def test_prompt_engine_repro_3050ti_summary_does_not_repeat_assistant_opener(self) -> None:
+        summary_text = "Earlier context: User said: testing my 3050ti 4gb in AI generation."
+        assistant_opener = "Looks like you landed on the topic again."
+        ctx = PipelineContext(
+            route="chat",
+            user_msg="you remember who i like?",
+            clean_user_msg="you remember who i like?",
+            state={
+                "history": [
+                    {"role": "user", "content": "I told you who I like."},
+                    {"role": "assistant", "content": assistant_opener},
+                ]
+            },
+            meta={},
+            tags={},
+            retrieved_memories=[],
+            traits={},
+            policies={},
+            profile=PROFILE_BALANCED,
+            memory_context={
+                "blocks": {
+                    "session_summary": summary_text,
+                },
+                "selected": [],
+            },
+        )
+
+        ctx = PromptBuildStage(character_runtime=CharacterRuntime(autosave=False)).run(ctx)
+        ctx = PromptEngineStage(prompt_engine=PromptEngine()).run(ctx)
+
+        system_prompt = str(ctx.prompt_sections.get("system") or "")
+        self.assertEqual(system_prompt.count(summary_text), 1)
+        self.assertNotIn(assistant_opener, system_prompt)
+        self.assertIn("- user: I told you who I like.", system_prompt)
 
 
 class SummaryQualityTests(unittest.TestCase):

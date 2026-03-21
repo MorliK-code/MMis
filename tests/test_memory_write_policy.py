@@ -778,7 +778,81 @@ class MemoryWritePolicyTests(unittest.TestCase):
             row for row in list(manager._event_store.entries or [])
             if str(dict(row).get("type") or "") == "memory_identity_core_decision"
         ]
-        self.assertEqual(str(dict(identity_events[-1].get("payload") or {}).get("reason") or ""), "override_requires_confirmation")
+        self.assertEqual(
+            str(dict(identity_events[-1].get("payload") or {}).get("reason") or ""),
+            "canonical_name_strong_self_identification",
+        )
+        governor_events = [
+            row for row in list(manager._event_store.entries or [])
+            if str(dict(row).get("type") or "") == "memory_governor_decision"
+        ]
+        self.assertEqual(
+            str(dict(governor_events[-1].get("payload") or {}).get("reason") or ""),
+            "protected_profile_requires_confirmation",
+        )
+
+    def test_governor_blocks_protected_identity_fact_override_without_confirmation(self) -> None:
+        manager = self._manager()
+
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="identity_name",
+                    value="Pasha",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.91,
+                    importance=0.82,
+                    evidence="my name is Pasha",
+                    source_event_id="evt:identity-governor-1",
+                    canonical_key="user.identity_name",
+                    relation="identity",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-governor-protected-name",
+            now_ts=1.0,
+            event_id="evt:identity-governor-1",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+        manager._write_fact_records(
+            facts=[
+                FactRecordV2(
+                    subject="user",
+                    predicate="identity_name",
+                    value="Pashka",
+                    scope=MemoryScope.CONVERSATION,
+                    confidence=0.94,
+                    importance=0.84,
+                    evidence="call me Pashka now",
+                    source_event_id="evt:identity-governor-2",
+                    canonical_key="user.identity_name",
+                    relation="identity",
+                    metadata={"source_role": "user", "source_kind": "structured_fact"},
+                )
+            ],
+            namespace="conv-governor-protected-name",
+            now_ts=2.0,
+            event_id="evt:identity-governor-2",
+            source_role="user",
+            source_kind="structured_fact",
+        )
+
+        snapshot = manager.get_governor_profile_snapshot("conv-governor-protected-name")
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(len(dict(snapshot.active_facts or {})), 1)
+        only_fact = next(iter(dict(snapshot.active_facts or {}).values()))
+        self.assertEqual(str(only_fact.get("value") or ""), "Pasha")
+
+        governor_events = [
+            row for row in list(manager._event_store.entries or [])
+            if str(dict(row).get("type") or "") == "memory_governor_decision"
+        ]
+        self.assertEqual(
+            str(dict(governor_events[-1].get("payload") or {}).get("reason") or ""),
+            "protected_profile_requires_confirmation",
+        )
 
     def test_identity_core_is_written_from_direct_user_boundary_message(self) -> None:
         manager = self._manager()

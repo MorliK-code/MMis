@@ -66,6 +66,33 @@ def test_identity_core_builder_keeps_interaction_style_and_profile_fallbacks() -
     assert dict(dict(row.get("debug") or {}).get("sources") or {}).get("interaction_style", {}).get("prefers_directness") == "identity_core"
 
 
+def test_identity_core_builder_derives_interaction_style_from_profile_preferences() -> None:
+    builder = IdentityCoreBuilder()
+
+    snapshot = builder.build(
+        character_id="asya",
+        active_profile_snapshot={
+            "assistant_directness": 0.63,
+            "assistant_verbosity": 0.18,
+            "assistant_teasing": 0.41,
+            "prefers_examples_on_user_code": True,
+            "relation_technical_collaboration": 0.55,
+        },
+        stored_identity_core={},
+    )
+
+    row = snapshot.to_dict()
+    style = dict(row.get("interaction_style") or {})
+    assert style.get("prefers_directness") == 0.63
+    assert round(float(style.get("prefers_short_answers") or 0.0), 4) == 0.82
+    assert style.get("prefers_examples_on_user_code") is True
+    assert style.get("allows_light_teasing") is True
+    assert style.get("technical_collaboration_style") == "medium"
+    sources = dict(dict(row.get("debug") or {}).get("sources") or {})
+    assert dict(sources.get("interaction_style") or {}).get("prefers_short_answers") == "active_profile"
+    assert dict(sources.get("interaction_style") or {}).get("prefers_examples_on_user_code") == "active_profile"
+
+
 def test_identity_core_builder_uses_memory_identity_core_snapshot_above_runtime_storage() -> None:
     builder = IdentityCoreBuilder()
 
@@ -384,3 +411,33 @@ def test_character_storage_strips_non_identity_core_fields() -> None:
     assert "mood" not in identity_core
     assert "active_mode" not in identity_core
     assert "temporary_style" not in identity_core
+
+
+def test_identity_core_builder_ignores_session_profile_layer_when_persistent_layer_exists() -> None:
+    builder = IdentityCoreBuilder()
+
+    snapshot = builder.build(
+        character_id="asya",
+        active_profile_snapshot={
+            "persistent_traits": {
+                "user.identity_name": {
+                    "predicate": "identity_name",
+                    "value": "Pasha",
+                    "group_mode": "singleton",
+                    "effective_confidence": 0.92,
+                }
+            },
+            "session_preferences": {
+                "user.identity_name": {
+                    "predicate": "identity_name",
+                    "value": "Pashka",
+                    "group_mode": "singleton",
+                    "effective_confidence": 0.98,
+                }
+            },
+        },
+        stored_identity_core={},
+    )
+
+    row = snapshot.to_dict()
+    assert dict(row.get("addressing") or {}).get("canonical_name") == "Pasha"

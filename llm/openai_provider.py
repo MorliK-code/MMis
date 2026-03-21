@@ -30,12 +30,64 @@ LOGGER = get_logger(__name__)
 _cfg = load_config()
 
 
+def _serialize_tool_arguments(call: ToolCall) -> str:
+    raw = str(call.raw_arguments or "").strip()
+    if raw:
+        return raw
+    try:
+        return json.dumps(dict(call.arguments or {}), ensure_ascii=False)
+    except Exception:
+        return "{}"
+
+
+def _tool_call_to_openai_message_dict(call: ToolCall) -> dict[str, Any]:
+    return {
+        "id": str(call.id or ""),
+        "type": "function",
+        "function": {
+            "name": str(call.name or ""),
+            "arguments": _serialize_tool_arguments(call),
+        },
+    }
+
+
+def _tool_calls_from_message_dict(message: dict[str, Any]) -> list[ToolCall]:
+    calls: list[ToolCall] = []
+    for idx, row in enumerate(list(message.get("tool_calls") or [])):
+        if not isinstance(row, dict):
+            continue
+        fn = dict(row.get("function") or {})
+        name = str(fn.get("name") or row.get("name") or "").strip()
+        if not name:
+            continue
+        args_raw = str(fn.get("arguments") or row.get("arguments") or "")
+        args: dict[str, Any] = {}
+        if args_raw:
+            try:
+                parsed = json.loads(args_raw)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except Exception:
+                args = {}
+        calls.append(
+            ToolCall(
+                id=str(row.get("id") or f"tool_{idx+1}"),
+                name=name,
+                arguments=args,
+                raw_arguments=args_raw,
+            )
+        )
+    return calls
+
+
 def _message_to_dict(msg: Message) -> dict[str, Any]:
     out = {"role": str(msg.role), "content": str(msg.content or "")}
     if msg.name:
         out["name"] = str(msg.name)
     if msg.tool_call_id and out["role"] == "tool":
         out["tool_call_id"] = str(msg.tool_call_id)
+    if msg.tool_calls and out["role"] == "assistant":
+        out["tool_calls"] = [_tool_call_to_openai_message_dict(call) for call in list(msg.tool_calls or [])]
     return out
 
 
@@ -120,6 +172,7 @@ class OpenAIProvider(LLMProviderBase):
         model = str(req.model or self.default_model or "").strip()
         if not model:
             raise RuntimeError("OpenAI model is not configured.")
+        verbose = bool(dict(req.metadata or {}).get("verbose", False))
 
         log_json(
             LOGGER,
@@ -129,6 +182,7 @@ class OpenAIProvider(LLMProviderBase):
             messages=len(list(req.messages or [])),
             tools=len(list(req.tools or [])),
             json_mode=bool(req.json_mode),
+            verbose=verbose,
         )
         kwargs = self._build_completion_kwargs(req=req, model=model, stream=False)
         log_json(
@@ -180,6 +234,7 @@ class OpenAIProvider(LLMProviderBase):
         model = str(req.model or self.default_model or "").strip()
         if not model:
             raise RuntimeError("OpenAI model is not configured.")
+        verbose = bool(dict(req.metadata or {}).get("verbose", False))
 
         log_json(
             LOGGER,
@@ -189,6 +244,7 @@ class OpenAIProvider(LLMProviderBase):
             messages=len(list(req.messages or [])),
             tools=len(list(req.tools or [])),
             json_mode=bool(req.json_mode),
+            verbose=verbose,
         )
         kwargs = self._build_completion_kwargs(req=req, model=str(req.model or self.default_model).strip(), stream=True)
         log_json(
@@ -235,6 +291,9 @@ class OpenAIProvider(LLMProviderBase):
             yield LLMChunk(
                 text_delta=text_delta,
                 tool_calls_delta=tool_calls_delta,
+                usage=Usage(),
+                timings=Timings(),
+                model=model,
                 done=bool(finish_reason),
                 raw=(event.model_dump() if hasattr(event, "model_dump") else None),
             )
@@ -283,6 +342,7 @@ class OpenAIProvider(LLMProviderBase):
                     content=str(m.get("content") or ""),
                     name=str(m.get("name") or ""),
                     tool_call_id=str(m.get("tool_call_id") or ""),
+                    tool_calls=_tool_calls_from_message_dict(m),
                 )
                 for m in messages
             ],
@@ -307,6 +367,7 @@ class OpenAIProvider(LLMProviderBase):
                     content=str(m.get("content") or ""),
                     name=str(m.get("name") or ""),
                     tool_call_id=str(m.get("tool_call_id") or ""),
+                    tool_calls=_tool_calls_from_message_dict(m),
                 )
                 for m in messages
             ],

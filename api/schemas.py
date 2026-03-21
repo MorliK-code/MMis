@@ -7,6 +7,7 @@ class ChatRequest(BaseModel):
     text: str = Field(min_length=1)
     store_turn: bool = True
     think: bool | None = None
+    verbose: bool | None = None
     json_mode: bool | None = None
 
 
@@ -21,10 +22,19 @@ class ChatResponse(BaseModel):
     memory_debug_snapshot: dict | None = None
 
 
+class MemoryInspectorResponse(BaseModel):
+    conversation_id: str
+    request_id: str = ""
+    debug_trace: dict | None = None
+    memory_debug_snapshot: dict | None = None
+    memory_store_debug: dict | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     model: str
     thinking_enabled: bool
+    verbose_enabled: bool
     web_mode: str
     json_mode_enabled: bool
     active_profile: str
@@ -42,6 +52,9 @@ class ModelSetRequest(BaseModel):
 
 
 class ThinkingRequest(BaseModel):
+    enabled: bool
+
+class VerboseRequest(BaseModel):
     enabled: bool
 
 class WebModeRequest(BaseModel):

@@ -27,12 +27,15 @@ from core.debug_trace import DebugTrace
 from core.character_runtime import CharacterRuntime
 from core.character_runtime import PromptPack
 from core.mode_selector import ModeSelector, list_runtime_modes, normalize_mode_name
-from llm.provider_base import LLMProviderBase, LLMRequest, Message, ToolCall, ToolSpec
+from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, Message, ToolCall, ToolSpec
 from llm.task_router import run_task_model
 from llm.tokenizer import estimate_tokens
 from memory import EpisodePlanner, build_memory_debug_snapshot
 from memory.memory_models import ContextBuildRequest, MemoryScope
+from memory.profile_evolution import flatten_governor_profile_snapshot
+from memory.recall_policy import classify_query_recall_profile
 from memory.summary_quality import is_low_quality_session_summary, sanitize_session_summary_text
+from memory.tool_bridge import build_memory_tool_context_pack, normalize_memory_retrieval_plan
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
 from modules.studio.studio_generator import StudioGenerator
@@ -51,6 +54,10 @@ PROFILE_ECONOM = "ECONOM"
 PROFILE_ASYA = "ASYA"
 PROFILE_AUTONOMOUS = "AUTONOMOUS"
 _SELF_MEMORY_EXACT_MODE = "self_memory_exact"
+_MEMORY_TOOL_NAME = "memory_retrieve"
+_MEMORY_REASONING_TAG = "[MEMORY_REASONING_CHECK]"
+_AGENT_LOOP_MIN_TOOL_CALLS = 1
+_AGENT_LOOP_MAX_TOOL_CALLS = 2
 LOGGER = get_logger(__name__)
 WEB_TRACE_LOGGER = get_logger("web.trace")
 _WEB_TRACE_JSONL_LOCK = RLock()
@@ -466,10 +473,22 @@ class MemoryRetrieveStage(PipelineStage):
         self._cfg = load_config()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
+        """
+        Memory retrieve stage теперь работает ТОЛЬКО как fallback.
+        
+        Основной путь — agent loop + memory_retrieve tool.
+        Этот stage срабатывает, если:
+        - agent_loop не сработал (модель не вызвала tool)
+        - memory gate показал, что память нужна
+        - вопрос явно memory-dependent
+        
+        Это не основной путь, а fallback для спасения контекста.
+        """
         _ensure_debug_trace(ctx)
         if ctx.route != "chat":
             ctx.logs.append("stage=memory_retrieve skipped(route)")
             return ctx
+        
         query = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
         if not query:
             ctx.logs.append("stage=memory_retrieve skipped(empty)")
@@ -479,113 +498,214 @@ class MemoryRetrieveStage(PipelineStage):
         if manager is None or not hasattr(manager, "build_context"):
             ctx.logs.append("stage=memory_retrieve skipped(no_manager)")
             return ctx
-
-        def _cfg_int(name: str, *, minimum: int) -> int:
-            try:
-                value = int(getattr(self._cfg, name))
-            except Exception:
-                value = minimum
-            return max(minimum, value)
-
-        def _pick_int(*values: Any, default: int, minimum: int) -> int:
-            chosen = _pick_value(*values, default)
-            try:
-                value = int(chosen)
-            except Exception:
-                value = default
-            return max(minimum, value)
-
-        default_k = _cfg_int("memory_retrieval_top_k", minimum=1)
-        default_budget_total = _cfg_int("memory_context_budget_total", minimum=256)
-        default_budget_memory = _cfg_int("memory_context_budget_memory", minimum=64)
-        default_budget_docs = _cfg_int("memory_context_budget_docs", minimum=64)
-        default_budget_tools = _cfg_int("memory_context_budget_tools", minimum=32)
-        default_budget_response_reserve = _cfg_int("memory_context_budget_response_reserve", minimum=64)
+        
+        # Проверяем, был ли уже agent_loop с memory tool
+        agent_loop_trace = _as_dict(ctx.state.get("agent_loop_trace"))
+        agent_loop_used = bool(agent_loop_trace.get("agent_loop") or agent_loop_trace.get("tool_calls_executed"))
+        
+        # Если agent_loop уже отработал и вызвал memory_retrieve — не дублируем
+        if agent_loop_used:
+            ctx.logs.append("stage=memory_retrieve skipped(agent_loop_already_used)")
+            return ctx
+        
+        # Fallback logic: срабатываем только если:
+        # 1. agent_loop не сработал И
+        # 2. memory gate показывает, что память нужна
+        memory_gate_triggered = _memory_gate_should_trigger(ctx)
+        
+        if not memory_gate_triggered:
+            # Memory gate не сработал — память не нужна, пропускаем
+            ctx.logs.append("stage=memory_retrieve skipped(memory_gate_not_triggered)")
+            return ctx
+        
+        # Это fallback: memory gate сработал, но agent_loop не вызвал tool
+        ctx.logs.append("stage=memory_retrieve fallback mode (gate triggered, agent_loop did not recall)")
+        
         try:
-            k = max(1, int(_pick_value(ctx.meta.get("memory_k"), ctx.policies.get("memory_k"), default_k) or default_k))
-        except Exception:
-            k = default_k
-
-        try:
-            scope_names = list(_as_list(_pick_value(ctx.meta.get("memory_scopes"), ctx.policies.get("memory_scopes"), [])))
-            scopes = [_scope_from_name(x) for x in scope_names]
-            scopes = [x for x in scopes if x is not None]
-            if not scopes:
-                scopes = [
-                    MemoryScope.CONVERSATION,
-                    MemoryScope.SESSION,
-                    MemoryScope.PROJECT,
-                    MemoryScope.GLOBAL_USER,
-                    MemoryScope.CHARACTER,
-                    MemoryScope.TEMPORARY,
-                ]
-            context_request = ContextBuildRequest(
-                system_prompt=str(_pick_value(ctx.state.get("system_prompt"), "")),
-                user_message=query,
-                namespace=str(
-                    _pick_value(
-                        ctx.meta.get("memory_namespace"),
-                        ctx.meta.get("conversation_id"),
-                        ctx.state.get("conversation_id"),
-                        "default",
-                    )
-                ),
-                scopes=list(scopes),
-                top_k=max(1, int(k)),
-                session_summary=sanitize_session_summary_text(_pick_value(ctx.state.get("dialog_summary"), "")),
-                tool_state=_as_dict(ctx.state.get("last_tool_result")),
-                unresolved_items=[str(x) for x in list(_as_list(ctx.state.get("open_questions"))) if str(x).strip()],
-                context_budget_total=_pick_int(
-                    ctx.meta.get("context_budget_total"),
-                    ctx.policies.get("context_budget_total"),
-                    default=default_budget_total,
-                    minimum=256,
-                ),
-                context_budget_memory=_pick_int(
-                    ctx.meta.get("context_budget_memory"),
-                    ctx.policies.get("context_budget_memory"),
-                    default=default_budget_memory,
-                    minimum=64,
-                ),
-                context_budget_docs=_pick_int(
-                    ctx.meta.get("context_budget_docs"),
-                    ctx.policies.get("context_budget_docs"),
-                    default=default_budget_docs,
-                    minimum=64,
-                ),
-                context_budget_tools=_pick_int(
-                    ctx.meta.get("context_budget_tools"),
-                    ctx.policies.get("context_budget_tools"),
-                    default=default_budget_tools,
-                    minimum=32,
-                ),
-                context_budget_response_reserve=_pick_int(
-                    ctx.meta.get("context_budget_response_reserve"),
-                    ctx.policies.get("context_budget_response_reserve"),
-                    default=default_budget_response_reserve,
-                    minimum=64,
-                ),
-            )
-            result = manager.build_context(context_request)
-            pack = result.to_dict() if hasattr(result, "to_dict") else dict(result or {})
+            context_request = _build_memory_context_request(ctx, cfg=self._cfg, query=query)
+            pack = _build_memory_context_pack(manager, context_request)
         except Exception as exc:
             ctx.logs.append(f"stage=memory_retrieve error={type(exc).__name__}")
             return ctx
 
-        if not isinstance(pack, dict):
-            ctx.logs.append("stage=memory_retrieve skipped(invalid_pack)")
-            return ctx
+        _apply_memory_context_pack(
+            ctx,
+            manager=manager,
+            context_request=context_request,
+            pack=pack,
+            query=query,
+            stage_name="memory_retrieve_fallback",
+        )
+        
+        # Логируем как fallback
+        ctx.logs.append("memory fallback used (gate-triggered without agent recall)")
+        return ctx
 
-        pack = _strip_low_quality_session_summary_from_pack(pack)
-        ctx.memory_context = dict(pack)
-        ctx.state["memory_context"] = dict(pack)
-        active_profile_snapshot: dict[str, Any] = {}
-        if hasattr(manager, "get_governor_profile_snapshot"):
-            try:
-                snapshot = manager.get_governor_profile_snapshot(context_request.namespace)
-            except Exception:
-                snapshot = None
-            if snapshot is not None:
+
+def _memory_cfg_int(cfg: Any, name: str, *, minimum: int) -> int:
+    try:
+        value = int(getattr(cfg, name))
+    except Exception:
+        value = minimum
+    return max(minimum, value)
+
+
+def _pick_memory_int(*values: Any, default: int, minimum: int) -> int:
+    chosen = _pick_value(*values, default)
+    try:
+        value = int(chosen)
+    except Exception:
+        value = default
+    return max(minimum, value)
+
+
+def _default_memory_scopes() -> list[MemoryScope]:
+    return [
+        MemoryScope.CONVERSATION,
+        MemoryScope.SESSION,
+        MemoryScope.PROJECT,
+        MemoryScope.GLOBAL_USER,
+        MemoryScope.CHARACTER,
+        MemoryScope.TEMPORARY,
+    ]
+
+
+def _resolve_memory_scopes(
+    ctx: PipelineContext,
+    *,
+    scope_names: list[Any] | None = None,
+) -> list[MemoryScope]:
+    raw_names = list(scope_names or _as_list(_pick_value(ctx.meta.get("memory_scopes"), ctx.policies.get("memory_scopes"), [])))
+    scopes = [_scope_from_name(x) for x in raw_names]
+    scopes = [x for x in scopes if x is not None]
+    if scopes:
+        return list(scopes)
+    return _default_memory_scopes()
+
+
+def _build_memory_context_request(
+    ctx: PipelineContext,
+    *,
+    cfg: Any,
+    query: str,
+    top_k: int | None = None,
+    scope_names: list[Any] | None = None,
+) -> ContextBuildRequest:
+    default_k = _memory_cfg_int(cfg, "memory_retrieval_top_k", minimum=1)
+    default_budget_total = _memory_cfg_int(cfg, "memory_context_budget_total", minimum=256)
+    default_budget_memory = _memory_cfg_int(cfg, "memory_context_budget_memory", minimum=64)
+    default_budget_docs = _memory_cfg_int(cfg, "memory_context_budget_docs", minimum=64)
+    default_budget_tools = _memory_cfg_int(cfg, "memory_context_budget_tools", minimum=32)
+    default_budget_response_reserve = _memory_cfg_int(cfg, "memory_context_budget_response_reserve", minimum=64)
+
+    if top_k is None:
+        try:
+            resolved_top_k = max(
+                1,
+                int(_pick_value(ctx.meta.get("memory_k"), ctx.policies.get("memory_k"), default_k) or default_k),
+            )
+        except Exception:
+            resolved_top_k = default_k
+    else:
+        try:
+            resolved_top_k = max(1, int(top_k))
+        except Exception:
+            resolved_top_k = default_k
+
+    scopes = _resolve_memory_scopes(ctx, scope_names=scope_names)
+    return ContextBuildRequest(
+        system_prompt=str(_pick_value(ctx.state.get("system_prompt"), "")),
+        user_message=str(query or "").strip(),
+        namespace=str(
+            _pick_value(
+                ctx.meta.get("memory_namespace"),
+                ctx.meta.get("conversation_id"),
+                ctx.state.get("conversation_id"),
+                "default",
+            )
+        ),
+        scopes=list(scopes),
+        top_k=int(resolved_top_k),
+        session_summary=sanitize_session_summary_text(_pick_value(ctx.state.get("dialog_summary"), "")),
+        tool_state=_as_dict(ctx.state.get("last_tool_result")),
+        unresolved_items=[str(x) for x in list(_as_list(ctx.state.get("open_questions"))) if str(x).strip()],
+        context_budget_total=_pick_memory_int(
+            ctx.meta.get("context_budget_total"),
+            ctx.policies.get("context_budget_total"),
+            default=default_budget_total,
+            minimum=256,
+        ),
+        context_budget_memory=_pick_memory_int(
+            ctx.meta.get("context_budget_memory"),
+            ctx.policies.get("context_budget_memory"),
+            default=default_budget_memory,
+            minimum=64,
+        ),
+        context_budget_docs=_pick_memory_int(
+            ctx.meta.get("context_budget_docs"),
+            ctx.policies.get("context_budget_docs"),
+            default=default_budget_docs,
+            minimum=64,
+        ),
+        context_budget_tools=_pick_memory_int(
+            ctx.meta.get("context_budget_tools"),
+            ctx.policies.get("context_budget_tools"),
+            default=default_budget_tools,
+            minimum=32,
+        ),
+        context_budget_response_reserve=_pick_memory_int(
+            ctx.meta.get("context_budget_response_reserve"),
+            ctx.policies.get("context_budget_response_reserve"),
+            default=default_budget_response_reserve,
+            minimum=64,
+        ),
+    )
+
+
+def _build_memory_context_pack(manager: Any, context_request: ContextBuildRequest) -> dict[str, Any]:
+    result = manager.build_context(context_request)
+    pack = result.to_dict() if hasattr(result, "to_dict") else dict(result or {})
+    if not isinstance(pack, dict):
+        raise TypeError("invalid memory context pack")
+    return _strip_low_quality_session_summary_from_pack(pack)
+
+
+def _apply_memory_context_pack(
+    ctx: PipelineContext,
+    *,
+    manager: Any,
+    context_request: ContextBuildRequest,
+    pack: dict[str, Any],
+    query: str,
+    stage_name: str,
+) -> None:
+    if not isinstance(pack, dict):
+        raise TypeError("invalid memory context pack")
+
+    ctx.memory_context = dict(pack)
+    ctx.state["memory_context"] = dict(pack)
+    
+    # Обновляем working state из memory retrieval
+    # Это связывает explicit recall с always-on memory state
+    if hasattr(manager, "update_working_state_from_memory"):
+        try:
+            manager.update_working_state_from_memory(ctx.state, pack)
+        except Exception:
+            pass
+
+    active_profile_snapshot: dict[str, Any] = {}
+    if hasattr(manager, "get_governor_profile_snapshot"):
+        try:
+            snapshot = manager.get_governor_profile_snapshot(context_request.namespace)
+        except Exception:
+            snapshot = None
+        if snapshot is not None:
+            if hasattr(snapshot, "to_dict"):
+                try:
+                    active_profile_snapshot = dict(snapshot.to_dict() or {})
+                except Exception:
+                    active_profile_snapshot = {}
+            if not active_profile_snapshot:
                 active_profile_snapshot = {
                     "namespace": str(getattr(snapshot, "namespace", context_request.namespace) or context_request.namespace),
                     "active_facts": dict(getattr(snapshot, "active_facts", {}) or {}),
@@ -594,125 +714,243 @@ class MemoryRetrieveStage(PipelineStage):
                         for x in list(getattr(snapshot, "conflicts", []) or [])
                         if isinstance(x, dict)
                     ],
+                    "persistent_traits": dict(getattr(snapshot, "persistent_traits", {}) or {}),
+                    "volatile_preferences": dict(getattr(snapshot, "volatile_preferences", {}) or {}),
+                    "session_preferences": dict(getattr(snapshot, "session_preferences", {}) or {}),
+                    "resolved_profile": dict(getattr(snapshot, "resolved_profile", {}) or {}),
+                    "debug": dict(getattr(snapshot, "debug", {}) or {}),
                     "updated_at": float(_to_float(getattr(snapshot, "updated_at", 0.0), 0.0) or 0.0),
                 }
-        if active_profile_snapshot:
-            ctx.state["active_profile_snapshot"] = active_profile_snapshot
-        else:
-            ctx.state.pop("active_profile_snapshot", None)
-        retrieved = list(_as_list(pack.get("selected")))
-        if retrieved:
-            ctx.retrieved_memories = retrieved
+    if active_profile_snapshot:
+        ctx.state["active_profile_snapshot"] = active_profile_snapshot
+    else:
+        ctx.state.pop("active_profile_snapshot", None)
 
-        blocks = _as_dict(pack.get("blocks"))
-        session_summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
-        if session_summary:
-            ctx.state["dialog_summary"] = session_summary
-        else:
-            ctx.state.pop("dialog_summary", None)
+    retrieved = list(_as_list(pack.get("selected")))
+    if retrieved:
+        ctx.retrieved_memories = retrieved
 
-        truncation_log = list(_as_list(pack.get("truncation_log")))
-        dropped = list(_as_list(pack.get("dropped")))
-        ctx.logs.append(
-            "stage=memory_retrieve "
-            f"retrieved={len(ctx.retrieved_memories)} "
-            f"dropped={len(dropped)} "
-            f"compress={len(truncation_log)} "
-            f"tail={len(_as_list(ctx.state.get('history')))}"
-        )
-        hit_summary = _memory_hit_summary(retrieved)
-        _emit_turn_summary(
-            ctx,
-            "memory_summary",
-            summary=(
-                f"hits={hit_summary['retrieved']} semantic={hit_summary['semantic']} "
-                f"episodic={hit_summary['episodic']} docs={hit_summary['docs']} "
-                f"web={hit_summary['web']} dropped={len(dropped)} truncated={len(truncation_log)}"
+    blocks = _as_dict(pack.get("blocks"))
+    task_continuity = _as_dict(pack.get("task_continuity"))
+    if task_continuity:
+        ctx.state["task_continuity"] = dict(task_continuity)
+        continuity_active_task = _as_dict(task_continuity.get("active_task"))
+        if continuity_active_task and not _as_dict(ctx.state.get("active_task")):
+            ctx.state["active_task"] = dict(continuity_active_task)
+            ctx.state["active_goal"] = str(
+                _pick_value(
+                    continuity_active_task.get("current_goal"),
+                    continuity_active_task.get("summary_short"),
+                    continuity_active_task.get("topic"),
+                    "",
+                )
+                or ""
+            ).strip()
+            ctx.state["active_tasks"] = [dict(continuity_active_task)]
+            ctx.state["_active_task_source"] = str(task_continuity.get("source") or "memory_manager")
+    else:
+        ctx.state.pop("task_continuity", None)
+    open_questions = [str(x).strip() for x in list(_as_list(pack.get("open_questions"))) if str(x).strip()]
+    if open_questions:
+        ctx.state["open_questions"] = list(open_questions)
+        ctx.state["unresolved_items"] = list(open_questions)
+    else:
+        ctx.state.pop("open_questions", None)
+        ctx.state.pop("unresolved_items", None)
+    current_decisions = [str(x).strip() for x in list(_as_list(pack.get("current_decisions"))) if str(x).strip()]
+    if current_decisions:
+        ctx.state["current_decisions"] = list(current_decisions)
+    else:
+        ctx.state.pop("current_decisions", None)
+    session_summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
+    if session_summary:
+        ctx.state["dialog_summary"] = session_summary
+    else:
+        ctx.state.pop("dialog_summary", None)
+
+    truncation_log = list(_as_list(pack.get("truncation_log")))
+    dropped = list(_as_list(pack.get("dropped")))
+    ctx.logs.append(
+        f"stage={stage_name} "
+        f"retrieved={len(ctx.retrieved_memories)} "
+        f"dropped={len(dropped)} "
+        f"compress={len(truncation_log)} "
+        f"tail={len(_as_list(ctx.state.get('history')))}"
+    )
+    hit_summary = _memory_hit_summary(retrieved)
+    _emit_turn_summary(
+        ctx,
+        "memory_summary",
+        summary=(
+            f"hits={hit_summary['retrieved']} semantic={hit_summary['semantic']} "
+            f"episodic={hit_summary['episodic']} docs={hit_summary['docs']} "
+            f"web={hit_summary['web']} dropped={len(dropped)} truncated={len(truncation_log)}"
+        ),
+        route=str(ctx.route or ""),
+        stage=str(stage_name or ""),
+        selected_hits=int(hit_summary["retrieved"]),
+        semantic_hits=int(hit_summary["semantic"]),
+        episodic_hits=int(hit_summary["episodic"]),
+        document_hits=int(hit_summary["docs"]),
+        web_hits=int(hit_summary["web"]),
+        dropped_count=int(len(dropped)),
+        truncation_count=int(len(truncation_log)),
+        has_session_summary=bool(session_summary),
+        memory_block_keys=sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
+    )
+    trace = _ensure_debug_trace(ctx)
+    trace.memory_retrieval = {
+        "stage": str(stage_name or ""),
+        "query": str(query or ""),
+        "request_plan": dict(_as_dict(pack.get("tool_retrieval_plan"))),
+        "fanout_queries": [
+            dict(x)
+            for x in list(_as_list(pack.get("fanout_queries")))
+            if isinstance(x, dict)
+        ],
+        "fanout_sources": [str(x).strip() for x in list(_as_list(pack.get("fanout_sources"))) if str(x).strip()],
+        "recall_mode": str(pack.get("recall_mode") or ""),
+        "memory_block_keys": sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
+        "selected_total": int(len(retrieved)),
+        "selected_facts": [
+            _trace_compact_selected_memory(row)
+            for row in list(retrieved)
+            if str(dict(row).get("memory_type") or "").strip().lower() == "fact"
+        ],
+        "selected_claims": [
+            _trace_compact_selected_memory(row)
+            for row in list(retrieved)
+            if str(dict(row).get("memory_type") or "").strip().lower() == "claim"
+        ],
+        "selected_messages": [
+            _trace_compact_selected_memory(row)
+            for row in list(retrieved)
+            if str(dict(row).get("memory_type") or "").strip().lower() == "message"
+        ],
+        "selected_documents": [
+            _trace_compact_selected_memory(row)
+            for row in list(retrieved)
+            if str(dict(row).get("memory_type") or "").strip().lower() in {"document", "document_chunk"}
+        ],
+        "selected_episodes": [
+            _trace_compact_episode_hit(row)
+            for row in list(_as_list(pack.get("dialog_episode_hits")))
+            if isinstance(row, dict)
+        ],
+        "filtered_out": [
+            _trace_compact_filtered_item(row)
+            for row in list(dropped or [])
+            if isinstance(row, dict)
+        ],
+        "score_breakdowns": [
+            dict(x)
+            for x in list(_as_list(pack.get("score_breakdowns")))[:24]
+            if isinstance(x, dict)
+        ],
+        "truncated": [dict(x) for x in list(truncation_log or []) if isinstance(x, dict)],
+        "confidence": {
+            "selected_hits": int(hit_summary["retrieved"]),
+            "semantic_hits": int(hit_summary["semantic"]),
+            "episodic_hits": int(hit_summary["episodic"]),
+            "document_hits": int(hit_summary["docs"]),
+            "web_hits": int(hit_summary["web"]),
+            "top_selected_score": max(
+                [_to_float(dict(row).get("score"), 0.0) or 0.0 for row in list(retrieved or [])],
+                default=0.0,
             ),
-            route=str(ctx.route or ""),
-            selected_hits=int(hit_summary["retrieved"]),
-            semantic_hits=int(hit_summary["semantic"]),
-            episodic_hits=int(hit_summary["episodic"]),
-            document_hits=int(hit_summary["docs"]),
-            web_hits=int(hit_summary["web"]),
-            dropped_count=int(len(dropped)),
-            truncation_count=int(len(truncation_log)),
-            has_session_summary=bool(session_summary),
-            memory_block_keys=sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
-        )
-        trace = _ensure_debug_trace(ctx)
-        trace.memory_retrieval = {
-            "query": str(query or ""),
-            "recall_mode": str(pack.get("recall_mode") or ""),
-            "memory_block_keys": sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
-            "selected_total": int(len(retrieved)),
-            "selected_facts": [
-                _trace_compact_selected_memory(row)
-                for row in list(retrieved)
-                if str(dict(row).get("memory_type") or "").strip().lower() == "fact"
-            ],
-            "selected_claims": [
-                _trace_compact_selected_memory(row)
-                for row in list(retrieved)
-                if str(dict(row).get("memory_type") or "").strip().lower() == "claim"
-            ],
-            "selected_messages": [
-                _trace_compact_selected_memory(row)
-                for row in list(retrieved)
-                if str(dict(row).get("memory_type") or "").strip().lower() == "message"
-            ],
-            "selected_documents": [
-                _trace_compact_selected_memory(row)
-                for row in list(retrieved)
-                if str(dict(row).get("memory_type") or "").strip().lower() in {"document", "document_chunk"}
-            ],
-            "selected_episodes": [
-                _trace_compact_episode_hit(row)
-                for row in list(_as_list(pack.get("dialog_episode_hits")))
-                if isinstance(row, dict)
-            ],
-            "filtered_out": [
-                _trace_compact_filtered_item(row)
-                for row in list(dropped or [])
-                if isinstance(row, dict)
-            ],
-            "truncated": [dict(x) for x in list(truncation_log or []) if isinstance(x, dict)],
-            "confidence": {
-                "selected_hits": int(hit_summary["retrieved"]),
-                "semantic_hits": int(hit_summary["semantic"]),
-                "episodic_hits": int(hit_summary["episodic"]),
-                "document_hits": int(hit_summary["docs"]),
-                "web_hits": int(hit_summary["web"]),
-                "top_selected_score": max(
-                    [_to_float(dict(row).get("score"), 0.0) or 0.0 for row in list(retrieved or [])],
-                    default=0.0,
-                ),
+        },
+        "exact_self_fact_hits": {
+            "fact_expectation": dict(_as_dict(pack.get("fact_expectation"))),
+            "self_facts_context": {
+                "found_predicates": [
+                    str(x).strip()
+                    for x in list(_as_dict(pack.get("self_facts_context")).get("found_predicates") or [])
+                    if str(x).strip()
+                ],
+                "expected_predicates": [
+                    str(x).strip()
+                    for x in list(_as_dict(pack.get("fact_expectation")).get("expected_predicates") or [])
+                    if str(x).strip()
+                ],
             },
-            "exact_self_fact_hits": {
-                "fact_expectation": dict(_as_dict(pack.get("fact_expectation"))),
-                "self_facts_context": {
-                    "found_predicates": [
-                        str(x).strip()
-                        for x in list(_as_dict(pack.get("self_facts_context")).get("found_predicates") or [])
-                        if str(x).strip()
-                    ],
-                    "expected_predicates": [
-                        str(x).strip()
-                        for x in list(_as_dict(pack.get("fact_expectation")).get("expected_predicates") or [])
-                        if str(x).strip()
-                    ],
-                },
-            },
-        }
-        trace.active_profile = dict(active_profile_snapshot or {})
-        return ctx
+        },
+        "task_continuity": dict(task_continuity or {}),
+    }
+    trace.active_profile = dict(active_profile_snapshot or {})
+
+
+def _memory_tool_blocks(pack: dict[str, Any]) -> dict[str, str]:
+    blocks = _as_dict(pack.get("blocks"))
+    keys = (
+        "memory_recall_mode",
+        "self_facts",
+        "fact_expectation_check",
+        "relevant_claims",
+        "recalled_dialog",
+        "document_evidence",
+        "exact_fact_evidence",
+        "supporting_messages",
+        "supporting_message",
+        "working_memory",
+        "session_summary",
+        "retrieved_semantic",
+        "retrieved_episodic",
+        "retrieved_docs",
+        "active_tool_state",
+        "unresolved_items",
+    )
+    out: dict[str, str] = {}
+    for key in keys:
+        text = str(blocks.get(key) or "").strip()
+        if text:
+            out[key] = text
+    return out
+
+
+def _memory_tool_result_payload(
+    *,
+    context_request: ContextBuildRequest,
+    pack: dict[str, Any],
+) -> dict[str, Any]:
+    selected = [
+        _trace_compact_selected_memory(row)
+        for row in list(_as_list(pack.get("selected")))[: max(1, int(context_request.top_k or 1))]
+        if isinstance(row, dict)
+    ]
+    plan = dict(_as_dict(pack.get("tool_retrieval_plan")))
+    return {
+        "tool": _MEMORY_TOOL_NAME,
+        "status": "ok",
+        "request_plan": {
+            **dict(plan or {}),
+            "namespace": str(context_request.namespace or ""),
+            "scopes": [str(scope.value) for scope in list(context_request.scopes or [])],
+            "top_k": int(context_request.top_k or 0),
+        },
+        "fanout_queries": [dict(x) for x in list(_as_list(pack.get("fanout_queries"))) if isinstance(x, dict)],
+        "fanout_sources": [str(x).strip() for x in list(_as_list(pack.get("fanout_sources"))) if str(x).strip()],
+        "recall_mode": str(pack.get("recall_mode") or ""),
+        "selected": selected,
+        "dialog_episode_hits": [
+            _trace_compact_episode_hit(row)
+            for row in list(_as_list(pack.get("dialog_episode_hits")))
+            if isinstance(row, dict)
+        ],
+        "fact_expectation": dict(_as_dict(pack.get("fact_expectation"))),
+        "self_facts_context": dict(_as_dict(pack.get("self_facts_context"))),
+        "open_questions": [str(x).strip() for x in list(_as_list(pack.get("open_questions"))) if str(x).strip()],
+        "current_decisions": [str(x).strip() for x in list(_as_list(pack.get("current_decisions"))) if str(x).strip()],
+        "task_continuity": dict(_as_dict(pack.get("task_continuity"))),
+        "blocks": _memory_tool_blocks(pack),
+    }
 
 
 class EpisodeContinuityStage(PipelineStage):
     name = "episode_continuity"
 
-    def __init__(self, planner: EpisodePlanner | None = None):
+    def __init__(self, planner: EpisodePlanner | None = None, memory_manager: Any | None = None):
         self.planner = planner or EpisodePlanner()
+        self.memory_manager = memory_manager
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         trace = _ensure_debug_trace(ctx)
@@ -723,7 +961,10 @@ class EpisodeContinuityStage(PipelineStage):
         if not user_text:
             ctx.logs.append("stage=episode_continuity skipped(empty)")
             return ctx
-        previous_active_task = dict(ctx.state.get("active_task") or {})
+        previous_active_task = self.planner.resolve_context_active_task(
+            state=dict(ctx.state or {}),
+            memory_context=dict(ctx.memory_context or {}),
+        )
         continuation_reason = self.planner.continuation_reason(
             user_text=user_text,
             active_task=previous_active_task,
@@ -748,6 +989,10 @@ class EpisodeContinuityStage(PipelineStage):
                 ctx.state.pop("active_goal", None)
                 ctx.state.pop("active_tasks", None)
                 ctx.state.pop("_active_task_source", None)
+                ctx.state.pop("open_questions", None)
+                ctx.state.pop("current_decisions", None)
+                ctx.state.pop("next_steps", None)
+                ctx.state.pop("unresolved_items", None)
                 trace.active_task = {
                     **dict(active_task_payload),
                     "source": "episode_planner",
@@ -776,6 +1021,12 @@ class EpisodeContinuityStage(PipelineStage):
                     decisions=[str(x) for x in list(active_task_state.decisions or []) if str(x).strip()],
                     confidence=float(active_task_state.confidence or 0.0),
                 )
+                self._sync_task_continuity(
+                    ctx,
+                    active_task={},
+                    previous_active_task=previous_active_task,
+                    source="episode_continuity_close",
+                )
                 return ctx
             ctx.state["active_task"] = dict(active_task_payload)
             ctx.state["active_goal"] = str(
@@ -786,20 +1037,12 @@ class EpisodeContinuityStage(PipelineStage):
             ).strip()
             ctx.state["active_tasks"] = [dict(active_task_payload)]
             ctx.state["_active_task_source"] = "episode_planner"
-            resolution_source = "runtime_hints"
-            resolution_reason = "runtime_decisions_fallback"
-            if continuation_reason in {"short_followup", "followup_like_meta"} and previous_active_task:
-                resolution_source = "continuation"
-                resolution_reason = continuation_reason
-            elif str(active_task_state.source_episode_id or "").strip():
-                resolution_source = "episode_hit"
-                resolution_reason = (
-                    "episode_open_questions"
-                    if list(active_task_state.open_questions or [])
-                    else "episode_decisions"
-                )
-            elif list(active_task_state.open_questions or []):
-                resolution_reason = "runtime_open_questions_fallback"
+            ctx.state["open_questions"] = [str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()]
+            ctx.state["current_decisions"] = [str(x) for x in list(active_task_state.decisions or []) if str(x).strip()]
+            ctx.state["next_steps"] = [str(x) for x in list(active_task_state.next_steps or []) if str(x).strip()]
+            ctx.state["unresolved_items"] = [str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()]
+            resolution_source = str(active_task_payload.get("planner_source") or "runtime_hints")
+            resolution_reason = str(active_task_payload.get("planner_reason") or "runtime_decisions_fallback")
             trace.active_task = {
                 **dict(active_task_payload),
                 "source": resolution_source,
@@ -828,6 +1071,12 @@ class EpisodeContinuityStage(PipelineStage):
                 decisions=[str(x) for x in list(active_task_state.decisions or []) if str(x).strip()],
                 confidence=float(active_task_state.confidence or 0.0),
             )
+            self._sync_task_continuity(
+                ctx,
+                active_task=active_task_payload,
+                previous_active_task=previous_active_task,
+                source="episode_continuity_resolved",
+            )
             return ctx
 
         if str(ctx.state.get("_active_task_source") or "").strip().lower() == "episode_planner":
@@ -842,6 +1091,10 @@ class EpisodeContinuityStage(PipelineStage):
             ctx.state.pop("active_goal", None)
             ctx.state.pop("active_tasks", None)
             ctx.state.pop("_active_task_source", None)
+            ctx.state.pop("open_questions", None)
+            ctx.state.pop("current_decisions", None)
+            ctx.state.pop("next_steps", None)
+            ctx.state.pop("unresolved_items", None)
             trace.active_task = {
                 "task_id": previous_task_id,
                 "topic": previous_topic,
@@ -859,9 +1112,44 @@ class EpisodeContinuityStage(PipelineStage):
                 source="episode_planner",
                 reason=clear_reason,
             )
+            self._sync_task_continuity(
+                ctx,
+                active_task={},
+                previous_active_task=previous_active_task,
+                source=f"episode_continuity_clear:{clear_reason}",
+            )
         else:
             ctx.logs.append("stage=episode_continuity no_active_task")
         return ctx
+
+    def _sync_task_continuity(
+        self,
+        ctx: PipelineContext,
+        *,
+        active_task: dict[str, Any] | None,
+        previous_active_task: dict[str, Any] | None,
+        source: str,
+    ) -> None:
+        manager = self.memory_manager
+        if manager is None or not hasattr(manager, "update_task_continuity"):
+            return
+        namespace = str(
+            _pick_value(
+                ctx.meta.get("conversation_id"),
+                ctx.state.get("conversation_id"),
+                "default",
+            )
+            or "default"
+        ).strip() or "default"
+        snapshot = manager.update_task_continuity(
+            namespace=namespace,
+            active_task=dict(active_task or {}),
+            previous_active_task=dict(previous_active_task or {}),
+            source=str(source or ""),
+            now_ts=float(_to_float(_pick_value(ctx.meta.get("now_ts"), ctx.meta.get("ts"), time.time()), time.time()) or time.time()),
+        )
+        if snapshot:
+            ctx.state["task_continuity"] = dict(snapshot)
 
 
 class PromptBuildStage(PipelineStage):
@@ -876,6 +1164,68 @@ class PromptBuildStage(PipelineStage):
         self.character_runtime = character_runtime
         self.persona_snapshot_builder = persona_snapshot_builder or PersonaSnapshotBuilder()
         self.identity_core_builder = identity_core_builder or IdentityCoreBuilder()
+
+    @staticmethod
+    def _build_persona_memory_context(memory_context: dict[str, Any] | None) -> dict[str, Any]:
+        row = _as_dict(memory_context)
+        blocks = _as_dict(row.get("blocks"))
+        block_keys = sorted(str(key) for key in list(blocks.keys()) if str(key).strip())
+        recall_mode = str(
+            _pick_value(
+                row.get("recall_mode"),
+                row.get("mode"),
+                row.get("memory_recall_mode"),
+                blocks.get("memory_recall_mode"),
+                "",
+            )
+            or ""
+        ).strip()
+        return {
+            "input_mode": "distilled",
+            "block_keys": block_keys,
+            "selected_count": int(len(_as_list(row.get("selected")))),
+            "recall_mode": recall_mode,
+        }
+
+    def _apply_persona_snapshot_prompt_policies(
+        self,
+        *,
+        ctx: PipelineContext,
+        payload: dict[str, Any],
+    ) -> None:
+        ctx.state["persona_snapshot_required"] = True
+        ctx.meta["persona_snapshot_required"] = True
+        ctx.tags["persona_snapshot_required"] = "true"
+        active_task = _as_dict(payload.get("active_task"))
+        relation_continuity = _as_dict(payload.get("relation_continuity"))
+        recent_user_state = _as_dict(payload.get("recent_user_state"))
+        identity_core_interaction = _as_dict(_as_dict(ctx.state.get("identity_core")).get("interaction_style"))
+
+        if active_task:
+            _append_policy_rule(
+                ctx.policies,
+                "Treat PERSONA_SNAPSHOT and ACTIVE_TASK as the primary continuity anchors for this turn; prefer them over loose recalled snippets unless the user clearly switches topic.",
+            )
+        if bool(relation_continuity.get("is_followup")):
+            _append_policy_rule(
+                ctx.policies,
+                "This turn looks like a follow-up. Preserve relation and task continuity unless the user explicitly changes topic.",
+            )
+        if bool(recent_user_state.get("low_bandwidth")):
+            _append_policy_rule(
+                ctx.policies,
+                "The user currently appears low-bandwidth. Keep the answer compact, avoid repeated clarification loops, and prefer direct next steps.",
+            )
+        if bool(recent_user_state.get("frustrated")):
+            _append_policy_rule(
+                ctx.policies,
+                "The user seems frustrated or worn down. Keep the tone steady, reduce teasing, and prioritize concrete help over flourish.",
+            )
+        if bool(identity_core_interaction.get("prefers_examples_on_user_code")):
+            _append_policy_rule(
+                ctx.policies,
+                "When examples would help, prefer examples grounded in the user's current code or task instead of generic toy snippets.",
+            )
 
     def _build_persona_snapshot_payload(
         self,
@@ -952,17 +1302,24 @@ class PromptBuildStage(PipelineStage):
         ctx.meta["identity_core_memory_snapshot"] = dict(memory_identity_core_snapshot)
         ctx.meta["identity_core_runtime_fallback"] = dict(stored_identity_core)
         ctx.meta["character_trait_defaults"] = dict(character_trait_defaults)
+        persona_meta = dict(ctx.meta or {})
+        persona_meta["current_user_message"] = str(_pick_value(ctx.clean_user_msg, ctx.user_msg, "") or "")
+        persona_meta["route"] = str(ctx.route or "").strip().lower()
+        persona_meta["context_tags"] = dict(ctx.tags or {})
         persona_snapshot = self.persona_snapshot_builder.build(
             character_id=active_character_id,
             active_profile_snapshot=dict(ctx.state.get("active_profile_snapshot") or {}),
             identity_core_snapshot=dict(identity_core_payload),
-            memory_context=dict(ctx.memory_context or {}),
+            memory_context=self._build_persona_memory_context(dict(ctx.memory_context or {})),
             state=dict(ctx.state or {}),
-            meta=dict(ctx.meta or {}),
+            meta=persona_meta,
         )
         payload = {
             "mood": str(persona_snapshot.mood or "neutral").strip().lower() or "neutral",
             "relation_state": dict(persona_snapshot.relation_state or {}),
+            "active_task": dict(persona_snapshot.active_task or {}),
+            "relation_continuity": dict(persona_snapshot.relation_continuity or {}),
+            "recent_user_state": dict(persona_snapshot.recent_user_state or {}),
             "user_addressing": dict(persona_snapshot.user_addressing or {}),
             "stable_traits": dict(persona_snapshot.stable_traits or {}),
             "response_bias": dict(persona_snapshot.response_bias or {}),
@@ -973,15 +1330,21 @@ class PromptBuildStage(PipelineStage):
             "debug": dict(persona_snapshot.debug or {}),
         }
         ctx.state["persona_snapshot"] = dict(payload)
+        ctx.state["persona_snapshot_required"] = True
         prompt_state["persona_snapshot"] = dict(payload)
+        prompt_state["persona_snapshot_required"] = True
         persona_sources = _as_dict(payload.get("debug", {}).get("sources"))
         ctx.meta["persona_snapshot_sources"] = dict(persona_sources)
+        ctx.meta["persona_snapshot_required"] = True
         ctx.meta["persona_snapshot_built"] = {
             "character_id": active_character_id,
             "mood": payload["mood"],
             "active_mode": payload["active_mode"],
             "profile_keys": list(_as_list(payload.get("debug", {}).get("profile_keys"))),
             "relation_fields": sorted(dict(payload.get("relation_state") or {}).keys()),
+            "active_task_present": bool(payload.get("active_task")),
+            "relation_continuity_present": bool(payload.get("relation_continuity")),
+            "recent_user_state_present": bool(payload.get("recent_user_state")),
             "stable_trait_fields": sorted(dict(payload.get("stable_traits") or {}).keys()),
             "boundary_fields": sorted(dict(payload.get("boundaries") or {}).keys()),
             "emotional_handling_fields": sorted(dict(payload.get("emotional_handling") or {}).keys()),
@@ -990,6 +1353,9 @@ class PromptBuildStage(PipelineStage):
         ctx.meta["persona_snapshot_applied"] = {
             "character_id": active_character_id,
             "relation_fields": sorted(dict(payload.get("relation_state") or {}).keys()),
+            "active_task_fields": sorted(dict(payload.get("active_task") or {}).keys()),
+            "relation_continuity_fields": sorted(dict(payload.get("relation_continuity") or {}).keys()),
+            "recent_user_state_fields": sorted(dict(payload.get("recent_user_state") or {}).keys()),
             "applied_traits": sorted(dict(payload.get("stable_traits") or {}).keys()),
             "boundary_fields": sorted(dict(payload.get("boundaries") or {}).keys()),
             "emotional_handling_fields": sorted(dict(payload.get("emotional_handling") or {}).keys()),
@@ -1046,6 +1412,10 @@ class PromptBuildStage(PipelineStage):
             active_mode_source=str(persona_sources.get("active_mode_source") or ""),
             interaction_style_source=dict(_as_dict(persona_sources.get("interaction_style_source"))),
             response_bias_sources=sorted(list(_as_list(persona_sources.get("response_bias_sources")))),
+            active_task_source=str(persona_sources.get("active_task_source") or ""),
+            relation_continuity_sources=sorted(list(_as_list(persona_sources.get("relation_continuity_sources")))),
+            recent_user_state_sources=sorted(list(_as_list(persona_sources.get("recent_user_state_sources")))),
+            memory_input_mode=str(persona_sources.get("memory_input_mode") or ""),
             turn_local_fields=sorted(list(_as_list(persona_sources.get("turn_local_fields")))),
         )
         _emit_turn_summary(
@@ -1054,6 +1424,8 @@ class PromptBuildStage(PipelineStage):
             summary=(
                 f"traits={len(dict(payload.get('stable_traits') or {}))} "
                 f"relation={len(dict(payload.get('relation_state') or {}))} "
+                f"continuity={len(dict(payload.get('relation_continuity') or {}))} "
+                f"user_state={len(dict(payload.get('recent_user_state') or {}))} "
                 f"hints={len(dict(payload.get('user_profile_hints') or {}))} "
                 f"boundaries={len(dict(payload.get('boundaries') or {}))} "
                 f"emotional_handling={len(dict(payload.get('emotional_handling') or {}))}"
@@ -1063,6 +1435,9 @@ class PromptBuildStage(PipelineStage):
             active_mode=payload["active_mode"],
             profile_keys=sorted(list(_as_list(payload.get("debug", {}).get("profile_keys")))),
             relation_fields=sorted(dict(payload.get("relation_state") or {}).keys()),
+            active_task_fields=sorted(dict(payload.get("active_task") or {}).keys()),
+            relation_continuity_fields=sorted(dict(payload.get("relation_continuity") or {}).keys()),
+            recent_user_state_fields=sorted(dict(payload.get("recent_user_state") or {}).keys()),
             stable_trait_fields=sorted(dict(payload.get("stable_traits") or {}).keys()),
             boundary_fields=sorted(dict(payload.get("boundaries") or {}).keys()),
             emotional_handling_fields=sorted(dict(payload.get("emotional_handling") or {}).keys()),
@@ -1074,6 +1449,7 @@ class PromptBuildStage(PipelineStage):
             summary=(
                 f"traits={len(dict(payload.get('stable_traits') or {}))} "
                 f"addressing={len(dict(payload.get('user_addressing') or {}))} "
+                f"task={len(dict(payload.get('active_task') or {}))} "
                 f"persistent={len(list(_as_list(persona_sources.get('profile_hint_fields'))))} "
                 f"boundaries={len(dict(payload.get('boundaries') or {}))} "
                 f"emotional_handling={len(dict(payload.get('emotional_handling') or {}))}"
@@ -1087,6 +1463,9 @@ class PromptBuildStage(PipelineStage):
                 ]
             ),
             relation_fields=sorted(dict(payload.get("relation_state") or {}).keys()),
+            active_task_fields=sorted(dict(payload.get("active_task") or {}).keys()),
+            relation_continuity_fields=sorted(dict(payload.get("relation_continuity") or {}).keys()),
+            recent_user_state_fields=sorted(dict(payload.get("recent_user_state") or {}).keys()),
             boundary_fields=sorted(dict(payload.get("boundaries") or {}).keys()),
             emotional_handling_fields=sorted(dict(payload.get("emotional_handling") or {}).keys()),
             persistent_fields=sorted(
@@ -1134,6 +1513,7 @@ class PromptBuildStage(PipelineStage):
             "emotional_handling_source": dict(_as_dict(persona_sources.get("emotional_handling_source"))),
         }
         trace.active_profile = dict(_as_dict(ctx.state.get("active_profile_snapshot")))
+        self._apply_persona_snapshot_prompt_policies(ctx=ctx, payload=payload)
         return payload
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
@@ -1172,7 +1552,14 @@ class PromptBuildStage(PipelineStage):
             prompt_state["plan"] = ctx.plan
         prompt_state["active_task"] = dict(_as_dict(ctx.state.get("active_task")))
         prompt_state["active_tasks"] = [dict(x) for x in list(_as_list(ctx.state.get("active_tasks"))) if isinstance(x, dict)]
-        memory_context_for_prompt = _as_dict(ctx.memory_context)
+        memory_context_for_prompt = _guard_memory_context_for_self_memory_claim(
+            _as_dict(ctx.memory_context),
+            query_text=str(ctx.clean_user_msg or ctx.user_msg or ""),
+        )
+        claim_guard = _as_dict(memory_context_for_prompt.get("self_memory_claim_guard"))
+        if bool(claim_guard.get("applied")):
+            ctx.meta["self_memory_claim_guard"] = dict(claim_guard)
+            ctx.logs.append("stage=prompt_build self_memory_claim_guard")
         memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
         if memory_context_for_prompt:
             selected = list(_as_list(memory_context_for_prompt.get("selected")))
@@ -1204,6 +1591,12 @@ class PromptBuildStage(PipelineStage):
                     ctx.policies,
                     f"Missing exact memory facts for this turn: {', '.join(missing_predicates)}. Do not present them as remembered facts unless they are explicitly present in SELF_FACTS or FACT_EXPECTATION_CHECK.",
                 )
+        relevant_claims = str(memory_blocks.get("relevant_claims") or "").strip()
+        if relevant_claims and _is_self_memory_claim_query(str(ctx.clean_user_msg or ctx.user_msg or "")):
+            _append_policy_rule(
+                ctx.policies,
+                "If RELEVANT_CLAIMS is present for a self-memory preference or usage question, answer from RELEVANT_CLAIMS before relying on session summary or working notes.",
+            )
         if bool(ctx.meta.get("think", False)):
             rules = ctx.policies.get("rules")
             if not isinstance(rules, list):
@@ -1621,6 +2014,9 @@ class PromptEngineStage(PipelineStage):
 
 class GenerateStage(PipelineStage):
     name = "generate"
+    _build_persona_snapshot_payload = PromptBuildStage._build_persona_snapshot_payload
+    _build_persona_memory_context = staticmethod(PromptBuildStage._build_persona_memory_context)
+    _apply_persona_snapshot_prompt_policies = PromptBuildStage._apply_persona_snapshot_prompt_policies
 
     def __init__(
         self,
@@ -1631,6 +2027,8 @@ class GenerateStage(PipelineStage):
         self.provider = provider
         self.character_runtime = character_runtime
         self.character_engine = character_runtime
+        self.persona_snapshot_builder = PersonaSnapshotBuilder()
+        self.identity_core_builder = IdentityCoreBuilder()
         self.studio_generator = studio_generator or StudioGenerator()
         self._studio_sessions: dict[str, dict[str, Any]] = {}
 
@@ -1785,45 +2183,596 @@ class GenerateStage(PipelineStage):
                 return ctx
 
         req = self._build_request(ctx)
+        use_agent_loop = bool(_to_bool(req.metadata.get("agent_loop"), default=False))
         stream_answer_cb = ctx.meta.get("stream_on_answer_chunk")
         stream_thinking_cb = ctx.meta.get("stream_on_thinking_chunk")
-        use_stream = callable(stream_answer_cb) or callable(stream_thinking_cb)
+        use_stream = (callable(stream_answer_cb) or callable(stream_thinking_cb)) and not use_agent_loop
+        if not use_agent_loop:
+            ctx.state.pop("agent_loop_trace", None)
+            ctx.state.pop("memory_reasoning_snapshot", None)
 
         if use_stream:
             stream_result = self._generate_stream(ctx, req, on_answer=stream_answer_cb, on_thinking=stream_thinking_cb)
             if stream_result is not None:
-                text_out, thinking_out, model_name = stream_result
+                text_out, thinking_out, model_name, stream_stats = stream_result
                 ctx.raw_output = text_out
                 ctx.text = text_out
                 ctx.thinking = thinking_out
-                ctx.stats = {
+                stats = {
                     "served_model": str(model_name or req.model or ""),
-                    "answer_ms": 0.0,
+                    "answer_ms": float(_to_float(_as_dict(stream_stats).get("answer_ms"), 0.0) or 0.0),
                     "prompt_eval_count": 0,
                     "eval_count": 0,
                     "total_tokens": 0,
                     "streaming": True,
+                    "verbose_enabled": bool(_to_bool(ctx.meta.get("verbose"), default=False)),
                 }
+                stats.update(_as_dict(stream_stats))
+                ctx.stats = stats
                 ctx.logs.append(f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')} stream=1")
                 return ctx
+        elif callable(stream_answer_cb) or callable(stream_thinking_cb):
+            ctx.logs.append("stage=generate stream=disabled(agent_loop)")
 
-        resp = self.provider.generate(req)
+        agent_tool_calls = 0
+        agent_passes = 1
+        if use_agent_loop:
+            resp, agent_tool_calls, agent_passes = self._generate_with_agent_loop(ctx, req)
+        else:
+            resp = self.provider.generate(req)
         ctx.raw_output = str(resp.text or "")
         ctx.text = ctx.raw_output
         ctx.thinking = str(getattr(resp, "thinking", "") or "")
-        if resp.tool_calls:
+        if resp.tool_calls and not use_agent_loop:
             ctx.tool_calls = [_tool_call_to_dict(x) for x in list(resp.tool_calls or [])]
-        ctx.stats = {
+        stats = {
             "served_model": str(resp.model or req.model or ""),
             "answer_ms": float(resp.timings.latency_ms or 0.0),
             "prompt_eval_count": int(resp.usage.prompt_tokens or 0),
             "eval_count": int(resp.usage.completion_tokens or 0),
             "total_tokens": int(resp.usage.total_tokens or 0),
+            "agent_loop": bool(use_agent_loop),
+            "agent_tool_calls": int(agent_tool_calls),
+            "agent_passes": int(agent_passes),
+            "verbose_enabled": bool(_to_bool(ctx.meta.get("verbose"), default=False)),
         }
-        ctx.logs.append(f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')}")
+        ctx.stats = self._merge_llm_stats(
+            stats,
+            usage=getattr(resp, "usage", None),
+            timings=getattr(resp, "timings", None),
+        )
+        if use_agent_loop:
+            ctx.logs.append(
+                f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')} "
+                f"agent_loop=1 tool_calls={agent_tool_calls} passes={agent_passes}"
+            )
+        else:
+            ctx.logs.append(f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')}")
         return ctx
 
-    def _generate_stream(self, ctx: PipelineContext, req: LLMRequest, *, on_answer, on_thinking) -> tuple[str, str, str] | None:
+    def _generate_with_agent_loop(self, ctx: PipelineContext, req: LLMRequest) -> tuple[LLMResponse, int, int]:
+        messages = list(req.messages or [])
+        max_tool_calls = _agent_loop_tool_limit(ctx)
+        executed_calls = 0
+        pass_count = 0
+        final_response: LLMResponse | None = None
+        iteration_rows: list[dict[str, Any]] = []
+        tool_rows: list[dict[str, Any]] = []
+        
+        # Memory gate: проверяем, нужен ли принудительный memory retrieval
+        # Если gate срабатывает, добавляем мягкую подсказку в system message
+        memory_gate_triggered = _memory_gate_should_trigger(ctx)
+        if memory_gate_triggered:
+            ctx.logs.append("memory_gate triggered score>=3")
+            # Добавляем подсказку в начало messages
+            gate_instruction = (
+                "Memory recall hint: This query may depend on prior context, "
+                "user preferences, or unresolved questions. Consider calling "
+                "memory_retrieve before answering if you need more information."
+            )
+            # Вставляем после первого system message (если есть)
+            insert_index = 0
+            for i, msg in enumerate(messages):
+                if msg.role == "system":
+                    insert_index = i + 1
+                else:
+                    break
+            messages.insert(insert_index, Message(role="system", content=gate_instruction))
+
+        while True:
+            pass_count += 1
+            remaining = max(0, int(max_tool_calls) - int(executed_calls))
+            active_tools = list(req.tools or []) if remaining > 0 else []
+            loop_messages = list(messages)
+            memory_reasoning_snapshot: dict[str, Any] = {}
+            if executed_calls > 0:
+                loop_messages, memory_reasoning_snapshot = self._inject_memory_reasoning_check(
+                    ctx,
+                    messages=loop_messages,
+                )
+            loop_req = replace(
+                req,
+                messages=list(loop_messages),
+                tools=active_tools,
+                metadata={
+                    **dict(req.metadata or {}),
+                    "agent_loop_iteration": int(pass_count),
+                    "agent_loop_remaining_tools": int(remaining),
+                    "reason_with_memory": bool(memory_reasoning_snapshot),
+                    "memory_gate_triggered": memory_gate_triggered,
+                },
+            )
+            iteration_row = {
+                "iteration": int(pass_count),
+                "remaining_tools": int(remaining),
+                "tools_enabled": [str(tool.name or "") for tool in list(active_tools or []) if str(tool.name or "").strip()],
+                "reason_with_memory": bool(memory_reasoning_snapshot),
+                "memory_reasoning_sections": sorted(memory_reasoning_snapshot.keys()),
+                "memory_gate_triggered": memory_gate_triggered,
+            }
+            if memory_reasoning_snapshot:
+                ctx.logs.append(
+                    "stage=generate agent_loop memory_reasoning=1 "
+                    f"sections={','.join(sorted(memory_reasoning_snapshot.keys()))}"
+                )
+            response = self.provider.generate(loop_req)
+            if not response.tool_calls or not active_tools:
+                iteration_row["tool_calls_requested"] = int(len(list(response.tool_calls or [])))
+                iteration_row["executed_tool_calls"] = 0
+                iteration_rows.append(iteration_row)
+                final_response = response
+                break
+
+            tool_calls = list(response.tool_calls or [])[:remaining]
+            if not tool_calls:
+                iteration_row["tool_calls_requested"] = int(len(list(response.tool_calls or [])))
+                iteration_row["executed_tool_calls"] = 0
+                iteration_rows.append(iteration_row)
+                final_response = response
+                break
+
+            if len(tool_calls) < len(list(response.tool_calls or [])):
+                iteration_row["tool_calls_truncated"] = int(len(list(response.tool_calls or [])) - len(tool_calls))
+                ctx.logs.append(
+                    f"stage=generate agent_loop tool_calls_truncated={len(list(response.tool_calls or [])) - len(tool_calls)}"
+                )
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=str(response.text or ""),
+                    tool_calls=list(tool_calls),
+                )
+            )
+            executed_names: list[str] = []
+            for call in tool_calls:
+                content, is_error = self._execute_agent_tool_call(ctx, call)
+                messages.append(
+                    Message(
+                        role="tool",
+                        name=str(call.name or ""),
+                        tool_call_id=str(call.id or ""),
+                        content=content,
+                    )
+                )
+                executed_names.append(str(call.name or ""))
+                tool_rows.append(
+                    {
+                        "iteration": int(pass_count),
+                        "tool": str(call.name or ""),
+                        "call_id": str(call.id or ""),
+                        "ok": bool(not is_error),
+                        "result_preview": _preview_text(content, 180),
+                    }
+                )
+                ctx.logs.append(
+                    f"stage=generate agent_loop tool={call.name} ok={int(not is_error)} call_id={call.id}"
+                )
+            iteration_row["tool_calls_requested"] = int(len(list(response.tool_calls or [])))
+            iteration_row["executed_tool_calls"] = int(len(tool_calls))
+            iteration_row["executed_tools"] = executed_names
+            iteration_rows.append(iteration_row)
+            executed_calls += len(tool_calls)
+
+        if final_response is None:
+            raise RuntimeError("agent loop finished without final response")
+        ctx.state["agent_loop_trace"] = {
+            "agent_loop": True,
+            "agent_tool_calls": int(executed_calls),
+            "agent_passes": int(pass_count),
+            "iterations": [dict(x) for x in list(iteration_rows or []) if isinstance(x, dict)],
+            "executed_tools": [dict(x) for x in list(tool_rows or []) if isinstance(x, dict)],
+        }
+        return final_response, executed_calls, pass_count
+
+    def _inject_memory_reasoning_check(
+        self,
+        ctx: PipelineContext,
+        *,
+        messages: list[Message],
+    ) -> tuple[list[Message], dict[str, Any]]:
+        snapshot = self._build_memory_reasoning_snapshot(ctx)
+        if not snapshot:
+            ctx.state.pop("memory_reasoning_snapshot", None)
+            return (list(messages or []), {})
+
+        ctx.state["memory_reasoning_snapshot"] = dict(snapshot)
+        clean_messages = [
+            message
+            for message in list(messages or [])
+            if not (
+                str(getattr(message, "role", "") or "").strip().lower() == "system"
+                and str(getattr(message, "content", "") or "").startswith(_MEMORY_REASONING_TAG)
+            )
+        ]
+        insert_at = 0
+        while insert_at < len(clean_messages) and str(clean_messages[insert_at].role or "") == "system":
+            insert_at += 1
+        clean_messages.insert(
+            insert_at,
+            Message(
+                role="system",
+                content=(
+                    f"{_MEMORY_REASONING_TAG}\n"
+                    "Use this compact memory snapshot only as a pre-answer consistency check.\n"
+                    "Silently verify that the final answer does not contradict the profile facts, identity core, or active task.\n"
+                    "If there is conflict or uncertainty, answer cautiously, avoid overclaiming, and prefer continuity over invention.\n"
+                    f"{_compact_json(snapshot)}"
+                ),
+            ),
+        )
+        return (clean_messages, snapshot)
+
+    def _build_memory_reasoning_snapshot(self, ctx: PipelineContext) -> dict[str, Any]:
+        state = _as_dict(ctx.state)
+        active_profile = self._flatten_memory_reasoning_profile(
+            _as_dict(state.get("active_profile_snapshot"))
+        )
+        identity_core = self._compact_memory_reasoning_identity_core(
+            _as_dict(state.get("identity_core"))
+        )
+        active_task = self._compact_memory_reasoning_active_task(
+            _pick_value(
+                state.get("active_task"),
+                _as_dict(state.get("task_continuity")).get("active_task"),
+                {},
+            )
+        )
+        snapshot: dict[str, Any] = {}
+        profile_facts = self._compact_memory_reasoning_profile_facts(active_profile)
+        if not profile_facts:
+            profile_facts = self._fallback_memory_reasoning_profile_facts(identity_core)
+        if profile_facts:
+            snapshot["profile_facts"] = profile_facts
+        if identity_core:
+            snapshot["identity_core"] = identity_core
+        if active_task:
+            snapshot["active_task"] = active_task
+        return snapshot
+
+    @staticmethod
+    def _flatten_memory_reasoning_profile(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+        row = dict(snapshot or {})
+        resolved = _as_dict(row.get("resolved_profile"))
+        if resolved:
+            return dict(resolved)
+        has_layered_snapshot = any(
+            isinstance(row.get(layer_name), dict) and bool(dict(row.get(layer_name) or {}))
+            for layer_name in ("persistent_traits", "volatile_preferences", "session_preferences")
+        )
+        if has_layered_snapshot:
+            return flatten_governor_profile_snapshot(
+                row,
+                include_active_facts=False,
+            )
+        return {
+            key: value
+            for key, value in row.items()
+            if key not in {
+                "namespace",
+                "active_facts",
+                "conflicts",
+                "persistent_traits",
+                "volatile_preferences",
+                "session_preferences",
+                "resolved_profile",
+                "debug",
+                "updated_at",
+            }
+        }
+
+    @staticmethod
+    def _compact_memory_reasoning_profile_facts(profile: dict[str, Any] | None) -> dict[str, Any]:
+        row = dict(profile or {})
+        out: dict[str, Any] = {}
+        for key in (
+            "identity_name",
+            "prefers_short_answers",
+            "prefers_examples_on_user_code",
+            "allow_light_teasing",
+            "avoid_baby_talk",
+        ):
+            if key in row and not _is_empty_string_list_or_value(row.get(key)):
+                out[key] = row.get(key)
+        for key in (
+            "assistant_warmth",
+            "assistant_directness",
+            "assistant_teasing",
+            "relation_technical_collaboration",
+        ):
+            value = _to_float(row.get(key), None)
+            if value is not None:
+                out[key] = round(float(value), 3)
+        if "preferred_answer_brevity" in row and "prefers_short_answers" not in out:
+            value = _to_float(row.get("preferred_answer_brevity"), None)
+            if value is not None:
+                out["prefers_short_answers"] = round(float(value), 3)
+        return out
+
+    @staticmethod
+    def _fallback_memory_reasoning_profile_facts(identity_core: dict[str, Any] | None) -> dict[str, Any]:
+        row = dict(identity_core or {})
+        out: dict[str, Any] = {}
+        addressing = _as_dict(row.get("addressing"))
+        interaction_style = _as_dict(row.get("interaction_style"))
+        boundaries = _as_dict(row.get("boundaries"))
+        assistant_trait_baseline = _as_dict(row.get("assistant_trait_baseline"))
+
+        canonical_name = str(addressing.get("canonical_name") or "").strip()
+        if canonical_name:
+            out["identity_name"] = canonical_name
+        for key in ("prefers_short_answers", "prefers_examples_on_user_code", "allows_light_teasing"):
+            if key in interaction_style and not _is_empty_string_list_or_value(interaction_style.get(key)):
+                mapped_key = "allow_light_teasing" if key == "allows_light_teasing" else key
+                out[mapped_key] = interaction_style.get(key)
+        if "avoid_baby_talk" in boundaries:
+            out["avoid_baby_talk"] = bool(boundaries.get("avoid_baby_talk"))
+        directness = _to_float(
+            _pick_value(
+                interaction_style.get("prefers_directness"),
+                assistant_trait_baseline.get("directness_baseline"),
+                None,
+            ),
+            None,
+        )
+        if directness is not None:
+            out["assistant_directness"] = round(float(directness), 3)
+        warmth = _to_float(assistant_trait_baseline.get("warmth_baseline"), None)
+        if warmth is not None:
+            out["assistant_warmth"] = round(float(warmth), 3)
+        return out
+
+    @staticmethod
+    def _compact_memory_reasoning_identity_core(identity_core: dict[str, Any] | None) -> dict[str, Any]:
+        row = dict(identity_core or {})
+        out: dict[str, Any] = {}
+
+        addressing = _as_dict(row.get("addressing"))
+        if addressing:
+            compact_addressing: dict[str, Any] = {}
+            canonical_name = str(addressing.get("canonical_name") or "").strip()
+            if canonical_name:
+                compact_addressing["canonical_name"] = canonical_name
+            allowed_forms = [str(x).strip() for x in list(addressing.get("allowed_forms") or []) if str(x).strip()]
+            if allowed_forms:
+                compact_addressing["allowed_forms"] = allowed_forms[:3]
+            if "allow_diminutives" in addressing:
+                compact_addressing["allow_diminutives"] = bool(addressing.get("allow_diminutives"))
+            if compact_addressing:
+                out["addressing"] = compact_addressing
+
+        interaction_style = _as_dict(row.get("interaction_style"))
+        if interaction_style:
+            compact_style: dict[str, Any] = {}
+            for key in ("prefers_directness", "prefers_short_answers"):
+                value = _to_float(interaction_style.get(key), None)
+                if value is not None:
+                    compact_style[key] = round(float(value), 3)
+            for key in ("prefers_examples_on_user_code", "allows_light_teasing", "technical_collaboration_style"):
+                if key in interaction_style and not _is_empty_string_list_or_value(interaction_style.get(key)):
+                    compact_style[key] = interaction_style.get(key)
+            if compact_style:
+                out["interaction_style"] = compact_style
+
+        boundaries = _as_dict(row.get("boundaries"))
+        if boundaries:
+            compact_boundaries = {
+                key: bool(boundaries.get(key))
+                for key in ("avoid_baby_talk", "do_not_invent_user_facts", "avoid_overformal_tone")
+                if key in boundaries
+            }
+            if compact_boundaries:
+                out["boundaries"] = compact_boundaries
+
+        emotional_handling = _as_dict(row.get("emotional_handling"))
+        if emotional_handling:
+            compact_emotional: dict[str, Any] = {}
+            for key in ("deescalate_on_irritation", "treat_short_replies_as_low_bandwidth"):
+                if key in emotional_handling:
+                    compact_emotional[key] = bool(emotional_handling.get(key))
+            for key in ("warmth_upshift_on_user_distress", "playfulness_downshift_on_user_distress"):
+                value = _to_float(emotional_handling.get(key), None)
+                if value is not None:
+                    compact_emotional[key] = round(float(value), 3)
+            if compact_emotional:
+                out["emotional_handling"] = compact_emotional
+
+        assistant_trait_baseline = _as_dict(row.get("assistant_trait_baseline"))
+        if assistant_trait_baseline:
+            compact_baseline: dict[str, Any] = {}
+            for key in ("warmth_baseline", "directness_baseline", "sarcasm_ceiling"):
+                value = _to_float(assistant_trait_baseline.get(key), None)
+                if value is not None:
+                    compact_baseline[key] = round(float(value), 3)
+            if compact_baseline:
+                out["assistant_trait_baseline"] = compact_baseline
+
+        return out
+
+    @staticmethod
+    def _compact_memory_reasoning_active_task(value: Any) -> dict[str, Any]:
+        row = _as_dict(value)
+        if not row:
+            return {}
+        summary = str(
+            _pick_value(
+                row.get("current_goal"),
+                row.get("summary_short"),
+                row.get("topic"),
+                "",
+            )
+            or ""
+        ).strip()
+        out = {
+            "task_id": str(row.get("task_id") or "").strip(),
+            "topic": str(row.get("topic") or "").strip(),
+            "status": str(row.get("status") or "").strip().lower(),
+            "summary": summary,
+            "next_steps": [str(x).strip() for x in list(row.get("next_steps") or []) if str(x).strip()][:3],
+            "open_questions": [str(x).strip() for x in list(row.get("open_questions") or []) if str(x).strip()][:3],
+        }
+        return {
+            key: value
+            for key, value in out.items()
+            if not _is_empty_string_list_or_value(value)
+        }
+
+    def _execute_agent_tool_call(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
+        name = str(call.name or "").strip().lower()
+        if name == _MEMORY_TOOL_NAME:
+            return self._execute_memory_retrieve_tool(ctx, call)
+
+        executor = ctx.meta.get("tool_executor")
+        if not callable(executor):
+            payload = {
+                "tool": str(call.name or ""),
+                "status": "error",
+                "error": f"tool '{call.name}' is not available",
+            }
+            return _compact_json(payload), True
+        try:
+            result = executor(_tool_call_to_dict(call))
+        except Exception as exc:
+            payload = {
+                "tool": str(call.name or ""),
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            return _compact_json(payload), True
+        payload = {
+            "tool": str(call.name or ""),
+            "status": "ok",
+            "result": result,
+        }
+        return _compact_json(payload), False
+
+    def _execute_memory_retrieve_tool(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
+        manager = ctx.meta.get("memory_manager")
+        if manager is None or not hasattr(manager, "build_context"):
+            payload = {
+                "tool": _MEMORY_TOOL_NAME,
+                "status": "error",
+                "error": "memory manager is not available",
+            }
+            return _compact_json(payload), True
+
+        args = dict(call.arguments or {})
+        if not any(key in args for key in ("mode", "topic_hints", "time_hint", "sources")):
+            args = {
+                "mode": "context",
+                "topic_hints": [str(_pick_value(args.get("focus"), args.get("query"), ctx.clean_user_msg, "")).strip()],
+                "time_hint": "recent",
+                "sources": ["all"],
+                "top_k": _to_int(args.get("top_k"), 6) or 6,
+                "scopes": list(_as_list(args.get("scopes"))),
+            }
+        plan = normalize_memory_retrieval_plan(args, default_top_k=6)
+        base_query = str(_pick_value(ctx.clean_user_msg, ctx.user_msg, "")).strip()
+        scope_names = list(_as_list(args.get("scopes")))
+
+        try:
+            context_request = _build_memory_context_request(
+                ctx,
+                cfg=load_config(),
+                query=base_query,
+                top_k=int(plan.top_k or 0),
+                scope_names=scope_names,
+            )
+            pack = build_memory_tool_context_pack(
+                manager,
+                request=context_request,
+                plan=plan,
+            )
+            _apply_memory_context_pack(
+                ctx,
+                manager=manager,
+                context_request=context_request,
+                pack=pack,
+                query=base_query,
+                stage_name="agent_memory_retrieve",
+            )
+        except Exception as exc:
+            payload = {
+                "tool": _MEMORY_TOOL_NAME,
+                "status": "error",
+                "request_plan": plan.to_dict(),
+                "query": base_query,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            return _compact_json(payload), True
+
+        payload = _memory_tool_result_payload(
+            context_request=context_request,
+            pack=pack,
+        )
+        return _compact_json(payload), False
+
+    @staticmethod
+    def _merge_llm_stats(
+        base: dict[str, Any] | None,
+        *,
+        usage=None,
+        timings=None,
+    ) -> dict[str, Any]:
+        stats = dict(base or {})
+        if usage is not None:
+            prompt_tokens = _to_int(getattr(usage, "prompt_tokens", None), None)
+            completion_tokens = _to_int(getattr(usage, "completion_tokens", None), None)
+            total_tokens = _to_int(getattr(usage, "total_tokens", None), None)
+            if prompt_tokens is not None:
+                stats["prompt_eval_count"] = int(prompt_tokens)
+            if completion_tokens is not None:
+                stats["eval_count"] = int(completion_tokens)
+            if total_tokens is not None:
+                stats["total_tokens"] = int(total_tokens)
+            elif prompt_tokens is not None or completion_tokens is not None:
+                stats["total_tokens"] = int((stats.get("prompt_eval_count") or 0) + (stats.get("eval_count") or 0))
+        if timings is not None:
+            answer_ms = _to_float(getattr(timings, "latency_ms", None), None)
+            total_duration_ms = _to_float(getattr(timings, "total_duration_ms", None), None)
+            load_duration_ms = _to_float(getattr(timings, "load_duration_ms", None), None)
+            prompt_eval_duration_ms = _to_float(getattr(timings, "prompt_eval_duration_ms", None), None)
+            eval_duration_ms = _to_float(getattr(timings, "eval_duration_ms", None), None)
+            if answer_ms is not None:
+                stats["answer_ms"] = float(answer_ms)
+            if total_duration_ms is not None and total_duration_ms > 0:
+                stats["total_duration_ms"] = float(total_duration_ms)
+            if load_duration_ms is not None and load_duration_ms > 0:
+                stats["load_duration_ms"] = float(load_duration_ms)
+            if prompt_eval_duration_ms is not None and prompt_eval_duration_ms > 0:
+                stats["prompt_eval_duration_ms"] = float(prompt_eval_duration_ms)
+            if eval_duration_ms is not None and eval_duration_ms > 0:
+                stats["eval_duration_ms"] = float(eval_duration_ms)
+        eval_count = int(_to_int(stats.get("eval_count"), 0) or 0)
+        eval_duration_ms = float(_to_float(stats.get("eval_duration_ms"), 0.0) or 0.0)
+        if eval_count > 0 and eval_duration_ms > 0:
+            stats["eval_tokens_per_sec"] = round(float(eval_count) / (eval_duration_ms / 1000.0), 2)
+        prompt_count = int(_to_int(stats.get("prompt_eval_count"), 0) or 0)
+        prompt_duration_ms = float(_to_float(stats.get("prompt_eval_duration_ms"), 0.0) or 0.0)
+        if prompt_count > 0 and prompt_duration_ms > 0:
+            stats["prompt_tokens_per_sec"] = round(float(prompt_count) / (prompt_duration_ms / 1000.0), 2)
+        return stats
+
+    def _generate_stream(self, ctx: PipelineContext, req: LLMRequest, *, on_answer, on_thinking) -> tuple[str, str, str, dict[str, Any]] | None:
         stream = getattr(self.provider, "stream", None)
         if not callable(stream):
             return None
@@ -1831,9 +2780,13 @@ class GenerateStage(PipelineStage):
         answer_parts: list[str] = []
         thinking_parts: list[str] = []
         model_name = str(req.model or "")
+        stream_stats: dict[str, Any] = {}
 
         try:
             for chunk in stream(req):
+                chunk_model = str(getattr(chunk, "model", "") or "").strip()
+                if chunk_model:
+                    model_name = chunk_model
                 # 1) thinking из провайдера (Ollama отдаёт thinking_delta отдельно)
                 thinking_delta = str(getattr(chunk, "thinking_delta", "") or "")
                 if thinking_delta:
@@ -1863,6 +2816,15 @@ class GenerateStage(PipelineStage):
                                 on_answer(visible)
                             except Exception:
                                 pass
+                if bool(getattr(chunk, "done", False)):
+                    stream_stats = self._merge_llm_stats(
+                        {
+                            "served_model": str(model_name or req.model or ""),
+                            "streaming": True,
+                        },
+                        usage=getattr(chunk, "usage", None),
+                        timings=getattr(chunk, "timings", None),
+                    )
             visible, thinking_from_text = parser.flush()
             if thinking_from_text:
                 thinking_parts.append(thinking_from_text)
@@ -1881,7 +2843,7 @@ class GenerateStage(PipelineStage):
         except Exception:
             return None
 
-        return ("".join(answer_parts).strip(), "".join(thinking_parts).strip(), model_name)
+        return ("".join(answer_parts).strip(), "".join(thinking_parts).strip(), model_name, dict(stream_stats))
 
     @staticmethod
     def _handle_system_event(ctx: PipelineContext) -> None:
@@ -2175,6 +3137,28 @@ class GenerateStage(PipelineStage):
                 ctx.text = f"Thinking mode disabled for scope: {scope}."
             ctx.ui_actions.append({"type": "toggle_think", "enabled": False})
             ctx.logs.append("stage=generate command=nothink")
+            return True
+
+        if cmd == "/verbose":
+            if scope == "chat":
+                ctx.text = "Verbose stats enabled."
+                ctx.memory_ops.append({"op": "state_verbose", "value": True})
+            else:
+                self._scope_set(ctx, scope, verbose=True)
+                ctx.text = f"Verbose stats enabled for scope: {scope}."
+            ctx.ui_actions.append({"type": "toggle_verbose", "enabled": True})
+            ctx.logs.append("stage=generate command=verbose")
+            return True
+
+        if cmd == "/quiet":
+            if scope == "chat":
+                ctx.text = "Verbose stats disabled."
+                ctx.memory_ops.append({"op": "state_verbose", "value": False})
+            else:
+                self._scope_set(ctx, scope, verbose=False)
+                ctx.text = f"Verbose stats disabled for scope: {scope}."
+            ctx.ui_actions.append({"type": "toggle_verbose", "enabled": False})
+            ctx.logs.append("stage=generate command=quiet")
             return True
         
         if cmd == "/web":
@@ -2818,6 +3802,11 @@ class GenerateStage(PipelineStage):
         scoped_think = self._scope_get(ctx, scope, "think", None)
         if isinstance(scoped_think, bool):
             ctx.meta["think"] = bool(scoped_think)
+        scoped_verbose = self._scope_get(ctx, scope, "verbose", None)
+        if isinstance(scoped_verbose, bool):
+            ctx.meta["verbose"] = bool(scoped_verbose)
+        elif isinstance(ctx.state.get("verbose_enabled"), bool) and "verbose" not in ctx.meta:
+            ctx.meta["verbose"] = bool(ctx.state.get("verbose_enabled"))
         scoped_web_mode = str(self._scope_get(ctx, scope, "web_mode", "") or "").strip().lower()
         if scoped_web_mode in {"on", "off", "auto"}:
             ctx.meta["web_mode"] = scoped_web_mode
@@ -2944,12 +3933,19 @@ class GenerateStage(PipelineStage):
                 Message(role="user", content=ctx.clean_user_msg),
             ]
 
+        tools = _parse_tools(_pick_value(ctx.meta.get("tools"), ctx.policies.get("tools"), ctx.state.get("tools")))
+        agent_loop_enabled = _should_enable_agent_loop(ctx)
+        if agent_loop_enabled:
+            tools = _merge_tool_specs(tools, _agent_loop_tools(ctx))
+            agent_loop_enabled = bool(tools)
+            if agent_loop_enabled:
+                messages = _inject_agent_loop_messages(messages, tools)
+
         model = _pick(
             ctx.meta.get("model"),
             ctx.state.get("model"),
             ctx.policies.get("model"),
         )
-        tools = _parse_tools(_pick_value(ctx.meta.get("tools"), ctx.policies.get("tools"), ctx.state.get("tools")))
         response_format = _pick_value(
             ctx.meta.get("response_format"),
             ctx.policies.get("response_format"),
@@ -2971,6 +3967,9 @@ class GenerateStage(PipelineStage):
             if verbosity is not None:
                 req_max_tokens = _verbosity_to_max_tokens(verbosity)
         req_metadata = _request_metadata(ctx)
+        if agent_loop_enabled:
+            req_metadata["agent_loop"] = True
+            req_metadata["agent_loop_tool_limit"] = _agent_loop_tool_limit(ctx)
         return LLMRequest(
             model=model,
             messages=messages,
@@ -3490,6 +4489,10 @@ class OutputFormatStage(PipelineStage):
 class MemoryWriteStage(PipelineStage):
     name = "memory_write"
 
+    def __init__(self, memory_manager: Any | None = None, planner: EpisodePlanner | None = None):
+        self.memory_manager = memory_manager
+        self.planner = planner or EpisodePlanner()
+
     def run(self, ctx: PipelineContext) -> PipelineContext:
         studio_active = bool(_as_dict(_as_dict(ctx.state).get(StudioGenerator.KEY)).get("active", False))
         if studio_active:
@@ -3504,6 +4507,7 @@ class MemoryWriteStage(PipelineStage):
             return ctx
 
         context = _turn_log_context(ctx)
+        self._update_task_continuity_from_assistant_reply(ctx)
         if ctx.route in {"chat", "command"} and ctx.clean_user_msg:
             turn_tags = dict(ctx.tags)
             turn_tags["active_mode"] = normalize_mode_name(
@@ -3563,19 +4567,36 @@ class MemoryWriteStage(PipelineStage):
                     "cuts": dict(ctx.prompt_pack.cut_info),
                 }
             )
+            # Разрываем summary-петлю: не записываем conversation_summary,
+            # если long_summary пришёл из dialog_summary/rolling_summary.
+            # Иначе summary становится самоподдерживающимся кешем, а не живым слоем памяти.
             long_summary = str(ctx.prompt_pack.blocks.get("long_summary") or "").strip()
             if long_summary and not is_low_quality_session_summary(long_summary):
-                ctx.memory_ops.append(
-                    {
-                        "op": "conversation_summary",
-                        "text": long_summary,
-                        "ts": now_local_ts(),
-                        "trace_id": context.get("trace_id"),
-                        "request_id": context.get("request_id"),
-                        "turn_id": context.get("turn_id"),
-                        "conversation_id": context.get("conversation_id"),
-                    }
+                # Проверяем, не является ли long_summary просто копией dialog_summary
+                dialog_summary = str(ctx.state.get("dialog_summary") or "").strip()
+                rolling_summary = str(ctx.state.get("rolling_summary") or "").strip()
+                long_summary_from_existing_summary = (
+                    dialog_summary and long_summary == dialog_summary
+                ) or (
+                    rolling_summary and long_summary == rolling_summary
                 )
+                
+                if not long_summary_from_existing_summary:
+                    # Это новый summary, можно записывать
+                    ctx.memory_ops.append(
+                        {
+                            "op": "conversation_summary",
+                            "text": long_summary,
+                            "ts": now_local_ts(),
+                            "trace_id": context.get("trace_id"),
+                            "request_id": context.get("request_id"),
+                            "turn_id": context.get("turn_id"),
+                            "conversation_id": context.get("conversation_id"),
+                        }
+                    )
+                else:
+                    # Summary не изменился — это петля, пропускаем запись
+                    ctx.logs.append("stage=memory_write conversation_summary skipped(loop_detected)")
         ctx.logs.append(f"stage=memory_write ops={len(ctx.memory_ops)}")
         op_summary = _queued_memory_ops_summary(ctx.memory_ops)
         _emit_turn_summary(
@@ -3599,6 +4620,141 @@ class MemoryWriteStage(PipelineStage):
         )
         return ctx
 
+    def _update_task_continuity_from_assistant_reply(self, ctx: PipelineContext) -> None:
+        if ctx.route != "chat":
+            return
+        manager = self.memory_manager
+        if manager is None or not hasattr(manager, "update_task_continuity"):
+            return
+        active_task = self.planner.resolve_context_active_task(
+            state=dict(ctx.state or {}),
+            memory_context=dict(ctx.memory_context or {}),
+        )
+        if not active_task:
+            return
+        assistant_text = str(
+            _pick_value(
+                ctx.raw_output,
+                _as_dict(ctx.structured_output).get("text"),
+                ctx.text,
+                "",
+            )
+            or ""
+        ).strip()
+        if not assistant_text:
+            return
+        updated = self.planner.update_active_task_after_assistant_reply(
+            assistant_text=assistant_text,
+            active_task=active_task,
+            memory_context=dict(ctx.memory_context or {}),
+            state=dict(ctx.state or {}),
+            meta=dict(ctx.meta or {}),
+        )
+        if updated is None:
+            return
+        payload = updated.to_dict()
+        ctx.state["active_task"] = dict(payload)
+        ctx.state["active_goal"] = str(
+            _pick_value(payload.get("current_goal"), payload.get("summary_short"), payload.get("topic"), "")
+            or ""
+        ).strip()
+        ctx.state["active_tasks"] = [dict(payload)]
+        ctx.state["open_questions"] = [str(x) for x in list(payload.get("open_questions") or []) if str(x).strip()]
+        ctx.state["current_decisions"] = [str(x) for x in list(payload.get("decisions") or []) if str(x).strip()]
+        ctx.state["next_steps"] = [str(x) for x in list(payload.get("next_steps") or []) if str(x).strip()]
+        ctx.state["unresolved_items"] = [str(x) for x in list(payload.get("open_questions") or []) if str(x).strip()]
+        namespace = str(
+            _pick_value(
+                ctx.meta.get("conversation_id"),
+                ctx.state.get("conversation_id"),
+                "default",
+            )
+            or "default"
+        ).strip() or "default"
+        snapshot = manager.update_task_continuity(
+            namespace=namespace,
+            active_task=dict(payload),
+            previous_active_task=dict(active_task or {}),
+            source="assistant_reply",
+            now_ts=float(_to_float(_pick_value(ctx.meta.get("now_ts"), ctx.meta.get("ts"), time.time()), time.time()) or time.time()),
+        )
+        if snapshot:
+            ctx.state["task_continuity"] = dict(snapshot)
+        ctx.memory_ops.append(
+            {
+                "op": "task_continuity",
+                "namespace": namespace,
+                "active_task": dict(payload),
+            }
+        )
+    
+    def _update_working_state_from_memory(self, ctx: PipelineContext, memory_result: dict[str, Any]) -> None:
+        """
+        Обновляет working state из результата memory retrieval.
+        
+        Это связывает explicit recall с always-on memory state:
+        - извлечённые факты -> identity_core
+        - извлечённые задачи -> active_tasks, open_questions
+        - извлечённые решения -> current_decisions
+        - извлечённые темы -> recent_topics
+        
+        Так память становится 'внутренней': модель видит результат retrieval
+        и обновляет своё working state для будущих turn'ов.
+        """
+        if not isinstance(memory_result, dict):
+            return
+        
+        # Извлекаем факты для identity_core
+        facts = memory_result.get("facts") or memory_result.get("identity_facts") or []
+        if facts:
+            addressing = dict(ctx.state.get("addressing") or ctx.state.get("user_addressing") or {})
+            for fact in list(facts[:5])[:3]:  # Берём только топ-3 факта
+                if isinstance(fact, dict):
+                    key = str(fact.get("key") or fact.get("predicate") or "")
+                    value = fact.get("value")
+                    if key and value is not None:
+                        if "name" in key.lower() or "addressing" in key.lower():
+                            if "canonical" in key.lower():
+                                addressing["canonical_name"] = str(value)
+                            elif "allowed" in key.lower():
+                                addressing["allowed_forms"] = value if isinstance(value, list) else [value]
+                            elif "forbidden" in key.lower():
+                                addressing["forbidden_forms"] = value if isinstance(value, list) else [value]
+            
+            if addressing:
+                ctx.state["addressing"] = addressing
+                ctx.state["user_addressing"] = addressing
+        
+        # Извлекаем задачи для active_tasks и open_questions
+        tasks = memory_result.get("tasks") or memory_result.get("active_tasks") or []
+        if tasks:
+            ctx.state["active_tasks"] = list(tasks[:5])
+            open_questions = []
+            current_decisions = []
+            for task in list(tasks[:5]):
+                if isinstance(task, dict):
+                    if task.get("open_questions"):
+                        open_questions.extend(list(task.get("open_questions", [])))
+                    if task.get("decisions"):
+                        current_decisions.extend(list(task.get("decisions", [])))
+            
+            if open_questions:
+                ctx.state["open_questions"] = list(set(open_questions))[:5]
+            if current_decisions:
+                ctx.state["current_decisions"] = list(set(current_decisions))[:5]
+        
+        # Извлекаем темы для recent_topics
+        topics = memory_result.get("topics") or memory_result.get("recent_topics") or []
+        if topics:
+            ctx.state["recent_topics"] = list(topics[:5])
+        
+        # Извлекаем relation state
+        relation = memory_result.get("relation_state") or memory_result.get("user_preferences") or {}
+        if relation:
+            existing_relation = dict(ctx.state.get("relation_state") or {})
+            existing_relation.update(dict(relation))
+            ctx.state["relation_state"] = existing_relation
+
 
 class ResponsePipeline:
     def __init__(
@@ -3613,6 +4769,7 @@ class ResponsePipeline:
         self.provider = provider
         self.character_engine = character_runtime or CharacterRuntime()
         self.character_runtime = self.character_engine
+        episode_planner = EpisodePlanner()
         self.prompt_engine = prompt_engine or PromptEngine(
             character_runtime=self.character_engine,
         )
@@ -3624,7 +4781,7 @@ class ResponsePipeline:
                 character_runtime=self.character_engine,
             ),
             "memory_retrieve": MemoryRetrieveStage(memory_manager=memory_manager),
-            "episode_continuity": EpisodeContinuityStage(),
+            "episode_continuity": EpisodeContinuityStage(planner=episode_planner, memory_manager=memory_manager),
             "web_retrieve": WebStageV2(),
             "prompt_build": PromptBuildStage(character_runtime=self.character_runtime),
             "prompt_engine": PromptEngineStage(prompt_engine=self.prompt_engine),
@@ -3637,7 +4794,7 @@ class ResponsePipeline:
             "tool_router": ToolRouterStage(),
             "verify": VerifyStage(),
             "output_format": OutputFormatStage(provider=self.provider),
-            "memory_write": MemoryWriteStage(),
+            "memory_write": MemoryWriteStage(memory_manager=memory_manager, planner=episode_planner),
         }
         self._profiles: dict[str, tuple[str, ...]] = {
             PROFILE_FAST: (
@@ -3690,9 +4847,18 @@ class ResponsePipeline:
             ),
             PROFILE_AUTONOMOUS: (
                 "preprocess",
+                "mode_select",
+                "plan",
+                "personality",
+                "episode_continuity",
+                "web_retrieve",
+                "prompt_build",
+                "prompt_engine",
                 "generate",
+                "verify",
                 "postprocess",
                 "output_format",
+                "memory_write",
             ),
         }
 
@@ -3828,6 +4994,8 @@ class ResponsePipeline:
         if compact_trace_file:
             ctx.logs.append(f"stage=web_trace compact_file={compact_trace_file}")
         trace = _ensure_debug_trace(ctx)
+        memory_reasoning_snapshot = _as_dict(ctx.state.get("memory_reasoning_snapshot"))
+        agent_loop_trace = _as_dict(ctx.state.get("agent_loop_trace"))
         trace.final_answer_meta = {
             "route": str(ctx.route or ""),
             "request_id": str(request_id or ""),
@@ -3837,8 +5005,16 @@ class ResponsePipeline:
             "web_used": bool(web_used == "true"),
             "factual_response_mode": str(ctx.meta.get("factual_response_mode") or ""),
             "served_model": str(_as_dict(ctx.stats).get("served_model") or ""),
+            "verbose_enabled": bool(_to_bool(_as_dict(ctx.stats).get("verbose_enabled"), default=False)),
             "output_len": int(output_len),
             "output_preview": str(output_preview or ""),
+            "agent_loop": bool(_to_bool(_as_dict(ctx.stats).get("agent_loop"), default=False)),
+            "agent_tool_calls": int(_to_int(_as_dict(ctx.stats).get("agent_tool_calls"), 0) or 0),
+            "agent_passes": int(_to_int(_as_dict(ctx.stats).get("agent_passes"), 0) or 0),
+            "tool_loop": dict(agent_loop_trace),
+            "memory_reasoning_used": bool(memory_reasoning_snapshot),
+            "memory_reasoning_sections": sorted(memory_reasoning_snapshot.keys()),
+            "memory_reasoning_snapshot": dict(memory_reasoning_snapshot),
             "errors": [str(x).strip() for x in list(ctx.errors or []) if str(x).strip()],
             "warnings": [str(x).strip() for x in list(_as_list(ctx.meta.get("turn_log_warnings"))) if str(x).strip()],
         }
@@ -4342,6 +5518,41 @@ class _ThinkStreamParser:
         return best_idx, best_tag
 
 
+def _tool_calls_from_row(row: dict[str, Any]) -> list[ToolCall]:
+    out: list[ToolCall] = []
+    for idx, item in enumerate(list(row.get("tool_calls") or [])):
+        if not isinstance(item, dict):
+            continue
+        fn = dict(item.get("function") or {})
+        name = str(fn.get("name") or item.get("name") or "").strip()
+        if not name:
+            continue
+        args_raw = fn.get("arguments", item.get("arguments"))
+        raw_text = ""
+        args: dict[str, Any] = {}
+        if isinstance(args_raw, dict):
+            args = dict(args_raw)
+            raw_text = json.dumps(args_raw, ensure_ascii=False)
+        else:
+            raw_text = str(args_raw or "")
+            if raw_text:
+                try:
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                except Exception:
+                    args = {}
+        out.append(
+            ToolCall(
+                id=str(item.get("id") or f"tool_{idx+1}"),
+                name=name,
+                arguments=args,
+                raw_arguments=raw_text,
+            )
+        )
+    return out
+
+
 def _messages_from_prompt_pack(pack: PromptPack) -> list[Message]:
     out: list[Message] = []
     for row in list(pack.messages or []):
@@ -4355,9 +5566,72 @@ def _messages_from_prompt_pack(pack: PromptPack) -> list[Message]:
                 content=str(row.get("content") or ""),
                 name=str(row.get("name") or ""),
                 tool_call_id=str(row.get("tool_call_id") or ""),
+                tool_calls=_tool_calls_from_row(row),
             )
         )
     return out
+
+
+_SELF_MEMORY_CLAIM_HINTS: tuple[str, ...] = (
+    "\u0443 \u043c\u0435\u043d\u044f",
+    "\u043c\u043d\u0435",
+    "\u043c\u0435\u043d\u044f",
+    "\u043c\u043e\u0439",
+    "\u043c\u043e\u044f",
+    "\u043c\u043e\u044e",
+    "\u043c\u043e\u0451",
+    "my",
+    "me",
+    "what do i ",
+    "what's my",
+    "what is my",
+)
+
+
+def _contains_any_fragment(text: str, fragments: tuple[str, ...]) -> bool:
+    low = unicodedata.normalize("NFKC", str(text or "")).strip().lower()
+    if not low:
+        return False
+    return any(str(fragment).strip().lower() in low for fragment in fragments if str(fragment).strip())
+
+
+def _is_self_memory_claim_query(query_text: str) -> bool:
+    low = unicodedata.normalize("NFKC", str(query_text or "")).strip().lower()
+    if not low:
+        return False
+    profile = classify_query_recall_profile(low)
+    return bool(profile.claim_like and _contains_any_fragment(low, _SELF_MEMORY_CLAIM_HINTS))
+
+
+def _guard_memory_context_for_self_memory_claim(
+    memory_context: dict[str, Any] | None,
+    *,
+    query_text: str,
+) -> dict[str, Any]:
+    row = _as_dict(memory_context)
+    blocks = _as_dict(row.get("blocks"))
+    if not blocks or not _is_self_memory_claim_query(query_text):
+        return row
+    if not str(blocks.get("relevant_claims") or "").strip():
+        return row
+
+    next_blocks = dict(blocks)
+    dropped_blocks: list[str] = []
+    for key in ("working_memory", "session_summary"):
+        if str(next_blocks.get(key) or "").strip():
+            next_blocks.pop(key, None)
+            dropped_blocks.append(key)
+    if not dropped_blocks:
+        return row
+
+    next_row = dict(row)
+    next_row["blocks"] = next_blocks
+    next_row["self_memory_claim_guard"] = {
+        "applied": True,
+        "reason": "self_memory_claim_prefers_relevant_claims",
+        "dropped_blocks": dropped_blocks,
+    }
+    return next_row
 
 
 def _apply_memory_context_to_prompt_pack(
@@ -4372,11 +5646,14 @@ def _apply_memory_context_to_prompt_pack(
         return pack
 
     merged = dict(pack.blocks or {})
+    claim_guard = _as_dict(row.get("self_memory_claim_guard"))
     merged["retrieved_memories"] = _render_memory_context_for_prompt(blocks)
     conversation_tail_hint = str(blocks.get("conversation_tail") or "").strip()
     if conversation_tail_hint:
         merged["conversation_tail"] = conversation_tail_hint
 
+    if bool(claim_guard.get("applied")):
+        merged.pop("long_summary", None)
     summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
     if summary:
         merged["long_summary"] = summary
@@ -4397,6 +5674,8 @@ def _apply_memory_context_to_prompt_pack(
     cut_info["memory_context_selected"] = len(list(_as_list(row.get("selected"))))
     cut_info["memory_context_dropped"] = len(list(_as_list(row.get("dropped"))))
     cut_info["memory_context_compression_steps"] = len(truncation_log)
+    if bool(claim_guard.get("applied")):
+        cut_info["self_memory_claim_guard"] = dict(claim_guard)
     if truncation_log:
         cut_info["memory_context_truncation_log"] = truncation_log[:24]
 
@@ -4627,6 +5906,210 @@ def _render_prompt_preview_from_blocks(blocks: dict[str, Any]) -> str:
     return "\n\n".join(out).strip()
 
 
+def _memory_retrieve_tool_spec() -> ToolSpec:
+    return ToolSpec(
+        name=_MEMORY_TOOL_NAME,
+        description=(
+            "Retrieve memory candidates and context blocks for the current conversation. "
+            "Call it when you need past facts, episodes, tasks, or profile context and answer cannot be grounded from the current prompt alone."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "description": "Retrieval mode such as profile, fact, episode, task, document, or context.",
+                },
+                "topic_hints": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Short topic anchors for deterministic memory fan-out.",
+                },
+                "time_hint": {
+                    "type": "string",
+                    "description": "Temporal bias such as recent, session, historical, persistent, or any.",
+                },
+                "scopes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [scope.value for scope in _default_memory_scopes()],
+                    },
+                    "description": "Optional memory scopes to search.",
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Preferred memory sources such as facts, episodes, tasks, profile, documents, or messages.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 12,
+                    "description": "How many memory candidates to retrieve.",
+                },
+            },
+            "required": ["mode", "topic_hints", "time_hint", "sources", "top_k"],
+            "additionalProperties": False,
+        },
+    )
+
+
+def _should_enable_agent_loop(ctx: PipelineContext) -> bool:
+    """
+    Определяет, нужно ли включать agent loop для текущего запроса.
+
+    Agent loop теперь доступен для всех профилей, а не только AUTONOMOUS.
+    Это делает память 'внутренней' для модели, а не внешним сервисом.
+
+    Модель всегда знает о возможности memory_retrieve, но вызывает tool
+    только по необходимости (через memory gate или собственное решение).
+    """
+    if str(ctx.route or "").strip().lower() != "chat":
+        return False
+
+    # Явный override имеет приоритет
+    override = _pick_value(ctx.meta.get("agent_loop"), ctx.policies.get("agent_loop"), None)
+    if override is not None:
+        return _to_bool(override, default=False)
+
+    # Agent loop доступен для всех профилей по умолчанию
+    # Это критично для 'memory-native' архитектуры
+    return True
+
+
+def _memory_gate_should_trigger(ctx: PipelineContext) -> bool:
+    """
+    Memory gate: определяет, нужно ли принудительно включить memory retrieval.
+    
+    Локальные модели часто ленятся делать recall, даже когда память критична.
+    Этот gate мягко подталкивает к использованию памяти, когда:
+    - вопрос зависит от прошлых фактов
+    - есть местоимения типа "это", "тогда", "оно", "тот модуль"
+    - затронуты user-specific preferences / project continuity
+    - есть unresolved questions из прошлых.turns
+    
+    Возвращает True, если нужен force-enable memory tool pass.
+    """
+    query = str(ctx.clean_user_msg or ctx.user_msg or "").strip().lower()
+    if not query:
+        return False
+    
+    # 1. Местоимения и ссылки на предыдущий контекст
+    continuity_markers = [
+        # Русские
+        "это ", "этот ", "эта ", "эти ", "этом ", "этому ",
+        "тогда ", "тот ", "та ", "то ", "те ",
+        "оно ", "она ", "они ", "ним ", "ней ",
+        "напомни ", "вспомина ", "помниш ",
+        # English
+        "this ", "that ", "these ", "those ",
+        "it ", "they ", "them ",
+        "remember ", "remind ",
+    ]
+    has_continuity_marker = any(marker in query for marker in continuity_markers)
+    
+    # 2. Вопросы, которые явно зависят от контекста
+    context_dependent_patterns = [
+        # Вопросы о предыдущих решениях/планах
+        r"(мы\s+решили|мы\s+договорились|мы\s+планировали|как\s+договаривались)",
+        r"(we\s+decided|we\s+agreed|we\s+planned|as\s+discussed)",
+        # Вопросы о проекте/коде
+        r"(мой\s+проект|мой\s+код|этот\s+модуль|этот\s+файл)",
+        r"(my\s+project|my\s+code|this\s+module|this\s+file)",
+        # Вопросы о предпочтениях
+        r"(я\s+предпочитаю|мне\s+нравится|как\s+я\s+люблю)",
+        r"(i\s+prefer|i\s+like|how\s+i\s+like)",
+    ]
+    import re
+    has_context_dependent_pattern = any(
+        re.search(pattern, query) for pattern in context_dependent_patterns
+    )
+    
+    # 3. Есть ли unresolved questions в state
+    state = ctx.state or {}
+    open_questions = state.get("open_questions") or state.get("unresolved_questions")
+    has_open_questions = bool(open_questions and (
+        (isinstance(open_questions, list) and len(open_questions) > 0)
+        or (isinstance(open_questions, str) and open_questions.strip())
+    ))
+    
+    # 4. Есть ли active task / goal
+    active_task = state.get("active_goal") or state.get("current_task") or state.get("task")
+    has_active_task = bool(active_task and str(active_task).strip())
+    
+    # 5. User-specific preferences в identity_core
+    addressing = _as_dict(state.get("addressing") or state.get("user_addressing") or {})
+    has_identity_core = bool(addressing and (
+        addressing.get("canonical_name")
+        or addressing.get("allowed_forms")
+        or addressing.get("forbidden_forms")
+    ))
+    
+    # Комбинируем сигналы
+    score = 0
+    if has_continuity_marker:
+        score += 2
+    if has_context_dependent_pattern:
+        score += 3
+    if has_open_questions:
+        score += 2
+    if has_active_task:
+        score += 1
+    if has_identity_core and any(query.count(word) for word in ["я", "мне", "меня", "мной", "i ", "i'", "me ", "my "]):
+        # Личные местоимения + есть identity_core = возможна персонализация
+        score += 1
+    
+    # Порог срабатывания
+    return score >= 3
+
+
+def _agent_loop_tool_limit(ctx: PipelineContext) -> int:
+    raw = _pick_value(ctx.meta.get("agent_tool_limit"), ctx.policies.get("agent_tool_limit"), _AGENT_LOOP_MAX_TOOL_CALLS)
+    try:
+        value = int(raw)
+    except Exception:
+        value = _AGENT_LOOP_MAX_TOOL_CALLS
+    return max(_AGENT_LOOP_MIN_TOOL_CALLS, min(_AGENT_LOOP_MAX_TOOL_CALLS, value))
+
+
+def _agent_loop_tools(ctx: PipelineContext) -> list[ToolSpec]:
+    manager = ctx.meta.get("memory_manager")
+    tools: list[ToolSpec] = []
+    if manager is not None and hasattr(manager, "build_context"):
+        tools.append(_memory_retrieve_tool_spec())
+    return tools
+
+
+def _merge_tool_specs(current: list[ToolSpec], extra: list[ToolSpec]) -> list[ToolSpec]:
+    out: list[ToolSpec] = []
+    seen: set[str] = set()
+    for row in list(current or []) + list(extra or []):
+        name = str(getattr(row, "name", "") or "").strip()
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def _inject_agent_loop_messages(messages: list[Message], tools: list[ToolSpec]) -> list[Message]:
+    tool_names = {str(row.name or "").strip().lower() for row in list(tools or []) if str(row.name or "").strip()}
+    if _MEMORY_TOOL_NAME not in tool_names:
+        return list(messages or [])
+    instruction = (
+        "Agent loop rules:\n"
+        "- If user-specific memory, prior dialogue, identity, preferences, plans, or unresolved context may matter, call memory_retrieve before answering.\n"
+        "- Call memory_retrieve with a structured retrieval plan: mode, topic_hints, time_hint, sources, top_k.\n"
+        "- Do not send a long natural-language query inside the tool call. The code will build fan-out retrieval queries for you.\n"
+        "- memory_retrieve returns memory candidates and context blocks, not a final answer.\n"
+        "- Use at most one memory_retrieve call unless a second pass is truly necessary.\n"
+        "- After tool results arrive, answer the user directly and do not mention the tool protocol."
+    )
+    return [Message(role="system", content=instruction), *list(messages or [])]
+
+
 def _parse_tools(value) -> list[ToolSpec]:
     out: list[ToolSpec] = []
     for row in _as_list(value):
@@ -4682,6 +6165,7 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "num_batch",
         "keep_alive",
         "think",
+        "verbose",
         "user_greeting",
         "allow_greeting",
         "new_session",
@@ -5199,6 +6683,16 @@ def _isolate_factual_prompt_context(
         if name in {"system_core", "user_message"}:
             filtered_blocks[name] = value
             included_blocks.append(name)
+            continue
+        if name == "active_tool_state" or (name == "working_memory" and target == "fx_rate"):
+            dropped_blocks.append(
+                {
+                    "block": name,
+                    "detected_category": _detect_factual_context_category(text),
+                    "reason": "runtime_state_not_allowed_in_factual_context",
+                    "preview": _preview_text(text, 160),
+                }
+            )
             continue
         if name not in _FACTUAL_CONTEXT_BLOCK_KEYS:
             filtered_blocks[name] = value
@@ -6955,6 +8449,7 @@ def _trace_compact_selected_memory(row: dict[str, Any] | None) -> dict[str, Any]
     meta = _as_dict(item.get("metadata"))
     fact = _as_dict(meta.get("fact"))
     claim = _as_dict(meta.get("claim"))
+    breakdown = _as_dict(item.get("score_breakdown"))
     out = {
         "id": str(item.get("id") or ""),
         "memory_type": str(item.get("memory_type") or ""),
@@ -6987,6 +8482,15 @@ def _trace_compact_selected_memory(row: dict[str, Any] | None) -> dict[str, Any]
         out["reason"] = reason
     if source:
         out["source"] = source
+    why_selected = _trace_why_selected_from_breakdown(breakdown)
+    if why_selected:
+        out["why_selected"] = why_selected
+    if breakdown:
+        out["score_breakdown"] = {
+            key: round(float(value), 4)
+            for key, value in breakdown.items()
+            if _to_float(value, None) is not None and float(_to_float(value, 0.0) or 0.0) > 0.0
+        }
     if fact:
         out["predicate"] = str(fact.get("predicate") or "")
         out["value"] = fact.get("value")
@@ -7029,6 +8533,23 @@ def _trace_compact_filtered_item(row: dict[str, Any] | None) -> dict[str, Any]:
         "memory_type": str(item.get("memory_type") or ""),
         "score": float(_to_float(item.get("score"), 0.0) or 0.0),
     }
+
+
+def _trace_why_selected_from_breakdown(breakdown: dict[str, Any] | None) -> list[str]:
+    row = dict(breakdown or {})
+    weights = {
+        "semantic_similarity": float(_to_float(row.get("semantic_similarity"), 0.0) or 0.0),
+        "lexical_score": float(_to_float(row.get("lexical_score"), 0.0) or 0.0),
+        "recency_score": float(_to_float(row.get("recency_score"), 0.0) or 0.0),
+        "importance_score": float(_to_float(row.get("importance_score"), 0.0) or 0.0),
+        "confidence_score": float(_to_float(row.get("confidence_score"), 0.0) or 0.0),
+        "entity_overlap_score": float(_to_float(row.get("entity_overlap_score"), 0.0) or 0.0),
+        "numeric_overlap_score": float(_to_float(row.get("numeric_overlap_score"), 0.0) or 0.0),
+        "exact_match_boost": float(_to_float(row.get("exact_match_boost"), 0.0) or 0.0),
+        "scope_match_score": float(_to_float(row.get("scope_match_score"), 0.0) or 0.0),
+    }
+    ranked = sorted(weights.items(), key=lambda item: float(item[1]), reverse=True)
+    return [str(name) for name, value in ranked if float(value) > 0.0][:3]
 
 
 def _trace_prompt_block_titles(text: str) -> list[str]:

@@ -77,6 +77,45 @@ _SPONTANEOUS_CLAIM_QUERY_RE = re.compile(
     re.I,
 )
 _CONTEXTUAL_FACT_PREDICATES = {"decision", "task", "task_goal", "agreed_plan"}
+_CLAIM_SELF_HINTS: tuple[str, ...] = (
+    "\u0443 \u043c\u0435\u043d\u044f",
+    "\u043c\u043d\u0435",
+    "\u043c\u0435\u043d\u044f",
+    "\u043c\u043e\u0439",
+    "\u043c\u043e\u044f",
+    "\u043c\u043e\u044e",
+    "\u043c\u043e\u0451",
+    "my",
+    "me",
+    "i ",
+)
+_CLAIM_QUERY_FALLBACK_HINTS: tuple[str, ...] = (
+    "\u043d\u0440\u0430\u0432\u0438\u0442",
+    "\u043b\u044e\u0431\u043b\u044e",
+    "\u043e\u0431\u043e\u0436\u0430\u044e",
+    "\u043b\u044e\u0431\u0438\u043c",
+    "\u043d\u0435 \u043b\u044e\u0431\u043b\u044e",
+    "\u043d\u0435\u043d\u0430\u0432\u0438\u0436",
+    "\u0442\u0435\u0440\u043f\u0435\u0442\u044c \u043d\u0435 \u043c\u043e\u0433\u0443",
+    "\u0438\u0441\u043f\u043e\u043b\u044c\u0437",
+    "\u043f\u043e\u043b\u044c\u0437\u0443\u044e\u0441\u044c",
+    "\u044e\u0437\u0430\u044e",
+    "\u043f\u0440\u0435\u0434\u043f\u043e\u0447\u0438\u0442",
+)
+_SPONTANEOUS_CLAIM_FALLBACK_PHRASES: tuple[str, ...] = (
+    "\u0447\u0442\u043e \u043c\u043d\u0435 \u043d\u0440\u0430\u0432\u0438\u0442",
+    "\u0447\u0442\u043e \u044f \u043b\u044e\u0431\u043b\u044e",
+    "\u0447\u0442\u043e \u044f \u043d\u0435 \u043b\u044e\u0431\u043b\u044e",
+    "what do i like",
+    "what do i hate",
+)
+
+
+def _contains_any_fragment(text: str, fragments: tuple[str, ...]) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return False
+    return any(str(fragment).strip().lower() in low for fragment in fragments if str(fragment).strip())
 
 
 @dataclass(frozen=True)
@@ -124,11 +163,17 @@ def classify_query_recall_profile(query_text: str) -> QueryRecallProfile:
         self_like = has_self_hint and has_recall_hint
     contextual_dialog = any(pattern.search(low) for pattern in _CONTEXTUAL_RECALL_RULES)
     document_query = any(pattern.search(low) for pattern in _DOCUMENT_RECALL_RULES)
-    claim_like = bool(_CLAIM_QUERY_RE.search(low))
-    spontaneous_claim = bool(_SPONTANEOUS_CLAIM_QUERY_RE.search(low))
+    claim_like = bool(_CLAIM_QUERY_RE.search(low)) or (
+        _contains_any_fragment(low, _CLAIM_QUERY_FALLBACK_HINTS)
+        and _contains_any_fragment(low, _CLAIM_SELF_HINTS)
+    )
+    spontaneous_claim = bool(_SPONTANEOUS_CLAIM_QUERY_RE.search(low)) or _contains_any_fragment(
+        low,
+        _SPONTANEOUS_CLAIM_FALLBACK_PHRASES,
+    )
 
     mode = ""
-    if self_like:
+    if self_like and not claim_like:
         mode = "exact_fact_recall"
     elif contextual_dialog:
         mode = "contextual_recall"

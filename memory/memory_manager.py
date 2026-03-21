@@ -316,6 +316,7 @@ class MemoryManager:
         self._open_questions: list[str] = []
         self._current_decisions: list[str] = []
         self._active_preferences: list[str] = []
+        self._task_continuity_by_namespace: dict[str, dict[str, Any]] = {}
         self._private_runtime: dict[str, dict[str, Any]] = {}
         self._governor_profile_snapshots: dict[str, GovernorProfileSnapshot] = {}
         self._identity_core_snapshots: dict[str, IdentityCoreSnapshot] = {}
@@ -942,6 +943,18 @@ class MemoryManager:
 
         private_runtime = self._private_runtime_for_namespace(request.namespace)
         working = self._working_for_namespace(namespace=request.namespace, scopes=list(request.scopes or []))
+        task_continuity = self.get_task_continuity_snapshot(request.namespace)
+        continuity_active_task = dict(task_continuity.get("active_task") or {})
+        continuity_open_questions = [
+            str(x).strip()
+            for x in list(task_continuity.get("open_questions") or continuity_active_task.get("open_questions") or self._open_questions)
+            if str(x).strip()
+        ]
+        continuity_current_decisions = [
+            str(x).strip()
+            for x in list(task_continuity.get("current_decisions") or continuity_active_task.get("decisions") or self._current_decisions)
+            if str(x).strip()
+        ]
         req = ContextBuildRequest(
             system_prompt=request.system_prompt,
             user_message=request.user_message,
@@ -951,7 +964,7 @@ class MemoryManager:
             session_summary=sanitize_session_summary_text(request.session_summary or self._session_summary),
             working_memory=working,
             tool_state=dict(request.tool_state or {}),
-            unresolved_items=list(request.unresolved_items or self._open_questions),
+            unresolved_items=list(request.unresolved_items or continuity_open_questions),
             context_budget_total=budget_total,
             context_budget_memory=budget_memory,
             context_budget_docs=budget_docs,
@@ -1001,8 +1014,9 @@ class MemoryManager:
             fact_expectation=dict(result.fact_expectation or {}),
             self_facts_context=dict(result.self_facts_context or {}),
             dialog_episode_hits=[row.to_dict() for row in list(dialog_hits or [])],
-            open_questions=[str(x) for x in list(self._open_questions or []) if str(x).strip()],
-            current_decisions=[str(x) for x in list(self._current_decisions or []) if str(x).strip()],
+            open_questions=continuity_open_questions,
+            current_decisions=continuity_current_decisions,
+            task_continuity=dict(task_continuity or {}),
             recall_mode=str(result.recall_mode or ""),
         )
         self_facts_context = self._build_self_facts_context(
@@ -1029,6 +1043,7 @@ class MemoryManager:
                 dialog_episode_hits=[dict(x) for x in list(result.dialog_episode_hits or [])],
                 open_questions=[str(x) for x in list(result.open_questions or []) if str(x).strip()],
                 current_decisions=[str(x) for x in list(result.current_decisions or []) if str(x).strip()],
+                task_continuity=dict(task_continuity or {}),
                 recall_mode=recall_mode,
             )
         elif recall_mode:
@@ -1047,6 +1062,7 @@ class MemoryManager:
                 dialog_episode_hits=[dict(x) for x in list(result.dialog_episode_hits or [])],
                 open_questions=[str(x) for x in list(result.open_questions or []) if str(x).strip()],
                 current_decisions=[str(x) for x in list(result.current_decisions or []) if str(x).strip()],
+                task_continuity=dict(task_continuity or {}),
                 recall_mode=recall_mode,
             )
         self._debugger.record_retrieval_trace(
@@ -1828,6 +1844,70 @@ class MemoryManager:
             return None
         return cache.get(str(namespace or "default"))
 
+    def get_task_continuity_snapshot(self, namespace: str = "default") -> dict[str, Any]:
+        namespace_norm = str(namespace or "default")
+        rows = getattr(self, "_task_continuity_by_namespace", None)
+        if not isinstance(rows, dict):
+            rows = {}
+        return self._normalize_task_continuity_snapshot(rows.get(namespace_norm))
+
+    def update_task_continuity(
+        self,
+        *,
+        namespace: str = "default",
+        active_task: dict[str, Any] | None = None,
+        previous_active_task: dict[str, Any] | None = None,
+        source: str = "",
+        now_ts: float | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            namespace_norm = str(namespace or "default")
+            ts = float(now_ts or time.time())
+            cache = getattr(self, "_task_continuity_by_namespace", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                self._task_continuity_by_namespace = cache
+
+            current_snapshot = self._normalize_task_continuity_snapshot(cache.get(namespace_norm))
+            current_active = self._normalize_task_row(current_snapshot.get("active_task"))
+            previous_task = self._normalize_task_row(previous_active_task or current_active)
+            next_task = self._normalize_task_row(active_task)
+            history = [self._normalize_task_row(x) for x in list(current_snapshot.get("task_history") or [])]
+            history = [row for row in history if row]
+
+            next_task_id = str(next_task.get("task_id") or "").strip()
+            previous_task_id = str(previous_task.get("task_id") or "").strip()
+            if previous_task and previous_task_id and previous_task_id != next_task_id:
+                history = self._push_task_history(history, previous_task)
+
+            if next_task and str(next_task.get("status") or "").strip().lower() in {"done", "abandoned"}:
+                history = self._push_task_history(history, next_task)
+                next_task = {}
+
+            snapshot = {
+                "active_task": next_task,
+                "task_history": history[:8],
+                "updated_at": ts,
+                "source": str(source or ""),
+                "open_questions": [str(x).strip() for x in list(next_task.get("open_questions") or []) if str(x).strip()],
+                "current_decisions": [str(x).strip() for x in list(next_task.get("decisions") or []) if str(x).strip()],
+            }
+            cache[namespace_norm] = dict(snapshot)
+            if str(namespace_norm or "") == "default" or not list(snapshot["open_questions"]):
+                self._open_questions = [str(x) for x in list(snapshot.get("open_questions") or self._open_questions) if str(x).strip()]
+            else:
+                self._open_questions = [str(x) for x in list(snapshot.get("open_questions") or []) if str(x).strip()]
+            if str(namespace_norm or "") == "default" or not list(snapshot["current_decisions"]):
+                self._current_decisions = [str(x) for x in list(snapshot.get("current_decisions") or self._current_decisions) if str(x).strip()]
+            else:
+                self._current_decisions = [str(x) for x in list(snapshot.get("current_decisions") or []) if str(x).strip()]
+            self._record_task_continuity_event(
+                namespace=namespace_norm,
+                snapshot=snapshot,
+            )
+            self._save_state()
+            return self._normalize_task_continuity_snapshot(snapshot)
+
     def read_identity_core_records(
         self,
         *,
@@ -1981,6 +2061,79 @@ class MemoryManager:
                 break
         out.reverse()
         return out
+
+    def record_response_stats(
+        self,
+        *,
+        namespace: str = "default",
+        route: str = "chat",
+        request_id: str = "",
+        trace_id: str = "",
+        turn_id: Any = None,
+        model: str = "",
+        stats: dict[str, Any] | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        stats_map = dict(stats or {})
+        meta_map = dict(meta or {})
+        if not stats_map:
+            return
+
+        def _compact_value(value: Any) -> Any:
+            if value is None or isinstance(value, (bool, int, float, str)):
+                return value
+            if isinstance(value, (list, tuple)):
+                out = []
+                for item in list(value)[:24]:
+                    compact = _compact_value(item)
+                    if compact is not None:
+                        out.append(compact)
+                return out
+            if isinstance(value, dict):
+                out: dict[str, Any] = {}
+                for key, item in list(value.items())[:48]:
+                    compact = _compact_value(item)
+                    if compact is not None:
+                        out[str(key)] = compact
+                return out
+            return str(value)
+
+        payload_stats = {
+            str(key): _compact_value(value)
+            for key, value in list(stats_map.items())
+            if str(key).strip()
+        }
+        payload_meta = {
+            str(key): _compact_value(value)
+            for key, value in list(meta_map.items())
+            if str(key).strip()
+        }
+        event_payload = {
+            "namespace": str(namespace or "default"),
+            "conversation_id": str(meta_map.get("conversation_id") or namespace or "default"),
+            "route": str(route or "chat"),
+            "request_id": str(request_id or ""),
+            "trace_id": str(trace_id or ""),
+            "turn_id": str(turn_id or ""),
+            "stats": payload_stats,
+            "meta": payload_meta,
+        }
+        self._event_store.append(
+            {
+                "event_id": f"stats:{uuid.uuid4().hex[:18]}",
+                "ts": time.time(),
+                "type": "response_stats_v1",
+                "trace_id": str(trace_id or ""),
+                "model": str(model or payload_stats.get("served_model") or ""),
+                "latency_ms": float(payload_stats.get("answer_ms") or 0.0),
+                "payload": event_payload,
+                "tags": [
+                    "response_stats",
+                    str(route or "chat"),
+                    ("verbose" if bool(payload_meta.get("verbose")) else "compact"),
+                ],
+            }
+        )
 
     def _write_fact_records(
         self,
@@ -2735,6 +2888,9 @@ class MemoryManager:
                     "rebuilt": True,
                     "active_fact_count": len(dict(snapshot.active_facts or {})),
                     "conflict_count": len(list(snapshot.conflicts or [])),
+                    "persistent_trait_count": len(dict(getattr(snapshot, "persistent_traits", {}) or {})),
+                    "volatile_preference_count": len(dict(getattr(snapshot, "volatile_preferences", {}) or {})),
+                    "session_preference_count": len(dict(getattr(snapshot, "session_preferences", {}) or {})),
                     "conflict_groups": [
                         str(dict(item or {}).get("group") or "")
                         for item in list(snapshot.conflicts or [])
@@ -3142,6 +3298,13 @@ class MemoryManager:
             return int(default)
 
     @staticmethod
+    def _to_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
+    @staticmethod
     def _clamp01(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
 
@@ -3347,6 +3510,85 @@ class MemoryManager:
             out.append(src)
         return out[-max(1, int(limit)) :]
 
+    @staticmethod
+    def _normalize_task_row(value: Any) -> dict[str, Any]:
+        row = dict(value or {})
+        if not row:
+            return {}
+        out = {
+            "task_id": str(row.get("task_id") or "").strip(),
+            "topic": str(row.get("topic") or "").strip(),
+            "status": str(row.get("status") or "active").strip().lower() or "active",
+            "source_episode_id": str(row.get("source_episode_id") or "").strip(),
+            "summary_short": str(row.get("summary_short") or "").strip(),
+            "current_goal": str(row.get("current_goal") or "").strip(),
+            "next_steps": [str(x).strip() for x in list(row.get("next_steps") or []) if str(x).strip()],
+            "open_questions": [str(x).strip() for x in list(row.get("open_questions") or []) if str(x).strip()],
+            "decisions": [str(x).strip() for x in list(row.get("decisions") or []) if str(x).strip()],
+            "confidence": float(MemoryManager._to_float(row.get("confidence"), 0.0)),
+            "updated_at": float(MemoryManager._to_float(row.get("updated_at"), 0.0)),
+            "planner_source": str(row.get("planner_source") or "").strip(),
+            "planner_reason": str(row.get("planner_reason") or "").strip(),
+        }
+        return {
+            key: value
+            for key, value in out.items()
+            if value not in ("", []) or key in {"status", "confidence", "updated_at"}
+        }
+
+    def _normalize_task_continuity_snapshot(self, value: Any) -> dict[str, Any]:
+        row = dict(value or {})
+        active_task = self._normalize_task_row(row.get("active_task"))
+        history = [self._normalize_task_row(x) for x in list(row.get("task_history") or row.get("previous_tasks") or [])]
+        history = [item for item in history if item]
+        return {
+            "active_task": active_task,
+            "task_history": history[:8],
+            "previous_tasks": history[:8],
+            "updated_at": float(MemoryManager._to_float(row.get("updated_at"), 0.0)),
+            "source": str(row.get("source") or "").strip(),
+            "open_questions": [str(x).strip() for x in list(row.get("open_questions") or active_task.get("open_questions") or []) if str(x).strip()],
+            "current_decisions": [str(x).strip() for x in list(row.get("current_decisions") or active_task.get("decisions") or []) if str(x).strip()],
+        }
+
+    def _push_task_history(self, history: list[dict[str, Any]], task: dict[str, Any]) -> list[dict[str, Any]]:
+        candidate = self._normalize_task_row(task)
+        if not candidate:
+            return [self._normalize_task_row(x) for x in list(history or []) if self._normalize_task_row(x)]
+        out: list[dict[str, Any]] = [candidate]
+        candidate_id = str(candidate.get("task_id") or "").strip()
+        for row in list(history or []):
+            normalized = self._normalize_task_row(row)
+            if not normalized:
+                continue
+            row_id = str(normalized.get("task_id") or "").strip()
+            if candidate_id and row_id == candidate_id:
+                continue
+            out.append(normalized)
+        return out[:8]
+
+    def _record_task_continuity_event(
+        self,
+        *,
+        namespace: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        self._event_store.append(
+            {
+                "ts": float(time.time()),
+                "type": "memory_task_continuity_updated",
+                "payload": {
+                    "namespace": str(namespace or "default"),
+                    "active_task": dict(snapshot.get("active_task") or {}),
+                    "task_history_count": len(list(snapshot.get("task_history") or [])),
+                    "open_questions": [str(x).strip() for x in list(snapshot.get("open_questions") or []) if str(x).strip()],
+                    "current_decisions": [str(x).strip() for x in list(snapshot.get("current_decisions") or []) if str(x).strip()],
+                    "source": str(snapshot.get("source") or ""),
+                },
+                "tags": ["memory", "task_continuity", str(namespace or "default")],
+            }
+        )
+
     def _load_state(self) -> None:
         if not self._state_path.exists():
             return
@@ -3358,6 +3600,12 @@ class MemoryManager:
         self._open_questions = [str(x) for x in list(payload.get("open_questions") or []) if str(x).strip()]
         self._current_decisions = [str(x) for x in list(payload.get("current_decisions") or []) if str(x).strip()]
         self._active_preferences = [str(x) for x in list(payload.get("active_preferences") or []) if str(x).strip()]
+        continuity_payload = dict(payload.get("task_continuity_by_namespace") or {})
+        self._task_continuity_by_namespace = {
+            str(namespace or "default"): self._normalize_task_continuity_snapshot(row)
+            for namespace, row in list(continuity_payload.items())
+            if isinstance(row, dict)
+        }
         self._private_runtime = dict(payload.get("private_runtime") or {})
         self._working_records = []
         for row in list(payload.get("working_records") or []):
@@ -3374,6 +3622,11 @@ class MemoryManager:
             "open_questions": list(self._open_questions or []),
             "current_decisions": list(self._current_decisions or []),
             "active_preferences": list(self._active_preferences or []),
+            "task_continuity_by_namespace": {
+                str(namespace or "default"): self._normalize_task_continuity_snapshot(row)
+                for namespace, row in list(dict(getattr(self, "_task_continuity_by_namespace", {}) or {}).items())
+                if isinstance(row, dict)
+            },
             "private_runtime": dict(self._private_runtime or {}),
             "working_records": [x.to_dict() for x in list(self._working_records or [])],
         }

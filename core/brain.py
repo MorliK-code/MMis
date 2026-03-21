@@ -226,6 +226,12 @@ class Brain:
                 memory_apply_summary=memory_apply_summary,
                 persisted_summary=persisted_summary,
             )
+            self._harvest_response_stats(
+                result=result,
+                route=route,
+                meta=meta_for_pipeline,
+                conversation_id=conversation_id,
+            )
         except Exception as exc:
             result = self._build_error_result(route=route, error=exc)
 
@@ -298,6 +304,8 @@ class Brain:
                     )
             elif key == "state_think":
                 self.state_manager.patch({"thinking_enabled": bool(op.get("value", False))})
+            elif key == "state_verbose":
+                self.state_manager.patch({"verbose_enabled": bool(op.get("value", False))})
             elif key == "state_web_mode":
                 value = str(op.get("value") or "").strip().lower()
                 if value in {"auto", "on", "off"}:
@@ -849,6 +857,41 @@ class Brain:
                 status=str(result.status or "ok"),
             ),
         )
+
+    def _harvest_response_stats(
+        self,
+        *,
+        result: BrainResult,
+        route: str,
+        meta: dict[str, Any],
+        conversation_id: str,
+    ) -> None:
+        stats = dict(result.stats or {})
+        if route == "system_event" or not stats:
+            return
+        recorder = getattr(self.memory_manager, "record_response_stats", None)
+        if not callable(recorder):
+            return
+        try:
+            recorder(
+                namespace=str(conversation_id or "default"),
+                route=str(route or ""),
+                request_id=str(meta.get("request_id") or ""),
+                trace_id=str(meta.get("trace_id") or ""),
+                turn_id=meta.get("turn_id"),
+                model=str(stats.get("served_model") or meta.get("model") or ""),
+                stats=stats,
+                meta={
+                    "source": str(meta.get("source") or route or ""),
+                    "web_mode": str(meta.get("web_mode") or ""),
+                    "json_mode": bool(meta.get("json_mode", False)),
+                    "think": bool(meta.get("think", False)),
+                    "verbose": bool(meta.get("verbose", False)),
+                    "conversation_id": str(meta.get("conversation_id") or conversation_id or "default"),
+                },
+            )
+        except Exception as exc:
+            result.logs.append(f"stats_harvest_error={type(exc).__name__}")
 
     @staticmethod
     def _empty_memory_write_summary() -> dict[str, Any]:

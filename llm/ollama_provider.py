@@ -27,6 +27,65 @@ LOGGER = get_logger(__name__)
 _cfg = load_config()
 
 
+def _serialize_tool_arguments(call: ToolCall) -> Any:
+    if call.arguments:
+        return dict(call.arguments or {})
+    raw = str(call.raw_arguments or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return raw
+    return parsed if isinstance(parsed, (dict, list, str, int, float, bool)) or parsed is None else raw
+
+
+def _tool_call_to_ollama_message_dict(call: ToolCall) -> dict[str, Any]:
+    return {
+        "id": str(call.id or ""),
+        "type": "function",
+        "function": {
+            "name": str(call.name or ""),
+            "arguments": _serialize_tool_arguments(call),
+        },
+    }
+
+
+def _tool_calls_from_message_dict(message: dict[str, Any]) -> list[ToolCall]:
+    out: list[ToolCall] = []
+    for idx, row in enumerate(list(message.get("tool_calls") or [])):
+        if not isinstance(row, dict):
+            continue
+        fn = dict(row.get("function") or {})
+        name = str(fn.get("name") or row.get("name") or "").strip()
+        if not name:
+            continue
+        args_raw = fn.get("arguments", row.get("arguments"))
+        raw_text = ""
+        args: dict[str, Any] = {}
+        if isinstance(args_raw, dict):
+            args = dict(args_raw)
+            raw_text = json.dumps(args_raw, ensure_ascii=False)
+        else:
+            raw_text = str(args_raw or "")
+            if raw_text:
+                try:
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict):
+                        args = parsed
+                except Exception:
+                    args = {}
+        out.append(
+            ToolCall(
+                id=str(row.get("id") or f"tool_{idx+1}"),
+                name=name,
+                arguments=args,
+                raw_arguments=raw_text,
+            )
+        )
+    return out
+
+
 def _as_dict(obj) -> dict:
     if isinstance(obj, dict):
         return obj
@@ -55,8 +114,10 @@ def _message_to_dict(msg: Message) -> dict[str, Any]:
     out = {"role": str(msg.role), "content": str(msg.content or "")}
     if msg.name:
         out["name"] = str(msg.name)
-    if msg.tool_call_id:
+    if msg.tool_call_id and out["role"] == "tool":
         out["tool_call_id"] = str(msg.tool_call_id)
+    if msg.tool_calls and out["role"] == "assistant":
+        out["tool_calls"] = [_tool_call_to_ollama_message_dict(call) for call in list(msg.tool_calls or [])]
     return out
 
 
@@ -249,6 +310,7 @@ class OllamaProvider(LLMProviderBase):
         model = str(req.model or self.default_model or "").strip()
         if not model:
             raise RuntimeError("Ollama model is not configured.")
+        verbose = bool(dict(req.metadata or {}).get("verbose", False))
 
         log_json(
             LOGGER,
@@ -259,6 +321,7 @@ class OllamaProvider(LLMProviderBase):
             tools=len(list(req.tools or [])),
             json_mode=bool(req.json_mode),
             think=bool(req.metadata.get("think", False)),
+            verbose=verbose,
         )
         payload = self._chat_with_retry(req=req, model=model, stream=False)
         msg = dict(payload.get("message") or {})
@@ -288,13 +351,14 @@ class OllamaProvider(LLMProviderBase):
             usage=usage,
             timings=timings,
             model=str(payload.get("model") or model),
-            raw=(payload if self.debug_raw else None),
+            raw=(payload if (self.debug_raw or verbose) else None),
         )
 
     def stream(self, req: LLMRequest):
         model = str(req.model or self.default_model or "").strip()
         if not model:
             raise RuntimeError("Ollama model is not configured.")
+        verbose = bool(dict(req.metadata or {}).get("verbose", False))
 
         log_json(
             LOGGER,
@@ -305,6 +369,7 @@ class OllamaProvider(LLMProviderBase):
             tools=len(list(req.tools or [])),
             json_mode=bool(req.json_mode),
             think=bool(req.metadata.get("think", False)),
+            verbose=verbose,
         )
         stream = self._chat_with_retry(req=req, model=model, stream=True)
         chunk_count = 0
@@ -329,12 +394,17 @@ class OllamaProvider(LLMProviderBase):
                     chunks=chunk_count,
                     text_chars=chars,
                 )
+            usage = self._extract_usage(chunk) if done else Usage()
+            timings = self._extract_timings(chunk) if done else Timings()
             yield LLMChunk(
                 text_delta=text_delta,
                 thinking_delta=thinking_delta,
                 tool_calls_delta=tool_calls_delta,
+                usage=usage,
+                timings=timings,
+                model=str(chunk.get("model") or model),
                 done=done,
-                raw=(chunk if self.debug_raw else None),
+                raw=(chunk if (self.debug_raw or (verbose and done)) else None),
             )
 
     def healthcheck(self) -> ProviderHealth:
@@ -398,6 +468,7 @@ class OllamaProvider(LLMProviderBase):
                     content=str(m.get("content") or ""),
                     name=str(m.get("name") or ""),
                     tool_call_id=str(m.get("tool_call_id") or ""),
+                    tool_calls=_tool_calls_from_message_dict(m),
                 )
                 for m in messages
             ],
@@ -415,6 +486,7 @@ class OllamaProvider(LLMProviderBase):
                     content=str(m.get("content") or ""),
                     name=str(m.get("name") or ""),
                     tool_call_id=str(m.get("tool_call_id") or ""),
+                    tool_calls=_tool_calls_from_message_dict(m),
                 )
                 for m in messages
             ],
@@ -557,10 +629,22 @@ class OllamaProvider(LLMProviderBase):
 
     @staticmethod
     def _extract_timings(payload: dict[str, Any]) -> Timings:
-        if payload.get("total_duration") is not None:
+        def _ns_to_ms(value: Any) -> float:
             try:
-                latency_ms = float(payload.get("total_duration")) / 1_000_000.0
-                return Timings(latency_ms=latency_ms)
+                if value is None:
+                    return 0.0
+                return max(0.0, float(value) / 1_000_000.0)
             except Exception:
-                pass
-        return Timings(latency_ms=0.0)
+                return 0.0
+
+        total_duration_ms = _ns_to_ms(payload.get("total_duration"))
+        load_duration_ms = _ns_to_ms(payload.get("load_duration"))
+        prompt_eval_duration_ms = _ns_to_ms(payload.get("prompt_eval_duration"))
+        eval_duration_ms = _ns_to_ms(payload.get("eval_duration"))
+        return Timings(
+            latency_ms=total_duration_ms,
+            total_duration_ms=total_duration_ms,
+            load_duration_ms=load_duration_ms,
+            prompt_eval_duration_ms=prompt_eval_duration_ms,
+            eval_duration_ms=eval_duration_ms,
+        )

@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from urllib import error as urllib_error
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
 from config.settings import load_config
@@ -117,6 +118,11 @@ class ApiClient:
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
         return bool(payload.get("thinking_enabled", enabled))
 
+    def set_verbose_enabled(self, enabled: bool) -> bool:
+        payload = self._request_json("POST", "/verbose", {"enabled": bool(enabled)})
+        self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
+        return bool(payload.get("verbose_enabled", enabled))
+
     def set_web_mode(self, mode: str) -> str:
         payload = self._request_json("POST", "/web-mode", {"mode": str(mode or "")})
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
@@ -126,6 +132,25 @@ class ApiClient:
         payload = self._request_json("POST", "/json-mode", {"enabled": bool(enabled)})
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
         return bool(payload.get("json_mode_enabled", enabled))
+
+    def get_memory_inspector(
+        self,
+        *,
+        conversation_id: str = "",
+        limit: int = 80,
+        include_store: bool = True,
+    ) -> dict:
+        query = urllib_parse.urlencode(
+            {
+                "conversation_id": str(conversation_id or ""),
+                "limit": max(1, int(limit)),
+                "include_store": "true" if include_store else "false",
+            }
+        )
+        path = "/debug/memory-inspector"
+        if query:
+            path = f"{path}?{query}"
+        return self._request_json("GET", path)
 
     def register_feedback(self, user_text: str, assistant_text: str, feedback: int, penalty: float = 0.2) -> None:
         self._request_json(
@@ -144,6 +169,7 @@ class ApiClient:
         text: str,
         store_turn: bool = True,
         think: bool | None = None,
+        verbose: bool | None = None,
         json_mode: bool | None = None,
         on_chunk=None,
         on_thinking_chunk=None,
@@ -152,6 +178,8 @@ class ApiClient:
         payload = {"text": str(text or ""), "store_turn": bool(store_turn)}
         if think is not None:
             payload["think"] = bool(think)
+        if verbose is not None:
+            payload["verbose"] = bool(verbose)
         if json_mode is not None:
             payload["json_mode"] = bool(json_mode)
 
@@ -178,6 +206,7 @@ class ApiClient:
             path="/chat/stream",
             store_turn=bool(store_turn),
             think=think if think is not None else "runtime",
+            verbose=verbose if verbose is not None else "runtime",
             json_mode=json_mode if json_mode is not None else "runtime",
             text_chars=len(str(text or "")),
         )

@@ -22,7 +22,7 @@
   },
   "llm": {
     "provider": "ollama",
-    "model_name": "deepseek-r1:8b",
+    "model_name": "qwen3:4b",
     "model_fallbacks": [],
     "thinking_enabled": true,
     "json_mode_enabled": false,
@@ -123,7 +123,7 @@
         "ollama": {
           "num_thread": 6,
           "num_ctx": 8192,
-          "num_gpu": 25,
+          "num_gpu": 1,
           "num_batch": 128,
           "keep_alive": "5m"
         },
@@ -151,6 +151,27 @@
         "openai": {
           "model": "",
           "reasoning_effort": "high"
+        }
+      },
+      "FOR_ASYA": {
+        "name": "FOR_ASYA",
+        "generation": {
+          "temperature": 0.7,
+          "top_p": 0.9,
+          "repeat_penalty": 1.2,
+          "max_tokens": -1,
+          "stop": []
+        },
+        "ollama": {
+          "num_thread": 6,
+          "num_ctx": 8192,
+          "num_gpu": 25,
+          "num_batch": 128,
+          "keep_alive": "5m"
+        },
+        "openai": {
+          "model": "",
+          "reasoning_effort": "medium"
         }
       }
     },
@@ -646,7 +667,7 @@
       "timeout_sec": 2.5,
       "stream_timeout_sec": 600.0,
       "store_turn": true,
-      "show_thinking": true,
+      "show_thinking": false,
       "thinking_first": true,
       "auto_start_api": true,
       "auto_start_ollama": true,

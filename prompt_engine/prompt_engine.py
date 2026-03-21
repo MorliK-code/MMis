@@ -138,12 +138,7 @@ class PromptEngine:
         user_profile_block = self._build_user_profile_block(state_map)
         metadata_block = self._build_metadata_block(state_map=state_map, blocks=blocks)
         tools_state_block = self._build_tools_state_block(state_map, memory_blocks=memory_blocks)
-        memory_retrieval_block = self._build_memory_retrieval_block(
-            blocks=blocks,
-            memory_blocks=memory_blocks,
-            state_map=state_map,
-        )
-        web_evidence_block = self._build_web_evidence_block(
+        long_summary_block = _select_long_summary_block(
             blocks=blocks,
             memory_blocks=memory_blocks,
             state_map=state_map,
@@ -155,19 +150,23 @@ class PromptEngine:
                 "",
             )
             or ""
-        )
-        long_summary_block = str(
-            _pick_first(
-                memory_blocks.get("session_summary"),
-                blocks.get("long_summary"),
-                state_map.get("dialog_summary"),
-                "",
-            )
-            or ""
-        )
+        ).strip()
+        if long_summary_block:
+            recent_chat_block = _filter_recent_chat_for_long_summary(recent_chat_block)
         if self_facts and self_memory_exact:
             recent_chat_block = ""
             long_summary_block = ""
+        memory_retrieval_block = self._build_memory_retrieval_block(
+            blocks=blocks,
+            memory_blocks=memory_blocks,
+            state_map=state_map,
+            suppress_session_summary=bool(long_summary_block),
+        )
+        web_evidence_block = self._build_web_evidence_block(
+            blocks=blocks,
+            memory_blocks=memory_blocks,
+            state_map=state_map,
+        )
         user_block = str(_pick_first(memory_blocks.get("user_message"), blocks.get("user_message"), "") or "")
         verbosity_level = _resolve_verbosity_level(state_map=state_map, blocks=blocks)
         verbosity_limits = self.budget_manager.apply_verbosity(verbosity_level)
@@ -466,6 +465,7 @@ class PromptEngine:
         blocks: dict[str, str],
         memory_blocks: dict[str, Any],
         state_map: dict[str, Any] | None = None,
+        suppress_session_summary: bool = False,
     ) -> str:
         active_task_block = PromptEngine._render_active_task_block(
             _as_dict(_as_dict(state_map).get("active_task"))
@@ -500,6 +500,8 @@ class PromptEngine:
         suppress_raw_episodic = bool(str(memory_blocks.get("recalled_dialog") or "").strip())
         for title, key in order:
             if key == "retrieved_episodic" and suppress_raw_episodic:
+                continue
+            if key == "session_summary" and suppress_session_summary:
                 continue
             if key == "__active_task__":
                 text = str(active_task_block or "").strip()
@@ -768,6 +770,35 @@ def _pick(*values) -> str:
         if text:
             return text
     return ""
+
+
+def _select_long_summary_block(
+    *,
+    blocks: dict[str, Any],
+    memory_blocks: dict[str, Any],
+    state_map: dict[str, Any] | None = None,
+) -> str:
+    state_row = _as_dict(state_map)
+    for value in (
+        blocks.get("long_summary"),
+        state_row.get("dialog_summary"),
+        memory_blocks.get("session_summary"),
+    ):
+        text = sanitize_session_summary_text(value or "")
+        if text:
+            return text
+    return ""
+
+
+_RECENT_CHAT_USER_LINE_RE = re.compile(r"^\s*-\s*user\s*:", re.I)
+
+
+def _filter_recent_chat_for_long_summary(value: Any) -> str:
+    lines = [str(line).strip() for line in str(value or "").splitlines() if str(line).strip()]
+    if not lines:
+        return ""
+    kept = [line for line in lines if _RECENT_CHAT_USER_LINE_RE.match(line)]
+    return "\n".join(kept).strip()
 
 
 def _join_non_empty(items: list[str]) -> str:

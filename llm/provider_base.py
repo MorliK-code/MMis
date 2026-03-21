@@ -11,9 +11,10 @@ Role = Literal["system", "user", "assistant", "tool"]
 @dataclass(frozen=True)
 class Message:
     role: Role
-    content: str
+    content: str = ""
     name: str = ""
     tool_call_id: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,10 @@ class Usage:
 @dataclass(frozen=True)
 class Timings:
     latency_ms: float = 0.0
+    total_duration_ms: float = 0.0
+    load_duration_ms: float = 0.0
+    prompt_eval_duration_ms: float = 0.0
+    eval_duration_ms: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,9 @@ class LLMChunk:
     text_delta: str = ""
     tool_calls_delta: list[ToolCall] = field(default_factory=list)
     thinking_delta: str = ""
+    usage: Usage = field(default_factory=Usage)
+    timings: Timings = field(default_factory=Timings)
+    model: str = ""
     done: bool = False
     raw: Any = None
 
@@ -123,4 +131,3 @@ class LLMProviderBase(ABC):
     @abstractmethod
     def list_models(self) -> list[str]:
         raise NotImplementedError
-

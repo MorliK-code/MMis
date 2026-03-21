@@ -19,7 +19,14 @@ def test_build_memory_debug_snapshot_returns_expected_projection() -> None:
                 persona_snapshot={"mood": "neutral"},
                 active_task={"task_id": "task:episode:memory-plan", "status": "active"},
                 prompt_pack={"token_estimate": 321},
-                final_answer_meta={"route": "chat"},
+                final_answer_meta={
+                    "route": "chat",
+                    "agent_loop": True,
+                    "agent_tool_calls": 1,
+                    "agent_passes": 2,
+                    "memory_reasoning_used": True,
+                    "memory_reasoning_snapshot": {"profile_facts": {"prefers_short_answers": True}},
+                },
             )
         }
     )
@@ -36,7 +43,21 @@ def test_build_memory_debug_snapshot_returns_expected_projection() -> None:
         "persona_snapshot": {"mood": "neutral"},
         "active_task": {"task_id": "task:episode:memory-plan", "status": "active"},
         "prompt_pack": {"token_estimate": 321},
-        "final_answer_meta": {"route": "chat"},
+        "tool_loop": {
+            "agent_loop": True,
+            "agent_tool_calls": 1,
+            "agent_passes": 2,
+            "memory_reasoning_used": True,
+            "memory_reasoning_snapshot": {"profile_facts": {"prefers_short_answers": True}},
+        },
+        "final_answer_meta": {
+            "route": "chat",
+            "agent_loop": True,
+            "agent_tool_calls": 1,
+            "agent_passes": 2,
+            "memory_reasoning_used": True,
+            "memory_reasoning_snapshot": {"profile_facts": {"prefers_short_answers": True}},
+        },
     }
 
 

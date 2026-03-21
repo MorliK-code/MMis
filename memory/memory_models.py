@@ -384,6 +384,7 @@ class ContextBuildResult:
     dialog_episode_hits: list[dict[str, Any]] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     current_decisions: list[str] = field(default_factory=list)
+    task_continuity: dict[str, Any] = field(default_factory=dict)
     recall_mode: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -398,6 +399,7 @@ class ContextBuildResult:
             "dialog_episode_hits": [dict(x) for x in list(self.dialog_episode_hits or [])],
             "open_questions": [str(x) for x in list(self.open_questions or []) if str(x).strip()],
             "current_decisions": [str(x) for x in list(self.current_decisions or []) if str(x).strip()],
+            "task_continuity": dict(self.task_continuity or {}),
             "recall_mode": str(self.recall_mode or ""),
         }
 

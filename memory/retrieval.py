@@ -45,6 +45,18 @@ _ASSISTANT_HELP_COMMAND_RE = re.compile(
     r"(?:\bpython\s+--version\b|\bwinver\b|\bwmic\b|\bdxdiag\b|\blspci\b|\blshw\b|\bdevice manager\b|диспетчер устройств)",
     re.I,
 )
+_SELF_MEMORY_HINTS: tuple[str, ...] = (
+    "\u0443 \u043c\u0435\u043d\u044f",
+    "\u043c\u043d\u0435",
+    "\u043c\u0435\u043d\u044f",
+    "\u043c\u043e\u0439 ",
+    "\u043c\u043e\u044e ",
+    "\u043c\u043e\u044f ",
+    "\u043c\u043e\u0451 ",
+    "my ",
+    " me",
+    " i ",
+)
 
 _MESSAGE_CHANNEL_TYPES = [
     MemoryType.MESSAGE.value,
@@ -406,12 +418,17 @@ class HybridRetriever:
 
     @staticmethod
     def _is_self_like_query(query: RetrievalQuery) -> bool:
-        text = str(query.query_text or query.search_text or "").strip().lower()
+        text = normalize_text(str(query.query_text or query.search_text or "")).strip().lower()
         if not text:
             return False
         if _SELF_QUERY_RE.search(text):
             return True
-        return any(token in text for token in ("у меня", "мой ", "мою ", "моя ", "моё ", "my "))
+        profile = classify_query_recall_profile(text)
+        if profile.self_like:
+            return True
+        if profile.claim_like and any(token in text for token in _SELF_MEMORY_HINTS):
+            return True
+        return any(token in text for token in _SELF_MEMORY_HINTS)
 
     @classmethod
     def _expected_self_fact_predicates(cls, query: RetrievalQuery) -> set[str]:

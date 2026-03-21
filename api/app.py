@@ -18,16 +18,19 @@ from api.schemas import (
     FeedbackRequest,
     HealthResponse,
     JsonModeRequest,
+    MemoryInspectorResponse,
     MetadataResponse,
     ModelSetRequest,
     ModelsResponse,
     ThinkingRequest,
+    VerboseRequest,
     WebModeRequest,
 )
 from config.settings import get_profile, load_config
 from core.brain import Brain
 from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
+from memory.memory_models import DebugRequest
 from utils.logger import get_logger, log_json
 
 
@@ -55,6 +58,7 @@ class _Runtime:
         self.brain = Brain(provider=self.provider)
         self.model = str(self.settings.model_name or "").strip()
         self.thinking_enabled = bool(self.settings.thinking_enabled)
+        self.verbose_enabled = bool(self.brain.state_manager.get("verbose_enabled", False))
         self.web_mode = self.settings.web_mode if bool(self.settings.internet_enabled) else "off"
         self.json_mode_enabled = bool(self.settings.json_mode_enabled)
 
@@ -63,6 +67,9 @@ class _Runtime:
         self._message_seq = self._load_last_message_id()
         self.last_stats: dict[str, Any] = {}
         self.last_thinking: str = ""
+        self.last_debug_trace: dict[str, Any] = {}
+        self.last_memory_debug_snapshot: dict[str, Any] = {}
+        self.last_conversation_id: str = ""
 
     def next_message_id(self) -> int:
         self._message_seq += 1
@@ -165,12 +172,20 @@ def _build_health_response() -> HealthResponse:
         status="ok",
         model=_runtime.model,
         thinking_enabled=bool(_runtime.thinking_enabled),
+        verbose_enabled=bool(_runtime.verbose_enabled),
         json_mode_enabled=bool(_runtime.json_mode_enabled),
         web_mode=str(_runtime.web_mode),
         active_profile=str(active_profile or "BALANCED"),
         quality_profile=str(quality_profile or "BALANCED"),
         profile_parameters=profile_payload,
     )
+
+
+def _remember_debug_payload(*, meta_map: dict[str, Any] | None) -> None:
+    row = dict(meta_map or {})
+    _runtime.last_debug_trace = dict(row.get("debug_trace") or {})
+    _runtime.last_memory_debug_snapshot = dict(row.get("memory_debug_snapshot") or {})
+    _runtime.last_conversation_id = str(row.get("conversation_id") or _runtime.last_conversation_id or "").strip()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -205,6 +220,16 @@ def set_thinking(req: ThinkingRequest) -> HealthResponse:
         _runtime.thinking_enabled = bool(req.enabled)
         return _build_health_response()
 
+@app.post("/verbose", response_model=HealthResponse)
+def set_verbose(req: VerboseRequest) -> HealthResponse:
+    with _runtime.lock:
+        _runtime.verbose_enabled = bool(req.enabled)
+        try:
+            _runtime.brain.state_manager.patch({"verbose_enabled": bool(req.enabled)})
+        except Exception:
+            pass
+        return _build_health_response()
+
 @app.post("/web-mode", response_model=HealthResponse)
 def set_web_mode(req: WebModeRequest) -> HealthResponse:
     mode = str(req.mode or "").strip().lower()
@@ -220,6 +245,36 @@ def set_json_mode(req: JsonModeRequest) -> HealthResponse:
     with _runtime.lock:
         _runtime.json_mode_enabled = bool(req.enabled)
         return _build_health_response()
+
+
+@app.get("/debug/memory-inspector", response_model=MemoryInspectorResponse)
+def memory_inspector_debug(
+    conversation_id: str = Query(default="", description="Conversation namespace for store debug snapshot"),
+    limit: int = Query(default=80, ge=1, le=500),
+    include_store: bool = Query(default=True),
+) -> MemoryInspectorResponse:
+    with _runtime.lock:
+        namespace = str(conversation_id or _runtime.last_conversation_id or "default").strip() or "default"
+        debug_trace = dict(_runtime.last_debug_trace or {})
+        snapshot = dict(_runtime.last_memory_debug_snapshot or {})
+        if snapshot:
+            snapshot.setdefault("conversation_id", namespace)
+        memory_store_debug = None
+        manager = getattr(_runtime.brain, "memory_manager", None)
+        if include_store and manager is not None and hasattr(manager, "debug_snapshot"):
+            try:
+                memory_store_debug = manager.debug_snapshot(
+                    DebugRequest(namespace=namespace, limit=max(1, int(limit)))
+                )
+            except Exception:
+                memory_store_debug = None
+        return MemoryInspectorResponse(
+            conversation_id=namespace,
+            request_id=str(snapshot.get("request_id") or debug_trace.get("request_id") or ""),
+            debug_trace=debug_trace or None,
+            memory_debug_snapshot=snapshot or None,
+            memory_store_debug=(dict(memory_store_debug or {}) or None),
+        )
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
@@ -255,6 +310,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             text_chars=len(text),
             store_turn=bool(req.store_turn),
             think=_runtime.thinking_enabled if req.think is None else bool(req.think),
+            verbose=_runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
             json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
         )
         meta_map = _build_chat_meta(req=req, source="api")
@@ -270,6 +326,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         structured = dict(getattr(result, "structured_output", {}) or {})
         debug_trace = dict(meta_map.get("debug_trace") or {}) if isinstance(meta_map, dict) else {}
         memory_debug_snapshot = dict(meta_map.get("memory_debug_snapshot") or {}) if isinstance(meta_map, dict) else {}
+        _remember_debug_payload(meta_map=meta_map if isinstance(meta_map, dict) else {})
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None
@@ -364,6 +421,7 @@ def chat_stream(req: ChatRequest):
                         text_chars=len(request_text),
                         store_turn=bool(req.store_turn),
                         think=_runtime.thinking_enabled if req.think is None else bool(req.think),
+                        verbose=_runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
                         json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                     )
                     meta_map = _build_chat_meta(
@@ -416,6 +474,7 @@ def chat_stream(req: ChatRequest):
         meta_map = dict(state.get("meta") or {})
         debug_trace = dict(meta_map.get("debug_trace") or {}) if isinstance(meta_map, dict) else {}
         memory_debug_snapshot = dict(meta_map.get("memory_debug_snapshot") or {}) if isinstance(meta_map, dict) else {}
+        _remember_debug_payload(meta_map=meta_map if isinstance(meta_map, dict) else {})
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None
@@ -563,6 +622,7 @@ def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str
     meta: dict[str, Any] = {
         "model": _runtime.model,
         "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
+        "verbose": _runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
         "web_mode": str(_runtime.web_mode),
         "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
         "store_turn": bool(req.store_turn),
@@ -604,7 +664,7 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
         return {
             "answer": (
                 "Native API commands:\n"
-                "/health\n/models\n/model [name]\n/think\n/nothink\n/web [query]\n/no-web\n/json\n/nojson\n/character delete <id>\n/help"
+                "/health\n/models\n/model [name]\n/think\n/nothink\n/verbose\n/quiet\n/web [query]\n/no-web\n/json\n/nojson\n/character delete <id>\n/help"
             )
         }
     if cmd == "/health":
@@ -615,6 +675,7 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
                 f"status: ok\n"
                 f"model: {_runtime.model}\n"
                 f"thinking: {'on' if _runtime.thinking_enabled else 'off'}\n"
+                f"verbose: {'on' if _runtime.verbose_enabled else 'off'}\n"
                 f"web_mode: {_runtime.web_mode}\n"
                 f"json_mode: {'on' if _runtime.json_mode_enabled else 'off'}\n"
                 f"active_profile: {active_profile}\n"
@@ -650,6 +711,20 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
     if cmd == "/nothink":
         _runtime.thinking_enabled = False
         return {"answer": "Thinking: off"}
+    if cmd == "/verbose":
+        _runtime.verbose_enabled = True
+        try:
+            _runtime.brain.state_manager.patch({"verbose_enabled": True})
+        except Exception:
+            pass
+        return {"answer": "Verbose stats: on"}
+    if cmd == "/quiet":
+        _runtime.verbose_enabled = False
+        try:
+            _runtime.brain.state_manager.patch({"verbose_enabled": False})
+        except Exception:
+            pass
+        return {"answer": "Verbose stats: off"}
     if cmd == "/web":
         _runtime.web_mode = "on"
         if arg:

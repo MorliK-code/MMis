@@ -3516,7 +3516,12 @@ class CharacterRuntime:
         return _normalize_text(text)
 
     def _build_state_summary_block(self, state: dict[str, Any]) -> str:
-        """Построить блок state summary."""
+        """
+        Построить блок state summary.
+        
+        Теперь включает always-on memory state — рабочую память личности,
+        которая всегда доступна модели (не через retrieval).
+        """
         mode = _normalize_text(state.get("active_mode") or state.get("mode")) or "chatting"
         task = (
             _normalize_text(state.get("current_task"))
@@ -3529,13 +3534,43 @@ class CharacterRuntime:
             or "none"
         )
         focus = _normalize_text(state.get("focus") or state.get("active_goal") or "")
-
+        
+        # Always-on memory state: рабочая память личности
+        # Это не retrieval, а внутреннее состояние, которое всегда с моделью
+        identity_core = self._build_identity_core_block(state)
+        open_questions = self._build_open_questions_block(state)
+        current_decisions = self._build_current_decisions_block(state)
+        recent_topics = self._build_recent_topics_block(state)
+        relation_state = self._build_relation_state_block(state)
+        
         lines = [
             f"- mode: {mode}",
             f"- mode_lock: {str(bool(state.get('mode_lock', False))).lower()}",
             f"- current_task: {task}",
-            f"- dialog_summary: {summary}",
         ]
+        
+        # Добавляем identity_core только если есть данные
+        if identity_core and identity_core != "- none":
+            lines.append(f"- identity_core: {identity_core}")
+        
+        # Добавляем open_questions только если есть активные вопросы
+        if open_questions and open_questions != "- none":
+            lines.append(f"- open_questions: {open_questions}")
+        
+        # Добавляем current_decisions только если есть активные решения
+        if current_decisions and current_decisions != "- none":
+            lines.append(f"- current_decisions: {current_decisions}")
+        
+        # Добавляем recent_topics только если есть история тем
+        if recent_topics and recent_topics != "- none":
+            lines.append(f"- recent_topics: {recent_topics}")
+        
+        # Добавляем relation_state только если есть данные
+        if relation_state and relation_state != "- none":
+            lines.append(f"- relation_state: {relation_state}")
+        
+        lines.append(f"- dialog_summary: {summary}")
+        
         personality = _normalize_text(state.get("active_personality_id") or state.get("personality") or "default")
         lines.append(f"- active_personality: {personality}")
         character = _normalize_text(state.get("active_character_id") or state.get("character") or personality)
@@ -3549,6 +3584,173 @@ class CharacterRuntime:
         if focus:
             lines.append(f"- focus: {focus}")
         return "\n".join(lines)
+    
+    def _build_identity_core_block(self, state: dict[str, Any]) -> str:
+        """
+        Построить блок identity core — ключевые факты о пользователе и отношениях.
+        
+        Это всегда в prompt и является частью 'самосознания' модели:
+        - canonical_name: как пользователь представился
+        - preferred_addressing: предпочтительные формы обращения
+        - key_boundaries: установленные границы (не сюсюкать, не повторять вопросы)
+        - interaction_preferences: предпочтения в общении
+        """
+        addressing = _as_dict(state.get("addressing") or state.get("user_addressing") or {})
+        if not addressing:
+            return "- none"
+        
+        parts = []
+        canonical_name = addressing.get("canonical_name")
+        if canonical_name:
+            parts.append(f"name={canonical_name}")
+        
+        allowed_forms = addressing.get("allowed_forms")
+        if allowed_forms:
+            if isinstance(allowed_forms, list):
+                parts.append(f"address_as={','.join(allowed_forms[:3])}")
+            else:
+                parts.append(f"address_as={allowed_forms}")
+        
+        forbidden_forms = addressing.get("forbidden_forms")
+        if forbidden_forms:
+            if isinstance(forbidden_forms, list):
+                parts.append(f"do_not_call={','.join(forbidden_forms[:3])}")
+            else:
+                parts.append(f"do_not_call={forbidden_forms}")
+        
+        boundaries = _as_dict(state.get("boundaries") or {})
+        boundary_flags = []
+        if boundaries.get("avoid_baby_tone"):
+            boundary_flags.append("no_baby_talk")
+        if boundaries.get("avoid_repeating_question"):
+            boundary_flags.append("no_repeat_questions")
+        if boundaries.get("avoid_inventing_user_facts"):
+            boundary_flags.append("no_invent_facts")
+        if boundary_flags:
+            parts.append(f"boundaries={','.join(boundary_flags)}")
+        
+        interaction = _as_dict(state.get("interaction_style") or {})
+        if interaction.get("prefers_directness"):
+            parts.append("direct_style")
+        if interaction.get("prefers_short_answers"):
+            parts.append("short_answers")
+        if interaction.get("allows_light_teasing"):
+            parts.append("allows_teasing")
+        
+        if not parts:
+            return "- none"
+        
+        return " ".join(parts)
+    
+    def _build_open_questions_block(self, state: dict[str, Any]) -> str:
+        """
+        Построить блок unresolved items — открытые вопросы и незавершённые задачи.
+        
+        Помогает модели помнить о том, что ещё требует ответа или завершения.
+        """
+        open_questions = state.get("open_questions")
+        if not open_questions:
+            # Пробуем альтернативные ключи
+            open_questions = state.get("unresolved_questions")
+        if not open_questions:
+            return "- none"
+        
+        if isinstance(open_questions, list):
+            # Фильтруем только недавние и релевантные (максимум 3)
+            recent = [q for q in open_questions[:5] if q]
+            if not recent:
+                return "- none"
+            return "; ".join(str(q) for q in recent[:3])
+        elif isinstance(open_questions, str):
+            return open_questions[:200]
+        
+        return "- none"
+    
+    def _build_current_decisions_block(self, state: dict[str, Any]) -> str:
+        """
+        Построить блок current_decisions — текущие решения и договорённости.
+        
+        Помогает модели помнить о принятых решениях и планах.
+        """
+        decisions = state.get("current_decisions")
+        if not decisions:
+            decisions = state.get("active_decisions")
+        if not decisions:
+            return "- none"
+        
+        if isinstance(decisions, list):
+            recent = [d for d in decisions[:5] if d]
+            if not recent:
+                return "- none"
+            return "; ".join(str(d) for d in recent[:3])
+        elif isinstance(decisions, str):
+            return decisions[:200]
+        
+        return "- none"
+    
+    def _build_recent_topics_block(self, state: dict[str, Any]) -> str:
+        """
+        Построить блок recent_topics — последние обсуждавшиеся темы.
+        
+        Помогает модели поддерживать контекст беседы.
+        """
+        topics = state.get("recent_topics")
+        if not topics:
+            # Пробуем извлечь из context_tags
+            context_tags = _as_dict(state.get("context_tags") or {})
+            topic = context_tags.get("topic")
+            if topic:
+                return topic
+            return "- none"
+        
+        if isinstance(topics, list):
+            recent = [t for t in topics[:5] if t]
+            if not recent:
+                return "- none"
+            return "; ".join(str(t) for t in recent[:3])
+        elif isinstance(topics, str):
+            return topics[:200]
+        
+        return "- none"
+    
+    def _build_relation_state_block(self, state: dict[str, Any]) -> str:
+        """
+        Построить блок relation_state — состояние отношений с пользователем.
+        
+        Включает:
+        - rapport_level: уровень доверия/близости
+        - last_interaction_tone: тон последнего взаимодействия
+        - user_mood_pattern: паттерн настроения пользователя
+        """
+        relation = _as_dict(state.get("relation_state") or {})
+        if not relation:
+            # Пробуем извлечь из user_addressing
+            user_addressing = _as_dict(state.get("user_addressing") or {})
+            if user_addressing.get("rapport_level"):
+                relation["rapport_level"] = user_addressing["rapport_level"]
+            if user_addressing.get("last_interaction_tone"):
+                relation["last_interaction_tone"] = user_addressing["last_interaction_tone"]
+        
+        if not relation:
+            return "- none"
+        
+        parts = []
+        rapport = relation.get("rapport_level")
+        if rapport:
+            parts.append(f"rapport={rapport}")
+        
+        tone = relation.get("last_interaction_tone")
+        if tone:
+            parts.append(f"last_tone={tone}")
+        
+        mood_pattern = relation.get("user_mood_pattern")
+        if mood_pattern:
+            parts.append(f"mood_pattern={mood_pattern}")
+        
+        if not parts:
+            return "- none"
+        
+        return " ".join(parts)
 
     def _build_context_tags_block(self, tags: dict[str, str]) -> str:
         """Построить блок context tags."""

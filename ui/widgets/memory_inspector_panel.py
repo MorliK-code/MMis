@@ -285,6 +285,7 @@ class MemoryInspectorPanel(QWidget):
         self.persona_page = _InspectorPage("Persona", self.tabs)
         self.active_task_page = _InspectorPage("Active Task", self.tabs)
         self.prompt_page = _InspectorPage("Prompt", self.tabs)
+        self.loop_page = _InspectorPage("Loop", self.tabs)
 
         self.tabs.addTab(self.retrieval_page, "Retrieval")
         self.tabs.addTab(self.governor_page, "Governor")
@@ -292,8 +293,14 @@ class MemoryInspectorPanel(QWidget):
         self.tabs.addTab(self.persona_page, "Persona")
         self.tabs.addTab(self.active_task_page, "Active Task")
         self.tabs.addTab(self.prompt_page, "Prompt")
+        self.tabs.addTab(self.loop_page, "Loop")
 
-        self.clear_snapshot()
+        self.configure_display(
+            enabled=self._memory_inspector_enabled,
+            show_raw_scores=self._show_raw_scores,
+            show_filtered_items=self._show_filtered_items,
+            show_prompt_blocks=self._show_prompt_blocks,
+        )
 
     def clear_snapshot(self) -> None:
         self.set_snapshot({})
@@ -321,6 +328,7 @@ class MemoryInspectorPanel(QWidget):
             self.persona_page,
             self.active_task_page,
             self.prompt_page,
+            self.loop_page,
         ):
             page.set_show_raw_scores(self._show_raw_scores)
         self.setVisible(self._memory_inspector_enabled)
@@ -336,6 +344,7 @@ class MemoryInspectorPanel(QWidget):
         self.persona_page.set_sections(self._persona_sections(row))
         self.active_task_page.set_sections(self._active_task_sections(row))
         self.prompt_page.set_sections(self._prompt_sections(row))
+        self.loop_page.set_sections(self._loop_sections(row))
 
     @staticmethod
     def _build_meta_text(snapshot: dict[str, Any]) -> str:
@@ -354,21 +363,26 @@ class MemoryInspectorPanel(QWidget):
         retrieval = _get_section(snapshot, "retrieval", "memory_retrieval")
         return [
             (
-                "Query",
+                "Query Plan",
                 {
                     "query": retrieval.get("query"),
                     "recall_mode": retrieval.get("recall_mode"),
+                    "request_plan": retrieval.get("request_plan"),
+                    "fanout_sources": retrieval.get("fanout_sources"),
                     "memory_block_keys": retrieval.get("memory_block_keys"),
                     "selected_total": retrieval.get("selected_total"),
                 },
             ),
+            ("Fan-out Queries", retrieval.get("fanout_queries")),
             ("Exact Hits", retrieval.get("exact_self_fact_hits")),
-            ("Confidence", retrieval.get("confidence") if self._show_raw_scores else {}),
+            ("Hit Summary", retrieval.get("confidence")),
             ("Selected Facts", retrieval.get("selected_facts")),
             ("Selected Episodes", retrieval.get("selected_episodes")),
             ("Selected Claims", retrieval.get("selected_claims")),
             ("Selected Documents", retrieval.get("selected_documents")),
             ("Selected Messages", retrieval.get("selected_messages")),
+            ("Rerank", retrieval.get("score_breakdowns") if self._show_raw_scores else []),
+            ("Task Continuity", retrieval.get("task_continuity")),
             ("Filtered Out", retrieval.get("filtered_out") if self._show_filtered_items else []),
             ("Truncated", retrieval.get("truncated")),
         ]
@@ -393,9 +407,14 @@ class MemoryInspectorPanel(QWidget):
                     "active_mode": persona.get("active_mode"),
                 },
             ),
+            ("Active Task Bridge", persona.get("active_task")),
+            ("Relation Continuity", persona.get("relation_continuity")),
+            ("Recent User State", persona.get("recent_user_state")),
             ("User Addressing", persona.get("user_addressing")),
             ("Stable Traits", persona.get("stable_traits")),
             ("Relation State", persona.get("relation_state")),
+            ("Boundaries", persona.get("boundaries")),
+            ("Emotional Handling", persona.get("emotional_handling")),
             ("Response Bias", persona.get("response_bias")),
             ("User Profile Hints", persona.get("user_profile_hints")),
             ("Debug", persona.get("debug")),
@@ -441,6 +460,9 @@ class MemoryInspectorPanel(QWidget):
                     "source_episode_id": active_task.get("source_episode_id"),
                     "confidence": active_task.get("confidence"),
                     "updated_at": active_task.get("updated_at"),
+                    "source": active_task.get("source"),
+                    "reason": active_task.get("reason"),
+                    "event": active_task.get("event"),
                 },
             ),
             ("Summary", active_task.get("summary_short")),
@@ -460,6 +482,8 @@ class MemoryInspectorPanel(QWidget):
                     "section_keys": prompt_pack.get("section_keys"),
                 },
             ),
+            ("Included Memory Blocks", prompt_pack.get("included_memory_blocks")),
+            ("Omitted Memory Blocks", prompt_pack.get("omitted_memory_blocks")),
         ]
         if self._show_prompt_blocks:
             sections.extend(
@@ -470,3 +494,30 @@ class MemoryInspectorPanel(QWidget):
                 ]
             )
         return sections
+
+    def _loop_sections(self, snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
+        final_meta = dict(snapshot.get("final_answer_meta") or {})
+        tool_loop = dict(snapshot.get("tool_loop") or final_meta.get("tool_loop") or {})
+        return [
+            (
+                "Overview",
+                {
+                    "route": final_meta.get("route"),
+                    "served_model": final_meta.get("served_model"),
+                    "agent_loop": _get_section({"tool_loop": tool_loop}, "tool_loop").get("agent_loop", final_meta.get("agent_loop")),
+                    "agent_tool_calls": _get_section({"tool_loop": tool_loop}, "tool_loop").get("agent_tool_calls", final_meta.get("agent_tool_calls")),
+                    "agent_passes": _get_section({"tool_loop": tool_loop}, "tool_loop").get("agent_passes", final_meta.get("agent_passes")),
+                    "memory_reasoning_used": final_meta.get("memory_reasoning_used"),
+                    "memory_reasoning_sections": final_meta.get("memory_reasoning_sections"),
+                    "output_len": final_meta.get("output_len"),
+                },
+            ),
+            ("Iterations", tool_loop.get("iterations")),
+            ("Executed Tools", tool_loop.get("executed_tools")),
+            (
+                "Memory Reasoning",
+                tool_loop.get("memory_reasoning_snapshot") or final_meta.get("memory_reasoning_snapshot"),
+            ),
+            ("Warnings", final_meta.get("warnings")),
+            ("Errors", final_meta.get("errors")),
+        ]
