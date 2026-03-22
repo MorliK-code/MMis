@@ -22,7 +22,7 @@ from typing import Any
 from config.settings import load_config
 from core.mode_selector import normalize_mode_name
 from metadata.taxonomy import normalize_emotion
-from memory.summary_quality import is_meaningful_summary_turn, sanitize_session_summary_text
+from memory_core.utils.summary_quality import is_meaningful_summary_turn, sanitize_session_summary_text
 from modules.character.composer import CharacterComposeResult, CharacterComposer, compute_context_trait_modifiers
 from modules.character.dialog_policies import (
     local_date_kyiv as dialog_local_date,

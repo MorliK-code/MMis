@@ -25,6 +25,10 @@ _CHARACTER_FILES = {
     "evolution": "evolution_spec.json",
 }
 
+_LEGACY_MIGRATION_SKIP_FILES = {
+    "performance_profiles.json",
+}
+
 
 def _normalize_name(value: str) -> str:
     return str(value or "").strip().lower()
@@ -80,6 +84,8 @@ class SpecRegistry:
                     continue
                 rel = path.relative_to(src_root)
                 if rel.parts and str(rel.parts[0]).strip().lower() in {"rules_for_all", "characters", "faq"}:
+                    continue
+                if str(path.name or "").strip().lower() in _LEGACY_MIGRATION_SKIP_FILES:
                     continue
                 target = (dst_root / rel).resolve()
                 target.parent.mkdir(parents=True, exist_ok=True)

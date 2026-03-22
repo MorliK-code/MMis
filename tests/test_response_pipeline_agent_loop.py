@@ -4,7 +4,7 @@ import sys
 import types
 
 from core.response_pipeline import PROFILE_AUTONOMOUS, ResponsePipeline
-from llm.provider_base import LLMResponse, Message, Timings, ToolCall, Usage
+from llm.provider_base import LLMChunk, LLMResponse, Message, Timings, ToolCall, Usage
 
 if "ollama" not in sys.modules:
     stub = types.ModuleType("ollama")
@@ -135,6 +135,74 @@ class _LoopProvider:
         )
 
 
+class _StreamingLoopProvider:
+    def __init__(self) -> None:
+        self.stream_requests = []
+        self.generate_requests = []
+
+    def generate(self, req):
+        self.generate_requests.append(req)
+        raise AssertionError("generate() should not be used when agent-loop streaming succeeds")
+
+    def stream(self, req):
+        self.stream_requests.append(req)
+        if len(self.stream_requests) == 1:
+            yield LLMChunk(
+                tool_calls_delta=[
+                    ToolCall(
+                        id="call_memory_stream_1",
+                        name="memory_retrieve",
+                        arguments={
+                            "mode": "profile",
+                            "topic_hints": ["name"],
+                            "time_hint": "persistent",
+                            "sources": ["profile", "facts"],
+                            "top_k": 3,
+                        },
+                    )
+                ],
+                model="fake-stream-loop",
+                done=False,
+            )
+            yield LLMChunk(
+                model="fake-stream-loop",
+                usage=Usage(prompt_tokens=9, completion_tokens=1, total_tokens=10),
+                timings=Timings(latency_ms=4.0),
+                done=True,
+            )
+            return
+
+        yield LLMChunk(text_delta="I ", model="fake-stream-loop", done=False)
+        yield LLMChunk(text_delta="remember ", model="fake-stream-loop", done=False)
+        yield LLMChunk(text_delta="your ", model="fake-stream-loop", done=False)
+        yield LLMChunk(
+            text_delta="name is Pasha.",
+            model="fake-stream-loop",
+            usage=Usage(prompt_tokens=18, completion_tokens=6, total_tokens=24),
+            timings=Timings(latency_ms=7.0),
+            done=True,
+        )
+
+
+class _StreamingFallbackProvider:
+    def __init__(self) -> None:
+        self.stream_requests = []
+        self.generate_requests = []
+
+    def stream(self, req):
+        self.stream_requests.append(req)
+        raise RuntimeError("broken stream")
+
+    def generate(self, req):
+        self.generate_requests.append(req)
+        return LLMResponse(
+            text="Fallback final answer.",
+            model="fake-fallback-loop",
+            usage=Usage(prompt_tokens=12, completion_tokens=4, total_tokens=16),
+            timings=Timings(latency_ms=6.0),
+        )
+
+
 class ResponsePipelineAgentLoopTests(unittest.TestCase):
     def test_autonomous_profile_uses_full_pipeline_without_stage_memory_retrieve(self) -> None:
         pipeline = ResponsePipeline(provider=object())
@@ -236,6 +304,70 @@ class ResponsePipelineAgentLoopTests(unittest.TestCase):
         self.assertEqual(payload["role"], "assistant")
         self.assertEqual(payload["tool_calls"][0]["function"]["name"], "memory_retrieve")
         self.assertEqual(payload["tool_calls"][0]["function"]["arguments"]["query"], "What is my name?")
+
+    def test_agent_loop_streaming_keeps_tool_step_hidden_and_streams_final_pass(self) -> None:
+        provider = _StreamingLoopProvider()
+        manager = _MemoryManager()
+        pipeline = ResponsePipeline(provider=provider, memory_manager=manager)
+        streamed: list[str] = []
+        meta = {
+            "conversation_id": "conv-agent-loop-stream",
+            "turn_id": 2,
+            "profile": PROFILE_AUTONOMOUS,
+            "memory_manager": manager,
+            "stream_on_answer_chunk": lambda piece: streamed.append(piece),
+        }
+
+        result = pipeline.run(
+            route="chat",
+            user_msg="What is my name?",
+            state={
+                "conversation_id": "conv-agent-loop-stream",
+                "turn_id": 2,
+                "active_character_id": "asya",
+            },
+            meta=meta,
+            retrieved_memories=[],
+            traits={},
+            policies={},
+        )
+
+        self.assertEqual(result.text, "I remember your name is Pasha.")
+        self.assertEqual("".join(streamed), "I remember your name is Pasha.")
+        self.assertEqual(len(provider.stream_requests), 2)
+        self.assertEqual(len(provider.generate_requests), 0)
+        self.assertEqual(len(manager.calls), 1)
+        self.assertEqual(result.tool_calls, [])
+        self.assertEqual(int(result.stats.get("agent_tool_calls") or 0), 1)
+
+    def test_agent_loop_streaming_logs_and_falls_back_to_generate_on_stream_error(self) -> None:
+        provider = _StreamingFallbackProvider()
+        pipeline = ResponsePipeline(provider=provider)
+
+        result = pipeline.run(
+            route="chat",
+            user_msg="Say hello",
+            state={
+                "conversation_id": "conv-agent-loop-stream-fallback",
+                "turn_id": 3,
+                "active_character_id": "asya",
+            },
+            meta={
+                "conversation_id": "conv-agent-loop-stream-fallback",
+                "turn_id": 3,
+                "profile": PROFILE_AUTONOMOUS,
+                "stream_on_answer_chunk": lambda _piece: None,
+            },
+            retrieved_memories=[],
+            traits={},
+            policies={},
+        )
+
+        self.assertEqual(result.text, "Fallback final answer.")
+        self.assertEqual(len(provider.stream_requests), 1)
+        self.assertEqual(len(provider.generate_requests), 1)
+        self.assertTrue(any("agent_loop_stream_error=RuntimeError" in row for row in list(result.logs or [])))
+        self.assertTrue(any("agent_loop_stream_fallback=generate" in row for row in list(result.logs or [])))
 
 
 if __name__ == "__main__":

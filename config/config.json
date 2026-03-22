@@ -374,10 +374,10 @@
     "response_formatting_enabled": true
   },
   "memory": {
-    "memory_dir": "{dir_path}\\data\\memory_storage",
-    "cache_dir": "{dir_path}\\data\\memory_storage\\cache",
+    "memory_dir": "{dir_path}\\data\\memory_core",
+    "cache_dir": "{dir_path}\\data\\cache",
     "log_dir": "{dir_path}\\data\\logs",
-    "db_path": "{dir_path}\\data\\memory_storage\\memory.db",
+    "db_path": "{dir_path}\\data\\memory_core\\memory.db",
     "version": "v2",
     "backend": "chroma",
     "embedding": {
@@ -457,8 +457,7 @@
     "migration": {
       "auto_on_start": true,
       "schema_version": 2
-    },
-    "storage_profile": "compact"
+    }
   },
   "dialog": {
     "new_session_after_min": 360,
@@ -532,7 +531,16 @@
   },
   "features": {
     "flags": {},
-    "extra_legacy": {}
+    "extra_legacy": {
+      "memory_core": {
+        "enabled": true,
+        "db_path": "{dir_path}\\data\\memory_core\\memory.db",
+        "vector_path": "{dir_path}\\data\\memory_core\\vector",
+        "default_workspace": "global",
+        "default_namespace": "default",
+        "top_k": 8
+      }
+    }
   },
   "hardware": {
     "gpu_vram_gb": null

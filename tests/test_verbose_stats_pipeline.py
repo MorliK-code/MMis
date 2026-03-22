@@ -120,6 +120,7 @@ class VerboseStatsPipelineTests(unittest.TestCase):
             meta={
                 "conversation_id": "conv-stream-verbose",
                 "verbose": True,
+                "agent_loop": False,
                 "stream_on_answer_chunk": seen_chunks.append,
             },
             retrieved_memories=[],

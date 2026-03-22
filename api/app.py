@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from api.memory_core_api import register_memory_core_api
 from api.schemas import (
     ChatRequest,
     ChatResponse,
@@ -30,7 +31,6 @@ from config.settings import get_profile, load_config
 from core.brain import Brain
 from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
-from memory.memory_models import DebugRequest
 from utils.logger import get_logger, log_json
 
 
@@ -38,6 +38,9 @@ cfg = load_config(force_reload=True)
 validate_no_txt_paths(cfg)
 app = FastAPI(title="MMis API", version="2.1.0")
 LOGGER = get_logger(__name__)
+
+# Регистрируем Memory Core API
+register_memory_core_api(app)
 
 
 class _Runtime:
@@ -260,12 +263,10 @@ def memory_inspector_debug(
         if snapshot:
             snapshot.setdefault("conversation_id", namespace)
         memory_store_debug = None
-        manager = getattr(_runtime.brain, "memory_manager", None)
-        if include_store and manager is not None and hasattr(manager, "debug_snapshot"):
+        memory_core = getattr(_runtime.brain, "memory_core", None)
+        if include_store and memory_core is not None:
             try:
-                memory_store_debug = manager.debug_snapshot(
-                    DebugRequest(namespace=namespace, limit=max(1, int(limit)))
-                )
+                memory_store_debug = memory_core.debug_snapshot(limit=max(1, int(limit)))
             except Exception:
                 memory_store_debug = None
         return MemoryInspectorResponse(
@@ -328,7 +329,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         # Debug trace берётся из result
         debug_trace = dict(getattr(result, "debug_trace", {}) or {})
         memory_debug_snapshot = dict(getattr(result, "memory_debug_snapshot", {}) or {})
-        _remember_debug_payload({"debug_trace": debug_trace, "memory_debug_snapshot": memory_debug_snapshot})
+        _remember_debug_payload(meta_map={"debug_trace": debug_trace, "memory_debug_snapshot": memory_debug_snapshot})
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None
@@ -487,7 +488,7 @@ def chat_stream(req: ChatRequest):
         # Debug trace берётся из result
         debug_trace = dict(getattr(result, "debug_trace", {}) or {})
         memory_debug_snapshot = dict(getattr(result, "memory_debug_snapshot", {}) or {})
-        _remember_debug_payload({"debug_trace": debug_trace, "memory_debug_snapshot": memory_debug_snapshot})
+        _remember_debug_payload(meta_map={"debug_trace": debug_trace, "memory_debug_snapshot": memory_debug_snapshot})
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None
@@ -495,6 +496,10 @@ def chat_stream(req: ChatRequest):
             summary_text = None
         stats = dict(result.stats or {})
         stats.setdefault("served_model", _runtime.model)
+        stats["streaming_requested"] = True
+        stats["streaming_live"] = bool(sent_answer or sent_thinking)
+        stats["streamed_answer_chars"] = int(sent_answer)
+        stats["streamed_thinking_chars"] = int(sent_thinking)
         payload = {
             "answer": answer,
             "thinking": thinking,
@@ -510,15 +515,6 @@ def chat_stream(req: ChatRequest):
         if bool(req.store_turn) and _should_store_metadata(text=request_text, structured_output=structured):
             _append_metadata_row(model=_runtime.model, role="user", text=request_text, context=answer)
             _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=request_text)
-
-        if sent_thinking == 0:
-            for t_chunk in _split_chunks(thinking, chunk_size=48):
-                if t_chunk:
-                    yield _ndjson("thinking", t_chunk)
-        if sent_answer == 0:
-            for chunk in _split_chunks(answer, chunk_size=48):
-                if chunk:
-                    yield _ndjson("chunk", chunk)
 
         log_json(
             LOGGER,

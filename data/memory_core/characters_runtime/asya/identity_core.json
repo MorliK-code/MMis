@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "addressing": {
+    "canonical_name": "",
+    "allowed_forms": [],
+    "forbidden_forms": [],
+    "allow_diminutives": false,
+    "use_name_by_default": false,
+    "updated_at": ""
+  },
+  "interaction_style": {},
+  "boundaries": {},
+  "emotional_handling": {},
+  "assistant_trait_baseline": {},
+  "updated_at": ""
+}

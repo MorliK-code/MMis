@@ -1,0 +1,123 @@
+{
+  "schema_version": 2,
+  "global": {
+    "conversation_id": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa",
+    "turn_id": 0,
+    "active_character_id": "asya",
+    "active_mode": "chatting",
+    "mode_lock": false,
+    "mode_until": "",
+    "web_mode": "auto",
+    "thinking_enabled": false,
+    "output_format": {
+      "show_parameters": null,
+      "show_summary": null
+    },
+    "quality_profile": "ASYA",
+    "active_goal": "",
+    "active_tasks": [],
+    "last_signals": {},
+    "last_actions": [],
+    "context_stack": []
+  },
+  "characters": {
+    "asya": {
+      "persona": {
+        "traits": {
+          "warmth": 0.41,
+          "sarcasm": 0.19
+        },
+        "mood": "playful",
+        "locks": {
+          "feminine": true,
+          "informal_you": true
+        },
+        "bans": [
+          "could you clarify what you mean",
+          "быть полезной"
+        ],
+        "learned": {
+          "preferences_confirmed": [
+            "less_warmth",
+            "shorter_answers",
+            "ban_word:быть полезной",
+            "ban_word:could you clarify what you mean"
+          ],
+          "preferences_pending": [],
+          "style_bias": {}
+        },
+        "baseline_traits": {}
+      },
+      "local_context": {
+        "last_topic_weights": {},
+        "last_seen_ts": "2026-03-22T20:20:23.558+02:00"
+      }
+    }
+  },
+  "conversation_id": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa",
+  "turn_id": 0,
+  "active_character_id": "asya",
+  "mode": "chat",
+  "active_mode": "chatting",
+  "mode_lock": false,
+  "mode_until": "",
+  "web_mode": "auto",
+  "thinking_enabled": false,
+  "output_format": {
+    "show_parameters": null,
+    "show_summary": null
+  },
+  "quality_profile": "ASYA",
+  "active_goal": "",
+  "active_tasks": [],
+  "last_signals": {},
+  "last_actions": [],
+  "context_tags": {},
+  "traits": {},
+  "policies": {},
+  "retrieved_memories": [],
+  "context_stack": [],
+  "last_tool_result": null,
+  "cooldowns": {
+    "last_user_message": "",
+    "last_user_hash": "",
+    "last_user_ts": "",
+    "prev_user_ts": "",
+    "last_assistant_message": "",
+    "last_assistant_ts": "",
+    "last_action": "",
+    "last_action_ts": "",
+    "repeat_count": 0,
+    "session_id": "",
+    "prev_session_id": "",
+    "greeting_date_local": "",
+    "greeting_ts": ""
+  },
+  "address_terms": {
+    "last_term_used_at": "",
+    "term_used_turn_index": 0,
+    "terms_used_count_session": 0,
+    "session_id_snapshot": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa",
+    "banned_terms": [],
+    "banned_terms_until": {},
+    "last_disable_directive_ts": "",
+    "last_enable_directive_ts": ""
+  },
+  "dialog_summary": "",
+  "history": [],
+  "character_locked": false,
+  "character_last_switch_ts": "",
+  "active_personality_id": "default",
+  "personality_blend": {
+    "active": false,
+    "from": "default",
+    "to": "default",
+    "step": 0,
+    "steps": 4,
+    "old_weight": 0.0,
+    "new_weight": 1.0
+  },
+  "personality_locked": false,
+  "personality_last_switch_ts": "",
+  "personality_cooldown_sec": 90.0
+}

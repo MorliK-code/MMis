@@ -15,9 +15,7 @@ from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
 from llm.tokenizer import ApproxTokenizer, Tokenizer
-from memory.auto_migration import run_auto_migration
-from memory.event_store import EventStore
-from memory.memory_manager import MemoryManager
+from memory_core.adapter import MemoryCoreAdapter, init_memory_core
 from metadata.metadata_extractor import MetadataExtractor
 from modules.automation import BrowserConfig, BrowserController, OSActions, OSActionConfig, TaskExecutor
 from modules.internet import SearchClient, WebScraper
@@ -37,7 +35,7 @@ class AppContainer:
     tokenizer: Tokenizer
     character_runtime: CharacterRuntime
     metadata_extractor: MetadataExtractor
-    memory_manager: MemoryManager
+    memory_core: MemoryCoreAdapter
     response_pipeline: ResponsePipeline
     brain: Brain
     voice: VoiceManager | None = None
@@ -49,7 +47,7 @@ class AppContainer:
     def shutdown(self) -> None:
         _safe_call(self.voice, "shutdown")
         _safe_call(self.character_runtime, "save")
-        _safe_call(self.memory_manager, "close")
+        _safe_call(self.memory_core, "close")
         _safe_call(self.provider, "shutdown")
         _safe_call(self.provider, "close")
         logging.shutdown()
@@ -58,14 +56,6 @@ class AppContainer:
 def build_container(settings: AppSettings) -> AppContainer:
     validate_no_txt_paths(settings)
     ensure_dirs(memory_dir=settings.memory_dir)
-    migration_result = run_auto_migration(
-        memory_dir=settings.memory_dir,
-        target_schema_version=int(settings.memory_migration_schema_version),
-        auto_on_start=bool(settings.memory_migration_auto_on_start),
-        facts_scope=str(settings.memory_facts_scope or "user_only"),
-    )
-    if not bool(migration_result.get("success", True)):
-        LOGGER.warning("Memory auto-migration failed: %s", str(migration_result.get("error") or "unknown_error"))
     profile = get_profile(settings.active_profile)
     provider_name = _resolve_provider_name(settings.llm_default_provider)
     provider = build_provider(provider_name, default_model=settings.model_name)
@@ -77,26 +67,32 @@ def build_container(settings: AppSettings) -> AppContainer:
     )
     metadata_extractor = MetadataExtractor(cache_size=280)
 
-    event_store = EventStore()
-    memory_manager = MemoryManager(root_dir=settings.memory_dir)
+    # Инициализация memory_core через адаптер
+    memory_core = init_memory_core(
+        db_path=settings.memory_core_db_path,
+        vector_path=settings.memory_core_vector_path,
+        default_workspace=settings.memory_core_default_workspace,
+        default_namespace=settings.memory_core_default_namespace,
+        top_k=int(settings.memory_core_top_k),
+    )
 
     response_pipeline = ResponsePipeline(
         provider=provider,
         character_runtime=character_runtime,
         metadata_extractor=metadata_extractor,
-        memory_manager=memory_manager,
+        memory_core=memory_core,
     )
     brain = Brain(
         provider=provider,
         state_manager=character_runtime,
-        memory_manager=memory_manager,
+        memory_core=memory_core,
         metadata_extractor=metadata_extractor,
         response_pipeline=response_pipeline,
     )
 
     voice = VoiceManager() if settings.voice_enabled else None
     screen = ScreenAnalyzer() if settings.screen_enabled else None
-    automation = _build_automation(settings=settings, event_store=event_store) if settings.automation_enabled else None
+    automation = _build_automation(settings=settings) if settings.automation_enabled else None
     internet_search = (
         SearchClient(
             endpoint=settings.search_api_url,
@@ -126,7 +122,7 @@ def build_container(settings: AppSettings) -> AppContainer:
         tokenizer=tokenizer,
         character_runtime=character_runtime,
         metadata_extractor=metadata_extractor,
-        memory_manager=memory_manager,
+        memory_core=memory_core,
         response_pipeline=response_pipeline,
         brain=brain,
         voice=voice,
@@ -268,7 +264,14 @@ def _brain_meta(container: AppContainer, *, source: str) -> dict[str, Any]:
     return meta
 
 
-def _build_automation(settings: AppSettings, event_store: EventStore) -> TaskExecutor:
+def _build_automation(settings: AppSettings) -> TaskExecutor:
+    # Простая заглушка EventStore для automation
+    class EventStore:
+        def append(self, *args, **kwargs):
+            pass
+        def list_events(self, *args, **kwargs):
+            return []
+
     allow_actions = settings.safety_mode == "allow_os_actions"
     os_actions = OSActions(
         config=OSActionConfig(
@@ -290,6 +293,7 @@ def _build_automation(settings: AppSettings, event_store: EventStore) -> TaskExe
             require_confirmation_for_sensitive=True,
         ),
     )
+    event_store = EventStore()
     return TaskExecutor(browser=browser, os_actions=os_actions, event_store=event_store)
 
 

@@ -3,7 +3,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from memory.profile_evolution import flatten_governor_profile_snapshot
+from memory_core.processors.state_reducer import StateUpdate
+
+
+def flatten_governor_profile_snapshot(
+    snapshot: dict | None,
+    layer_priority: tuple[str, ...] | None = None,
+    include_active_facts: bool = True,
+) -> dict:
+    """Заглушка для обратной совместимости."""
+    if not snapshot:
+        return {}
+    result = {}
+    for key in ["traits", "mood", "relation", "active_task", "user_profile"]:
+        if key in snapshot:
+            result[key] = snapshot[key]
+    if "flat_traits" in snapshot:
+        result["flat_traits"] = snapshot["flat_traits"]
+    elif "traits" in snapshot and isinstance(snapshot["traits"], dict):
+        result["flat_traits"] = snapshot["traits"]
+    return result
 
 
 @dataclass(frozen=True)

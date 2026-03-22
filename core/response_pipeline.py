@@ -27,18 +27,12 @@ from core.debug_trace import DebugTrace
 from core.character_runtime import CharacterRuntime
 from core.character_runtime import PromptPack
 from core.mode_selector import ModeSelector, list_runtime_modes, normalize_mode_name
-from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, Message, ToolCall, ToolSpec
+from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, Message, Timings, ToolCall, ToolSpec, Usage
 from llm.task_router import run_task_model
 from llm.tokenizer import estimate_tokens
-from memory import EpisodePlanner, build_memory_debug_snapshot
-from memory.history_tools import history_tools_list, HistoryReadResult
-from memory.memory_models import ContextBuildRequest, MemoryScope
-from memory.native_state import build_memory_native_state
-from memory.profile_evolution import flatten_governor_profile_snapshot
-from memory.project_terms import build_retrieval_hints
-from memory.recall_policy import classify_query_recall_profile
-from memory.summary_quality import is_low_quality_session_summary, sanitize_session_summary_text
-from memory.tool_bridge import build_memory_tool_context_pack, format_memory_result_for_llm, normalize_memory_retrieval_plan
+from memory_core.adapter import MemoryCoreAdapter
+from memory_core.retrieval.history_tools import history_tools_list, HistoryReadResult
+from memory_core.utils.summary_quality import is_low_quality_session_summary, sanitize_session_summary_text
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
 from modules.studio.studio_generator import StudioGenerator
@@ -482,8 +476,8 @@ class MemoryNativeStateStage(PipelineStage):
     """
     name = "memory_native_state"
 
-    def __init__(self, memory_manager=None):
-        self.memory_manager = memory_manager
+    def __init__(self, memory_core: MemoryCoreAdapter | None = None):
+        self.memory_core = memory_core or MemoryCoreAdapter()
         self._cfg = load_config()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
@@ -493,32 +487,28 @@ class MemoryNativeStateStage(PipelineStage):
         Это always-on слой — строится всегда, даже для не-chat маршрутов.
         """
         _ensure_debug_trace(ctx)
-        
-        # Строим memory_native_state из текущего state
+
+        # Строим memory_native_state из текущего state и memory_context
         # Это always-on слой — доступен даже без retrieval и для не-chat маршрутов
-        native_state = build_memory_native_state(
-            state=ctx.state,
-            memory_context=ctx.memory_context if ctx.memory_context else None,
-        )
+        native_state = {
+            "hits": ctx.memory_context.get("hits", []) if ctx.memory_context else [],
+            "citations": ctx.memory_context.get("citations", []) if ctx.memory_context else [],
+        }
         ctx.state["memory_native_state"] = native_state
 
         # Логируем, что было построено
-        has_identity = bool(native_state.get("identity_core"))
-        has_task = bool(native_state.get("active_task"))
-        has_questions = bool(native_state.get("open_questions"))
-        has_decisions = bool(native_state.get("current_decisions"))
+        has_hits = bool(native_state.get("hits"))
+        has_citations = bool(native_state.get("citations"))
 
         if ctx.route != "chat":
             ctx.logs.append(
                 f"stage=memory_native_state built (non-chat route={ctx.route}) "
-                f"identity={int(has_identity)} task={int(has_task)} "
-                f"questions={int(has_questions)} decisions={int(has_decisions)}"
+                f"hits={int(has_hits)} citations={int(has_citations)}"
             )
         else:
             ctx.logs.append(
                 f"stage=memory_native_state built "
-                f"identity={int(has_identity)} task={int(has_task)} "
-                f"questions={int(has_questions)} decisions={int(has_decisions)}"
+                f"hits={int(has_hits)} citations={int(has_citations)}"
             )
         return ctx
 
@@ -526,23 +516,15 @@ class MemoryNativeStateStage(PipelineStage):
 class MemoryRetrieveStage(PipelineStage):
     name = "memory_retrieve"
 
-    def __init__(self, memory_manager=None):
-        self.memory_manager = memory_manager
+    def __init__(self, memory_core: MemoryCoreAdapter | None = None):
+        self.memory_core = memory_core or MemoryCoreAdapter()
         self._cfg = load_config()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         """
-        Memory retrieve stage — основной путь для моделей без tool support.
+        Memory retrieve stage через memory_core.
 
-        Для моделей С tools (qwen3, llama3):
-          - это fallback, если agent_loop не вызвал tool
-        Для моделей БЕЗ tools (deepseek-r1):
-          - это основной путь retrieval
-
-        Срабатывает, когда:
-        - agent_loop не сработал (модель не вызвала tool) ИЛИ
-        - модель не поддерживает tools (deepseek-r1) И
-        - memory gate показал, что память нужна
+        Выполняет запрос к memory_core и сохраняет результат в ctx.memory_context.
         """
         _ensure_debug_trace(ctx)
         if ctx.route != "chat":
@@ -554,79 +536,38 @@ class MemoryRetrieveStage(PipelineStage):
             ctx.logs.append("stage=memory_retrieve skipped(empty)")
             return ctx
 
-        manager = ctx.meta.get("memory_manager") or self.memory_manager
-        if manager is None or not hasattr(manager, "build_context"):
-            ctx.logs.append("stage=memory_retrieve skipped(no_manager)")
+        memory_core = ctx.meta.get("memory_core") or self.memory_core
+        if memory_core is None:
+            ctx.logs.append("stage=memory_retrieve skipped(no_memory_core)")
             return ctx
 
-        # Проверяем, был ли уже agent_loop с memory tool
-        agent_loop_trace = _as_dict(ctx.state.get("agent_loop_trace"))
-        agent_loop_used = bool(agent_loop_trace.get("agent_loop") or agent_loop_trace.get("tool_calls_executed"))
-
-        # Если agent_loop уже отработал и вызвал memory_retrieve — не дублируем
-        if agent_loop_used:
-            ctx.logs.append("stage=memory_retrieve skipped(agent_loop_already_used)")
-            return ctx
-
-        # Проверяем, поддерживает ли модель tools
-        model = str(ctx.meta.get("model") or ctx.state.get("model") or "").lower()
-        model_supports_tools = "deepseek-r1" not in model and "deepseek-reasoner" not in model
-
-        # Memory gate: проверяем, нужна ли память
-        memory_gate_triggered = _memory_gate_should_trigger(ctx)
-
-        # Для моделей без tools — memory gate всегда срабатывает (консервативно)
-        # НО только если это не smalltalk
-        if not model_supports_tools and not memory_gate_triggered:
-            # Даже если gate не сработал, для моделей без tools делаем retrieval
-            # Это консервативный подход — лучше лишний retrieval, чем ответ без контекста
-            ctx.logs.append("stage=memory_retrieve — model without tools, forcing retrieval")
-            memory_gate_triggered = True
-
-        if not memory_gate_triggered:
-            # Memory gate не сработал — память не нужна, пропускаем
-            ctx.logs.append("stage=memory_retrieve skipped(memory_gate_not_triggered)")
-            return ctx
-
-        # Определяем режим: fallback или основной
-        if model_supports_tools:
-            ctx.logs.append("stage=memory_retrieve fallback mode (gate triggered, agent_loop did not recall)")
-            stage_name = "memory_retrieve_fallback"
-        else:
-            ctx.logs.append("stage=memory_retrieve — model without tools, using as primary retrieval path")
-            stage_name = "memory_retrieve_primary"
-
+        # Определяем workspace и session
+        workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global")
+        session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "default")
+        
+        # Выполняем запрос через memory_core
         try:
-            context_request = _build_memory_context_request(ctx, cfg=self._cfg, query=query)
-            pack = _build_memory_context_pack(manager, context_request)
+            result = memory_core.query(
+                text=query,
+                workspace_id=workspace_id,
+                top_k=int(self._cfg.memory_core_top_k or 8),
+                include_citations=True,
+            )
+            
+            # Сохраняем результат в ctx.memory_context
+            ctx.memory_context = {
+                "context_blocks": result.get("context_blocks", []),
+                "hits": result.get("hits", []),
+                "citations": result.get("citations", []),
+            }
+            
+            ctx.logs.append(
+                f"stage=memory_retrieve done hits={len(result.get('hits', []))} "
+                f"blocks={len(result.get('context_blocks', []))}"
+            )
         except Exception as exc:
             ctx.logs.append(f"stage=memory_retrieve error={type(exc).__name__}")
-            return ctx
-
-        _apply_memory_context_pack(
-            ctx,
-            manager=manager,
-            context_request=context_request,
-            pack=pack,
-            query=query,
-            stage_name=stage_name,
-            memory_gate_triggered=memory_gate_triggered,
-        )
-
-        # После применения memory context, ПЕРЕСТРАИВАЕМ memory_native_state
-        # с учётом новых данных из retrieval
-        native_state = build_memory_native_state(
-            state=ctx.state,
-            memory_context=ctx.memory_context,
-        )
-        ctx.state["memory_native_state"] = native_state
-        ctx.logs.append("memory_native_state rebuilt after retrieval")
-
-        # Логируем результат
-        if model_supports_tools:
-            ctx.logs.append("memory fallback used (gate-triggered without agent recall)")
-        else:
-            ctx.logs.append("memory primary retrieval used (model without tools)")
+        
         return ctx
 
 
@@ -647,388 +588,20 @@ def _pick_memory_int(*values: Any, default: int, minimum: int) -> int:
     return max(minimum, value)
 
 
-def _default_memory_scopes() -> list[MemoryScope]:
-    return [
-        MemoryScope.CONVERSATION,
-        MemoryScope.SESSION,
-        MemoryScope.PROJECT,
-        MemoryScope.GLOBAL_USER,
-        MemoryScope.CHARACTER,
-        MemoryScope.TEMPORARY,
-    ]
+class EpisodeContinuityStage(PipelineStage):
+    """
+    Заглушка EpisodeContinuityStage для обратной совместимости.
+    Функционал episode continuity перенесён в memory_core.
+    """
+    name = "episode_continuity"
 
+    def __init__(self, memory_core: MemoryCoreAdapter | None = None):
+        self.memory_core = memory_core or MemoryCoreAdapter()
 
-def _resolve_memory_scopes(
-    ctx: PipelineContext,
-    *,
-    scope_names: list[Any] | None = None,
-) -> list[MemoryScope]:
-    raw_names = list(scope_names or _as_list(_pick_value(ctx.meta.get("memory_scopes"), ctx.policies.get("memory_scopes"), [])))
-    scopes = [_scope_from_name(x) for x in raw_names]
-    scopes = [x for x in scopes if x is not None]
-    if scopes:
-        return list(scopes)
-    return _default_memory_scopes()
-
-
-def _build_memory_context_request(
-    ctx: PipelineContext,
-    *,
-    cfg: Any,
-    query: str,
-    top_k: int | None = None,
-    scope_names: list[Any] | None = None,
-) -> ContextBuildRequest:
-    default_k = _memory_cfg_int(cfg, "memory_retrieval_top_k", minimum=1)
-    default_budget_total = _memory_cfg_int(cfg, "memory_context_budget_total", minimum=256)
-    default_budget_memory = _memory_cfg_int(cfg, "memory_context_budget_memory", minimum=64)
-    default_budget_docs = _memory_cfg_int(cfg, "memory_context_budget_docs", minimum=64)
-    default_budget_tools = _memory_cfg_int(cfg, "memory_context_budget_tools", minimum=32)
-    default_budget_response_reserve = _memory_cfg_int(cfg, "memory_context_budget_response_reserve", minimum=64)
-
-    if top_k is None:
-        try:
-            resolved_top_k = max(
-                1,
-                int(_pick_value(ctx.meta.get("memory_k"), ctx.policies.get("memory_k"), default_k) or default_k),
-            )
-        except Exception:
-            resolved_top_k = default_k
-    else:
-        try:
-            resolved_top_k = max(1, int(top_k))
-        except Exception:
-            resolved_top_k = default_k
-
-    scopes = _resolve_memory_scopes(ctx, scope_names=scope_names)
-    return ContextBuildRequest(
-        system_prompt=str(_pick_value(ctx.state.get("system_prompt"), "")),
-        user_message=str(query or "").strip(),
-        namespace=str(
-            _pick_value(
-                ctx.meta.get("memory_namespace"),
-                ctx.meta.get("conversation_id"),
-                ctx.state.get("conversation_id"),
-                "default",
-            )
-        ),
-        scopes=list(scopes),
-        top_k=int(resolved_top_k),
-        session_summary=sanitize_session_summary_text(_pick_value(ctx.state.get("dialog_summary"), "")),
-        tool_state=_as_dict(ctx.state.get("last_tool_result")),
-        unresolved_items=[str(x) for x in list(_as_list(ctx.state.get("open_questions"))) if str(x).strip()],
-        context_budget_total=_pick_memory_int(
-            ctx.meta.get("context_budget_total"),
-            ctx.policies.get("context_budget_total"),
-            default=default_budget_total,
-            minimum=256,
-        ),
-        context_budget_memory=_pick_memory_int(
-            ctx.meta.get("context_budget_memory"),
-            ctx.policies.get("context_budget_memory"),
-            default=default_budget_memory,
-            minimum=64,
-        ),
-        context_budget_docs=_pick_memory_int(
-            ctx.meta.get("context_budget_docs"),
-            ctx.policies.get("context_budget_docs"),
-            default=default_budget_docs,
-            minimum=64,
-        ),
-        context_budget_tools=_pick_memory_int(
-            ctx.meta.get("context_budget_tools"),
-            ctx.policies.get("context_budget_tools"),
-            default=default_budget_tools,
-            minimum=32,
-        ),
-        context_budget_response_reserve=_pick_memory_int(
-            ctx.meta.get("context_budget_response_reserve"),
-            ctx.policies.get("context_budget_response_reserve"),
-            default=default_budget_response_reserve,
-            minimum=64,
-        ),
-    )
-
-
-def _build_memory_context_pack(manager: Any, context_request: ContextBuildRequest) -> dict[str, Any]:
-    result = manager.build_context(context_request)
-    pack = result.to_dict() if hasattr(result, "to_dict") else dict(result or {})
-    if not isinstance(pack, dict):
-        raise TypeError("invalid memory context pack")
-    return _strip_low_quality_session_summary_from_pack(pack)
-
-
-def _apply_memory_context_pack(
-    ctx: PipelineContext,
-    *,
-    manager: Any,
-    context_request: ContextBuildRequest,
-    pack: dict[str, Any],
-    query: str,
-    stage_name: str,
-    memory_gate_triggered: bool = False,
-) -> None:
-    if not isinstance(pack, dict):
-        raise TypeError("invalid memory context pack")
-
-    ctx.memory_context = dict(pack)
-    ctx.state["memory_context"] = dict(pack)
-    
-    # Обновляем working state из memory retrieval
-    # Это связывает explicit recall с always-on memory state
-    if hasattr(manager, "update_working_state_from_memory"):
-        try:
-            manager.update_working_state_from_memory(ctx.state, pack)
-        except Exception:
-            pass
-    
-    # Строим memory_native_state — always-on memory layer
-    # Это компактный, структурированный слой, который модель ощущает как своё внутреннее состояние
-    native_state = build_memory_native_state(
-        state=ctx.state,
-        memory_context=ctx.memory_context,
-    )
-    ctx.state["memory_native_state"] = native_state
-
-    active_profile_snapshot: dict[str, Any] = {}
-    if hasattr(manager, "get_governor_profile_snapshot"):
-        try:
-            snapshot = manager.get_governor_profile_snapshot(context_request.namespace)
-        except Exception:
-            snapshot = None
-        if snapshot is not None:
-            if hasattr(snapshot, "to_dict"):
-                try:
-                    active_profile_snapshot = dict(snapshot.to_dict() or {})
-                except Exception:
-                    active_profile_snapshot = {}
-            if not active_profile_snapshot:
-                active_profile_snapshot = {
-                    "namespace": str(getattr(snapshot, "namespace", context_request.namespace) or context_request.namespace),
-                    "active_facts": dict(getattr(snapshot, "active_facts", {}) or {}),
-                    "conflicts": [
-                        dict(x)
-                        for x in list(getattr(snapshot, "conflicts", []) or [])
-                        if isinstance(x, dict)
-                    ],
-                    "persistent_traits": dict(getattr(snapshot, "persistent_traits", {}) or {}),
-                    "volatile_preferences": dict(getattr(snapshot, "volatile_preferences", {}) or {}),
-                    "session_preferences": dict(getattr(snapshot, "session_preferences", {}) or {}),
-                    "resolved_profile": dict(getattr(snapshot, "resolved_profile", {}) or {}),
-                    "debug": dict(getattr(snapshot, "debug", {}) or {}),
-                    "updated_at": float(_to_float(getattr(snapshot, "updated_at", 0.0), 0.0) or 0.0),
-                }
-    if active_profile_snapshot:
-        ctx.state["active_profile_snapshot"] = active_profile_snapshot
-    else:
-        ctx.state.pop("active_profile_snapshot", None)
-
-    retrieved = list(_as_list(pack.get("selected")))
-    
-    # RETRY LOGIC: если retrieval вернул пусто, но memory gate сработал,
-    # пробуем ещё раз с расширенными параметрами
-    if not retrieved and memory_gate_triggered and hasattr(manager, "build_context"):
-        ctx.logs.append("memory retrieval retry — empty result but gate triggered, expanding search")
-        # Расширяем поиск: больше top_k, все источники, шире time_hint
-        retry_plan = normalize_memory_retrieval_plan({
-            "mode": "context",
-            "topic_hints": [
-                str(ctx.clean_user_msg or "")[:50],
-                str(ctx.state.get("active_goal") or "")[:30],
-                str(ctx.state.get("topic") or "")[:30],
-            ],
-            "time_hint": "any",  # Ищем во всём диапазоне
-            "sources": ["all"],  # Все источники
-            "top_k": 10,  # Больше кандидатов
-            "scopes": ["conversation", "session", "project", "global_user"],  # Все scope
-        }, default_top_k=10)
-        
-        retry_context_request = _build_memory_context_request(
-            ctx,
-            cfg=load_config(),
-            query=query,
-            top_k=10,
-            scope_names=["conversation", "session", "project", "global_user"],
-        )
-        retry_pack = build_memory_tool_context_pack(
-            manager,
-            request=retry_context_request,
-            plan=retry_plan,
-        )
-        
-        # Проверяем, дало ли retry результаты
-        retry_retrieved = list(_as_list(retry_pack.get("selected")))
-        if retry_retrieved:
-            ctx.logs.append(f"memory retrieval retry succeeded — got {len(retry_retrieved)} results")
-            pack = retry_pack  # Используем retry pack
-            retrieved = retry_retrieved
-        else:
-            ctx.logs.append("memory retrieval retry failed — still empty, will answer with uncertainty")
-    
-    if retrieved:
-        ctx.retrieved_memories = retrieved
-
-    blocks = _as_dict(pack.get("blocks"))
-    
-    # Добавляем conversation_tail из state history если есть
-    history = list(ctx.state.get("history") or [])
-    if history:
-        tail = history[-10:]  # Последние 10 сообщений
-        conversation_tail = "\n".join([f"- {m.get('role', 'unknown')}: {m.get('content', '')}" for m in tail])
-        blocks["conversation_tail"] = conversation_tail
-        ctx.logs.append(f"Added conversation_tail from history: {len(tail)} messages")
-    task_continuity = _as_dict(pack.get("task_continuity"))
-    if task_continuity:
-        ctx.state["task_continuity"] = dict(task_continuity)
-        continuity_active_task = _as_dict(task_continuity.get("active_task"))
-        if continuity_active_task and not _as_dict(ctx.state.get("active_task")):
-            ctx.state["active_task"] = dict(continuity_active_task)
-            ctx.state["active_goal"] = str(
-                _pick_value(
-                    continuity_active_task.get("current_goal"),
-                    continuity_active_task.get("summary_short"),
-                    continuity_active_task.get("topic"),
-                    "",
-                )
-                or ""
-            ).strip()
-            ctx.state["active_tasks"] = [dict(continuity_active_task)]
-            ctx.state["_active_task_source"] = str(task_continuity.get("source") or "memory_manager")
-    else:
-        ctx.state.pop("task_continuity", None)
-    open_questions = [str(x).strip() for x in list(_as_list(pack.get("open_questions"))) if str(x).strip()]
-    if open_questions:
-        ctx.state["open_questions"] = list(open_questions)
-        ctx.state["unresolved_items"] = list(open_questions)
-    else:
-        ctx.state.pop("open_questions", None)
-        ctx.state.pop("unresolved_items", None)
-    current_decisions = [str(x).strip() for x in list(_as_list(pack.get("current_decisions"))) if str(x).strip()]
-    if current_decisions:
-        ctx.state["current_decisions"] = list(current_decisions)
-    else:
-        ctx.state.pop("current_decisions", None)
-    
-    # Summary больше не является источником continuity.
-    # Это только fallback кеш для очень старых диалогов.
-    # Не записываем session_summary в dialog_summary.
-    # dialog_summary теперь устарел и используется только как крайний fallback.
-    session_summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
-    if session_summary:
-        # Сохраняем session_summary только в memory_context для prompt_engine
-        # Но НЕ в state["dialog_summary"] для continuity
-        pass
-    # dialog_summary больше не обновляется из retrieval
-
-    truncation_log = list(_as_list(pack.get("truncation_log")))
-    dropped = list(_as_list(pack.get("dropped")))
-    ctx.logs.append(
-        f"stage={stage_name} "
-        f"retrieved={len(ctx.retrieved_memories)} "
-        f"dropped={len(dropped)} "
-        f"compress={len(truncation_log)} "
-        f"tail={len(_as_list(ctx.state.get('history')))}"
-    )
-    hit_summary = _memory_hit_summary(retrieved)
-    _emit_turn_summary(
-        ctx,
-        "memory_summary",
-        summary=(
-            f"hits={hit_summary['retrieved']} semantic={hit_summary['semantic']} "
-            f"episodic={hit_summary['episodic']} docs={hit_summary['docs']} "
-            f"web={hit_summary['web']} dropped={len(dropped)} truncated={len(truncation_log)}"
-        ),
-        route=str(ctx.route or ""),
-        stage=str(stage_name or ""),
-        selected_hits=int(hit_summary["retrieved"]),
-        semantic_hits=int(hit_summary["semantic"]),
-        episodic_hits=int(hit_summary["episodic"]),
-        document_hits=int(hit_summary["docs"]),
-        web_hits=int(hit_summary["web"]),
-        dropped_count=int(len(dropped)),
-        truncation_count=int(len(truncation_log)),
-        has_session_summary=bool(session_summary),
-        memory_block_keys=sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
-    )
-    trace = _ensure_debug_trace(ctx)
-    trace.memory_retrieval = {
-        "stage": str(stage_name or ""),
-        "query": str(query or ""),
-        "request_plan": dict(_as_dict(pack.get("tool_retrieval_plan"))),
-        "fanout_queries": [
-            dict(x)
-            for x in list(_as_list(pack.get("fanout_queries")))
-            if isinstance(x, dict)
-        ],
-        "fanout_sources": [str(x).strip() for x in list(_as_list(pack.get("fanout_sources"))) if str(x).strip()],
-        "recall_mode": str(pack.get("recall_mode") or ""),
-        "memory_block_keys": sorted(str(x) for x in list(blocks.keys()) if str(x).strip()),
-        "selected_total": int(len(retrieved)),
-        "selected_facts": [
-            _trace_compact_selected_memory(row)
-            for row in list(retrieved)
-            if str(dict(row).get("memory_type") or "").strip().lower() == "fact"
-        ],
-        "selected_claims": [
-            _trace_compact_selected_memory(row)
-            for row in list(retrieved)
-            if str(dict(row).get("memory_type") or "").strip().lower() == "claim"
-        ],
-        "selected_messages": [
-            _trace_compact_selected_memory(row)
-            for row in list(retrieved)
-            if str(dict(row).get("memory_type") or "").strip().lower() == "message"
-        ],
-        "selected_documents": [
-            _trace_compact_selected_memory(row)
-            for row in list(retrieved)
-            if str(dict(row).get("memory_type") or "").strip().lower() in {"document", "document_chunk"}
-        ],
-        "selected_episodes": [
-            _trace_compact_episode_hit(row)
-            for row in list(_as_list(pack.get("dialog_episode_hits")))
-            if isinstance(row, dict)
-        ],
-        "filtered_out": [
-            _trace_compact_filtered_item(row)
-            for row in list(dropped or [])
-            if isinstance(row, dict)
-        ],
-        "score_breakdowns": [
-            dict(x)
-            for x in list(_as_list(pack.get("score_breakdowns")))[:24]
-            if isinstance(x, dict)
-        ],
-        "truncated": [dict(x) for x in list(truncation_log or []) if isinstance(x, dict)],
-        "confidence": {
-            "selected_hits": int(hit_summary["retrieved"]),
-            "semantic_hits": int(hit_summary["semantic"]),
-            "episodic_hits": int(hit_summary["episodic"]),
-            "document_hits": int(hit_summary["docs"]),
-            "web_hits": int(hit_summary["web"]),
-            "top_selected_score": max(
-                [_to_float(dict(row).get("score"), 0.0) or 0.0 for row in list(retrieved or [])],
-                default=0.0,
-            ),
-        },
-        "exact_self_fact_hits": {
-            "fact_expectation": dict(_as_dict(pack.get("fact_expectation"))),
-            "self_facts_context": {
-                "found_predicates": [
-                    str(x).strip()
-                    for x in list(_as_dict(pack.get("self_facts_context")).get("found_predicates") or [])
-                    if str(x).strip()
-                ],
-                "expected_predicates": [
-                    str(x).strip()
-                    for x in list(_as_dict(pack.get("fact_expectation")).get("expected_predicates") or [])
-                    if str(x).strip()
-                ],
-            },
-        },
-        "task_continuity": dict(task_continuity or {}),
-    }
-    trace.active_profile = dict(active_profile_snapshot or {})
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        # Пустая заглушка - функционал перенесён в memory_core
+        ctx.logs.append("stage=episode_continuity skipped(use memory_core)")
+        return ctx
 
 
 def _memory_tool_blocks(pack: dict[str, Any]) -> dict[str, str]:
@@ -1057,251 +630,6 @@ def _memory_tool_blocks(pack: dict[str, Any]) -> dict[str, str]:
         if text:
             out[key] = text
     return out
-
-
-def _memory_tool_result_payload(
-    *,
-    context_request: ContextBuildRequest,
-    pack: dict[str, Any],
-) -> dict[str, Any]:
-    selected = [
-        _trace_compact_selected_memory(row)
-        for row in list(_as_list(pack.get("selected")))[: max(1, int(context_request.top_k or 1))]
-        if isinstance(row, dict)
-    ]
-    plan = dict(_as_dict(pack.get("tool_retrieval_plan")))
-    return {
-        "tool": _MEMORY_TOOL_NAME,
-        "status": "ok",
-        "request_plan": {
-            **dict(plan or {}),
-            "namespace": str(context_request.namespace or ""),
-            "scopes": [str(scope.value) for scope in list(context_request.scopes or [])],
-            "top_k": int(context_request.top_k or 0),
-        },
-        "fanout_queries": [dict(x) for x in list(_as_list(pack.get("fanout_queries"))) if isinstance(x, dict)],
-        "fanout_sources": [str(x).strip() for x in list(_as_list(pack.get("fanout_sources"))) if str(x).strip()],
-        "recall_mode": str(pack.get("recall_mode") or ""),
-        "selected": selected,
-        "dialog_episode_hits": [
-            _trace_compact_episode_hit(row)
-            for row in list(_as_list(pack.get("dialog_episode_hits")))
-            if isinstance(row, dict)
-        ],
-        "fact_expectation": dict(_as_dict(pack.get("fact_expectation"))),
-        "self_facts_context": dict(_as_dict(pack.get("self_facts_context"))),
-        "open_questions": [str(x).strip() for x in list(_as_list(pack.get("open_questions"))) if str(x).strip()],
-        "current_decisions": [str(x).strip() for x in list(_as_list(pack.get("current_decisions"))) if str(x).strip()],
-        "task_continuity": dict(_as_dict(pack.get("task_continuity"))),
-        "blocks": _memory_tool_blocks(pack),
-    }
-
-
-class EpisodeContinuityStage(PipelineStage):
-    name = "episode_continuity"
-
-    def __init__(self, planner: EpisodePlanner | None = None, memory_manager: Any | None = None):
-        self.planner = planner or EpisodePlanner()
-        self.memory_manager = memory_manager
-
-    def run(self, ctx: PipelineContext) -> PipelineContext:
-        trace = _ensure_debug_trace(ctx)
-        if ctx.route != "chat":
-            ctx.logs.append("stage=episode_continuity skipped(route)")
-            return ctx
-        user_text = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
-        if not user_text:
-            ctx.logs.append("stage=episode_continuity skipped(empty)")
-            return ctx
-        previous_active_task = self.planner.resolve_context_active_task(
-            state=dict(ctx.state or {}),
-            memory_context=dict(ctx.memory_context or {}),
-        )
-        continuation_reason = self.planner.continuation_reason(
-            user_text=user_text,
-            active_task=previous_active_task,
-            meta=dict(ctx.meta or {}),
-        )
-        close_reason = self.planner.close_reason(
-            user_text=user_text,
-            active_task=previous_active_task,
-        )
-
-        active_task_state = self.planner.resolve_active_task(
-            user_text=user_text,
-            memory_context=dict(ctx.memory_context or {}),
-            state=dict(ctx.state or {}),
-            meta=dict(ctx.meta or {}),
-        )
-        if active_task_state is not None:
-            active_task_payload = active_task_state.to_dict()
-            closed_status = str(active_task_state.status or "").strip().lower()
-            if closed_status in {"done", "abandoned"}:
-                ctx.state.pop("active_task", None)
-                ctx.state.pop("active_goal", None)
-                ctx.state.pop("active_tasks", None)
-                ctx.state.pop("_active_task_source", None)
-                ctx.state.pop("open_questions", None)
-                ctx.state.pop("current_decisions", None)
-                ctx.state.pop("next_steps", None)
-                ctx.state.pop("unresolved_items", None)
-                trace.active_task = {
-                    **dict(active_task_payload),
-                    "source": "episode_planner",
-                    "reason": str(close_reason or "explicit_close_signal"),
-                    "event": "close",
-                }
-                ctx.logs.append(
-                    f"stage=episode_continuity active_task_closed task={active_task_state.task_id} status={closed_status}"
-                )
-                _emit_turn_summary(
-                    ctx,
-                    "active_task_closed",
-                    summary=(
-                        f"task_id={active_task_state.task_id} "
-                        f"status={closed_status} "
-                        f"topic={active_task_state.topic or '-'}"
-                    ),
-                    stage="episode_continuity",
-                    task_id=str(active_task_state.task_id or ""),
-                    topic=str(active_task_state.topic or ""),
-                    status=closed_status,
-                    source_episode_id=str(active_task_state.source_episode_id or ""),
-                    current_goal=str(active_task_state.current_goal or ""),
-                    next_steps=[str(x) for x in list(active_task_state.next_steps or []) if str(x).strip()],
-                    open_questions=[str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()],
-                    decisions=[str(x) for x in list(active_task_state.decisions or []) if str(x).strip()],
-                    confidence=float(active_task_state.confidence or 0.0),
-                )
-                self._sync_task_continuity(
-                    ctx,
-                    active_task={},
-                    previous_active_task=previous_active_task,
-                    source="episode_continuity_close",
-                )
-                return ctx
-            ctx.state["active_task"] = dict(active_task_payload)
-            ctx.state["active_goal"] = str(
-                active_task_state.current_goal
-                or active_task_state.summary_short
-                or active_task_state.topic
-                or ""
-            ).strip()
-            ctx.state["active_tasks"] = [dict(active_task_payload)]
-            ctx.state["_active_task_source"] = "episode_planner"
-            ctx.state["open_questions"] = [str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()]
-            ctx.state["current_decisions"] = [str(x) for x in list(active_task_state.decisions or []) if str(x).strip()]
-            ctx.state["next_steps"] = [str(x) for x in list(active_task_state.next_steps or []) if str(x).strip()]
-            ctx.state["unresolved_items"] = [str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()]
-            resolution_source = str(active_task_payload.get("planner_source") or "runtime_hints")
-            resolution_reason = str(active_task_payload.get("planner_reason") or "runtime_decisions_fallback")
-            trace.active_task = {
-                **dict(active_task_payload),
-                "source": resolution_source,
-                "reason": resolution_reason,
-                "event": "resolved",
-            }
-            ctx.logs.append(
-                f"stage=episode_continuity task={active_task_state.task_id} status={active_task_state.status}"
-            )
-            _emit_turn_summary(
-                ctx,
-                "active_task_resolved",
-                summary=(
-                    f"task_id={active_task_state.task_id} "
-                    f"status={active_task_state.status} "
-                    f"topic={active_task_state.topic or '-'}"
-                ),
-                stage="episode_continuity",
-                task_id=str(active_task_state.task_id or ""),
-                topic=str(active_task_state.topic or ""),
-                status=str(active_task_state.status or ""),
-                source_episode_id=str(active_task_state.source_episode_id or ""),
-                current_goal=str(active_task_state.current_goal or ""),
-                next_steps=[str(x) for x in list(active_task_state.next_steps or []) if str(x).strip()],
-                open_questions=[str(x) for x in list(active_task_state.open_questions or []) if str(x).strip()],
-                decisions=[str(x) for x in list(active_task_state.decisions or []) if str(x).strip()],
-                confidence=float(active_task_state.confidence or 0.0),
-            )
-            self._sync_task_continuity(
-                ctx,
-                active_task=active_task_payload,
-                previous_active_task=previous_active_task,
-                source="episode_continuity_resolved",
-            )
-            return ctx
-
-        if str(ctx.state.get("_active_task_source") or "").strip().lower() == "episode_planner":
-            previous_task_id = str(previous_active_task.get("task_id") or "").strip()
-            previous_topic = str(previous_active_task.get("topic") or "").strip()
-            clear_reason = (
-                continuation_reason
-                if continuation_reason in {"meta_topic_switch", "switch_topic_phrase"}
-                else "no_relevant_episode"
-            )
-            ctx.state.pop("active_task", None)
-            ctx.state.pop("active_goal", None)
-            ctx.state.pop("active_tasks", None)
-            ctx.state.pop("_active_task_source", None)
-            ctx.state.pop("open_questions", None)
-            ctx.state.pop("current_decisions", None)
-            ctx.state.pop("next_steps", None)
-            ctx.state.pop("unresolved_items", None)
-            trace.active_task = {
-                "task_id": previous_task_id,
-                "topic": previous_topic,
-                "status": "cleared",
-                "source": "episode_planner",
-                "reason": clear_reason,
-                "event": "clear",
-            }
-            ctx.logs.append("stage=episode_continuity active_task_cleared")
-            _emit_turn_summary(
-                ctx,
-                "active_task_cleared",
-                summary="source=episode_planner",
-                stage="episode_continuity",
-                source="episode_planner",
-                reason=clear_reason,
-            )
-            self._sync_task_continuity(
-                ctx,
-                active_task={},
-                previous_active_task=previous_active_task,
-                source=f"episode_continuity_clear:{clear_reason}",
-            )
-        else:
-            ctx.logs.append("stage=episode_continuity no_active_task")
-        return ctx
-
-    def _sync_task_continuity(
-        self,
-        ctx: PipelineContext,
-        *,
-        active_task: dict[str, Any] | None,
-        previous_active_task: dict[str, Any] | None,
-        source: str,
-    ) -> None:
-        manager = self.memory_manager
-        if manager is None or not hasattr(manager, "update_task_continuity"):
-            return
-        namespace = str(
-            _pick_value(
-                ctx.meta.get("conversation_id"),
-                ctx.state.get("conversation_id"),
-                "default",
-            )
-            or "default"
-        ).strip() or "default"
-        snapshot = manager.update_task_continuity(
-            namespace=namespace,
-            active_task=dict(active_task or {}),
-            previous_active_task=dict(previous_active_task or {}),
-            source=str(source or ""),
-            now_ts=float(_to_float(_pick_value(ctx.meta.get("now_ts"), ctx.meta.get("ts"), time.time()), time.time()) or time.time()),
-        )
-        if snapshot:
-            ctx.state["task_continuity"] = dict(snapshot)
 
 
 class PromptBuildStage(PipelineStage):
@@ -1704,14 +1032,7 @@ class PromptBuildStage(PipelineStage):
             prompt_state["plan"] = ctx.plan
         prompt_state["active_task"] = dict(_as_dict(ctx.state.get("active_task")))
         prompt_state["active_tasks"] = [dict(x) for x in list(_as_list(ctx.state.get("active_tasks"))) if isinstance(x, dict)]
-        memory_context_for_prompt = _guard_memory_context_for_self_memory_claim(
-            _as_dict(ctx.memory_context),
-            query_text=str(ctx.clean_user_msg or ctx.user_msg or ""),
-        )
-        claim_guard = _as_dict(memory_context_for_prompt.get("self_memory_claim_guard"))
-        if bool(claim_guard.get("applied")):
-            ctx.meta["self_memory_claim_guard"] = dict(claim_guard)
-            ctx.logs.append("stage=prompt_build self_memory_claim_guard")
+        memory_context_for_prompt = _as_dict(ctx.memory_context)
         memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
         if memory_context_for_prompt:
             selected = list(_as_list(memory_context_for_prompt.get("selected")))
@@ -1744,7 +1065,7 @@ class PromptBuildStage(PipelineStage):
                     f"Missing exact memory facts for this turn: {', '.join(missing_predicates)}. Do not present them as remembered facts unless they are explicitly present in SELF_FACTS or FACT_EXPECTATION_CHECK.",
                 )
         relevant_claims = str(memory_blocks.get("relevant_claims") or "").strip()
-        if relevant_claims and _is_self_memory_claim_query(str(ctx.clean_user_msg or ctx.user_msg or "")):
+        if relevant_claims:
             _append_policy_rule(
                 ctx.policies,
                 "If RELEVANT_CLAIMS is present for a self-memory preference or usage question, answer from RELEVANT_CLAIMS before relying on session summary or working notes.",
@@ -2369,6 +1690,7 @@ class GenerateStage(PipelineStage):
                 ctx.stats = stats
                 ctx.logs.append(f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')} stream=1")
                 return ctx
+            ctx.logs.append("stage=generate stream=fallback_to_generate")
         elif use_stream and use_agent_loop:
             ctx.logs.append("stage=generate stream=enabled with agent_loop")
         elif not use_stream:
@@ -2517,10 +1839,10 @@ class GenerateStage(PipelineStage):
                     messages.append(Message(role="assistant", content="", tool_calls=[forced_tool_call]))
                     messages.append(Message(role="tool", content=tool_result_json, tool_call_id=forced_tool_call.id))
                     # Перестраиваем memory_native_state с учётом новых данных
-                    native_state = build_memory_native_state(
-                        state=ctx.state,
-                        memory_context=ctx.memory_context,
-                    )
+                    native_state = {
+                        "hits": ctx.memory_context.get("hits", []) if ctx.memory_context else [],
+                        "citations": ctx.memory_context.get("citations", []) if ctx.memory_context else [],
+                    }
                     ctx.state["memory_native_state"] = native_state
                     ctx.logs.append("memory_native_state rebuilt after forced retrieval")
                     # Продолжаем loop для генерации ответа с memory context
@@ -2661,15 +1983,7 @@ class GenerateStage(PipelineStage):
         resolved = _as_dict(row.get("resolved_profile"))
         if resolved:
             return dict(resolved)
-        has_layered_snapshot = any(
-            isinstance(row.get(layer_name), dict) and bool(dict(row.get(layer_name) or {}))
-            for layer_name in ("persistent_traits", "volatile_preferences", "session_preferences")
-        )
-        if has_layered_snapshot:
-            return flatten_governor_profile_snapshot(
-                row,
-                include_active_facts=False,
-            )
+        # Упрощённая логика — возвращаем resolved_profile или пустой dict
         return {
             key: value
             for key, value in row.items()
@@ -2893,58 +2207,136 @@ class GenerateStage(PipelineStage):
         stream = getattr(self.provider, "stream", None)
         if not callable(stream):
             # Fallback на обычный generate если stream не доступен
+            ctx.logs.append("stage=generate agent_loop_stream_fallback=no_provider_stream")
             return self.provider.generate(req)
-        
+
+        parser = _ThinkStreamParser()
         answer_parts: list[str] = []
         thinking_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
         model_name = str(req.model or "")
-        final_response: LLMResponse | None = None
-        
+        usage = Usage()
+        timings = Timings()
+
+        probe_tool_calls = bool(list(req.tools or [])) and int(
+            _to_int(_pick_value(req.metadata.get("agent_loop_iteration"), 1), 1) or 1
+        ) == 1
+        probe_answer_buffer: list[str] = []
+        probe_thinking_buffer: list[str] = []
+        probe_visible_pieces = 0
+        probe_released = not probe_tool_calls
+
+        def _release_probe_buffers() -> None:
+            nonlocal probe_released
+            if probe_released:
+                return
+            if callable(on_thinking):
+                for piece in list(probe_thinking_buffer or []):
+                    try:
+                        on_thinking(piece)
+                    except Exception:
+                        pass
+            if callable(on_answer):
+                for piece in list(probe_answer_buffer or []):
+                    try:
+                        on_answer(piece)
+                    except Exception:
+                        pass
+            probe_answer_buffer.clear()
+            probe_thinking_buffer.clear()
+            probe_released = True
+
+        def _handle_visible_answer(piece: str) -> None:
+            nonlocal probe_visible_pieces, probe_released
+            if not piece:
+                return
+            if probe_tool_calls and not tool_calls and not probe_released:
+                probe_answer_buffer.append(piece)
+                probe_visible_pieces += 1
+                if probe_visible_pieces >= 2:
+                    _release_probe_buffers()
+                return
+            if callable(on_answer):
+                try:
+                    on_answer(piece)
+                except Exception:
+                    pass
+
+        def _handle_visible_thinking(piece: str) -> None:
+            if not piece:
+                return
+            if probe_tool_calls and not tool_calls and not probe_released:
+                probe_thinking_buffer.append(piece)
+                return
+            if callable(on_thinking):
+                try:
+                    on_thinking(piece)
+                except Exception:
+                    pass
+
         try:
             for chunk in stream(req):
                 chunk_model = str(getattr(chunk, "model", "") or "").strip()
                 if chunk_model:
                     model_name = chunk_model
-                
-                # Thinking delta
+
+                tool_calls_delta = list(getattr(chunk, "tool_calls_delta", []) or [])
+                if tool_calls_delta:
+                    if probe_tool_calls and not probe_released:
+                        probe_answer_buffer.clear()
+                        probe_thinking_buffer.clear()
+                        probe_released = True
+                    for call in tool_calls_delta:
+                        if not isinstance(call, ToolCall):
+                            continue
+                        if any(str(existing.id or "") == str(call.id or "") for existing in tool_calls):
+                            continue
+                        tool_calls.append(call)
+
+                # Thinking delta from provider
                 thinking_delta = str(getattr(chunk, "thinking_delta", "") or "")
-                if thinking_delta and callable(on_thinking):
+                if thinking_delta:
                     thinking_parts.append(thinking_delta)
-                    try:
-                        on_thinking(thinking_delta)
-                    except Exception:
-                        pass
-                
-                # Answer delta
+                    _handle_visible_thinking(thinking_delta)
+
+                # Answer delta with inline <think> support
                 text_delta = str(getattr(chunk, "text_delta", "") or "")
                 if text_delta:
-                    answer_parts.append(text_delta)
-                    if callable(on_answer):
-                        try:
-                            on_answer(text_delta)
-                        except Exception:
-                            pass  # Игнорируем ошибки callback
-                
+                    visible, thinking_from_text = parser.feed(text_delta)
+                    if thinking_from_text:
+                        thinking_parts.append(thinking_from_text)
+                        _handle_visible_thinking(thinking_from_text)
+                    if visible:
+                        answer_parts.append(visible)
+                        _handle_visible_answer(visible)
+
                 if bool(getattr(chunk, "done", False)):
-                    final_response = LLMResponse(
-                        text="".join(answer_parts),
-                        thinking="".join(thinking_parts),
-                        model=model_name,
-                        usage=getattr(chunk, "usage", None),
-                        timings=getattr(chunk, "timings", None),
-                    )
-        except Exception:
-            # Fallback на обычный generate при ошибке streaming
+                    usage = getattr(chunk, "usage", None) or usage
+                    timings = getattr(chunk, "timings", None) or timings
+
+            visible, thinking_from_text = parser.flush()
+            if thinking_from_text:
+                thinking_parts.append(thinking_from_text)
+                _handle_visible_thinking(thinking_from_text)
+            if visible:
+                answer_parts.append(visible)
+                _handle_visible_answer(visible)
+            if probe_tool_calls and not tool_calls and not probe_released:
+                _release_probe_buffers()
+        except Exception as exc:
+            ctx.logs.append(f"stage=generate agent_loop_stream_error={type(exc).__name__}")
+            ctx.errors.append(f"agent_loop_stream:{type(exc).__name__}:{exc}")
+            ctx.logs.append("stage=generate agent_loop_stream_fallback=generate")
             return self.provider.generate(req)
-        
-        if final_response is None:
-            final_response = LLMResponse(
-                text="".join(answer_parts),
-                thinking="".join(thinking_parts),
-                model=model_name,
-            )
-        
-        return final_response
+
+        return LLMResponse(
+            text="".join(answer_parts).strip(),
+            tool_calls=list(tool_calls),
+            thinking="".join(thinking_parts).strip(),
+            model=model_name,
+            usage=usage,
+            timings=timings,
+        )
 
     def _execute_memory_retrieve_tool(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
         """
@@ -2988,34 +2380,40 @@ class GenerateStage(PipelineStage):
             "topic_hints": args.get("topic_hints"),
             "time_hint": args.get("time_hint"),
         })
-        
-        plan = normalize_memory_retrieval_plan(args, default_top_k=6)
+
+        # Упрощённая логика memory retrieval для memory_core
         base_query = str(_pick_value(ctx.clean_user_msg, ctx.user_msg, "")).strip()
-        scope_names = list(_as_list(args.get("scopes")))
+        top_k = int(_to_int(args.get("top_k"), 6) or 6)
 
         try:
-            context_request = _build_memory_context_request(
-                ctx,
-                cfg=load_config(),
+            # Выполняем retrieval через memory_core напрямую
+            memory_core = ctx.meta.get("memory_core") or self.memory_core
+            if memory_core is None:
+                raise RuntimeError("memory_core not available")
+
+            # Простой retrieval без сложной логики
+            result = memory_core.retrieve(
                 query=base_query,
-                top_k=int(plan.top_k or 0),
-                scope_names=scope_names,
+                top_k=top_k,
+                workspace_id=str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global"),
+                session_id=str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or ""),
             )
-            pack = build_memory_tool_context_pack(
-                manager,
-                request=context_request,
-                plan=plan,
-            )
-            _apply_memory_context_pack(
-                ctx,
-                manager=manager,
-                context_request=context_request,
-                pack=pack,
-                query=base_query,
-                stage_name="agent_memory_retrieve",
-                memory_gate_triggered=True,
-            )
-            
+
+            # Сохраняем результат в ctx.memory_context
+            pack = {
+                "selected": list(result.get("selected") or []),
+                "blocks": dict(result.get("blocks") or {}),
+                "recall_mode": str(result.get("recall_mode") or "semantic"),
+                "tool_retrieval_plan": {"mode": "context", "top_k": top_k},
+            }
+
+            ctx.memory_context = dict(pack)
+            ctx.state["memory_context"] = dict(pack)
+
+            retrieved = list(_as_list(pack.get("selected")))
+            if retrieved:
+                ctx.retrieved_memories = retrieved
+
             selected_count = len(list(_as_list(pack.get("selected"))))
             emit("memory_retrieval_done", {
                 "tool": _MEMORY_TOOL_NAME,
@@ -3023,7 +2421,7 @@ class GenerateStage(PipelineStage):
                 "selected_count": selected_count,
                 "recall_mode": str(pack.get("recall_mode") or ""),
             })
-            
+
         except Exception as exc:
             emit("memory_retrieval_error", {
                 "tool": _MEMORY_TOOL_NAME,
@@ -3033,16 +2431,22 @@ class GenerateStage(PipelineStage):
             payload = {
                 "tool": _MEMORY_TOOL_NAME,
                 "status": "error",
-                "request_plan": plan.to_dict(),
                 "query": base_query,
                 "error": f"{type(exc).__name__}: {exc}",
             }
             return _compact_json(payload), True
 
-        payload = _memory_tool_result_payload(
-            context_request=context_request,
-            pack=pack,
-        )
+        # Упрощённый payload
+        payload = {
+            "tool": _MEMORY_TOOL_NAME,
+            "status": "ok",
+            "selected": [
+                _trace_compact_selected_memory(row)
+                for row in list(_as_list(ctx.memory_context.get("selected")))[:top_k]
+                if isinstance(row, dict)
+            ],
+            "recall_mode": str(ctx.memory_context.get("recall_mode") or ""),
+        }
         return _compact_json(payload), False
 
     def _execute_history_read_recent(
@@ -3292,7 +2696,9 @@ class GenerateStage(PipelineStage):
                         on_answer(visible)
                     except Exception:
                         pass
-        except Exception:
+        except Exception as exc:
+            ctx.logs.append(f"stage=generate stream_error={type(exc).__name__}")
+            ctx.errors.append(f"stream:{type(exc).__name__}:{exc}")
             return None
 
         return ("".join(answer_parts).strip(), "".join(thinking_parts).strip(), model_name, dict(stream_stats))
@@ -4942,9 +4348,8 @@ class OutputFormatStage(PipelineStage):
 class MemoryWriteStage(PipelineStage):
     name = "memory_write"
 
-    def __init__(self, memory_manager: Any | None = None, planner: EpisodePlanner | None = None):
-        self.memory_manager = memory_manager
-        self.planner = planner or EpisodePlanner()
+    def __init__(self, memory_core: MemoryCoreAdapter | None = None):
+        self.memory_core = memory_core or MemoryCoreAdapter()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         studio_active = bool(_as_dict(_as_dict(ctx.state).get(StudioGenerator.KEY)).get("active", False))
@@ -5074,73 +4479,10 @@ class MemoryWriteStage(PipelineStage):
         return ctx
 
     def _update_task_continuity_from_assistant_reply(self, ctx: PipelineContext) -> None:
-        if ctx.route != "chat":
-            return
-        manager = self.memory_manager
-        if manager is None or not hasattr(manager, "update_task_continuity"):
-            return
-        active_task = self.planner.resolve_context_active_task(
-            state=dict(ctx.state or {}),
-            memory_context=dict(ctx.memory_context or {}),
-        )
-        if not active_task:
-            return
-        assistant_text = str(
-            _pick_value(
-                ctx.raw_output,
-                _as_dict(ctx.structured_output).get("text"),
-                ctx.text,
-                "",
-            )
-            or ""
-        ).strip()
-        if not assistant_text:
-            return
-        updated = self.planner.update_active_task_after_assistant_reply(
-            assistant_text=assistant_text,
-            active_task=active_task,
-            memory_context=dict(ctx.memory_context or {}),
-            state=dict(ctx.state or {}),
-            meta=dict(ctx.meta or {}),
-        )
-        if updated is None:
-            return
-        payload = updated.to_dict()
-        ctx.state["active_task"] = dict(payload)
-        ctx.state["active_goal"] = str(
-            _pick_value(payload.get("current_goal"), payload.get("summary_short"), payload.get("topic"), "")
-            or ""
-        ).strip()
-        ctx.state["active_tasks"] = [dict(payload)]
-        ctx.state["open_questions"] = [str(x) for x in list(payload.get("open_questions") or []) if str(x).strip()]
-        ctx.state["current_decisions"] = [str(x) for x in list(payload.get("decisions") or []) if str(x).strip()]
-        ctx.state["next_steps"] = [str(x) for x in list(payload.get("next_steps") or []) if str(x).strip()]
-        ctx.state["unresolved_items"] = [str(x) for x in list(payload.get("open_questions") or []) if str(x).strip()]
-        namespace = str(
-            _pick_value(
-                ctx.meta.get("conversation_id"),
-                ctx.state.get("conversation_id"),
-                "default",
-            )
-            or "default"
-        ).strip() or "default"
-        snapshot = manager.update_task_continuity(
-            namespace=namespace,
-            active_task=dict(payload),
-            previous_active_task=dict(active_task or {}),
-            source="assistant_reply",
-            now_ts=float(_to_float(_pick_value(ctx.meta.get("now_ts"), ctx.meta.get("ts"), time.time()), time.time()) or time.time()),
-        )
-        if snapshot:
-            ctx.state["task_continuity"] = dict(snapshot)
-        ctx.memory_ops.append(
-            {
-                "op": "task_continuity",
-                "namespace": namespace,
-                "active_task": dict(payload),
-            }
-        )
-    
+        # Упрощённая версия — больше не использует EpisodePlanner
+        # Task continuity теперь управляется через memory_core
+        pass
+
     def _update_working_state_from_memory(self, ctx: PipelineContext, memory_result: dict[str, Any]) -> None:
         """
         Обновляет working state из результата memory retrieval.
@@ -5216,13 +4558,13 @@ class ResponsePipeline:
         character_runtime: CharacterRuntime | None = None,
         metadata_extractor: MetadataExtractor | None = None,
         prompt_engine: PromptEngine | None = None,
-        memory_manager=None,
+        memory_core: MemoryCoreAdapter | None = None,
         studio_generator: StudioGenerator | None = None,
     ):
         self.provider = provider
         self.character_engine = character_runtime or CharacterRuntime()
         self.character_runtime = self.character_engine
-        episode_planner = EpisodePlanner()
+        self.memory_core = memory_core or MemoryCoreAdapter()
         self.prompt_engine = prompt_engine or PromptEngine(
             character_runtime=self.character_engine,
         )
@@ -5233,9 +4575,9 @@ class ResponsePipeline:
             "personality": PersonalityStage(
                 character_runtime=self.character_engine,
             ),
-            "memory_native_state": MemoryNativeStateStage(memory_manager=memory_manager),
-            "memory_retrieve": MemoryRetrieveStage(memory_manager=memory_manager),
-            "episode_continuity": EpisodeContinuityStage(planner=episode_planner, memory_manager=memory_manager),
+            "memory_native_state": MemoryNativeStateStage(memory_core=self.memory_core),
+            "memory_retrieve": MemoryRetrieveStage(memory_core=self.memory_core),
+            "episode_continuity": EpisodeContinuityStage(memory_core=self.memory_core),
             "web_retrieve": WebStageV2(),
             "prompt_build": PromptBuildStage(character_runtime=self.character_runtime),
             "prompt_engine": PromptEngineStage(prompt_engine=self.prompt_engine),
@@ -5248,7 +4590,7 @@ class ResponsePipeline:
             "tool_router": ToolRouterStage(),
             "verify": VerifyStage(),
             "output_format": OutputFormatStage(provider=self.provider),
-            "memory_write": MemoryWriteStage(memory_manager=memory_manager, planner=episode_planner),
+            "memory_write": MemoryWriteStage(memory_core=self.memory_core),
         }
         # Memory retrieval теперь работает ТОЛЬКО через agent_loop + memory_retrieve tool.
         # MemoryNativeStateStage строит always-on memory layer для всех профилей.
@@ -5475,7 +4817,12 @@ class ResponsePipeline:
             "errors": [str(x).strip() for x in list(ctx.errors or []) if str(x).strip()],
             "warnings": [str(x).strip() for x in list(_as_list(ctx.meta.get("turn_log_warnings"))) if str(x).strip()],
         }
-        memory_debug_snapshot = build_memory_debug_snapshot(ctx)
+        # Упрощённый memory_debug_snapshot
+        memory_debug_snapshot = {
+            "memory_context": dict(ctx.memory_context or {}),
+            "memory_native_state": dict(ctx.state.get("memory_native_state") or {}),
+            "retrieved_count": len(list(ctx.retrieved_memories or [])),
+        }
         ctx.state["memory_debug_snapshot"] = dict(memory_debug_snapshot or {})
         if isinstance(meta, dict):
             meta["trace_id"] = str(ctx.meta.get("trace_id") or "")
@@ -6052,45 +5399,6 @@ def _contains_any_fragment(text: str, fragments: tuple[str, ...]) -> bool:
     if not low:
         return False
     return any(str(fragment).strip().lower() in low for fragment in fragments if str(fragment).strip())
-
-
-def _is_self_memory_claim_query(query_text: str) -> bool:
-    low = unicodedata.normalize("NFKC", str(query_text or "")).strip().lower()
-    if not low:
-        return False
-    profile = classify_query_recall_profile(low)
-    return bool(profile.claim_like and _contains_any_fragment(low, _SELF_MEMORY_CLAIM_HINTS))
-
-
-def _guard_memory_context_for_self_memory_claim(
-    memory_context: dict[str, Any] | None,
-    *,
-    query_text: str,
-) -> dict[str, Any]:
-    row = _as_dict(memory_context)
-    blocks = _as_dict(row.get("blocks"))
-    if not blocks or not _is_self_memory_claim_query(query_text):
-        return row
-    if not str(blocks.get("relevant_claims") or "").strip():
-        return row
-
-    next_blocks = dict(blocks)
-    dropped_blocks: list[str] = []
-    for key in ("working_memory", "session_summary"):
-        if str(next_blocks.get(key) or "").strip():
-            next_blocks.pop(key, None)
-            dropped_blocks.append(key)
-    if not dropped_blocks:
-        return row
-
-    next_row = dict(row)
-    next_row["blocks"] = next_blocks
-    next_row["self_memory_claim_guard"] = {
-        "applied": True,
-        "reason": "self_memory_claim_prefers_relevant_claims",
-        "dropped_blocks": dropped_blocks,
-    }
-    return next_row
 
 
 def _apply_memory_context_to_prompt_pack(
@@ -9032,16 +8340,6 @@ def _as_list(value) -> list[Any]:
     return [value]
 
 
-def _scope_from_name(value) -> MemoryScope | None:
-    raw = str(value or "").strip().lower()
-    if not raw:
-        return None
-    for scope in MemoryScope:
-        if raw == scope.value:
-            return scope
-    return None
-
-
 def _pick(*values) -> str:
     for value in values:
         text = _normalize_text(value)
@@ -9469,32 +8767,6 @@ def _emit_turn_summary(ctx: PipelineContext, event: str, *, summary: str, **payl
     row = dict(payload or {})
     _remember_turn_summary(ctx, str(event or "").strip(), row)
     log_json(LOGGER, str(event or "").strip(), summary=compact, context=context, **row)
-
-
-def _memory_hit_summary(rows: list[Any]) -> dict[str, int]:
-    selected = [_as_dict(x) for x in list(rows or [])]
-    semantic = 0
-    episodic = 0
-    docs = 0
-    web = 0
-    for row in selected:
-        level = str(row.get("level") or "").strip().lower()
-        memory_type = str(row.get("memory_type") or "").strip().lower()
-        if level == "l3_semantic" or memory_type == "fact":
-            semantic += 1
-        if level == "l2_episodic":
-            episodic += 1
-        if level == "l4_document" or memory_type in {"document", "document_chunk"}:
-            docs += 1
-        if _is_web_memory_item(row):
-            web += 1
-    return {
-        "retrieved": int(len(selected)),
-        "semantic": int(semantic),
-        "episodic": int(episodic),
-        "docs": int(docs),
-        "web": int(web),
-    }
 
 
 def _queued_memory_ops_summary(ops: list[dict[str, Any]]) -> dict[str, int]:

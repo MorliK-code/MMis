@@ -23,10 +23,8 @@ CONFIG_DIR = BASE_DIR / "config"
 DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
 LOG_DIR = DATA_DIR / "logs"
-DEFAULT_MEMORY_DIR = DATA_DIR / "memory_storage"
-LEGACY_MEMORY_DIR = BASE_DIR / "memory_storage"
-CACHE_DIR = DEFAULT_MEMORY_DIR / "cache"
-LEGACY_CACHE_DIR = DATA_DIR / "cache"
+CACHE_DIR = DATA_DIR / "cache"
+MEMORY_DIR = DATA_DIR / "memory_core"
 DIR_PATH_TOKEN = "{dir_path}"
 _DIR_PATH_TOKEN_LOW = DIR_PATH_TOKEN.lower()
 
@@ -82,57 +80,10 @@ def _from_env_path(name: str) -> Path | None:
     return Path(raw).expanduser() if raw else None
 
 
-def _resolve_memory_dir_default() -> Path:
-    env_path = _from_env_path("MMIS_MEMORY_DIR")
-    if env_path is not None:
-        return env_path
-    use_legacy = str(os.getenv("MMIS_USE_LEGACY_MEMORY_DIR", "")).strip().lower() in {"1", "true", "yes", "on"}
-    if use_legacy:
-        return LEGACY_MEMORY_DIR
-    return DEFAULT_MEMORY_DIR
-
-
-def _resolve_cache_dir_default(memory_dir: Path | None = None) -> Path:
-    env_path = _from_env_path("MMIS_CACHE_DIR")
-    if env_path is not None:
-        return env_path
-    if memory_dir is not None:
-        root = Path(memory_dir).expanduser().resolve()
-    else:
-        root = _resolve_memory_dir_default().expanduser().resolve()
-    return (root / "cache").resolve()
-
-
-def resolve_memory_dir() -> Path:
-    cache = globals().get("_SETTINGS_CACHE")
-    if cache is not None and getattr(cache, "memory_dir", None):
-        return _resolve_path_value(cache.memory_dir, _resolve_memory_dir_default())
-    cfg_raw = str(os.getenv("MMIS_CONFIG_FILE", "")).strip()
-    if cfg_raw:
-        cfg_file = Path(cfg_raw).expanduser().resolve()
-    else:
-        cfg_file = (BASE_DIR / "config" / "config.json").resolve()
-    try:
-        if cfg_file.exists():
-            payload = json.loads(cfg_file.read_text(encoding="utf-8-sig") or "{}")
-            if isinstance(payload, dict):
-                memory_row = payload.get("memory")
-                value = memory_row.get("memory_dir") if isinstance(memory_row, dict) else None
-                if str(value or "").strip():
-                    return _resolve_path_value(value, _resolve_memory_dir_default())
-    except Exception:
-        pass
-    return _resolve_path_value(None, _resolve_memory_dir_default())
-
-
-MEMORY_DIR = resolve_memory_dir()
-
-
 def ensure_dirs(memory_dir: str | Path | None = None) -> dict[str, Path]:
-    mem_dir = _to_path(memory_dir, resolve_memory_dir()) if memory_dir is not None else resolve_memory_dir()
+    mem_dir = _to_path(memory_dir, MEMORY_DIR) if memory_dir is not None else MEMORY_DIR
     cfg = globals().get("_SETTINGS_CACHE")
-    default_cache_dir = _resolve_cache_dir_default(mem_dir)
-    cache_dir = _to_path(cfg.cache_dir, default_cache_dir) if cfg is not None and cfg.cache_dir else default_cache_dir
+    cache_dir = _to_path(cfg.cache_dir, CACHE_DIR) if cfg is not None and cfg.cache_dir else CACHE_DIR
     logs_dir = _to_path(cfg.log_dir, LOG_DIR.resolve()) if cfg is not None and cfg.log_dir else LOG_DIR.resolve()
     data_dir = _to_path(cfg.data_dir, DATA_DIR.resolve()) if cfg is not None and cfg.data_dir else DATA_DIR.resolve()
     models_dir = _to_path(cfg.models_dir, MODELS_DIR.resolve()) if cfg is not None and cfg.models_dir else MODELS_DIR.resolve()
@@ -162,7 +113,6 @@ def safe_join(base: str | Path, user_path: str | Path) -> Path:
 
 ROOT_DIR = BASE_DIR
 LOGS_DIR = LOG_DIR
-NEW_MEMORY_DIR = DEFAULT_MEMORY_DIR
 
 
 def ensure_data_dirs() -> None:
@@ -265,10 +215,10 @@ class AppSettings:
     prompt_response_formatting_enabled: bool = True
     data_dir: Path = DATA_DIR
     models_dir: Path = MODELS_DIR
-    memory_dir: Path = field(default_factory=lambda: DEFAULT_MEMORY_DIR.resolve())
+    memory_dir: Path = field(default_factory=lambda: MEMORY_DIR.resolve())
     cache_dir: Path = field(default_factory=lambda: CACHE_DIR.resolve())
     log_dir: Path = field(default_factory=lambda: Path("logs").resolve())
-    db_path: Path = field(default_factory=lambda: DEFAULT_MEMORY_DIR.resolve() / "memory.db")
+    db_path: Path = field(default_factory=lambda: MEMORY_DIR.resolve() / "memory.db")
     dialog_new_session_after_min: int = 360
     dialog_greeting_max_words: int = 6
     dialog_greeting_max_chars: int = 35
@@ -328,56 +278,13 @@ class AppSettings:
     chat_events_limit: int = 10
     chat_proofread: bool = False
     chat_proofread_strict: bool = False
-    memory_facts_scope: str = "user_only"
-    memory_include_pending_facts_in_retrieval: bool = False
-    memory_confirmation_ttl_sec: int = 300
-    memory_migration_auto_on_start: bool = True
-    memory_migration_schema_version: int = 2
-    memory_version: str = "v2"
-    memory_backend: str = "chroma"
-    memory_embedding_backend: str = "sentence_transformers"
-    memory_embedding_model: str = "all-MiniLM-L6-v2"
-    memory_embedding_dim: int = 384
-    memory_retrieval_top_k: int = 8
-    memory_rerank_top_k: int = 8
-    memory_retrieval_weight_semantic_similarity: float = 0.34
-    memory_retrieval_weight_lexical_score: float = 0.25
-    memory_retrieval_weight_recency_score: float = 0.10
-    memory_retrieval_weight_importance_score: float = 0.09
-    memory_retrieval_weight_confidence_score: float = 0.08
-    memory_retrieval_weight_entity_overlap_score: float = 0.07
-    memory_retrieval_weight_exact_match_boost: float = 0.04
-    memory_retrieval_weight_scope_match_score: float = 0.03
-    memory_chunk_size: int = 1200
-    memory_chunk_overlap: int = 160
-    memory_summary_trigger: int = 60
-    memory_summary_target_tokens: int = 220
-    memory_context_budget_total: int = 2200
-    memory_context_budget_memory: int = 700
-    memory_context_budget_docs: int = 600
-    memory_context_budget_tools: int = 220
-    memory_context_budget_response_reserve: int = 260
-    memory_stale_after_days: int = 30
-    memory_archive_after_days: int = 90
-    memory_promotion_message_importance_threshold: float = 0.55
-    memory_promotion_message_confidence_threshold: float = 0.50
-    memory_promotion_project_signal_boost: float = 0.12
-    memory_promotion_fact_signal_boost: float = 0.16
-    memory_promotion_decision_signal_boost: float = 0.12
-    memory_promotion_smalltalk_penalty: float = 0.20
-    memory_importance_weight_base: float = 0.42
-    memory_importance_weight_decision: float = 0.24
-    memory_importance_weight_remember: float = 0.18
-    memory_importance_weight_project: float = 0.10
-    memory_salience_weight_novelty: float = 0.22
-    memory_salience_weight_permanence: float = 0.20
-    memory_salience_weight_repetition: float = 0.14
-    memory_salience_weight_project_relevance: float = 0.16
-    memory_salience_weight_task_relevance: float = 0.16
-    memory_salience_weight_explicit_save_signal: float = 0.12
-    memory_temporary_ttl_sec: int = 3600
-    memory_private_runtime_ttl_sec: int = 900
-    memory_working_limit: int = 120
+    # Memory Core
+    memory_core_enabled: bool = True
+    memory_core_db_path: str = "data/memory_core/memory.db"
+    memory_core_vector_path: str = "data/memory_core/vector"
+    memory_core_default_workspace: str = "global"
+    memory_core_default_namespace: str = "default"
+    memory_core_top_k: int = 8
     model_fallbacks: list[str] = field(default_factory=list)
 
     # Hardware
@@ -632,8 +539,8 @@ def _default_task_model_profiles_tree(
 
 
 def _default_config_tree() -> dict[str, Any]:
-    memory_dir = _resolve_memory_dir_default().expanduser().resolve()
-    cache_dir = _resolve_cache_dir_default(memory_dir).resolve()
+    memory_dir = MEMORY_DIR.expanduser().resolve()
+    cache_dir = CACHE_DIR.resolve()
     log_dir = LOG_DIR.resolve()
     return {
         "app": {
@@ -1020,11 +927,9 @@ def _default_config_tree() -> dict[str, Any]:
 def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> AppSettings:
     row = dict(payload or {})
 
-    memory_dir = _to_path(_get_dotted(row, "memory.memory_dir"), _resolve_memory_dir_default().expanduser().resolve())
+    memory_dir = MEMORY_DIR.expanduser().resolve()
     dirs = ensure_dirs(memory_dir=memory_dir)
     cache_dir = _to_path(_get_dotted(row, "memory.cache_dir"), dirs["cache"])
-    if cache_dir.resolve() == LEGACY_CACHE_DIR.resolve():
-        cache_dir = _resolve_cache_dir_default(memory_dir).resolve()
     log_dir = _to_path(_get_dotted(row, "memory.log_dir"), dirs["logs"])
     db_path = _to_path(_get_dotted(row, "memory.db_path"), memory_dir / "memory.db")
 
@@ -1149,316 +1054,6 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         chat_events_limit=max(1, _to_int(_get_dotted(row, "memory.chat_events_limit"), default=10)),
         chat_proofread=_to_bool(_get_dotted(row, "memory.chat_proofread")),
         chat_proofread_strict=_to_bool(_get_dotted(row, "memory.chat_proofread_strict")),
-        memory_facts_scope=_norm_lower(_pick_value(_get_dotted(row, "memory.facts_scope"), "user_only")),
-        memory_include_pending_facts_in_retrieval=_to_bool(
-            _pick_value(_get_dotted(row, "memory.include_pending_facts_in_retrieval"), False)
-        ),
-        memory_confirmation_ttl_sec=max(1, _to_int(_pick_value(_get_dotted(row, "memory.confirmation_ttl_sec"), 300), default=300)),
-        memory_migration_auto_on_start=_to_bool(
-            _pick_value(_get_dotted(row, "memory.migration.auto_on_start"), True)
-        ),
-        memory_migration_schema_version=max(
-            1,
-            _to_int(_pick_value(_get_dotted(row, "memory.migration.schema_version"), 2), default=2),
-        ),
-        memory_version=_norm_lower(_pick_value(_get_dotted(row, "memory.version"), "v2")),
-        memory_backend=_norm_lower(_pick_value(_get_dotted(row, "memory.backend"), "chroma")),
-        memory_embedding_backend=_norm_lower(
-            _pick_value(_get_dotted(row, "memory.embedding.backend"), "sentence_transformers")
-        ),
-        memory_embedding_model=_norm_str(
-            _pick_value(_get_dotted(row, "memory.embedding.model"), "all-MiniLM-L6-v2")
-        ),
-        memory_embedding_dim=max(32, _to_int(_pick_value(_get_dotted(row, "memory.embedding.dim"), 384), default=384)),
-        memory_retrieval_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.top_k"), 8), default=8)),
-        memory_rerank_top_k=max(1, _to_int(_pick_value(_get_dotted(row, "memory.retrieval.rerank_top_k"), 8), default=8)),
-        memory_retrieval_weight_semantic_similarity=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.semantic_similarity"), 0.34),
-                    default=0.34,
-                ),
-            ),
-        ),
-        memory_retrieval_weight_lexical_score=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.lexical_score"), 0.25),
-                    default=0.25,
-                ),
-            ),
-        ),
-        memory_retrieval_weight_recency_score=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.recency_score"), 0.10),
-                    default=0.10,
-                ),
-            ),
-        ),
-        memory_retrieval_weight_importance_score=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.importance_score"), 0.09),
-                    default=0.09,
-                ),
-            ),
-        ),
-        memory_retrieval_weight_confidence_score=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.confidence_score"), 0.08),
-                    default=0.08,
-                ),
-            ),
-        ),
-        memory_retrieval_weight_entity_overlap_score=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.entity_overlap_score"), 0.07),
-                    default=0.07,
-                ),
-            ),
-        ),
-        memory_retrieval_weight_exact_match_boost=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.exact_match_boost"), 0.04),
-                    default=0.04,
-                ),
-            ),
-        ),
-        memory_retrieval_weight_scope_match_score=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.retrieval.fusion_weights.scope_match_score"), 0.03),
-                    default=0.03,
-                ),
-            ),
-        ),
-        memory_chunk_size=max(200, _to_int(_pick_value(_get_dotted(row, "memory.documents.chunk_size"), 1200), default=1200)),
-        memory_chunk_overlap=max(
-            0,
-            _to_int(_pick_value(_get_dotted(row, "memory.documents.chunk_overlap"), 160), default=160),
-        ),
-        memory_summary_trigger=max(1, _to_int(_pick_value(_get_dotted(row, "memory.summary.trigger"), 60), default=60)),
-        memory_summary_target_tokens=max(
-            32,
-            _to_int(_pick_value(_get_dotted(row, "memory.summary.target_tokens"), 220), default=220),
-        ),
-        memory_context_budget_total=max(
-            256,
-            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.total"), 2200), default=2200),
-        ),
-        memory_context_budget_memory=max(
-            64,
-            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.memory"), 700), default=700),
-        ),
-        memory_context_budget_docs=max(
-            64,
-            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.docs"), 600), default=600),
-        ),
-        memory_context_budget_tools=max(
-            32,
-            _to_int(_pick_value(_get_dotted(row, "memory.context_budget.tools"), 220), default=220),
-        ),
-        memory_context_budget_response_reserve=max(
-            64,
-            _to_int(
-                _pick_value(_get_dotted(row, "memory.context_budget.response_reserve"), 260),
-                default=260,
-            ),
-        ),
-        memory_stale_after_days=max(
-            1,
-            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.stale_after_days"), 30), default=30),
-        ),
-        memory_archive_after_days=max(
-            1,
-            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.archive_after_days"), 90), default=90),
-        ),
-        memory_promotion_message_importance_threshold=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_thresholds.message_importance"), 0.55),
-                    default=0.55,
-                ),
-            ),
-        ),
-        memory_promotion_message_confidence_threshold=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_thresholds.message_confidence"), 0.50),
-                    default=0.50,
-                ),
-            ),
-        ),
-        memory_promotion_project_signal_boost=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.project"), 0.12),
-                    default=0.12,
-                ),
-            ),
-        ),
-        memory_promotion_fact_signal_boost=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.fact"), 0.16),
-                    default=0.16,
-                ),
-            ),
-        ),
-        memory_promotion_decision_signal_boost=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.decision"), 0.12),
-                    default=0.12,
-                ),
-            ),
-        ),
-        memory_promotion_smalltalk_penalty=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.lifecycle.promotion_signal_boosts.smalltalk_penalty"), 0.20),
-                    default=0.20,
-                ),
-            ),
-        ),
-        memory_importance_weight_base=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(_pick_value(_get_dotted(row, "memory.scoring.importance_weights.base"), 0.42), default=0.42),
-            ),
-        ),
-        memory_importance_weight_decision=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.scoring.importance_weights.decision"), 0.24),
-                    default=0.24,
-                ),
-            ),
-        ),
-        memory_importance_weight_remember=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.scoring.importance_weights.remember"), 0.18),
-                    default=0.18,
-                ),
-            ),
-        ),
-        memory_importance_weight_project=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(_pick_value(_get_dotted(row, "memory.scoring.importance_weights.project"), 0.10), default=0.10),
-            ),
-        ),
-        memory_salience_weight_novelty=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(_pick_value(_get_dotted(row, "memory.scoring.salience_weights.novelty"), 0.22), default=0.22),
-            ),
-        ),
-        memory_salience_weight_permanence=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.permanence"), 0.20),
-                    default=0.20,
-                ),
-            ),
-        ),
-        memory_salience_weight_repetition=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.repetition"), 0.14),
-                    default=0.14,
-                ),
-            ),
-        ),
-        memory_salience_weight_project_relevance=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.project_relevance"), 0.16),
-                    default=0.16,
-                ),
-            ),
-        ),
-        memory_salience_weight_task_relevance=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.task_relevance"), 0.16),
-                    default=0.16,
-                ),
-            ),
-        ),
-        memory_salience_weight_explicit_save_signal=max(
-            0.0,
-            min(
-                1.0,
-                _to_float(
-                    _pick_value(_get_dotted(row, "memory.scoring.salience_weights.explicit_save_signal"), 0.12),
-                    default=0.12,
-                ),
-            ),
-        ),
-        memory_temporary_ttl_sec=max(
-            30,
-            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.temporary_ttl_sec"), 3600), default=3600),
-        ),
-        memory_private_runtime_ttl_sec=max(
-            30,
-            _to_int(
-                _pick_value(_get_dotted(row, "memory.lifecycle.private_runtime_ttl_sec"), 900),
-                default=900,
-            ),
-        ),
-        memory_working_limit=max(
-            20,
-            _to_int(_pick_value(_get_dotted(row, "memory.lifecycle.working_limit"), 120), default=120),
-        ),
         model_fallbacks=_to_csv_list(_get_dotted(row, "llm.model_fallbacks")),
         gpu_vram_gb=_to_int_or_none(_get_dotted(row, "hardware.gpu_vram_gb")),
         console_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.timeout_sec"), 2.5)),
@@ -1889,81 +1484,9 @@ def _validate_settings(settings: AppSettings) -> None:
     if str(settings.web_mode or "").strip().lower() not in {"on", "off", "auto"}:
         errors.append(f"internet.web_mode must be one of ['auto', 'off', 'on'], got: {settings.web_mode}")
     errors.extend(_validate_web_v2_settings(settings.web_v2))
-    if str(settings.memory_facts_scope or "").strip().lower() not in {"user_only", "all"}:
-        errors.append(
-            f"memory.facts_scope must be one of ['all', 'user_only'], got: {settings.memory_facts_scope}"
-        )
-    if int(settings.memory_confirmation_ttl_sec) < 1:
-        errors.append("memory.confirmation_ttl_sec must be >= 1")
-    if int(settings.memory_migration_schema_version) < 1:
-        errors.append("memory.migration.schema_version must be >= 1")
-    if str(settings.memory_version or "").strip().lower() not in {"v2"}:
-        errors.append(f"memory.version must be 'v2', got: {settings.memory_version}")
-    if str(settings.memory_backend or "").strip().lower() not in {"chroma", "chromadb"}:
-        errors.append(
-            "memory.backend must be one of ['chroma', 'chromadb']; "
-            f"got: {settings.memory_backend}. Switch memory.backend to 'chroma' or 'chromadb'."
-        )
-    if int(settings.memory_retrieval_top_k) < 1:
-        errors.append("memory.retrieval.top_k must be >= 1")
-    if int(settings.memory_rerank_top_k) < 1:
-        errors.append("memory.retrieval.rerank_top_k must be >= 1")
-    if not (0.0 <= float(settings.memory_retrieval_weight_semantic_similarity) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.semantic_similarity must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_retrieval_weight_lexical_score) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.lexical_score must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_retrieval_weight_recency_score) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.recency_score must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_retrieval_weight_importance_score) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.importance_score must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_retrieval_weight_confidence_score) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.confidence_score must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_retrieval_weight_entity_overlap_score) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.entity_overlap_score must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_retrieval_weight_exact_match_boost) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.exact_match_boost must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_retrieval_weight_scope_match_score) <= 1.0):
-        errors.append("memory.retrieval.fusion_weights.scope_match_score must be in [0, 1]")
-    if int(settings.memory_chunk_size) < 200:
-        errors.append("memory.documents.chunk_size must be >= 200")
-    if int(settings.memory_chunk_overlap) < 0:
-        errors.append("memory.documents.chunk_overlap must be >= 0")
-    if not (0.0 <= float(settings.memory_promotion_message_importance_threshold) <= 1.0):
-        errors.append("memory.lifecycle.promotion_thresholds.message_importance must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_promotion_message_confidence_threshold) <= 1.0):
-        errors.append("memory.lifecycle.promotion_thresholds.message_confidence must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_promotion_project_signal_boost) <= 1.0):
-        errors.append("memory.lifecycle.promotion_signal_boosts.project must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_promotion_fact_signal_boost) <= 1.0):
-        errors.append("memory.lifecycle.promotion_signal_boosts.fact must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_promotion_decision_signal_boost) <= 1.0):
-        errors.append("memory.lifecycle.promotion_signal_boosts.decision must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_promotion_smalltalk_penalty) <= 1.0):
-        errors.append("memory.lifecycle.promotion_signal_boosts.smalltalk_penalty must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_importance_weight_base) <= 1.0):
-        errors.append("memory.scoring.importance_weights.base must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_importance_weight_decision) <= 1.0):
-        errors.append("memory.scoring.importance_weights.decision must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_importance_weight_remember) <= 1.0):
-        errors.append("memory.scoring.importance_weights.remember must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_importance_weight_project) <= 1.0):
-        errors.append("memory.scoring.importance_weights.project must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_salience_weight_novelty) <= 1.0):
-        errors.append("memory.scoring.salience_weights.novelty must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_salience_weight_permanence) <= 1.0):
-        errors.append("memory.scoring.salience_weights.permanence must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_salience_weight_repetition) <= 1.0):
-        errors.append("memory.scoring.salience_weights.repetition must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_salience_weight_project_relevance) <= 1.0):
-        errors.append("memory.scoring.salience_weights.project_relevance must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_salience_weight_task_relevance) <= 1.0):
-        errors.append("memory.scoring.salience_weights.task_relevance must be in [0, 1]")
-    if not (0.0 <= float(settings.memory_salience_weight_explicit_save_signal) <= 1.0):
-        errors.append("memory.scoring.salience_weights.explicit_save_signal must be in [0, 1]")
-    if int(settings.memory_temporary_ttl_sec) < 30:
-        errors.append("memory.lifecycle.temporary_ttl_sec must be >= 30")
-    if int(settings.memory_private_runtime_ttl_sec) < 30:
-        errors.append("memory.lifecycle.private_runtime_ttl_sec must be >= 30")
+    # Memory Core validation
+    if not (1 <= int(settings.memory_core_top_k) <= 100):
+        errors.append("memory_core.top_k must be in [1, 100]")
     if errors:
         raise ValueError("Invalid application settings:\n- " + "\n- ".join(errors))
 

@@ -13,13 +13,10 @@ from core.character_runtime import CharacterRuntime
 from core.response_pipeline import PipelineResult, ResponsePipeline
 from llm import build_provider
 from llm.provider_base import LLMProviderBase
-from memory.debug_snapshot import build_memory_debug_snapshot
-from memory.identity_core import PROTECTED_IDENTITY_CORE_KEYS
-from memory.memory_manager import MemoryManager
-from memory.memory_models import MemoryEvent, MemoryScope, MemoryType
-from memory.state_reducer import reduce_state_for_turn, merge_state_updates
-from memory.summary_quality import sanitize_session_summary_text
-from memory.text_sanitizer import (
+from memory_core.adapter import MemoryCoreAdapter
+from memory_core.processors.state_reducer import reduce_state_for_turn, merge_state_updates
+from memory_core.utils.summary_quality import sanitize_session_summary_text
+from memory_core.utils.text_sanitizer import (
     clean_assistant_text_for_memory,
     contains_memory_service_sections,
     sanitize_assistant_memory_text,
@@ -59,7 +56,7 @@ class Brain:
         *,
         provider: LLMProviderBase | None = None,
         state_manager: CharacterRuntime | None = None,
-        memory_manager: MemoryManager | None = None,
+        memory_core: MemoryCoreAdapter | None = None,
         metadata_extractor: MetadataExtractor | None = None,
         response_pipeline: ResponsePipeline | None = None,
         dedup_window_sec: float = 1.6,
@@ -71,12 +68,12 @@ class Brain:
             cfg = load_config()
             self._provider = build_provider(cfg.llm_default_provider, default_model=cfg.model_name)
         self.state_manager = state_manager or CharacterRuntime()
-        self.memory_manager = memory_manager or MemoryManager()
+        self.memory_core = memory_core or MemoryCoreAdapter()
         self.metadata_extractor = metadata_extractor or MetadataExtractor(cache_size=280)
         self.pipeline = response_pipeline or ResponsePipeline(
             self._provider,
             character_runtime=self.state_manager,
-            memory_manager=self.memory_manager,
+            memory_core=self.memory_core,
         )
 
         self._lock = RLock()
@@ -180,7 +177,7 @@ class Brain:
         policies = meta_map.get("policies", state_snapshot.policies)
         meta_for_pipeline = dict(meta_map)
         meta_for_pipeline.setdefault("source", source or route)
-        meta_for_pipeline.setdefault("memory_manager", self.memory_manager)
+        meta_for_pipeline.setdefault("memory_core", self.memory_core)
         meta_for_pipeline.setdefault("conversation_id", state_snapshot.conversation_id)
         meta_for_pipeline.setdefault("turn_id", state_snapshot.turn_id)
         if character_quality_profile:
@@ -367,41 +364,33 @@ class Brain:
                 items = list(op.get("items") or [])
                 if items:
                     self.state_manager.set_last_tool_result(items[-1])
-                    try:
-                        self.memory_manager.set_private_runtime_state(
-                            key="last_tool_result",
-                            value=items[-1],
-                            namespace=str(self.state_manager.get("conversation_id") or "default"),
-                        )
-                    except Exception:
-                        pass
+                    # В memory_core tool results записываются через ingest_event
+                    # set_private_runtime_state больше не используется
             elif key == "conversation_summary":
                 text = sanitize_session_summary_text(op.get("text") or "")
                 if text:
                     self.state_manager.set_dialog_summary(text)
                     try:
-                        ingest_result = self.memory_manager.ingest_event(
-                            MemoryEvent(
-                                role="system",
-                                text=text,
-                                namespace=str(self.state_manager.get("conversation_id") or "default"),
-                                scope=MemoryScope.SESSION,
-                                memory_type=MemoryType.SUMMARY,
-                                metadata={
-                                    "source_kind": "system_decision",
-                                    "source": "rolling_summary",
-                                    "importance": 0.6,
-                                    "confidence": 0.7,
-                                    "trace_id": str(op.get("trace_id") or ""),
-                                    "request_id": str(op.get("request_id") or ""),
-                                    "turn_id": op.get("turn_id"),
-                                    "conversation_id": str(
-                                        op.get("conversation_id")
-                                        or self.state_manager.get("conversation_id")
-                                        or "default"
-                                    ),
-                                },
-                            )
+                        ingest_result = self.memory_core.ingest_event(
+                            text=text,
+                            source_kind="system",
+                            payload_type="state_update",
+                            metadata={
+                                "source_kind": "system_decision",
+                                "source": "rolling_summary",
+                                "importance": 0.6,
+                                "confidence": 0.7,
+                                "trace_id": str(op.get("trace_id") or ""),
+                                "request_id": str(op.get("request_id") or ""),
+                                "turn_id": op.get("turn_id"),
+                                "conversation_id": str(
+                                    op.get("conversation_id")
+                                    or self.state_manager.get("conversation_id")
+                                    or "default"
+                                ),
+                            },
+                            session_id=str(self.state_manager.get("conversation_id") or "default"),
+                            workspace_id=str(self.state_manager.get("active_character_id") or "global"),
                         )
                         self._capture_memory_ingest(
                             summary,
@@ -411,8 +400,6 @@ class Brain:
                     except Exception:
                         self._append_summary_warning(summary, "conversation_summary_failed")
             elif key == "web_memory_write":
-                if self.memory_manager is None:
-                    continue
                 default_namespace = str(
                     op.get("namespace")
                     or self.state_manager.get("conversation_id")
@@ -426,9 +413,6 @@ class Brain:
                     text = str(row.get("text") or "").strip()
                     if not text:
                         continue
-                    scope = _memory_scope_from_name(row.get("scope"), default=MemoryScope.PROJECT)
-                    memory_type = _memory_type_from_name(row.get("memory_type"), default=MemoryType.SEMANTIC)
-                    namespace = str(row.get("namespace") or default_namespace).strip() or default_namespace
                     metadata = dict(_as_dict(row.get("metadata")) or {})
                     if not str(metadata.get("source") or "").strip():
                         metadata["source"] = "web_v2"
@@ -459,15 +443,13 @@ class Brain:
                         except Exception:
                             pass
                     try:
-                        ingest_result = self.memory_manager.ingest_event(
-                            MemoryEvent(
-                                role="system",
-                                text=text,
-                                namespace=namespace,
-                                scope=scope,
-                                memory_type=memory_type,
-                                metadata=metadata,
-                            )
+                        ingest_result = self.memory_core.ingest_event(
+                            text=text,
+                            source_kind="system",
+                            payload_type="tool_result",
+                            metadata=metadata,
+                            session_id=default_namespace,
+                            workspace_id=str(self.state_manager.get("active_character_id") or "global"),
                         )
                         written += 1
                         self._capture_memory_ingest(summary, ingest_result, bucket="web_memory_write")
@@ -608,25 +590,23 @@ class Brain:
                 latency_ms=0.0,
                 personality_id=personality_id,
             )
-            ingest_result = self.memory_manager.ingest_event(
-                MemoryEvent(
-                    role="user",
-                    text=user_payload,
-                    namespace=(conversation_id or "default"),
-                    scope=MemoryScope.CONVERSATION,
-                    memory_type=MemoryType.MESSAGE,
-                    metadata={
-                        "source_kind": "user",
-                        **dict(user_meta or {}),
-                        "trace_id": trace_id,
-                        "request_id": request_id,
-                        "source": source,
-                        "model": model,
-                        "quality_profile": quality_profile,
-                        "turn_id": turn_id,
-                        "conversation_id": conversation_id or "default",
-                    },
-                )
+            ingest_result = self.memory_core.ingest_event(
+                text=user_payload,
+                source_kind="user",
+                payload_type="message",
+                metadata={
+                    "source_kind": "user",
+                    **dict(user_meta or {}),
+                    "trace_id": trace_id,
+                    "request_id": request_id,
+                    "source": source,
+                    "model": model,
+                    "quality_profile": quality_profile,
+                    "turn_id": turn_id,
+                    "conversation_id": conversation_id or "default",
+                },
+                session_id=conversation_id or "default",
+                workspace_id=str(self.state_manager.get("active_character_id") or "global"),
             )
             self._capture_memory_ingest(summary, ingest_result, bucket="user_turn")
 
@@ -677,26 +657,23 @@ class Brain:
             # persona_snapshot is debug-only, don't store in memory
             if persona_snapshot:
                 assistant_meta["_persona_snapshot_debug"] = dict(persona_snapshot)
-            ingest_result = self.memory_manager.ingest_event(
-                MemoryEvent(
-                    role="assistant",
-                    text=assistant_payload,
-                    namespace=(conversation_id or "default"),
-                    scope=MemoryScope.CONVERSATION,
-                    memory_type=MemoryType.MESSAGE,
-                    thinking=str(result.thinking or ""),
-                    metadata={
-                        "source_kind": "assistant_reply",
-                        **dict(assistant_meta or {}),
-                        "trace_id": trace_id,
-                        "request_id": request_id,
-                        "source": source,
-                        "model": model,
-                        "quality_profile": quality_profile,
-                        "turn_id": turn_id,
-                        "conversation_id": conversation_id or "default",
-                    },
-                )
+            ingest_result = self.memory_core.ingest_event(
+                text=assistant_payload,
+                source_kind="assistant",
+                payload_type="message",
+                metadata={
+                    "source_kind": "assistant_reply",
+                    **dict(assistant_meta or {}),
+                    "trace_id": trace_id,
+                    "request_id": request_id,
+                    "source": source,
+                    "model": model,
+                    "quality_profile": quality_profile,
+                    "turn_id": turn_id,
+                    "conversation_id": conversation_id or "default",
+                },
+                session_id=conversation_id or "default",
+                workspace_id=str(self.state_manager.get("active_character_id") or "global"),
             )
             self._capture_memory_ingest(summary, ingest_result, bucket="assistant_turn")
         
@@ -888,29 +865,8 @@ class Brain:
         stats = dict(result.stats or {})
         if route == "system_event" or not stats:
             return
-        recorder = getattr(self.memory_manager, "record_response_stats", None)
-        if not callable(recorder):
-            return
-        try:
-            recorder(
-                namespace=str(conversation_id or "default"),
-                route=str(route or ""),
-                request_id=str(meta.get("request_id") or ""),
-                trace_id=str(meta.get("trace_id") or ""),
-                turn_id=meta.get("turn_id"),
-                model=str(stats.get("served_model") or meta.get("model") or ""),
-                stats=stats,
-                meta={
-                    "source": str(meta.get("source") or route or ""),
-                    "web_mode": str(meta.get("web_mode") or ""),
-                    "json_mode": bool(meta.get("json_mode", False)),
-                    "think": bool(meta.get("think", False)),
-                    "verbose": bool(meta.get("verbose", False)),
-                    "conversation_id": str(meta.get("conversation_id") or conversation_id or "default"),
-                },
-            )
-        except Exception as exc:
-            result.logs.append(f"stats_harvest_error={type(exc).__name__}")
+        # record_response_stats больше не используется в memory_core
+        # статистика записывается через ingest_event с payload_type="state_update"
 
     @staticmethod
     def _empty_memory_write_summary() -> dict[str, Any]:
@@ -968,119 +924,36 @@ class Brain:
         meta: dict[str, Any],
         conversation_id: str,
     ) -> None:
-        if not isinstance(meta, dict) or self.memory_manager is None:
+        if not isinstance(meta, dict) or self.memory_core is None:
             return
         trace = dict(meta.get("debug_trace") or {})
         if not trace:
             return
         namespace = str(conversation_id or "default").strip() or "default"
-        request_id = str(meta.get("request_id") or "").strip()
+        
+        # Новая версия debug trace через memory_core
         snapshot = None
-        if hasattr(self.memory_manager, "get_governor_profile_snapshot"):
-            try:
-                snapshot = self.memory_manager.get_governor_profile_snapshot(namespace)
-            except Exception:
-                snapshot = None
-        decisions: list[dict[str, Any]] = []
-        if hasattr(self.memory_manager, "debug_recent_governor_events"):
-            try:
-                decisions = list(
-                    self.memory_manager.debug_recent_governor_events(
-                        namespace=namespace,
-                        request_id=request_id,
-                        limit=16,
-                    )
-                    or []
-                )
-            except Exception:
-                decisions = []
-        superseded: list[str] = []
-        superseded_rows: list[dict[str, Any]] = []
-        for row in list(decisions or []):
-            for record_id in list(dict(row).get("superseded_record_ids") or []):
-                token = str(record_id or "").strip()
-                if token and token not in superseded:
-                    superseded.append(token)
-            for event_row in list(dict(row).get("superseded_rows") or []):
-                compact = dict(event_row or {})
-                record_id = str(compact.get("record_id") or "").strip()
-                if not compact:
-                    continue
-                if record_id and any(str(x.get("record_id") or "").strip() == record_id for x in superseded_rows):
-                    continue
-                superseded_rows.append(compact)
-        conflicts = []
-        if snapshot is not None:
-            conflicts = [dict(x) for x in list(getattr(snapshot, "conflicts", []) or []) if isinstance(x, dict)]
-            trace["active_profile"] = {
-                "namespace": str(getattr(snapshot, "namespace", namespace) or namespace),
-                "active_facts": dict(getattr(snapshot, "active_facts", {}) or {}),
-                "conflicts": conflicts,
-                "updated_at": float(getattr(snapshot, "updated_at", 0.0) or 0.0),
-            }
-        trace["memory_governor"] = {
-            "decisions": [dict(x) for x in list(decisions or []) if isinstance(x, dict)],
-            "superseded": list(superseded),
-            "superseded_rows": [dict(x) for x in list(superseded_rows or []) if isinstance(x, dict)],
-            "conflicts": conflicts,
+        try:
+            snapshot = self.memory_core.inspect(kind="profile", limit=50)
+        except Exception:
+            snapshot = None
+        
+        trace["memory_core"] = {
+            "snapshot": snapshot,
+            "namespace": namespace,
         }
+        
         identity_core_snapshot = None
-        if hasattr(self.memory_manager, "get_identity_core_snapshot"):
-            try:
-                identity_core_snapshot = self.memory_manager.get_identity_core_snapshot(namespace)
-            except Exception:
-                identity_core_snapshot = None
-        identity_core_decisions: list[dict[str, Any]] = []
-        if hasattr(self.memory_manager, "debug_recent_identity_core_events"):
-            try:
-                identity_core_decisions = list(
-                    self.memory_manager.debug_recent_identity_core_events(
-                        namespace=namespace,
-                        request_id=request_id,
-                        limit=16,
-                    )
-                    or []
-                )
-            except Exception:
-                identity_core_decisions = []
-        identity_core_payload = (
-            identity_core_snapshot.to_dict()
-            if identity_core_snapshot is not None and hasattr(identity_core_snapshot, "to_dict")
-            else {}
-        )
-        pending_overrides = [
-            dict(x)
-            for x in list(identity_core_decisions or [])
-            if isinstance(x, dict)
-            and not bool(x.get("allow_write", False))
-            and str(x.get("reason") or "").strip() == "override_requires_confirmation"
-        ]
-        active_identity_keys = dict(dict(trace.get("identity_core") or {}).get("active_identity_keys") or {})
-        if not active_identity_keys and identity_core_payload:
-            active_identity_keys = {
-                "addressing": sorted(dict(identity_core_payload.get("addressing") or {}).keys()),
-                "interaction_style": sorted(dict(identity_core_payload.get("interaction_style") or {}).keys()),
-                "boundaries": sorted(dict(identity_core_payload.get("boundaries") or {}).keys()),
-                "emotional_rules": sorted(dict(identity_core_payload.get("emotional_rules") or {}).keys()),
-                "assistant_trait_baseline": sorted(dict(identity_core_payload.get("assistant_trait_baseline") or {}).keys()),
-            }
-        identity_trace = {
-            **dict(trace.get("identity_core") or {}),
-            "memory_snapshot": dict(identity_core_payload or {}),
-            "active_identity_keys": active_identity_keys,
-            "trait_baselines": dict(
-                dict(trace.get("identity_core") or {}).get("trait_baselines")
-                or dict(identity_core_payload.get("assistant_trait_baseline") or {})
-            ),
-            "protected_keys": list(PROTECTED_IDENTITY_CORE_KEYS),
-            "pending_overrides": pending_overrides,
-            "recent_decisions": [dict(x) for x in list(identity_core_decisions or []) if isinstance(x, dict)],
+        try:
+            identity_core_snapshot = self.memory_core.inspect(kind="artifacts", limit=20)
+        except Exception:
+            identity_core_snapshot = None
+        
+        trace["identity_core"] = {
+            "snapshot": identity_core_snapshot,
         }
-        trace["identity_core"] = identity_trace
         meta["debug_trace"] = trace
-        meta["memory_debug_snapshot"] = build_memory_debug_snapshot(
-            SimpleNamespace(state={"debug_trace": trace})
-        )
+        meta["memory_debug_snapshot"] = self.memory_core.debug_snapshot(limit=20)
 
     @staticmethod
     def _merge_memory_write_summaries(*parts: dict[str, Any]) -> dict[str, Any]:
@@ -1622,34 +1495,3 @@ def _normalize_command_candidate(value: str) -> str:
     # Tolerate accidental console prompt prefixes copied into input.
     text = re.sub(r"^\s*(?:you|user|assistant)\s*>\s*", "", text, flags=re.IGNORECASE)
     return text
-
-
-def _memory_scope_from_name(value: Any, *, default: MemoryScope) -> MemoryScope:
-    raw = str(value or "").strip().lower()
-    mapping = {
-        "global_user": MemoryScope.GLOBAL_USER,
-        "conversation": MemoryScope.CONVERSATION,
-        "session": MemoryScope.SESSION,
-        "project": MemoryScope.PROJECT,
-        "character": MemoryScope.CHARACTER,
-        "temporary": MemoryScope.TEMPORARY,
-        "private_runtime": MemoryScope.PRIVATE_RUNTIME,
-    }
-    return mapping.get(raw, default)
-
-
-def _memory_type_from_name(value: Any, *, default: MemoryType) -> MemoryType:
-    raw = str(value or "").strip().lower()
-    mapping = {
-        "message": MemoryType.MESSAGE,
-        "summary": MemoryType.SUMMARY,
-        "fact": MemoryType.FACT,
-        "episode": MemoryType.EPISODE,
-        "semantic": MemoryType.SEMANTIC,
-        "document": MemoryType.DOCUMENT,
-        "document_chunk": MemoryType.DOCUMENT_CHUNK,
-        "task_state": MemoryType.TASK_STATE,
-        "tool_result": MemoryType.TOOL_RESULT,
-        "runtime_state": MemoryType.RUNTIME_STATE,
-    }
-    return mapping.get(raw, default)

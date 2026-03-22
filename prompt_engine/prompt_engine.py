@@ -8,7 +8,7 @@ from config.settings import load_config
 from core.character_runtime import CharacterRuntime
 from core.spec_registry import load_spec
 from llm.provider_base import Message
-from memory.summary_quality import sanitize_session_summary_text
+from memory_core.utils.summary_quality import sanitize_session_summary_text
 from prompt_engine.prompt_registry import PromptRegistry
 from prompt_engine.token_budget_manager import ContextBlock, TokenBudgetManager
 

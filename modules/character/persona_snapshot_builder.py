@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from memory.profile_evolution import flatten_governor_profile_snapshot
+from modules.character.identity_core import flatten_governor_profile_snapshot
 
 
 @dataclass(frozen=True)

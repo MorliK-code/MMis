@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         self._stream_thinking_buffer: str = ""
         self._stream_flush_timer = QTimer(self)
         self._stream_flush_timer.setSingleShot(True)
-        self._stream_flush_timer.setInterval(110)
+        self._stream_flush_timer.setInterval(35)
         self._stream_flush_timer.timeout.connect(self._flush_stream_chunks)
         self._message_row_widgets: dict[int, QWidget] = {}
         self._chat_sync_pending_scroll_bottom = False
@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
         self._rt_output_chars = 0
         self._rt_thinking_chars = 0
         self._rt_last_flush_ms = 0.0
+        self._stream_paint_in_progress = False
         self._rt_timer = QTimer(self)
         self._rt_timer.setInterval(250)
         self._rt_timer.timeout.connect(self._tick_realtime_stats)
@@ -2181,6 +2182,7 @@ class MainWindow(QMainWindow):
         think_row = getattr(row, "_think_row", None)
         think_preview_label = getattr(row, "_think_preview_label", None)
         think_full_label = getattr(row, "_think_full_label", None)
+        layout_changed = False
         if isinstance(think_toggle, QPushButton) and isValid(think_toggle):
             think_text = str(thinking or "").strip()
             has_thinking = bool(think_text)
@@ -2195,14 +2197,30 @@ class MainWindow(QMainWindow):
             if isinstance(think_preview_label, QLabel) and isValid(think_preview_label):
                 if think_preview_label.text() != compact_text:
                     think_preview_label.setText(compact_text)
+                    layout_changed = True
                 think_preview_label.setVisible(bool(has_thinking and is_streaming_thinking))
             if isinstance(think_full_label, QLabel) and isValid(think_full_label):
                 if think_full_label.text() != think_text:
                     think_full_label.setText(think_text)
+                    layout_changed = True
                 think_full_label.setVisible(bool(has_thinking and is_open))
             if isinstance(think_row, QFrame) and isValid(think_row):
                 think_row.setVisible(has_thinking)
 
+        bubble_label.adjustSize()
+        bubble_label.repaint()
+        if isinstance(think_preview_label, QLabel) and isValid(think_preview_label):
+            think_preview_label.adjustSize()
+            think_preview_label.repaint()
+        if isinstance(think_full_label, QLabel) and isValid(think_full_label):
+            think_full_label.adjustSize()
+            think_full_label.repaint()
+        if layout_changed:
+            row.adjustSize()
+        row.repaint()
+        self.chat_root.adjustSize()
+        self.chat_scroll.viewport().repaint()
+        self._pump_stream_paint_events()
         self._schedule_chat_sync(scroll_to_bottom=was_near_bottom)
         return True
 
@@ -2369,6 +2387,8 @@ class MainWindow(QMainWindow):
                 f"Буфер: out {len(self._stream_chunk_buffer)} / think {len(self._stream_thinking_buffer)}"
             )
             return
+
+        self._update_stream_waiting_visual()
 
         elapsed = max(0.001, time.perf_counter() - float(self._request_started_perf or 0.0))
         out_chars = self._rt_output_chars
@@ -2645,6 +2665,12 @@ class MainWindow(QMainWindow):
         self._rt_output_chars += len(piece_text)
         if piece_text:
             self._rt_chunk_count += 1
+            self._flush_stream_chunks()
+            return
+        flush_now = self._should_flush_stream_immediately(kind="answer")
+        if flush_now:
+            self._flush_stream_chunks()
+            return
         if not self._stream_flush_timer.isActive():
             self._stream_flush_timer.start()
 
@@ -2655,8 +2681,30 @@ class MainWindow(QMainWindow):
         self._rt_thinking_chars += len(piece_text)
         if piece_text:
             self._rt_chunk_count += 1
+            self._flush_stream_chunks()
+            return
+        flush_now = self._should_flush_stream_immediately(kind="thinking")
+        if flush_now:
+            self._flush_stream_chunks()
+            return
         if not self._stream_flush_timer.isActive():
             self._stream_flush_timer.start()
+
+    def _should_flush_stream_immediately(self, *, kind: str) -> bool:
+        idx = self._stream_ai_index
+        if idx is None or idx < 0 or idx >= len(self._history):
+            return False
+        role, text, _stat_line, _feedback, thinking = self._history[idx]
+        if role != "ai":
+            return False
+        has_text = bool(str(text or "").strip())
+        has_thinking = bool(str(thinking or "").strip())
+        kind_name = str(kind or "").strip().lower()
+        if kind_name == "answer":
+            return not has_text
+        if kind_name == "thinking":
+            return not has_text and not has_thinking
+        return False
 
     def _flush_stream_chunks(self):
         t0 = time.perf_counter()
@@ -2684,7 +2732,52 @@ class MainWindow(QMainWindow):
         # Fast path: update only current streaming label to avoid full rerender flicker.
         if not self._update_stream_row_widgets(idx, new_text, new_thinking or None):
             self._render_chat(scroll_to_bottom=True)
+            self._pump_stream_paint_events()
         self._rt_last_flush_ms = (time.perf_counter() - t0) * 1000.0
+
+    def _update_stream_waiting_visual(self) -> None:
+        idx = self._stream_ai_index
+        if idx is None or idx < 0 or idx >= len(self._history):
+            return
+        role, text, _stat_line, _feedback, thinking = self._history[idx]
+        if role != "ai":
+            return
+        if str(text or "").strip() or self._stream_chunk_buffer or self._rt_output_chars > 0:
+            return
+        row = self._message_row_widgets.get(idx)
+        if row is None or not isValid(row):
+            return
+        bubble_label = getattr(row, "_bubble_label", None)
+        if not isinstance(bubble_label, QLabel) or not isValid(bubble_label):
+            return
+        has_thinking = bool(str(thinking or "").strip() or self._stream_thinking_buffer or self._rt_thinking_chars > 0)
+        base = "Думаю" if has_thinking else "Печатаю"
+        phase = 1 + (int(time.perf_counter() * 4.0) % 3)
+        placeholder = base + "." * phase
+        if bubble_label.text() == placeholder:
+            return
+        bubble_label.setText(placeholder)
+        bubble_label.adjustSize()
+        bubble_label.repaint()
+        row.adjustSize()
+        row.repaint()
+        self.chat_root.adjustSize()
+        self.chat_scroll.viewport().repaint()
+        self._pump_stream_paint_events()
+
+    def _pump_stream_paint_events(self) -> None:
+        if self._stream_paint_in_progress:
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        self._stream_paint_in_progress = True
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
+        finally:
+            self._stream_paint_in_progress = False
 
     @Slot(object)
     def _on_reply(self, res: ReplyResult):

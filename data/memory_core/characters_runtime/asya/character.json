@@ -1,0 +1,12 @@
+{
+  "id": "asya",
+  "name": "Asya",
+  "version": "1.0.0",
+  "default_mood": "neutral",
+  "llm_profile": "ASYA",
+  "schema_version": 1,
+  "character_id": "asya",
+  "default_mode": "chatting",
+  "custom_from_spec": "enabled",
+  "model_profile": "ASYA"
+}

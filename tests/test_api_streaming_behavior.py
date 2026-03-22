@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import json
+import sys
+import unittest
+from importlib import import_module
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+
+def _reply(*, text: str, thinking: str = "", stats: dict | None = None, model: str = "stub-model"):
+    return SimpleNamespace(
+        text=text,
+        thinking=thinking,
+        structured_output={},
+        stats=dict(stats or {}),
+        model=model,
+        debug_trace={},
+        memory_debug_snapshot={},
+    )
+
+
+class ApiStreamingBehaviorTests(unittest.TestCase):
+    @staticmethod
+    def _api_app():
+        cached = sys.modules.get("api.app")
+        if cached is not None:
+            return cached
+        with patch("llm.build_provider", return_value=SimpleNamespace()):
+            return import_module("api.app")
+
+    def _collect_events(self, client: TestClient, payload: dict) -> list[dict]:
+        with client.stream("POST", "/chat/stream", json=payload) as resp:
+            self.assertEqual(resp.status_code, 200)
+            return [json.loads(line) for line in resp.iter_lines() if line]
+
+    def test_chat_stream_does_not_fake_chunk_replay_when_no_live_stream(self) -> None:
+        def fake_handle_message(_text: str, meta: dict | None = None):
+            self.assertTrue(callable(dict(meta or {}).get("stream_on_answer_chunk")))
+            return _reply(text="Hello world", stats={"served_model": "stub-model"})
+
+        api_app = self._api_app()
+        with TestClient(api_app.app) as client:
+            with patch.object(api_app._runtime.brain, "handle_message", side_effect=fake_handle_message):
+                events = self._collect_events(client, {"text": "hello", "store_turn": False})
+
+        self.assertEqual([str(row.get("event") or "") for row in events], ["final"])
+        payload = dict(events[0].get("data") or {})
+        stats = dict(payload.get("stats") or {})
+        self.assertEqual(str(payload.get("answer") or ""), "Hello world")
+        self.assertFalse(bool(stats.get("streaming_live")))
+        self.assertEqual(int(stats.get("streamed_answer_chars") or 0), 0)
+        self.assertEqual(int(stats.get("streamed_thinking_chars") or 0), 0)
+
+    def test_chat_stream_preserves_live_chunks_without_duplicate_replay(self) -> None:
+        def fake_handle_message(_text: str, meta: dict | None = None):
+            meta_map = dict(meta or {})
+            meta_map["stream_on_answer_chunk"]("Hello ")
+            meta_map["stream_on_answer_chunk"]("world")
+            return _reply(text="Hello world", stats={"served_model": "stub-model", "streaming": True})
+
+        api_app = self._api_app()
+        with TestClient(api_app.app) as client:
+            with patch.object(api_app._runtime.brain, "handle_message", side_effect=fake_handle_message):
+                events = self._collect_events(client, {"text": "hello", "store_turn": False})
+
+        self.assertEqual(
+            [str(row.get("event") or "") for row in events],
+            ["chunk", "chunk", "final"],
+        )
+        self.assertEqual("".join(str(row.get("data") or "") for row in events[:-1]), "Hello world")
+        payload = dict(events[-1].get("data") or {})
+        stats = dict(payload.get("stats") or {})
+        self.assertEqual(str(payload.get("answer") or ""), "Hello world")
+        self.assertTrue(bool(stats.get("streaming_live")))
+        self.assertEqual(int(stats.get("streamed_answer_chars") or 0), len("Hello world"))
+
+
+if __name__ == "__main__":
+    unittest.main()
