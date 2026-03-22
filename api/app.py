@@ -324,9 +324,11 @@ def chat(req: ChatRequest) -> ChatResponse:
         if not thinking.strip():
             thinking = str(getattr(result, "thinking", "") or "").strip()
         structured = dict(getattr(result, "structured_output", {}) or {})
-        debug_trace = dict(meta_map.get("debug_trace") or {}) if isinstance(meta_map, dict) else {}
-        memory_debug_snapshot = dict(meta_map.get("memory_debug_snapshot") or {}) if isinstance(meta_map, dict) else {}
-        _remember_debug_payload(meta_map=meta_map if isinstance(meta_map, dict) else {})
+        
+        # Debug trace берётся из result
+        debug_trace = dict(getattr(result, "debug_trace", {}) or {})
+        memory_debug_snapshot = dict(getattr(result, "memory_debug_snapshot", {}) or {})
+        _remember_debug_payload({"debug_trace": debug_trace, "memory_debug_snapshot": memory_debug_snapshot})
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None
@@ -411,31 +413,41 @@ def chat_stream(req: ChatRequest):
             if chunk:
                 events.put(("thinking", chunk))
 
+        def _on_debug_event(kind: str, payload: dict[str, Any]) -> None:
+            """Эмитить memory-debug событие в stream."""
+            try:
+                events.put((
+                    "memory_debug",
+                    json.dumps({"kind": kind, "payload": payload}, ensure_ascii=False)
+                ))
+            except Exception:
+                pass  # Игнорируем ошибки debug events
+
         def _worker() -> None:
             try:
-                with _runtime.lock:
-                    log_json(
-                        LOGGER,
-                        "api_chat_stream_start",
-                        model=_runtime.model,
-                        text_chars=len(request_text),
-                        store_turn=bool(req.store_turn),
-                        think=_runtime.thinking_enabled if req.think is None else bool(req.think),
-                        verbose=_runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
-                        json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
-                    )
-                    meta_map = _build_chat_meta(
-                        req=req,
-                        source="api",
-                        stream_on_answer_chunk=_on_answer,
-                        stream_on_thinking_chunk=_on_thinking,
-                    )
-                    result = _runtime.brain.handle_message(
-                        request_text,
-                        meta=meta_map,
-                    )
-                    state["result"] = result
-                    state["meta"] = meta_map
+                log_json(
+                    LOGGER,
+                    "api_chat_stream_start",
+                    model=_runtime.model,
+                    text_chars=len(request_text),
+                    store_turn=bool(req.store_turn),
+                    think=_runtime.thinking_enabled if req.think is None else bool(req.think),
+                    verbose=_runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
+                    json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
+                )
+                meta_map = _build_chat_meta(
+                    req=req,
+                    source="api",
+                    stream_on_answer_chunk=_on_answer,
+                    stream_on_thinking_chunk=_on_thinking,
+                    stream_on_debug_event=_on_debug_event,
+                )
+                result = _runtime.brain.handle_message(
+                    request_text,
+                    meta=meta_map,
+                )
+                state["result"] = result
+                state["meta"] = meta_map
             except Exception as exc:
                 state["error"] = str(exc)
             finally:
@@ -446,7 +458,7 @@ def chat_stream(req: ChatRequest):
 
         while not done.is_set() or not events.empty():
             try:
-                kind, payload = events.get(timeout=0.2)
+                kind, payload = events.get(timeout=0.01)  # Уменьшенный timeout для быстрого стриминга
             except queue.Empty:
                 continue
             if kind == "chunk":
@@ -471,10 +483,11 @@ def chat_stream(req: ChatRequest):
         if not thinking.strip():
             thinking = str(getattr(result, "thinking", "") or "").strip()
         structured = dict(getattr(result, "structured_output", {}) or {})
-        meta_map = dict(state.get("meta") or {})
-        debug_trace = dict(meta_map.get("debug_trace") or {}) if isinstance(meta_map, dict) else {}
-        memory_debug_snapshot = dict(meta_map.get("memory_debug_snapshot") or {}) if isinstance(meta_map, dict) else {}
-        _remember_debug_payload(meta_map=meta_map if isinstance(meta_map, dict) else {})
+        
+        # Debug trace берётся из result
+        debug_trace = dict(getattr(result, "debug_trace", {}) or {})
+        memory_debug_snapshot = dict(getattr(result, "memory_debug_snapshot", {}) or {})
+        _remember_debug_payload({"debug_trace": debug_trace, "memory_debug_snapshot": memory_debug_snapshot})
         parameters = structured.get("parameters") if isinstance(structured.get("parameters"), dict) else None
         summary = structured.get("summary")
         summary_text = str(summary).strip() if summary is not None else None

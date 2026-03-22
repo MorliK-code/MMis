@@ -36,6 +36,7 @@ class ConsoleState:
     api_process: subprocess.Popen | None = None
     ollama_process: subprocess.Popen | None = None
     prefs: dict = field(default_factory=dict)
+    debug_memory: bool = False  # Показывать memory retrieval в real-time
 
 
 def _ui_state_file_path() -> Path:
@@ -289,6 +290,7 @@ def _print_help() -> None:
     print("/hide-thinking               скрывать поток thinking")
     print("/thinking-first              показывать thinking до ответа")
     print("/thinking-last               показывать ответ без ожидания thinking")
+    print("/debug-memory on|off         показывать что находит память (real-time)")
     print("/store on|off                включить/выключить сохранение turns")
     print("/health                      проверить состояние API")
     print("/exit или /quit              выход")
@@ -450,7 +452,18 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
         _save_ui_state(state)
         print(f"Thinking-first: {'on' if state.thinking_first else 'off'}")
         return True
-    
+
+    if key in {"/debug-memory", "/debug-memory-on", "/debug-memory-off"}:
+        if key == "/debug-memory":
+            state.debug_memory = not state.debug_memory
+        elif key == "/debug-memory-on":
+            state.debug_memory = True
+        else:
+            state.debug_memory = False
+        _save_ui_state(state)
+        print(f"Debug memory: {'on' if state.debug_memory else 'off'}")
+        return True
+
     if key in {"/web", "/no-web"}:
         if not _ensure_connected_or_start(state):
             return True
@@ -668,10 +681,12 @@ class _StreamRealtimePrinter:
         *,
         prefer_thinking_first: bool = True,
         show_thinking: bool = True,
+        debug_memory: bool = False,
     ):
         self.renderer = renderer
         self.prefer_thinking_first = bool(prefer_thinking_first)
         self.show_thinking = bool(show_thinking)
+        self.debug_memory = bool(debug_memory)
         self.answer_parts: list[str] = []
         self.thinking_parts: list[str] = []
         self._pending_answer: list[str] = []
@@ -692,6 +707,8 @@ class _StreamRealtimePrinter:
         self._hidden_hint_stop = threading.Event()
         self._hidden_hint_thread: threading.Thread | None = None
         self._hidden_hint_last_width = 0
+        # Debug memory state
+        self._memory_retrieval_shown = False
 
     def start_hidden_thinking_hint(self) -> None:
         if self.show_thinking:
@@ -825,7 +842,7 @@ class _StreamRealtimePrinter:
     def rendered_thinking(self) -> str:
         return "".join(self.thinking_parts)
 
-    def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None) -> None:
+    def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None, debug_trace: dict | None = None) -> None:
         self.stop_hidden_thinking_hint(clear_line=True)
         # Flush any pending buffer first
         if self._pending_answer:
@@ -856,6 +873,82 @@ class _StreamRealtimePrinter:
                 tail_t = final_t_san[len(rendered_t):]
                 if tail_t:
                     self._emit_thinking(tail_t)
+        
+        # Show debug memory info (after answer and thinking)
+        if self.debug_memory and not self._memory_retrieval_shown:
+            self._show_debug_memory(debug_trace)
+            self._memory_retrieval_shown = True
+
+    def _show_debug_memory(self, debug_trace: dict | None) -> None:
+        """Показать debug memory информацию после ответа."""
+        if not debug_trace:
+            return
+        
+        memory_retrieval = debug_trace.get("memory_retrieval", {})
+        if not memory_retrieval:
+            print("\n[memory retrieval] no retrieval performed (gate not triggered)")
+            sys.stdout.flush()
+            return
+        
+        print("\n[memory retrieval]")
+        sys.stdout.flush()
+        
+        # Retrieved memories
+        selected = memory_retrieval.get("selected_total", 0)
+        if selected > 0:
+            print(f"  found: {selected} memories")
+            sys.stdout.flush()
+            
+            # Facts
+            facts = memory_retrieval.get("selected_facts", [])
+            if facts:
+                print(f"  facts: {len(facts)}")
+                for fact in facts[:3]:
+                    print(f"    - {fact.get('text', '')[:80]}")
+                sys.stdout.flush()
+            
+            # Claims
+            claims = memory_retrieval.get("selected_claims", [])
+            if claims:
+                print(f"  claims: {len(claims)}")
+                for claim in claims[:3]:
+                    print(f"    - {claim.get('text', '')[:80]}")
+                sys.stdout.flush()
+            
+            # Messages
+            messages = memory_retrieval.get("selected_messages", [])
+            if messages:
+                print(f"  messages: {len(messages)}")
+                for msg in messages[:3]:
+                    print(f"    - {msg.get('text', '')[:80]}")
+                sys.stdout.flush()
+            
+            # Episodes
+            episodes = memory_retrieval.get("selected_episodes", [])
+            if episodes:
+                print(f"  episodes: {len(episodes)}")
+                for ep in episodes[:3]:
+                    print(f"    - {ep.get('summary_short', '')[:80]}")
+                sys.stdout.flush()
+        
+        # Confidence
+        confidence = memory_retrieval.get("confidence", {})
+        if confidence:
+            top_score = confidence.get("top_selected_score", 0)
+            print(f"  confidence: {top_score:.2f}")
+            sys.stdout.flush()
+        
+        # Query info
+        query = memory_retrieval.get("query", "")
+        if query:
+            print(f"  query: {query[:60]}")
+            sys.stdout.flush()
+        
+        # Stage info
+        stage = memory_retrieval.get("stage", "")
+        if stage:
+            print(f"  stage: {stage}")
+            sys.stdout.flush()
 
     def _emit_thinking(self, text: str) -> None:
         if not text:
@@ -927,13 +1020,7 @@ def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) 
             model = str(getattr(reply, "model", "") or "")
             if model:
                 print(f"[model: {model}]")
-            if state.show_thinking:
-                thinking = str(getattr(reply, "thinking", "") or "")
-                if str(streamed_thinking or "").strip():
-                    pass
-                elif thinking.strip():
-                    print("[thinking]")
-                    print(thinking.strip())
+            # Debug memory и thinking теперь показываются в _stream_once через printer
         state.online = True
         return 0
     except ApiClientError as exc:
@@ -949,6 +1036,7 @@ def _stream_once(state: ConsoleState, text: str, *, command_output: bool = False
         renderer,
         prefer_thinking_first=prefer_thinking_first,
         show_thinking=bool(state.show_thinking),
+        debug_memory=bool(state.debug_memory),
     )
     if (not bool(command_output)) and (not bool(state.show_thinking)) and bool(state.think_enabled):
         printer.start_hidden_thinking_hint()
@@ -963,7 +1051,11 @@ def _stream_once(state: ConsoleState, text: str, *, command_output: bool = False
         )
     finally:
         printer.stop_hidden_thinking_hint(clear_line=True)
-    printer.finalize_with_final(answer_final=reply.answer, thinking_final=reply.thinking)
+    printer.finalize_with_final(
+        answer_final=reply.answer,
+        thinking_final=reply.thinking,
+        debug_trace=reply.debug_trace,
+    )
     return reply, printer.rendered_answer(), printer.rendered_thinking()
 
 

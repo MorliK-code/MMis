@@ -14,6 +14,7 @@ class TokenBudget:
     user_profile: int = 120
     metadata: int = 80
     tools_state: int = 120
+    memory_native_state: int = 280
     recent_chat: int = 600
     memory_retrieval: int = 400
     long_summary: int = 180
@@ -25,7 +26,7 @@ class TokenBudget:
 
     @property
     def memory(self) -> int:
-        return self.memory_retrieval
+        return self.memory_native_state + self.memory_retrieval
 
     @property
     def history(self) -> int:
@@ -204,6 +205,7 @@ class TokenBudgetManager:
             "user_profile": max(60, int(self.budget.user_profile * (0.8 + (0.6 * level)))),
             "history": max(120, int(self.budget.recent_chat * (0.62 + (0.78 * level)))),
             "long_summary": max(80, int(self.budget.long_summary * (0.7 + (0.7 * level)))),
+            "memory_native_state": max(140, int(self.budget.memory_native_state * (0.5 + (0.5 * level)))),
             "output": max(70, int(self.budget.output * (0.7 + (1.0 * level)))),
         }
 
@@ -215,8 +217,9 @@ class TokenBudgetManager:
             "user_profile": int(self.budget.user_profile),
             "metadata": int(self.budget.metadata),
             "tools": int(self.budget.tools_state),
+            "memory": int(self.budget.memory_native_state + self.budget.memory_retrieval),
+            "memory_native_state": int(self.budget.memory_native_state),
             "history": int(self.budget.recent_chat),
-            "memory": int(self.budget.memory_retrieval),
             "long_summary": int(self.budget.long_summary),
             "output": int(self.budget.output),
             "user": int(self.budget.user),

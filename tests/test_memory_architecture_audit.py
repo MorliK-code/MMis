@@ -19,15 +19,12 @@ from memory import (
     DocumentRecord,
     DocumentRetriever,
     DocumentSummary,
-    GovernorDecision,
-    GovernorProfileSnapshot,
     IdentityCoreCandidate,
-    MemoryGovernor,
+    IdentityCoreWriteDecision,
     MemoryLevel,
     MemoryRecord,
     MemoryScope,
     MemoryType,
-    IdentityCoreWriteDecision,
     build_memory_debug_snapshot,
     analyze_message_for_memory,
 )
@@ -40,9 +37,7 @@ def test_memory_layers_are_importable() -> None:
     assert ClaimRecord is not None
     assert ClaimPromotionDecision is not None
     assert ClaimRetriever is not None
-    assert MemoryGovernor is not None
-    assert GovernorDecision is not None
-    assert GovernorProfileSnapshot is not None
+    # Governor теперь отдельный модуль (memory.governor)
     assert IdentityCoreCandidate is not None
     assert IdentityCoreWriteDecision is not None
 

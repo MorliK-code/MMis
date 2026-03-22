@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "default",
+  "character_id": "default",
   "name": "Default",
   "version": "1.0.0",
   "default_mood": "thoughtful",

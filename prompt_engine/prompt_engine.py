@@ -138,6 +138,7 @@ class PromptEngine:
         user_profile_block = self._build_user_profile_block(state_map)
         metadata_block = self._build_metadata_block(state_map=state_map, blocks=blocks)
         tools_state_block = self._build_tools_state_block(state_map, memory_blocks=memory_blocks)
+        memory_native_state_block = self._build_memory_native_state_block(state_map)
         long_summary_block = _select_long_summary_block(
             blocks=blocks,
             memory_blocks=memory_blocks,
@@ -226,6 +227,15 @@ class PromptEngine:
                 max_tokens=self.budget_manager.budget.tools_state,
             ),
             ContextBlock(
+                id="memory_native_state",
+                content=memory_native_state_block,
+                bucket="memory",
+                priority=90,
+                required=True,
+                shrink_strategy="summarize",
+                max_tokens=int(verbosity_limits.get("memory_native_state", 280)),
+            ),
+            ContextBlock(
                 id="memory_retrieval",
                 content=memory_retrieval_block,
                 bucket="memory",
@@ -285,6 +295,7 @@ class PromptEngine:
                 ("USER_PROFILE", fitted.get("user_profile", "")),
                 ("METADATA", fitted.get("metadata", "")),
                 ("TOOLS_STATE", fitted.get("tools_state", "")),
+                ("MEMORY_NATIVE_STATE", fitted.get("memory_native_state", "")),
                 ("MEMORY", fitted.get("memory_retrieval", "")),
                 ("WEB_EVIDENCE", fitted.get("web_evidence", "")),
                 ("RECENT_CHAT", fitted.get("recent_chat", "")),
@@ -458,6 +469,70 @@ class PromptEngine:
             return json.dumps(value, ensure_ascii=False)
         except Exception:
             return str(value)
+
+    @staticmethod
+    def _build_memory_native_state_block(state_map: dict[str, Any]) -> str:
+        """
+        Построить блок [MEMORY_NATIVE_STATE] — always-on memory layer.
+
+        Оптимизация: компактный формат для экономии токенов (целевой лимит: 150 токенов).
+        """
+        native_state = _as_dict(state_map.get("memory_native_state"))
+        if not native_state:
+            return ""
+
+        parts: list[str] = []
+
+        # Identity core — компактно (1 строка)
+        identity_core = _as_dict(native_state.get("identity_core"))
+        if identity_core:
+            items = []
+            if identity_core.get("canonical_name"):
+                items.append(f"name={identity_core['canonical_name']}")
+            if identity_core.get("allowed_forms"):
+                items.append(f"address={','.join(identity_core['allowed_forms'][:2])}")
+            if identity_core.get("boundaries"):
+                items.append(f"bounds={','.join(identity_core['boundaries'][:2])}")
+            if identity_core.get("direct_style"):
+                items.append("style=direct")
+            if identity_core.get("short_answers"):
+                items.append("style=brief")
+            if items:
+                parts.append("[IDENTITY] " + "; ".join(items))
+
+        # Active task — компактно (1 строка)
+        active_task = _as_dict(native_state.get("active_task"))
+        if active_task and active_task.get("current_goal"):
+            goal = active_task.get("current_goal", "")[:80]  # Обрезаем длинные цели
+            parts.append(f"[TASK] {goal}")
+
+        # Open questions — максимум 3, компактно
+        open_questions = list(native_state.get("open_questions") or [])
+        if open_questions:
+            q_list = [q[:40] for q in open_questions[:3]]  # Короткие вопросы
+            parts.append("[QUESTIONS] " + "; ".join(q_list))
+
+        # Current decisions — максимум 3, компактно
+        current_decisions = list(native_state.get("current_decisions") or [])
+        if current_decisions:
+            d_list = [d[:40] for d in current_decisions[:3]]
+            parts.append("[DECISIONS] " + "; ".join(d_list))
+
+        # Recent topics — максимум 3, компактно
+        recent_topics = list(native_state.get("recent_topics") or [])
+        if recent_topics:
+            parts.append("[TOPICS] " + ", ".join(recent_topics[:3]))
+
+        # Continuity — 1 строка
+        continuity = _as_dict(native_state.get("continuity"))
+        if continuity and continuity.get("active"):
+            parts.append(f"[CONTINUITY] active={continuity.get('source', 'memory')} conf={continuity.get('confidence', 0):.1f}")
+
+        if not parts:
+            return ""
+
+        # Оборачиваем в общий блок
+        return "[MEMORY_NATIVE_STATE]\n" + "\n".join(parts)
 
     @staticmethod
     def _build_memory_retrieval_block(
@@ -778,7 +853,45 @@ def _select_long_summary_block(
     memory_blocks: dict[str, Any],
     state_map: dict[str, Any] | None = None,
 ) -> str:
+    """
+    Выбрать long summary ТОЛЬКО как fallback.
+
+    Summary больше не является основным источником контекста.
+    Это просто кеш для очень старых диалогов, где memory_native_state
+    и memory_retrieval не могут восстановить контекст.
+
+    Приоритет:
+    1. memory_native_state (всегда с моделью) — ГЛАВНЫЙ источник
+    2. memory_retrieval (актуальный retrieval) — основной источник
+    3. summary (только если ничего другого нет) — fallback
+    """
     state_row = _as_dict(state_map)
+    
+    # Проверяем, есть ли memory_native_state — это главный источник
+    native_state = _as_dict(state_row.get("memory_native_state"))
+    if native_state:
+        has_active_task = bool(native_state.get("active_task"))
+        has_identity = bool(native_state.get("identity_core"))
+        has_decisions = bool(native_state.get("current_decisions"))
+        has_topics = bool(native_state.get("recent_topics"))
+        
+        # Если memory_native_state содержит активный контекст, summary не нужен
+        if has_active_task or has_identity or has_decisions or has_topics:
+            return ""
+    
+    # Проверяем, есть ли свежий memory_retrieval
+    if memory_blocks:
+        has_retrieval = bool(
+            memory_blocks.get("recalled_dialog")
+            or memory_blocks.get("relevant_claims")
+            or memory_blocks.get("self_facts")
+            or memory_blocks.get("active_task")
+            or memory_blocks.get("current_decisions")
+        )
+        if has_retrieval:
+            return ""
+    
+    # Fallback: используем summary только если нет memory_native_state и memory_retrieval
     for value in (
         blocks.get("long_summary"),
         state_row.get("dialog_summary"),

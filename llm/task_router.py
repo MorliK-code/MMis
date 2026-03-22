@@ -156,7 +156,13 @@ def _default_provider_factory(profile: TaskModelProfile) -> LLMProviderBase:
         return OpenAIProvider(default_model=profile.model, timeout_sec=profile.timeout)
     from llm.ollama_provider import OllamaProvider
 
-    return OllamaProvider(default_model=profile.model, timeout_sec=profile.timeout)
+    # Увеличиваем timeout для reasoning моделей
+    timeout = float(profile.timeout) if profile.timeout else None
+    model_name = str(profile.model or "")
+    if OllamaProvider._is_reasoning_model(model_name):
+        timeout = max(timeout, 600.0) if timeout else 600.0
+
+    return OllamaProvider(default_model=profile.model, timeout_sec=timeout)
 
 
 def _synthetic_response(text: str, *, model: str = "deterministic_fallback") -> LLMResponse:

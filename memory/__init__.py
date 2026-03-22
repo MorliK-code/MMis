@@ -16,7 +16,6 @@ from memory.document_retrieval import DocumentRetrievalHit, DocumentRetriever, D
 from memory.document_memory import DocumentMemory
 from memory.embedding_provider import build_embedding_provider
 from memory.fact_extractor import FactExtractor
-from memory.governor import GovernorDecision, GovernorProfileSnapshot, MemoryGovernor
 from memory.identity_core import (
     IdentityCoreCandidate,
     IdentityCoreManager,

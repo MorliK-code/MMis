@@ -298,7 +298,7 @@ class AppSettings:
     llm_profiles: dict[str, Any] = field(default_factory=dict)
     task_model_profiles: dict[str, Any] = field(default_factory=dict)
     ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_timeout_sec: float = 120.0
+    ollama_timeout_sec: float = 300.0  # 5 минут для reasoning моделей
     ollama_retries: int = 1
     openai_api_key: str = ""
     openai_api_url: str = "https://api.openai.com/v1"
@@ -423,10 +423,11 @@ AppConfig = AppSettings
 _SETTINGS_CACHE: AppSettings | None = None
 
 
-def load_config(force_reload: bool = False) -> AppSettings:
+def load_config(force_reload: bool = True) -> AppSettings:  # Всегда перезагружаем для актуальных профилей
     global _SETTINGS_CACHE
-    if _SETTINGS_CACHE is not None and not force_reload:
-        return _SETTINGS_CACHE
+    # Кэш отключён — профили всегда загружаются из performance_profiles.json
+    # if _SETTINGS_CACHE is not None and not force_reload:
+    #     return _SETTINGS_CACHE
 
     manager = get_config_manager()
     bootstrap_seed = None
@@ -487,134 +488,26 @@ def update_config_values(updates: dict[str, Any]) -> AppSettings:
 
 
 def _default_model_profiles_tree() -> dict[str, Any]:
-    return {
-        "FAST": {
-            "name": "FAST",
-            "generation": {
-                "temperature": 0.55,
-                "top_p": 0.9,
-                "repeat_penalty": 1.05,
-                "max_tokens": 512,
-                "stop": [],
-            },
-            "ollama": {
-                "num_thread": 8,
-                "num_ctx": 4096,
-                "num_gpu": 1,
-                "num_batch": 64,
-                "keep_alive": "2m",
-            },
-            "openai": {
-                "model": "",
-                "reasoning_effort": "low",
-            },
-        },
-        "BALANCED": {
-            "name": "BALANCED",
-            "generation": {
-                "temperature": 0.7,
-                "top_p": 0.92,
-                "repeat_penalty": 1.1,
-                "max_tokens": 1024,
-                "stop": [],
-            },
-            "ollama": {
-                "num_thread": 6,
-                "num_ctx": 8192,
-                "num_gpu": 1,
-                "num_batch": 128,
-                "keep_alive": "5m",
-            },
-            "openai": {
-                "model": "",
-                "reasoning_effort": "medium",
-            },
-        },
-        "QUALITY": {
-            "name": "QUALITY",
-            "generation": {
-                "temperature": 0.82,
-                "top_p": 0.95,
-                "repeat_penalty": 1.2,
-                "max_tokens": 2048,
-                "stop": [],
-            },
-            "ollama": {
-                "num_thread": 6,
-                "num_ctx": 12288,
-                "num_gpu": 1,
-                "num_batch": 160,
-                "keep_alive": "10m",
-            },
-            "openai": {
-                "model": "",
-                "reasoning_effort": "high",
-            },
-        },
-        "ECONOM": {
-            "name": "ECONOM",
-            "generation": {
-                "temperature": 0.45,
-                "top_p": 0.88,
-                "repeat_penalty": 1.12,
-                "max_tokens": 384,
-                "stop": [],
-            },
-            "ollama": {
-                "num_thread": 4,
-                "num_ctx": 3072,
-                "num_gpu": 0,
-                "num_batch": 48,
-                "keep_alive": "1m",
-            },
-            "openai": {
-                "model": "",
-                "reasoning_effort": "low",
-            },
-        },
-        "ASYA": {
-            "name": "ASYA",
-            "generation": {
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "repeat_penalty": 1.2,
-                "max_tokens": -1,
-                "stop": [],
-            },
-            "ollama": {
-                "num_thread": 6,
-                "num_ctx": 8192,
-                "num_gpu": 1,
-                "num_batch": 128,
-                "keep_alive": "5m",
-            },
-            "openai": {
-                "model": "",
-                "reasoning_effort": "medium",
-            },
-        },
-        "AUTONOMOUS": {
-            "name": "AUTONOMOUS",
-            "generation": {
-                "temperature": 0.6,
-                "top_p": 0.9,
-                "repeat_penalty": 1.08,
-                "max_tokens": -1,
-                "stop": [],
-            },
-            "ollama": {
-                "num_thread": 6,
-                "num_ctx": 16384,
-                "num_gpu": 1,
-                "num_batch": 192,
-                "keep_alive": "15m",
-            },
-            "openai": {
-                "model": "",
-                "reasoning_effort": "high",
-            },
-        },
-    }
+    profiles: dict[str, Any] = {}
+    
+    # ЕДИНСТВЕННЫЙ источник: data/specs/performance_profiles.json
+    specs_file = Path(__file__).parent.parent / "data" / "specs" / "performance_profiles.json"
+    if specs_file.exists():
+        try:
+            import json
+            with open(specs_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                profiles.update(data.get("profiles", {}))
+                return profiles  # Возвращаем СРАЗУ, никаких fallback
+        except Exception as e:
+            # Критическая ошибка — профили не загружены
+            raise RuntimeError(f"Failed to load performance profiles from {specs_file}: {e}")
+    
+    # Если файл не найден — это критическая ошибка
+    raise FileNotFoundError(
+        f"Performance profiles not found at {specs_file}. "
+        "This file MUST exist. Profiles are ONLY loaded from data/specs/performance_profiles.json"
+    )
 
 
 def _default_task_model_profiles_tree(
@@ -770,7 +663,7 @@ def _default_config_tree() -> dict[str, Any]:
             "model_fallbacks": [],
             "thinking_enabled": True,
             "json_mode_enabled": False,
-            "profiles": _default_model_profiles_tree(),
+            # profiles удалены — теперь только в data/specs/performance_profiles.json
             "task_models": _default_task_model_profiles_tree(),
             "max_tokens": {
                 "lower_bound": 2048,
@@ -1149,10 +1042,18 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
 
     runtime = _normalize_ui_console_runtime(_as_dict(_get_dotted(row, "ui.console.runtime")))
     features_flags = _as_dict(_get_dotted(row, "features.flags"))
-    profile_rows = _as_dict(_get_dotted(row, "llm.profiles"))
-    if not profile_rows:
-        profile_rows = copy.deepcopy(_default_model_profiles_tree())
+    
+    # performance_profiles.json — единственный источник для chat-профилей
+    # config.json llm.profiles больше не используется (legacy, игнорируется)
+    profile_rows = copy.deepcopy(_default_model_profiles_tree())
     profile_rows = _normalize_profile_rows(profile_rows)
+    
+    # Проверяем есть ли legacy llm.profiles в config.json — только для debug trace
+    legacy_profile_rows = _as_dict(_get_dotted(row, "llm.profiles"))
+    if legacy_profile_rows:
+        # Legacy detected — но не используем, performance_profiles.json главный
+        pass
+    
     task_model_rows = _as_dict(_get_dotted(row, "llm.task_models"))
     if not task_model_rows:
         task_model_rows = copy.deepcopy(

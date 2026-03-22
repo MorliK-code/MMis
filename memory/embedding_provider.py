@@ -196,6 +196,11 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
 
 
 class CachedEmbeddingProvider(BaseEmbeddingProvider):
+    # Оптимизации кэша
+    MAX_CACHE_SIZE_MB = 100  # Увеличено с дефолтного SQLite
+    CACHE_TTL_DAYS = 7  # TTL для старых записей
+    PREFETCH_BATCH_SIZE = 50  # Размер пакета для pre-fetch
+    
     def __init__(self, *, base: BaseEmbeddingProvider, cache_path: str | Path):
         self._base = base
         self.model_name = base.model_name
@@ -204,28 +209,107 @@ class CachedEmbeddingProvider(BaseEmbeddingProvider):
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+        
+        # Оптимизация SQLite для большого кэша
+        self._conn.execute("PRAGMA cache_size = -102400")  # 100 MB cache
+        self._conn.execute("PRAGMA journal_mode = WAL")  # Write-ahead logging
+        self._conn.execute("PRAGMA synchronous = NORMAL")  # Баланс скорость/надёжность
+        
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS embeddings_cache (
                 cache_key TEXT PRIMARY KEY,
                 embedding_json TEXT NOT NULL,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                access_count INTEGER DEFAULT 1,
+                last_accessed REAL NOT NULL
             )
             """
         )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_last_accessed ON embeddings_cache(last_accessed)"
+        )
         self._conn.commit()
+        
+        # Pre-fetch queue
+        self._prefetch_queue: list[str] = []
+        self._prefetch_lock = threading.Lock()
 
     def model_fingerprint(self) -> str:
         return self._base.model_fingerprint()
 
     def close(self) -> None:
         with self._lock:
+            self._flush_prefetch()
+            self._cleanup_old_entries()
             self._conn.commit()
             self._conn.close()
+
+    def _cleanup_old_entries(self) -> None:
+        """Удалить старые записи (TTL + размер)."""
+        import time
+        cutoff = time.time() - (self.CACHE_TTL_DAYS * 24 * 60 * 60)
+        self._conn.execute(
+            "DELETE FROM embeddings_cache WHERE last_accessed < ?",
+            (cutoff,)
+        )
+        
+        # Проверка размера
+        try:
+            size_bytes = self._path.stat().st_size
+            max_bytes = self.MAX_CACHE_SIZE_MB * 1024 * 1024
+            if size_bytes > max_bytes:
+                # Удалить 20% наименее используемых
+                self._conn.execute("""
+                    DELETE FROM embeddings_cache WHERE rowid IN (
+                        SELECT rowid FROM embeddings_cache 
+                        ORDER BY last_accessed ASC, access_count ASC
+                        LIMIT (SELECT COUNT(*) FROM embeddings_cache) / 5
+                    )
+                """)
+        except Exception:
+            pass  # Не критично
+        
+        self._conn.commit()
 
     def _key_for(self, text: str) -> str:
         raw = f"{self.model_name}|{self.embedding_version}|{text}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _flush_prefetch(self) -> None:
+        """Обработать pre-fetch queue."""
+        with self._prefetch_lock:
+            if not self._prefetch_queue:
+                return
+            texts = list(set(self._prefetch_queue))[:self.PREFETCH_BATCH_SIZE]
+            self._prefetch_queue.clear()
+        
+        # Embed и сохранить
+        keys = [self._key_for(text) for text in texts]
+        vectors = self._base.embed_batch(texts)
+        
+        import time
+        now = time.time()
+        with self._lock:
+            for key, vector in zip(keys, vectors):
+                # Проверить, есть ли уже
+                exists = self._conn.execute(
+                    "SELECT 1 FROM embeddings_cache WHERE cache_key=?", (key,)
+                ).fetchone()
+                if not exists:
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO embeddings_cache(cache_key, embedding_json, created_at, last_accessed) VALUES (?, ?, ?, ?)",
+                        (key, json.dumps(vector, ensure_ascii=False), now, now),
+                    )
+            self._conn.commit()
+
+    def queue_prefetch(self, texts: list[str]) -> None:
+        """Добавить тексты в pre-fetch queue (фоновая загрузка)."""
+        with self._prefetch_lock:
+            self._prefetch_queue.extend(texts)
+            # Ограничить размер queue
+            if len(self._prefetch_queue) > self.PREFETCH_BATCH_SIZE * 2:
+                self._prefetch_queue = self._prefetch_queue[-self.PREFETCH_BATCH_SIZE:]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         rows = [str(x or "") for x in list(texts or [])]
@@ -234,6 +318,9 @@ class CachedEmbeddingProvider(BaseEmbeddingProvider):
 
         keys = [self._key_for(text) for text in rows]
         cached: dict[str, list[float]] = {}
+        import time
+        now = time.time()
+        
         with self._lock:
             for key in keys:
                 row = self._conn.execute(
@@ -244,8 +331,14 @@ class CachedEmbeddingProvider(BaseEmbeddingProvider):
                     continue
                 try:
                     cached[key] = [float(x) for x in json.loads(str(row[0] or "[]"))]
+                    # Обновить access_count
+                    self._conn.execute(
+                        "UPDATE embeddings_cache SET access_count = access_count + 1, last_accessed = ? WHERE cache_key = ?",
+                        (now, key)
+                    )
                 except Exception:
                     continue
+            self._conn.commit()
 
         missing_idx = [idx for idx, key in enumerate(keys) if key not in cached]
         if missing_idx:
@@ -257,8 +350,8 @@ class CachedEmbeddingProvider(BaseEmbeddingProvider):
                     vector = list(new_vectors[offset]) if offset < len(new_vectors) else []
                     cached[key] = vector
                     self._conn.execute(
-                        "INSERT OR REPLACE INTO embeddings_cache(cache_key, embedding_json, created_at) VALUES (?, ?, strftime('%s','now'))",
-                        (key, json.dumps(vector, ensure_ascii=False)),
+                        "INSERT OR REPLACE INTO embeddings_cache(cache_key, embedding_json, created_at, last_accessed) VALUES (?, ?, ?, ?)",
+                        (key, json.dumps(vector, ensure_ascii=False), now, now),
                     )
                 self._conn.commit()
 

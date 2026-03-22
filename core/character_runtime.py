@@ -1376,8 +1376,8 @@ class CharacterRuntime:
             "version": str(row.get("version") or "").strip(),
             "default_mood": str(row.get("default_mood") or "").strip(),
             "default_mode": str(row.get("default_mode") or "").strip(),
-            "llm_profile": str(row.get("llm_profile") or "").strip().upper(),
-            "model_profile": str(row.get("model_profile") or "").strip().upper(),
+            "llm_profile": str(row.get("llm_profile") or row.get("performance") or "").strip().upper(),
+            "model_profile": str(row.get("model_profile") or row.get("llm_profile") or row.get("performance") or "").strip().upper(),
             "system_prompt": str(row.get("system_prompt") or "").strip(),
             "style_prompt": str(row.get("style_prompt") or "").strip(),
             "rules_prompt": str(row.get("rules_prompt") or "").strip(),
@@ -1396,7 +1396,7 @@ class CharacterRuntime:
             return self._normalize_profile(fallback)
         try:
             payload = self.storage.load_character(cid)
-            value = payload.get("llm_profile") or payload.get("model_profile") or fallback
+            value = payload.get("performance") or payload.get("llm_profile") or payload.get("model_profile") or fallback
         except Exception:
             value = fallback
         return self._normalize_profile(value)
@@ -1719,7 +1719,7 @@ class CharacterRuntime:
             name=str(character.get("name") or cid).strip() or cid,
             version=str(character.get("version") or "1.0.0").strip() or "1.0.0",
             default_mood=str(character.get("default_mood") or "thoughtful").strip() or "thoughtful",
-            llm_profile=str(character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED",
+            llm_profile=str(character.get("performance") or character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED",
             prompt_files=dict(character.get("prompt_files") or {}),
             system_prompt=profile.system_prompt if profile else "",
             style_prompt=profile.style_prompt if profile else "",
@@ -1754,7 +1754,7 @@ class CharacterRuntime:
             style_prompt=str(payload.get("style_prompt") or "").strip(),
             rules_prompt=str(payload.get("rules_prompt") or "").strip(),
             voice_style=str(payload.get("voice_style") or "neutral").strip(),
-            llm_profile=str(payload.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED",
+            llm_profile=str(payload.get("performance") or payload.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED",
             traits={},
             triggers={},
         )
@@ -2676,7 +2676,7 @@ class CharacterRuntime:
             "changes": changes[:16],
         })
 
-        llm_profile = str(character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED"
+        llm_profile = str(character.get("performance") or character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED"
 
         return CharacterRuntimeResult(
             character_id=cid,
@@ -2795,7 +2795,7 @@ class CharacterRuntime:
             active_mode=active_mode,
             user_addressing=user_addressing,
         )
-        llm_profile = str(character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED"
+        llm_profile = str(character.get("performance") or character.get("llm_profile") or "BALANCED").strip().upper() or "BALANCED"
         return CharacterRuntimeResult(
             character_id=cid,
             mood=mood,

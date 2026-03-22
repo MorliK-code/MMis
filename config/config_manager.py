@@ -95,7 +95,7 @@ LEGACY_KEY_MAP: dict[str, str] = {
     "console_output_parameters": "ui.console.runtime.output_parameters",
     "console_output_summary": "ui.console.runtime.output_summary",
     "console_runtime": "ui.console.runtime",
-    "model_profiles": "llm.profiles",
+    # "model_profiles": "llm.profiles",  # DEPRECATED — performance_profiles.json теперь единственный источник
 }
 
 _DEPRECATED_TOP_LEVEL_KEYS: set[str] = {
@@ -267,6 +267,11 @@ class ConfigManager:
         cfg_path = Path(self.path).expanduser().resolve()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+        
+        # Удаляем llm.profiles из payload перед сохранением (profiles теперь только в performance_profiles.json)
+        if 'llm' in payload and 'profiles' in payload['llm']:
+            del payload['llm']['profiles']
+        
         text = json.dumps(payload, ensure_ascii=False, indent=2)
         tmp_path.write_text(text, encoding="utf-8")
         tmp_path.replace(cfg_path)

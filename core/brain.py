@@ -17,6 +17,7 @@ from memory.debug_snapshot import build_memory_debug_snapshot
 from memory.identity_core import PROTECTED_IDENTITY_CORE_KEYS
 from memory.memory_manager import MemoryManager
 from memory.memory_models import MemoryEvent, MemoryScope, MemoryType
+from memory.state_reducer import reduce_state_for_turn, merge_state_updates
 from memory.summary_quality import sanitize_session_summary_text
 from memory.text_sanitizer import (
     clean_assistant_text_for_memory,
@@ -46,6 +47,8 @@ class BrainResult:
     throttled: bool = False
     error: str = ""
     stats: dict[str, Any] = field(default_factory=dict)
+    debug_trace: dict[str, Any] = field(default_factory=dict)
+    memory_debug_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 class Brain:
@@ -279,6 +282,8 @@ class Brain:
             logs=list(pipeline_result.logs or []),
             stats=dict(pipeline_result.stats or {}),
             status="ok",
+            debug_trace=dict(pipeline_result.debug_trace or {}),
+            memory_debug_snapshot=dict(pipeline_result.memory_debug_snapshot or {}),
         )
 
     def _apply_memory_ops(self, ops: list[dict[str, Any]]) -> dict[str, Any]:
@@ -694,6 +699,20 @@ class Brain:
                 )
             )
             self._capture_memory_ingest(summary, ingest_result, bucket="assistant_turn")
+        
+        # State reducer — нормализация state после turn
+        if assistant_payload:
+            state_update = reduce_state_for_turn(
+                user_text=user_text,
+                assistant_text=assistant_payload,
+                current_state=state_map,
+            )
+            new_state = merge_state_updates(state_map, state_update)
+            # Применяем обновления
+            for key, value in new_state.items():
+                if key != "history":  # history обновляется отдельно
+                    self.state_manager.patch({key: value})
+        
         self._update_debug_trace_after_persist(
             meta=meta,
             conversation_id=conversation_id or "default",

@@ -18,7 +18,6 @@ from memory.document_retrieval import DocumentRetrievalHit, DocumentRetriever
 from memory.embedding_provider import build_embedding_provider
 from memory.event_store import EventStore
 from memory.fact_extractor import FactExtractor
-from memory.governor import GovernorProfileSnapshot, MemoryGovernor
 from memory.identity_core import (
     IdentityCoreCandidate,
     IdentityCoreManager,
@@ -186,6 +185,10 @@ class MemoryManager:
       - reindex_embeddings
     """
 
+    # Кэш retrieval: ключ = hash(query+scope), значение = (timestamp, result)
+    RETRIEVAL_CACHE_TTL_SEC = 120  # 2 минуты
+    MAX_CACHE_ENTRIES = 50
+
     def __init__(self, *, root_dir: str | Path | None = None):
         self._cfg = load_config()
         base = Path(root_dir).expanduser().resolve() if root_dir is not None else Path(self._cfg.memory_dir).resolve()
@@ -194,6 +197,9 @@ class MemoryManager:
         self._state_path = self._root / "manager_state.json"
 
         self._lock = RLock()
+        
+        # Retrieval cache
+        self._retrieval_cache: dict[str, tuple[float, Any]] = {}
 
         # Storage profile: "compact" (default) or "debug"
         # Can be set via config or environment variable MEMORY_STORAGE_PROFILE
@@ -264,10 +270,11 @@ class MemoryManager:
                 getattr(self._cfg, "memory_promotion_smalltalk_penalty", 0.20) or 0.20
             ),
         )
-        self._governor = MemoryGovernor(
-            parallel_margin=float(getattr(self._lifecycle, "parallel_margin", 0.03) or 0.03),
-            lifecycle=self._lifecycle,
-        )
+        # self._governor = MemoryGovernor(  # DEPRECATED — governor теперь отдельный модуль memory/governor.py
+        #     parallel_margin=float(getattr(self._lifecycle, "parallel_margin", 0.03) or 0.03),
+        #     lifecycle=self._lifecycle,
+        # )
+        self._governor = None
         self._retriever = HybridRetriever(
             store=self._store,
             stale_after_days=int(getattr(self._cfg, "memory_stale_after_days", 30) or 30),
@@ -851,6 +858,10 @@ class MemoryManager:
                 metadata_filters=dict(query.metadata_filters or {}),
             )
 
+            # Pre-fetch: добавить query text в очередь на кэширование embeddings
+            if hasattr(self._embedding_provider, 'queue_prefetch'):
+                self._embedding_provider.queue_prefetch([raw_query_text, search_seed])
+
             retrieved = self._retriever.retrieve(normalized_query)
             reranked = self._reranker.rerank(
                 query=normalized_query,
@@ -864,7 +875,39 @@ class MemoryManager:
                 reindex_required=bool(retrieved.reindex_required),
             )
 
+    def _cache_key(self, request: ContextBuildRequest) -> str:
+        """Создать ключ кэша для retrieval."""
+        import hashlib
+        key_data = f"{request.namespace}:{request.user_message}:{request.scopes}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+
+    def _get_cached_context(self, key: str) -> ContextBuildResult | None:
+        """Получить из кэша, если не истёк TTL."""
+        import time
+        if key not in self._retrieval_cache:
+            return None
+        ts, result = self._retrieval_cache[key]
+        if time.time() - ts > self.RETRIEVAL_CACHE_TTL_SEC:
+            del self._retrieval_cache[key]
+            return None
+        return result
+
+    def _cache_context(self, key: str, result: ContextBuildResult) -> None:
+        """Сохранить в кэш с ограничением размера."""
+        import time
+        # Удалить старые записи при переполнении
+        if len(self._retrieval_cache) >= self.MAX_CACHE_ENTRIES:
+            oldest_key = min(self._retrieval_cache.keys(), key=lambda k: self._retrieval_cache[k][0])
+            del self._retrieval_cache[oldest_key]
+        self._retrieval_cache[key] = (time.time(), result)
+
     def build_context(self, request: ContextBuildRequest) -> ContextBuildResult:
+        # Проверка кэша
+        cache_key = self._cache_key(request)
+        cached = self._get_cached_context(cache_key)
+        if cached is not None:
+            return cached
+        
         def _cfg_budget(name: str, *, minimum: int) -> int:
             try:
                 value = int(getattr(self._cfg, name))
@@ -1073,6 +1116,10 @@ class MemoryManager:
             truncation_log=list(result.truncation_log or []),
             context_blocks=dict(result.blocks or {}),
         )
+        
+        # Сохранение в кэш
+        self._cache_context(cache_key, result)
+        
         return result
 
     def _build_fact_expectation_check(self, *, query_text: str, namespace: str) -> dict[str, Any]:
@@ -3463,6 +3510,11 @@ class MemoryManager:
         return max(0.0, min(1.0, blended))
 
     def _update_session_state_from_event(self, record: MemoryRecord) -> None:
+        """
+        Обновить session state из события.
+        
+        Теперь использует state_reducer вместо эвристик.
+        """
         text = str(record.text or "").strip()
         if not text:
             return
@@ -3475,20 +3527,9 @@ class MemoryManager:
                 self._session_summary = ""
             return
 
-        if record.memory_type != MemoryType.MESSAGE:
-            return
-
-        source_kind = str(dict(record.metadata or {}).get("source_kind") or "").strip().lower()
-        if source_kind in {"assistant_reply", "assistant", "system_decision"}:
-            return
-
-        low = text.lower()
-        if "?" in text and len(text) <= 220:
-            self._open_questions = self._append_unique_tail(self._open_questions, text, limit=24)
-        if any(token in low for token in ("decide", "decision", "решили", "приняли")):
-            self._current_decisions = self._append_unique_tail(self._current_decisions, text, limit=32)
-        if any(token in low for token in ("prefer", "like", "предпочитаю", "люблю")):
-            self._active_preferences = self._append_unique_tail(self._active_preferences, text, limit=32)
+        # Эвристики отключены — теперь state обновляется через state_reducer
+        # в response_pipeline после каждого turn
+        return
 
     @staticmethod
     def _append_unique_tail(items: list[str], value: str, *, limit: int) -> list[str]:

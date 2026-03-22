@@ -25,6 +25,7 @@ class ReplyWorker(QObject):
     errored = Signal(str)
     chunk = Signal(str)
     thinking_chunk = Signal(str)
+    debug_event = Signal(object)
 
     def __init__(
         self,
@@ -52,6 +53,7 @@ class ReplyWorker(QObject):
                 think=self.think,
                 on_chunk=self.chunk.emit,
                 on_thinking_chunk=self.thinking_chunk.emit,
+                on_debug_event=self.debug_event.emit,
                 cancel_requested=lambda: self._cancel_requested,
             )
             if self._cancel_requested:

@@ -290,6 +290,9 @@ def _stitch_thinking_delta(prev_char: str, delta: str) -> tuple[str, str]:
 
 
 class OllamaProvider(LLMProviderBase):
+    # Reasoning модели требуют больше времени
+    REASONING_MODEL_PATTERNS = ["deepseek-r1", "deepseek-reasoner", "o1", "o3", "thinking"]
+
     def __init__(
         self,
         *,
@@ -300,11 +303,24 @@ class OllamaProvider(LLMProviderBase):
         debug_raw: bool | None = None,
     ):
         self.host = str(host or _cfg.ollama_base_url).strip()
-        self.timeout_sec = float(timeout_sec if timeout_sec is not None else _cfg.ollama_timeout_sec)
-        self.retries = int(retries if retries is not None else _cfg.ollama_retries)
         self.default_model = str(default_model or _cfg.model_name).strip()
+        
+        # Автоматически увеличиваем timeout для reasoning моделей
+        base_timeout = float(timeout_sec if timeout_sec is not None else _cfg.ollama_timeout_sec)
+        if self._is_reasoning_model(self.default_model):
+            self.timeout_sec = max(base_timeout, 600.0)  # 10 минут для reasoning
+        else:
+            self.timeout_sec = base_timeout
+            
+        self.retries = int(retries if retries is not None else _cfg.ollama_retries)
         self.debug_raw = bool(debug_raw if debug_raw is not None else False)
         self._client = ollama.Client(host=self.host, timeout=self.timeout_sec)
+
+    @staticmethod
+    def _is_reasoning_model(model: str) -> bool:
+        """Проверка, является ли модель reasoning моделью."""
+        model_lower = str(model or "").lower()
+        return any(pattern in model_lower for pattern in OllamaProvider.REASONING_MODEL_PATTERNS)
 
     def generate(self, req: LLMRequest) -> LLMResponse:
         model = str(req.model or self.default_model or "").strip()
@@ -607,7 +623,23 @@ class OllamaProvider(LLMProviderBase):
             options["repeat_penalty"] = float(req.repeat_penalty)
         if req.seed is not None:
             options["seed"] = int(req.seed)
-        options["num_predict"] = int(req.max_tokens) if req.max_tokens is not None else 4096
+        
+        # Для thinking моделей увеличиваем лимит, чтобы хватило и на thinking, и на ответ
+        max_tokens = req.max_tokens
+        if max_tokens is not None:
+            think_enabled = bool(dict(req.metadata or {}).get("think", False))
+            # Reasoning модели всегда используют thinking
+            model = str(req.model or "")
+            is_reasoning = any(p in model.lower() for p in ["deepseek-r1", "deepseek-reasoner", "o1", "o3"])
+            if think_enabled or is_reasoning:
+                # Thinking может занимать до 50% токенов, поэтому увеличиваем лимит
+                options["num_predict"] = max(256, int(max_tokens * 2))
+            else:
+                # Минимум 256 токенов для нормального ответа
+                options["num_predict"] = max(256, int(max_tokens))
+        else:
+            options["num_predict"] = 4096
+            
         if req.stop:
             options["stop"] = [str(x) for x in req.stop if str(x)]
 

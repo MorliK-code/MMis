@@ -31,11 +31,14 @@ from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, Message,
 from llm.task_router import run_task_model
 from llm.tokenizer import estimate_tokens
 from memory import EpisodePlanner, build_memory_debug_snapshot
+from memory.history_tools import history_tools_list, HistoryReadResult
 from memory.memory_models import ContextBuildRequest, MemoryScope
+from memory.native_state import build_memory_native_state
 from memory.profile_evolution import flatten_governor_profile_snapshot
+from memory.project_terms import build_retrieval_hints
 from memory.recall_policy import classify_query_recall_profile
 from memory.summary_quality import is_low_quality_session_summary, sanitize_session_summary_text
-from memory.tool_bridge import build_memory_tool_context_pack, normalize_memory_retrieval_plan
+from memory.tool_bridge import build_memory_tool_context_pack, format_memory_result_for_llm, normalize_memory_retrieval_plan
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
 from modules.studio.studio_generator import StudioGenerator
@@ -105,6 +108,8 @@ class PipelineResult:
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
+    debug_trace: dict[str, Any] = field(default_factory=dict)
+    memory_debug_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 class PipelineStage(ABC):
@@ -465,6 +470,59 @@ class PersonalityStage(PipelineStage):
         return ctx
 
 
+class MemoryNativeStateStage(PipelineStage):
+    """
+    Построение memory_native_state — always-on memory layer.
+
+    Этот этап ВСЕГДА строит компактный, структурированный слой памяти,
+    который модель ощущает как своё внутреннее состояние.
+
+    Важно: memory_native_state строится ДО любого retrieval и доступен
+    даже если memory retrieval не сработал.
+    """
+    name = "memory_native_state"
+
+    def __init__(self, memory_manager=None):
+        self.memory_manager = memory_manager
+        self._cfg = load_config()
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        """
+        Построить memory_native_state из текущего state.
+
+        Это always-on слой — строится всегда, даже для не-chat маршрутов.
+        """
+        _ensure_debug_trace(ctx)
+        
+        # Строим memory_native_state из текущего state
+        # Это always-on слой — доступен даже без retrieval и для не-chat маршрутов
+        native_state = build_memory_native_state(
+            state=ctx.state,
+            memory_context=ctx.memory_context if ctx.memory_context else None,
+        )
+        ctx.state["memory_native_state"] = native_state
+
+        # Логируем, что было построено
+        has_identity = bool(native_state.get("identity_core"))
+        has_task = bool(native_state.get("active_task"))
+        has_questions = bool(native_state.get("open_questions"))
+        has_decisions = bool(native_state.get("current_decisions"))
+
+        if ctx.route != "chat":
+            ctx.logs.append(
+                f"stage=memory_native_state built (non-chat route={ctx.route}) "
+                f"identity={int(has_identity)} task={int(has_task)} "
+                f"questions={int(has_questions)} decisions={int(has_decisions)}"
+            )
+        else:
+            ctx.logs.append(
+                f"stage=memory_native_state built "
+                f"identity={int(has_identity)} task={int(has_task)} "
+                f"questions={int(has_questions)} decisions={int(has_decisions)}"
+            )
+        return ctx
+
+
 class MemoryRetrieveStage(PipelineStage):
     name = "memory_retrieve"
 
@@ -474,21 +532,23 @@ class MemoryRetrieveStage(PipelineStage):
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         """
-        Memory retrieve stage теперь работает ТОЛЬКО как fallback.
-        
-        Основной путь — agent loop + memory_retrieve tool.
-        Этот stage срабатывает, если:
-        - agent_loop не сработал (модель не вызвала tool)
+        Memory retrieve stage — основной путь для моделей без tool support.
+
+        Для моделей С tools (qwen3, llama3):
+          - это fallback, если agent_loop не вызвал tool
+        Для моделей БЕЗ tools (deepseek-r1):
+          - это основной путь retrieval
+
+        Срабатывает, когда:
+        - agent_loop не сработал (модель не вызвала tool) ИЛИ
+        - модель не поддерживает tools (deepseek-r1) И
         - memory gate показал, что память нужна
-        - вопрос явно memory-dependent
-        
-        Это не основной путь, а fallback для спасения контекста.
         """
         _ensure_debug_trace(ctx)
         if ctx.route != "chat":
             ctx.logs.append("stage=memory_retrieve skipped(route)")
             return ctx
-        
+
         query = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
         if not query:
             ctx.logs.append("stage=memory_retrieve skipped(empty)")
@@ -498,29 +558,44 @@ class MemoryRetrieveStage(PipelineStage):
         if manager is None or not hasattr(manager, "build_context"):
             ctx.logs.append("stage=memory_retrieve skipped(no_manager)")
             return ctx
-        
+
         # Проверяем, был ли уже agent_loop с memory tool
         agent_loop_trace = _as_dict(ctx.state.get("agent_loop_trace"))
         agent_loop_used = bool(agent_loop_trace.get("agent_loop") or agent_loop_trace.get("tool_calls_executed"))
-        
+
         # Если agent_loop уже отработал и вызвал memory_retrieve — не дублируем
         if agent_loop_used:
             ctx.logs.append("stage=memory_retrieve skipped(agent_loop_already_used)")
             return ctx
-        
-        # Fallback logic: срабатываем только если:
-        # 1. agent_loop не сработал И
-        # 2. memory gate показывает, что память нужна
+
+        # Проверяем, поддерживает ли модель tools
+        model = str(ctx.meta.get("model") or ctx.state.get("model") or "").lower()
+        model_supports_tools = "deepseek-r1" not in model and "deepseek-reasoner" not in model
+
+        # Memory gate: проверяем, нужна ли память
         memory_gate_triggered = _memory_gate_should_trigger(ctx)
-        
+
+        # Для моделей без tools — memory gate всегда срабатывает (консервативно)
+        # НО только если это не smalltalk
+        if not model_supports_tools and not memory_gate_triggered:
+            # Даже если gate не сработал, для моделей без tools делаем retrieval
+            # Это консервативный подход — лучше лишний retrieval, чем ответ без контекста
+            ctx.logs.append("stage=memory_retrieve — model without tools, forcing retrieval")
+            memory_gate_triggered = True
+
         if not memory_gate_triggered:
             # Memory gate не сработал — память не нужна, пропускаем
             ctx.logs.append("stage=memory_retrieve skipped(memory_gate_not_triggered)")
             return ctx
-        
-        # Это fallback: memory gate сработал, но agent_loop не вызвал tool
-        ctx.logs.append("stage=memory_retrieve fallback mode (gate triggered, agent_loop did not recall)")
-        
+
+        # Определяем режим: fallback или основной
+        if model_supports_tools:
+            ctx.logs.append("stage=memory_retrieve fallback mode (gate triggered, agent_loop did not recall)")
+            stage_name = "memory_retrieve_fallback"
+        else:
+            ctx.logs.append("stage=memory_retrieve — model without tools, using as primary retrieval path")
+            stage_name = "memory_retrieve_primary"
+
         try:
             context_request = _build_memory_context_request(ctx, cfg=self._cfg, query=query)
             pack = _build_memory_context_pack(manager, context_request)
@@ -534,11 +609,24 @@ class MemoryRetrieveStage(PipelineStage):
             context_request=context_request,
             pack=pack,
             query=query,
-            stage_name="memory_retrieve_fallback",
+            stage_name=stage_name,
+            memory_gate_triggered=memory_gate_triggered,
         )
-        
-        # Логируем как fallback
-        ctx.logs.append("memory fallback used (gate-triggered without agent recall)")
+
+        # После применения memory context, ПЕРЕСТРАИВАЕМ memory_native_state
+        # с учётом новых данных из retrieval
+        native_state = build_memory_native_state(
+            state=ctx.state,
+            memory_context=ctx.memory_context,
+        )
+        ctx.state["memory_native_state"] = native_state
+        ctx.logs.append("memory_native_state rebuilt after retrieval")
+
+        # Логируем результат
+        if model_supports_tools:
+            ctx.logs.append("memory fallback used (gate-triggered without agent recall)")
+        else:
+            ctx.logs.append("memory primary retrieval used (model without tools)")
         return ctx
 
 
@@ -678,6 +766,7 @@ def _apply_memory_context_pack(
     pack: dict[str, Any],
     query: str,
     stage_name: str,
+    memory_gate_triggered: bool = False,
 ) -> None:
     if not isinstance(pack, dict):
         raise TypeError("invalid memory context pack")
@@ -692,6 +781,14 @@ def _apply_memory_context_pack(
             manager.update_working_state_from_memory(ctx.state, pack)
         except Exception:
             pass
+    
+    # Строим memory_native_state — always-on memory layer
+    # Это компактный, структурированный слой, который модель ощущает как своё внутреннее состояние
+    native_state = build_memory_native_state(
+        state=ctx.state,
+        memory_context=ctx.memory_context,
+    )
+    ctx.state["memory_native_state"] = native_state
 
     active_profile_snapshot: dict[str, Any] = {}
     if hasattr(manager, "get_governor_profile_snapshot"):
@@ -727,10 +824,59 @@ def _apply_memory_context_pack(
         ctx.state.pop("active_profile_snapshot", None)
 
     retrieved = list(_as_list(pack.get("selected")))
+    
+    # RETRY LOGIC: если retrieval вернул пусто, но memory gate сработал,
+    # пробуем ещё раз с расширенными параметрами
+    if not retrieved and memory_gate_triggered and hasattr(manager, "build_context"):
+        ctx.logs.append("memory retrieval retry — empty result but gate triggered, expanding search")
+        # Расширяем поиск: больше top_k, все источники, шире time_hint
+        retry_plan = normalize_memory_retrieval_plan({
+            "mode": "context",
+            "topic_hints": [
+                str(ctx.clean_user_msg or "")[:50],
+                str(ctx.state.get("active_goal") or "")[:30],
+                str(ctx.state.get("topic") or "")[:30],
+            ],
+            "time_hint": "any",  # Ищем во всём диапазоне
+            "sources": ["all"],  # Все источники
+            "top_k": 10,  # Больше кандидатов
+            "scopes": ["conversation", "session", "project", "global_user"],  # Все scope
+        }, default_top_k=10)
+        
+        retry_context_request = _build_memory_context_request(
+            ctx,
+            cfg=load_config(),
+            query=query,
+            top_k=10,
+            scope_names=["conversation", "session", "project", "global_user"],
+        )
+        retry_pack = build_memory_tool_context_pack(
+            manager,
+            request=retry_context_request,
+            plan=retry_plan,
+        )
+        
+        # Проверяем, дало ли retry результаты
+        retry_retrieved = list(_as_list(retry_pack.get("selected")))
+        if retry_retrieved:
+            ctx.logs.append(f"memory retrieval retry succeeded — got {len(retry_retrieved)} results")
+            pack = retry_pack  # Используем retry pack
+            retrieved = retry_retrieved
+        else:
+            ctx.logs.append("memory retrieval retry failed — still empty, will answer with uncertainty")
+    
     if retrieved:
         ctx.retrieved_memories = retrieved
 
     blocks = _as_dict(pack.get("blocks"))
+    
+    # Добавляем conversation_tail из state history если есть
+    history = list(ctx.state.get("history") or [])
+    if history:
+        tail = history[-10:]  # Последние 10 сообщений
+        conversation_tail = "\n".join([f"- {m.get('role', 'unknown')}: {m.get('content', '')}" for m in tail])
+        blocks["conversation_tail"] = conversation_tail
+        ctx.logs.append(f"Added conversation_tail from history: {len(tail)} messages")
     task_continuity = _as_dict(pack.get("task_continuity"))
     if task_continuity:
         ctx.state["task_continuity"] = dict(task_continuity)
@@ -762,11 +908,17 @@ def _apply_memory_context_pack(
         ctx.state["current_decisions"] = list(current_decisions)
     else:
         ctx.state.pop("current_decisions", None)
+    
+    # Summary больше не является источником continuity.
+    # Это только fallback кеш для очень старых диалогов.
+    # Не записываем session_summary в dialog_summary.
+    # dialog_summary теперь устарел и используется только как крайний fallback.
     session_summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
     if session_summary:
-        ctx.state["dialog_summary"] = session_summary
-    else:
-        ctx.state.pop("dialog_summary", None)
+        # Сохраняем session_summary только в memory_context для prompt_engine
+        # Но НЕ в state["dialog_summary"] для continuity
+        pass
+    # dialog_summary больше не обновляется из retrieval
 
     truncation_log = list(_as_list(pack.get("truncation_log")))
     dropped = list(_as_list(pack.get("dropped")))
@@ -1710,10 +1862,15 @@ class PromptBuildStage(PipelineStage):
         prompt_state.pop("long_summary", None)
         prompt_state.pop("dialog_summary", None)
         prompt_state.pop("last_tool_result", None)
+        
+        # Summary больше не используется как источник continuity.
+        # Это только fallback кеш для prompt_engine.
+        # Не записываем summary_hint в prompt_state["long_summary"]/["dialog_summary"].
+        # prompt_engine сам решит, нужен ли summary как fallback.
         summary_hint = sanitize_session_summary_text(memory_blocks.get("session_summary") or "")
-        if summary_hint:
-            prompt_state["long_summary"] = summary_hint
-            prompt_state["dialog_summary"] = summary_hint
+        # Summary теперь только в memory_blocks["session_summary"] для prompt_engine
+        # Но НЕ в prompt_state для continuity
+        
         tool_hint = str(memory_blocks.get("active_tool_state") or "").strip()
         if tool_hint:
             prompt_state["last_tool_result"] = tool_hint
@@ -2186,12 +2343,13 @@ class GenerateStage(PipelineStage):
         use_agent_loop = bool(_to_bool(req.metadata.get("agent_loop"), default=False))
         stream_answer_cb = ctx.meta.get("stream_on_answer_chunk")
         stream_thinking_cb = ctx.meta.get("stream_on_thinking_chunk")
-        use_stream = (callable(stream_answer_cb) or callable(stream_thinking_cb)) and not use_agent_loop
-        if not use_agent_loop:
-            ctx.state.pop("agent_loop_trace", None)
-            ctx.state.pop("memory_reasoning_snapshot", None)
-
-        if use_stream:
+        
+        # Streaming теперь работает ВСЕГДА, даже с agent_loop
+        # agent_loop будет вызывать on_answer/on_thinking callbacks во время генерации
+        use_stream = bool(callable(stream_answer_cb) or callable(stream_thinking_cb))
+        
+        if use_stream and not use_agent_loop:
+            # Простой streaming без agent_loop
             stream_result = self._generate_stream(ctx, req, on_answer=stream_answer_cb, on_thinking=stream_thinking_cb)
             if stream_result is not None:
                 text_out, thinking_out, model_name, stream_stats = stream_result
@@ -2211,8 +2369,10 @@ class GenerateStage(PipelineStage):
                 ctx.stats = stats
                 ctx.logs.append(f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')} stream=1")
                 return ctx
-        elif callable(stream_answer_cb) or callable(stream_thinking_cb):
-            ctx.logs.append("stage=generate stream=disabled(agent_loop)")
+        elif use_stream and use_agent_loop:
+            ctx.logs.append("stage=generate stream=enabled with agent_loop")
+        elif not use_stream:
+            ctx.logs.append("stage=generate stream=disabled")
 
         agent_tool_calls = 0
         agent_passes = 1
@@ -2259,18 +2419,24 @@ class GenerateStage(PipelineStage):
         iteration_rows: list[dict[str, Any]] = []
         tool_rows: list[dict[str, Any]] = []
         
-        # Memory gate: проверяем, нужен ли принудительный memory retrieval
-        # Если gate срабатывает, добавляем мягкую подсказку в system message
+        # Streaming callbacks
+        stream_answer_cb = ctx.meta.get("stream_on_answer_chunk")
+        stream_thinking_cb = ctx.meta.get("stream_on_thinking_chunk")
+        use_streaming = bool(callable(stream_answer_cb) or callable(stream_thinking_cb))
+
+        # Memory gate: ЖЁСТКОЕ правило — если срабатывает, модель ОБЯЗАНА вызвать memory_retrieve
+        # Добавляем жёсткую инструкцию в system message
         memory_gate_triggered = _memory_gate_should_trigger(ctx)
         if memory_gate_triggered:
-            ctx.logs.append("memory_gate triggered score>=3")
-            # Добавляем подсказку в начало messages
+            ctx.logs.append("memory_gate HARD trigger — memory_retrieve required before answer")
+            # Жёсткое требование — прямой ответ запрещён до memory pass
             gate_instruction = (
-                "Memory recall hint: This query may depend on prior context, "
-                "user preferences, or unresolved questions. Consider calling "
-                "memory_retrieve before answering if you need more information."
+                "HARD CONSTRAINT: This query depends on prior context or user-specific information. "
+                "You MUST call memory_retrieve tool BEFORE providing any answer. "
+                "Direct answer is FORBIDDEN until memory retrieval completes. "
+                "If memory_retrieve returns no relevant information, explicitly state that you cannot answer without more context."
             )
-            # Вставляем после первого system message (если есть)
+            # Вставляем после первого system message
             insert_index = 0
             for i, msg in enumerate(messages):
                 if msg.role == "system":
@@ -2315,11 +2481,51 @@ class GenerateStage(PipelineStage):
                     "stage=generate agent_loop memory_reasoning=1 "
                     f"sections={','.join(sorted(memory_reasoning_snapshot.keys()))}"
                 )
-            response = self.provider.generate(loop_req)
+            
+            # Streaming или обычный generate
+            if use_streaming:
+                # Streaming через provider.stream()
+                response = self._generate_with_agent_loop_streaming(ctx, loop_req, stream_answer_cb, stream_thinking_cb)
+            else:
+                response = self.provider.generate(loop_req)
             if not response.tool_calls or not active_tools:
                 iteration_row["tool_calls_requested"] = int(len(list(response.tool_calls or [])))
                 iteration_row["executed_tool_calls"] = 0
                 iteration_rows.append(iteration_row)
+                
+                # PROGRAMMATIC ENFORCEMENT: если memory gate сработал, но модель не вызвала tool,
+                # принудительно вызываем memory_retrieve вместо ответа модели
+                if memory_gate_triggered and pass_count == 1:
+                    ctx.logs.append("memory_gate enforcement — model ignored tool call, forcing memory_retrieve")
+                    # Принудительно вызываем memory_retrieve с дефолтным query
+                    forced_tool_call = ToolCall(
+                        id="forced_memory_retrieve",
+                        name=_MEMORY_TOOL_NAME,
+                        arguments={
+                            "mode": "context",
+                            "topic_hints": [str(ctx.clean_user_msg or "")[:50]],
+                            "time_hint": "recent",
+                            "sources": ["messages", "facts", "episodes"],
+                            "top_k": 5,
+                        },
+                    )
+                    # Выполняем принудительный tool call
+                    tool_result_json, _ = self._execute_memory_retrieve_tool(ctx, forced_tool_call)
+                    executed_calls += 1
+                    tool_rows.append({"tool_call": _tool_call_to_dict(forced_tool_call), "result": tool_result_json})
+                    # Добавляем результат в messages и продолжаем loop
+                    messages.append(Message(role="assistant", content="", tool_calls=[forced_tool_call]))
+                    messages.append(Message(role="tool", content=tool_result_json, tool_call_id=forced_tool_call.id))
+                    # Перестраиваем memory_native_state с учётом новых данных
+                    native_state = build_memory_native_state(
+                        state=ctx.state,
+                        memory_context=ctx.memory_context,
+                    )
+                    ctx.state["memory_native_state"] = native_state
+                    ctx.logs.append("memory_native_state rebuilt after forced retrieval")
+                    # Продолжаем loop для генерации ответа с memory context
+                    continue
+                
                 final_response = response
                 break
 
@@ -2638,8 +2844,14 @@ class GenerateStage(PipelineStage):
 
     def _execute_agent_tool_call(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
         name = str(call.name or "").strip().lower()
+        
+        # Memory retrieve (semantic search)
         if name == _MEMORY_TOOL_NAME:
             return self._execute_memory_retrieve_tool(ctx, call)
+        
+        # History tools (exact DB reads)
+        if name in ("history_read_recent", "history_read_range", "history_search"):
+            return self._execute_history_tool(ctx, call)
 
         executor = ctx.meta.get("tool_executor")
         if not callable(executor):
@@ -2665,9 +2877,93 @@ class GenerateStage(PipelineStage):
         }
         return _compact_json(payload), False
 
+    def _generate_with_agent_loop_streaming(
+        self,
+        ctx: PipelineContext,
+        req: LLMRequest,
+        on_answer,
+        on_thinking,
+    ) -> LLMResponse:
+        """
+        Streaming генерация внутри agent_loop.
+        
+        Использует provider.stream() вместо provider.generate() и вызывает
+        callbacks для каждого chunk.
+        """
+        stream = getattr(self.provider, "stream", None)
+        if not callable(stream):
+            # Fallback на обычный generate если stream не доступен
+            return self.provider.generate(req)
+        
+        answer_parts: list[str] = []
+        thinking_parts: list[str] = []
+        model_name = str(req.model or "")
+        final_response: LLMResponse | None = None
+        
+        try:
+            for chunk in stream(req):
+                chunk_model = str(getattr(chunk, "model", "") or "").strip()
+                if chunk_model:
+                    model_name = chunk_model
+                
+                # Thinking delta
+                thinking_delta = str(getattr(chunk, "thinking_delta", "") or "")
+                if thinking_delta and callable(on_thinking):
+                    thinking_parts.append(thinking_delta)
+                    try:
+                        on_thinking(thinking_delta)
+                    except Exception:
+                        pass
+                
+                # Answer delta
+                text_delta = str(getattr(chunk, "text_delta", "") or "")
+                if text_delta:
+                    answer_parts.append(text_delta)
+                    if callable(on_answer):
+                        try:
+                            on_answer(text_delta)
+                        except Exception:
+                            pass  # Игнорируем ошибки callback
+                
+                if bool(getattr(chunk, "done", False)):
+                    final_response = LLMResponse(
+                        text="".join(answer_parts),
+                        thinking="".join(thinking_parts),
+                        model=model_name,
+                        usage=getattr(chunk, "usage", None),
+                        timings=getattr(chunk, "timings", None),
+                    )
+        except Exception:
+            # Fallback на обычный generate при ошибке streaming
+            return self.provider.generate(req)
+        
+        if final_response is None:
+            final_response = LLMResponse(
+                text="".join(answer_parts),
+                thinking="".join(thinking_parts),
+                model=model_name,
+            )
+        
+        return final_response
+
     def _execute_memory_retrieve_tool(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
+        """
+        Выполнить memory_retrieve tool.
+        
+        Эмитит debug events если доступен stream_on_debug_event.
+        """
         manager = ctx.meta.get("memory_manager")
+        debug_event = ctx.meta.get("stream_on_debug_event")
+        
+        def emit(kind: str, payload: dict[str, Any]) -> None:
+            if callable(debug_event):
+                try:
+                    debug_event(kind, payload)
+                except Exception:
+                    pass
+        
         if manager is None or not hasattr(manager, "build_context"):
+            emit("memory_error", {"tool": _MEMORY_TOOL_NAME, "error": "memory_manager_not_available"})
             payload = {
                 "tool": _MEMORY_TOOL_NAME,
                 "status": "error",
@@ -2685,6 +2981,14 @@ class GenerateStage(PipelineStage):
                 "top_k": _to_int(args.get("top_k"), 6) or 6,
                 "scopes": list(_as_list(args.get("scopes"))),
             }
+        
+        emit("memory_retrieval_start", {
+            "tool": _MEMORY_TOOL_NAME,
+            "mode": args.get("mode"),
+            "topic_hints": args.get("topic_hints"),
+            "time_hint": args.get("time_hint"),
+        })
+        
         plan = normalize_memory_retrieval_plan(args, default_top_k=6)
         base_query = str(_pick_value(ctx.clean_user_msg, ctx.user_msg, "")).strip()
         scope_names = list(_as_list(args.get("scopes")))
@@ -2709,8 +3013,23 @@ class GenerateStage(PipelineStage):
                 pack=pack,
                 query=base_query,
                 stage_name="agent_memory_retrieve",
+                memory_gate_triggered=True,
             )
+            
+            selected_count = len(list(_as_list(pack.get("selected"))))
+            emit("memory_retrieval_done", {
+                "tool": _MEMORY_TOOL_NAME,
+                "status": "ok",
+                "selected_count": selected_count,
+                "recall_mode": str(pack.get("recall_mode") or ""),
+            })
+            
         except Exception as exc:
+            emit("memory_retrieval_error", {
+                "tool": _MEMORY_TOOL_NAME,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
             payload = {
                 "tool": _MEMORY_TOOL_NAME,
                 "status": "error",
@@ -2725,6 +3044,139 @@ class GenerateStage(PipelineStage):
             pack=pack,
         )
         return _compact_json(payload), False
+
+    def _execute_history_read_recent(
+        self,
+        ctx: PipelineContext,
+        *,
+        limit: int,
+        role: str,
+        order: str,
+    ) -> HistoryReadResult:
+        """
+        Выполнить history_read_recent — чтение последних сообщений.
+        
+        Читает из state["history"], а не из vector storage.
+        """
+        history = list(ctx.state.get("history") or [])
+        
+        # Фильтр по role
+        if role != "any":
+            history = [h for h in history if str(h.get("role") or "").lower() == role]
+        
+        # Порядок
+        if order == "newest_first":
+            history = list(reversed(history))
+        
+        # Лимит
+        total = len(history)
+        history = history[:limit]
+        
+        return HistoryReadResult(
+            messages=history,
+            total_count=total,
+            has_more=total > limit,
+        )
+    
+    def _execute_history_search(
+        self,
+        ctx: PipelineContext,
+        *,
+        query: str,
+        role: str,
+        limit: int,
+    ) -> HistoryReadResult:
+        """
+        Выполнить history_search — поиск по истории.
+        
+        Простой text search по state["history"].
+        """
+        history = list(ctx.state.get("history") or [])
+        query_lower = query.lower()
+        
+        # Фильтр по role
+        if role != "any":
+            history = [h for h in history if str(h.get("role") or "").lower() == role]
+        
+        # Поиск
+        results = [
+            h for h in history
+            if query_lower in str(h.get("content") or "").lower()
+        ]
+        
+        # Лимит
+        total = len(results)
+        results = results[:limit]
+        
+        return HistoryReadResult(
+            messages=results,
+            total_count=total,
+            has_more=total > limit,
+        )
+
+    def _execute_history_tool(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
+        """
+        Выполнить history tool (read_recent, read_range, search).
+        
+        Эти tools читают точную историю из state["history"], а не semantic search.
+        """
+        from memory.history_tools import (
+            _execute_history_read_recent,
+            _execute_history_search,
+            HistoryReadResult,
+        )
+        
+        tool_name = str(call.name or "").strip().lower()
+        args = dict(call.arguments or {})
+        
+        try:
+            if tool_name == "history_read_recent":
+                limit = _to_int(args.get("limit"), 10)
+                role = str(args.get("role", "any")).strip().lower()
+                order = str(args.get("order", "newest_first")).strip().lower()
+                
+                result: HistoryReadResult = _execute_history_read_recent(
+                    ctx,
+                    limit=limit,
+                    role=role,
+                    order=order,
+                )
+                
+            elif tool_name == "history_search":
+                query = str(args.get("query", "")).strip()
+                limit = _to_int(args.get("limit"), 10)
+                role = str(args.get("role", "any")).strip().lower()
+                
+                result = _execute_history_search(
+                    ctx,
+                    query=query,
+                    role=role,
+                    limit=limit,
+                )
+                
+            else:
+                payload = {
+                    "tool": tool_name,
+                    "status": "error",
+                    "error": f"Unknown history tool: {tool_name}",
+                }
+                return _compact_json(payload), True
+            
+            payload = {
+                "tool": tool_name,
+                "status": "ok",
+                "result": result.to_dict(),
+                "message_count": result.total_count,
+            }
+            return _compact_json(payload), False
+            
+        except Exception as exc:
+            payload = {
+                "tool": tool_name,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            return _compact_json(payload), True
 
     @staticmethod
     def _merge_llm_stats(
@@ -3896,10 +4348,11 @@ class GenerateStage(PipelineStage):
                     ctx.state["memory_context"] = dict(memory_context_for_prompt)
                     prompt_state["memory_context"] = dict(memory_context_for_prompt)
                     context_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
+                    # Summary больше не используется как источник continuity.
+                    # Это только fallback кеш для prompt_engine.
+                    # Не записываем summary_hint в prompt_state["long_summary"]/["dialog_summary"].
                     summary_hint = sanitize_session_summary_text(context_blocks.get("session_summary") or "")
-                    if summary_hint:
-                        prompt_state["long_summary"] = summary_hint
-                        prompt_state["dialog_summary"] = summary_hint
+                    # Summary теперь только в context_blocks["session_summary"] для prompt_engine
                 else:
                     ctx.memory_context = {}
                     ctx.state.pop("memory_context", None)
@@ -4780,6 +5233,7 @@ class ResponsePipeline:
             "personality": PersonalityStage(
                 character_runtime=self.character_engine,
             ),
+            "memory_native_state": MemoryNativeStateStage(memory_manager=memory_manager),
             "memory_retrieve": MemoryRetrieveStage(memory_manager=memory_manager),
             "episode_continuity": EpisodeContinuityStage(planner=episode_planner, memory_manager=memory_manager),
             "web_retrieve": WebStageV2(),
@@ -4796,12 +5250,15 @@ class ResponsePipeline:
             "output_format": OutputFormatStage(provider=self.provider),
             "memory_write": MemoryWriteStage(memory_manager=memory_manager, planner=episode_planner),
         }
+        # Memory retrieval теперь работает ТОЛЬКО через agent_loop + memory_retrieve tool.
+        # MemoryNativeStateStage строит always-on memory layer для всех профилей.
+        # MemoryRetrieveStage остаётся только как fallback для экстренных случаев.
         self._profiles: dict[str, tuple[str, ...]] = {
             PROFILE_FAST: (
                 "preprocess",
                 "mode_select",
                 "personality",
-                "memory_retrieve",
+                "memory_native_state",
                 "episode_continuity",
                 "prompt_build",
                 "prompt_engine",
@@ -4816,7 +5273,7 @@ class ResponsePipeline:
                 "mode_select",
                 "plan",
                 "personality",
-                "memory_retrieve",
+                "memory_native_state",
                 "episode_continuity",
                 "web_retrieve",
                 "prompt_build",
@@ -4833,7 +5290,7 @@ class ResponsePipeline:
                 "mode_select",
                 "plan",
                 "personality",
-                "memory_retrieve",
+                "memory_native_state",
                 "episode_continuity",
                 "web_retrieve",
                 "prompt_build",
@@ -5041,6 +5498,8 @@ class ResponsePipeline:
             ui_actions=list(ctx.ui_actions or []),
             logs=list(ctx.logs or []),
             stats=dict(ctx.stats or {}),
+            debug_trace=dict(meta.get("debug_trace") or {}),
+            memory_debug_snapshot=dict(meta.get("memory_debug_snapshot") or {}),
         )
 
     def _emit_web_trace_event(self, ctx: PipelineContext, *, event: str, payload: dict[str, Any] | None = None) -> None:
@@ -5958,86 +6417,188 @@ def _memory_retrieve_tool_spec() -> ToolSpec:
 def _should_enable_agent_loop(ctx: PipelineContext) -> bool:
     """
     Определяет, нужно ли включать agent loop для текущего запроса.
-
-    Agent loop теперь доступен для всех профилей, а не только AUTONOMOUS.
+    
+    Agent loop теперь включён для ВСЕХ chat запросов по умолчанию.
     Это делает память 'внутренней' для модели, а не внешним сервисом.
+    
+    Отключить можно через meta['agent_loop'] = False.
+    """
+    if str(ctx.route or "").strip().lower() != "chat":
+        return False
+    
+    # Явный override имеет приоритет
+    override = _pick_value(ctx.meta.get("agent_loop"), ctx.policies.get("agent_loop"), None)
+    if override is not None:
+        return _to_bool(override, default=True)
+    
+    # По умолчанию agent loop включён для всех chat запросов
+    return True
 
-    Модель всегда знает о возможности memory_retrieve, но вызывает tool
-    только по необходимости (через memory gate или собственное решение).
+
+def _should_enable_memory_retrieve_stage(ctx: PipelineContext) -> bool:
+    """
+    Определяет, нужно ли включать MemoryRetrieveStage.
+
+    MemoryRetrieveStage используется:
+    1. Для моделей без tool support (deepseek-r1 и т.д.)
+    2. Как fallback, когда agent_loop не сработал
+
+    Это основной путь retrieval для моделей без function calling.
     """
     if str(ctx.route or "").strip().lower() != "chat":
         return False
 
-    # Явный override имеет приоритет
-    override = _pick_value(ctx.meta.get("agent_loop"), ctx.policies.get("agent_loop"), None)
-    if override is not None:
-        return _to_bool(override, default=False)
+    # Если agent_loop отключён из-за модели — используем stage
+    if not _should_enable_agent_loop(ctx):
+        return True
 
-    # Agent loop доступен для всех профилей по умолчанию
-    # Это критично для 'memory-native' архитектуры
-    return True
+    # Если agent_loop включён — stage не нужен (будет tool call)
+    return False
 
 
 def _memory_gate_should_trigger(ctx: PipelineContext) -> bool:
     """
-    Memory gate: определяет, нужно ли принудительно включить memory retrieval.
-    
-    Локальные модели часто ленятся делать recall, даже когда память критична.
-    Этот gate мягко подталкивает к использованию памяти, когда:
+    Memory gate: ЖЁСТКОЕ правило для memory-dependent вопросов.
+
+    Если gate срабатывает, модель ОБЯЗАНА вызвать memory_retrieve перед ответом.
+    Прямой ответ запрещён до completion memory pass.
+
+    Срабатывает, когда:
     - вопрос зависит от прошлых фактов
     - есть местоимения типа "это", "тогда", "оно", "тот модуль"
     - затронуты user-specific preferences / project continuity
     - есть unresolved questions из прошлых.turns
-    
-    Возвращает True, если нужен force-enable memory tool pass.
+    - вопрос о личных фактах пользователя
+    - вопрос о прошлых разговорах/сообщениях/решениях
+
+    НЕ срабатывает на:
+    - smalltalk / greetings
+    - общие вопросы без контекста
+    - факты общего знания
     """
     query = str(ctx.clean_user_msg or ctx.user_msg or "").strip().lower()
     if not query:
         return False
+
+    state = ctx.state or {}
+
+    # === БЫСТРЫЙ ОТКАЗ: smalltalk и общие вопросы ===
+    # Эти темы НЕ требуют memory retrieval
+    import re
     
-    # 1. Местоимения и ссылки на предыдущий контекст
+    # Сначала проверяем на personal possessive — если есть, НЕ блокируем
+    has_personal_possessive = bool(re.search(r"\b(my|мой|моё|моя|мои|меня|мне)\b", query))
+    
+    if not has_personal_possessive:
+        smalltalk_patterns = [
+            # Приветствия / прощания
+            r"^\s*(привет|здравствуй|hello|hi|hey|добрый)\b",
+            r"^\s*(пока|до свидания|goodbye|bye)\b",
+            
+            # "Как дела" без контекста
+            r"^\s*(как дела|как жизнь|как оно|how are you|how's it going)\s*[?!]?\s*$",
+            
+            # Общие вопросы без личного контекста
+            r"^\s*(что нового|what's new)\s*[?!]?\s*$",
+            
+            # Благодарности
+            r"^\s*(спасибо|благодарю|thank you|thanks)\b",
+            
+            # Извинения
+            r"^\s*(извини|прости|sorry)\b",
+            
+            # Подтверждения
+            r"^\s*(да|нет|ок|ok|хорошо|well|yes|no)\s*[!?.]?\s*$",
+            
+            # Погода (общий вопрос)
+            r"^\s*(какая погода|weather)\b",
+        ]
+        
+        for pattern in smalltalk_patterns:
+            if re.search(pattern, query):
+                return False
+
+    # === Memory gate логика ===
+    
+    # 1. Местоимения и ссылки на предыдущий контекст (расширенный список)
     continuity_markers = [
-        # Русские
-        "это ", "этот ", "эта ", "эти ", "этом ", "этому ",
-        "тогда ", "тот ", "та ", "то ", "те ",
-        "оно ", "она ", "они ", "ним ", "ней ",
-        "напомни ", "вспомина ", "помниш ",
+        # Русские местоимения и указатели
+        "это ", "этот ", "эта ", "эти ", "этом ", "этому ", "этим ", "этой ",
+        "тогда ", "тот ", "та ", "то ", "те ", "тем ", "тому ",
+        "оно ", "она ", "они ", "ним ", "ней ", "них ", "нее ",
+        "такой ", "такая ", "такое ", "такие ",
+        "выше ", "ниже ", "ранее ", "прежде ",
+        # Указатели на прошлое
+        "напомни ", "вспомина ", "помниш ", "помню ",
+        "ещё раз ", "снова ", "опять ", "вернись ",
         # English
         "this ", "that ", "these ", "those ",
-        "it ", "they ", "them ",
-        "remember ", "remind ",
+        "it ", "they ", "them ", "such ",
+        "above ", "below ", "earlier ", "before ",
+        "remember ", "remind ", "again ", "back ",
     ]
     has_continuity_marker = any(marker in query for marker in continuity_markers)
-    
-    # 2. Вопросы, которые явно зависят от контекста
+
+    # 2. Вопросы, которые явно зависят от контекста (максимально полный список)
     context_dependent_patterns = [
-        # Вопросы о предыдущих решениях/планах
+        # === Вопросы о предыдущих решениях/планах/договорённостях ===
+        r"(мы\s+.+\s+решили|мы\s+.+\s+договорились|мы\s+.+\s+планировали)",
         r"(мы\s+решили|мы\s+договорились|мы\s+планировали|как\s+договаривались)",
+        r"(we\s+.+\s+decided|we\s+.+\s+agreed|we\s+.+\s+planned)",
         r"(we\s+decided|we\s+agreed|we\s+planned|as\s+discussed)",
-        # Вопросы о проекте/коде
+        
+        # === Вопросы о проекте/коде/файлах ===
+        r"(мой\s+.+\s+проект|мой\s+.+\s+код|этот\s+.+\s+модуль|этот\s+.+\s+файл)",
         r"(мой\s+проект|мой\s+код|этот\s+модуль|этот\s+файл)",
+        r"(my\s+.+\s+project|my\s+.+\s+code|this\s+.+\s+module|this\s+.+\s+file)",
         r"(my\s+project|my\s+code|this\s+module|this\s+file)",
-        # Вопросы о предпочтениях
+        
+        # === Вопросы о предпочтениях ===
+        r"(я\s+.+\s+предпочитаю|мне\s+.+\s+нравится|как\s+я\s+.+\s+люблю)",
         r"(я\s+предпочитаю|мне\s+нравится|как\s+я\s+люблю)",
+        r"(i\s+.+\s+prefer|i\s+.+\s+like|how\s+i\s+.+\s+like)",
         r"(i\s+prefer|i\s+like|how\s+i\s+like)",
+        
+        # === Вопросы о прошлых событиях/разговорах (гибкие паттерны) ===
+        r"(мы\s+.+\s+обсуждали|мы\s+.+\s+говорили|ты\s+помнишь|помнишь\s+как)",
+        r"(мы\s+обсуждали|мы\s+говорили|ты\s+помнишь|помнишь\s+как)",
+        r"(we\s+.+\s+discussed|we\s+.+\s+talked|do\s+you\s+remember)",
+        r"(we\s+discussed|we\s+talked|do\s+you\s+remember)",
+        
+        # === Прямые вопросы о прошлых сообщениях/разговорах ===
+        r"(о\s+чём\s+мы\s+говорили|что\s+мы\s+обсуждали|последн[иеыхих]*\s*сообщен)",
+        r"(какие\s+были\s+темы|какие\s+были\s+идеи|какие\s+были\s+планы)",
+        r"(what\s+did\s+we\s+talk|last\s+messages|previous\s+conversation)",
+        r"(what\s+were\s+the\s+topics|what\s+were\s+the\s+ideas|what\s+were\s+the\s+plans)",
+        
+        # === Вопросы о продолжении/возврате к теме ===
+        r"(вернись\s+к|возвращаясь\s+к|продолжим\s+про|давай\s+ещё\s+раз\s+про)",
+        r"(continue\s+about|back\s+to|let'?s\s+continue\s+on|more\s+about)",
+        
+        # === Вопросы "что ты помнишь" ===
+        r"(что\s+ты\s+помнишь|что\s+помнишь\s+про|что\s+помнишь\s+о)",
+        r"(what\s+do\s+you\s+remember|what\s+remember\s+about)",
+        
+        # === Вопросы "расскажи ещё раз" ===
+        r"(расскажи\s+ещё|расскажи\s+снова|повтори\s+ещё|повтори\s+снова)",
+        r"(tell\s+again|repeat\s+again|once\s+more)",
     ]
     import re
     has_context_dependent_pattern = any(
         re.search(pattern, query) for pattern in context_dependent_patterns
     )
-    
+
     # 3. Есть ли unresolved questions в state
-    state = ctx.state or {}
     open_questions = state.get("open_questions") or state.get("unresolved_questions")
     has_open_questions = bool(open_questions and (
         (isinstance(open_questions, list) and len(open_questions) > 0)
         or (isinstance(open_questions, str) and open_questions.strip())
     ))
-    
+
     # 4. Есть ли active task / goal
     active_task = state.get("active_goal") or state.get("current_task") or state.get("task")
     has_active_task = bool(active_task and str(active_task).strip())
-    
+
     # 5. User-specific preferences в identity_core
     addressing = _as_dict(state.get("addressing") or state.get("user_addressing") or {})
     has_identity_core = bool(addressing and (
@@ -6045,8 +6606,29 @@ def _memory_gate_should_trigger(ctx: PipelineContext) -> bool:
         or addressing.get("allowed_forms")
         or addressing.get("forbidden_forms")
     ))
+
+    # 6. Вопросы о пользователе (Таня, Ася, имя, факты о себе)
+    personal_questions = [
+        r"\b(таня|ася|ты\s+о\s+себе|ты\s+помнишь\s+себя)\b",
+        r"\b(who\s+are\s+you|what\s+do\s+you\s+remember|about\s+you)\b",
+        # Вопросы о личных фактах (имя, возраст и т.д.)
+        r"\b(what\s+is\s+my|как\s+меня|моё\s+имя|my\s+name)\b",
+    ]
+    has_personal_question = any(
+        re.search(pattern, query) for pattern in personal_questions
+    )
+
+    # 7. Дополнительные эвристики для memory-dependent вопросов
+    # Вопросы с "какой"/"какие" о прошлых решениях
+    has_which_question = bool(re.search(r"(какой\s+мы|какие\s+мы|какой\s+ты|какие\s+ты)", query))
     
-    # Комбинируем сигналы
+    # Вопросы с "почему" о прошлых действиях
+    has_why_question = bool(re.search(r"(почему\s+мы|почему\s+ты|why\s+we|why\s+you)", query))
+    
+    # Вопросы с "когда" о прошлых событиях
+    has_when_question = bool(re.search(r"(когда\s+мы|когда\s+ты|when\s+we|when\s+you)", query))
+
+    # Комбинируем сигналы — жёсткий gate
     score = 0
     if has_continuity_marker:
         score += 2
@@ -6059,9 +6641,13 @@ def _memory_gate_should_trigger(ctx: PipelineContext) -> bool:
     if has_identity_core and any(query.count(word) for word in ["я", "мне", "меня", "мной", "i ", "i'", "me ", "my "]):
         # Личные местоимения + есть identity_core = возможна персонализация
         score += 1
-    
-    # Порог срабатывания
-    return score >= 3
+    if has_personal_question:
+        score += 3  # Вопросы о себе — всегда memory-dependent
+    if has_which_question or has_why_question or has_when_question:
+        score += 2  # Вопросы о прошлых событиях
+
+    # Порог срабатывания снижен для жёсткого gate
+    return score >= 2
 
 
 def _agent_loop_tool_limit(ctx: PipelineContext) -> int:
@@ -6074,10 +6660,24 @@ def _agent_loop_tool_limit(ctx: PipelineContext) -> int:
 
 
 def _agent_loop_tools(ctx: PipelineContext) -> list[ToolSpec]:
+    """
+    Вернуть список tools для agent loop.
+
+    Включает:
+    - memory_retrieve (semantic search)
+    - history_read_recent (точные последние сообщения)
+    - history_search (поиск по истории)
+    """
     manager = ctx.meta.get("memory_manager")
     tools: list[ToolSpec] = []
+
+    # Memory retrieve (semantic search)
     if manager is not None and hasattr(manager, "build_context"):
         tools.append(_memory_retrieve_tool_spec())
+
+    # History tools (exact DB reads)
+    tools.extend(history_tools_list())
+
     return tools
 
 
@@ -6145,6 +6745,16 @@ def _append_policy_rule(policies: dict[str, Any], rule: str) -> None:
 def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
     tags = dict(ctx.tags or {})
     meta = dict(ctx.meta or {})
+    
+    # Загружаем performance profile и применяем настройки
+    profile_name = str(ctx.state.get("quality_profile") or ctx.meta.get("quality_profile") or "BALANCED").strip().upper()
+    ollama_options = _load_ollama_options_from_performance_profile(profile_name)
+    if ollama_options:
+        # Применяем настройки из profile (если не переопределены в meta)
+        for key, value in ollama_options.items():
+            if key not in meta and value is not None:
+                meta[key] = value
+    
     out = {
         "trace_id": str(meta.get("trace_id") or f"trace_{int(time.time() * 1000)}"),
         "user_id": str(meta.get("user_id") or "anonymous"),
@@ -6197,6 +6807,38 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         if key in meta:
             out[key] = meta.get(key)
     return out
+
+
+def _load_ollama_options_from_performance_profile(profile_name: str) -> dict[str, Any]:
+    """
+    Загрузить Ollama настройки из performance profile.
+    
+    Performance profiles хранятся в data/specs/performance_profiles.json
+    """
+    try:
+        from pathlib import Path
+        import json
+        
+        specs_file = Path(__file__).parent.parent / "data" / "specs" / "performance_profiles.json"
+        if not specs_file.exists():
+            return {}
+        
+        with open(specs_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        profiles = data.get("profiles", {})
+        profile = profiles.get(profile_name, {})
+        ollama = profile.get("ollama", {})
+        
+        # Возвращаем только Ollama настройки
+        options = {}
+        for key in ("num_ctx", "num_thread", "num_gpu", "num_batch", "keep_alive"):
+            if key in ollama and ollama[key] is not None:
+                options[key] = ollama[key]
+        
+        return options
+    except Exception:
+        return {}
 
 
 def _inject_temporal_grounding(ctx: PipelineContext) -> None:

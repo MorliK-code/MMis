@@ -173,6 +173,7 @@ class ApiClient:
         json_mode: bool | None = None,
         on_chunk=None,
         on_thinking_chunk=None,
+        on_debug_event=None,
         cancel_requested=None,
     ) -> ApiReply:
         payload = {"text": str(text or ""), "store_turn": bool(store_turn)}
@@ -235,6 +236,14 @@ class ApiClient:
                         thinking_chunk_count += 1
                         if on_thinking_chunk:
                             on_thinking_chunk(piece)
+                    elif kind == "memory_debug":
+                        # Live memory-debug event
+                        if on_debug_event:
+                            try:
+                                payload = self._parse_json(str(data or "{}"))
+                                on_debug_event(payload)
+                            except Exception:
+                                pass
                     elif kind == "error":
                         LOGGER.warning("ui stream error event=%s", data)
                         raise ApiClientError(str(data or "Unknown API stream error"))
