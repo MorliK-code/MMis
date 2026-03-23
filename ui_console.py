@@ -702,6 +702,8 @@ class _StreamRealtimePrinter:
         self._hidden_hint_stop = threading.Event()
         self._hidden_hint_thread: threading.Thread | None = None
         self._hidden_hint_last_width = 0
+        # Channel tracking for streaming output
+        self._current_channel: str | None = None
         # Debug memory state
         self._memory_retrieval_shown = False
 
@@ -761,7 +763,7 @@ class _StreamRealtimePrinter:
             sys.stdout.write("\r" + (" " * width) + "\r")
             sys.stdout.flush()
         self._hidden_hint_last_width = 0
-        self._current_channel = ""
+        self._current_channel = None
         self._printed_any = False
 
     def on_thinking(self, piece: str) -> None:
