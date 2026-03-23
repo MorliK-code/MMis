@@ -372,33 +372,36 @@ def chat_stream(req: ChatRequest):
 
     def generate():
         request_text = text
-        with _runtime.lock:
-            native = _handle_native_chat_command(request_text)
-            if native is not None:
-                pass_text = str(native.get("pass_text") or "").strip()
-                if pass_text:
-                    request_text = pass_text
-                else:
-                    answer = str(native.get("answer") or "")
-                    stats = {"served_model": _runtime.model, "native_command": True}
-                    payload = {
-                        "answer": answer,
-                        "thinking": "",
-                        "stats": stats,
-                        "model": _runtime.model,
-                        "parameters": None,
-                        "summary": None,
-                    }
-                    if bool(req.store_turn) and _should_store_metadata(text=request_text):
-                        _append_metadata_row(model=_runtime.model, role="user", text=request_text, context=answer)
-                        _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=request_text)
-                    for chunk in _split_chunks(answer, chunk_size=48):
-                        if chunk:
-                            yield _ndjson("chunk", chunk)
-                    yield _ndjson("final", payload)
-                    return
+        
+        # Проверяем native команды вне lock
+        native = _handle_native_chat_command(request_text)
+        if native is not None:
+            pass_text = str(native.get("pass_text") or "").strip()
+            if pass_text:
+                request_text = pass_text
+            else:
+                answer = str(native.get("answer") or "")
+                stats = {"served_model": _runtime.model, "native_command": True}
+                payload = {
+                    "answer": answer,
+                    "thinking": "",
+                    "stats": stats,
+                    "model": _runtime.model,
+                    "parameters": None,
+                    "summary": None,
+                }
+                if bool(req.store_turn) and _should_store_metadata(text=text):
+                    with _runtime.lock:
+                        _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+                        _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+                for chunk in _split_chunks(answer, chunk_size=48):
+                    if chunk:
+                        yield _ndjson("chunk", chunk)
+                yield _ndjson("final", payload)
+                return
 
-        events: queue.Queue[tuple[str, str]] = queue.Queue()
+        # Запускаем worker вне lock, чтобы yield мог отправлять чанки по ходу
+        events: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=0)  # Безграничная очередь для минимальной буферизации
         done = threading.Event()
         state: dict[str, Any] = {"result": None, "error": "", "meta": {}}
         sent_answer = 0
@@ -407,12 +410,12 @@ def chat_stream(req: ChatRequest):
         def _on_answer(piece: str) -> None:
             chunk = str(piece or "")
             if chunk:
-                events.put(("chunk", chunk))
+                events.put(("chunk", chunk), block=False)  # Не блокировать, если очередь полна
 
         def _on_thinking(piece: str) -> None:
             chunk = str(piece or "")
             if chunk:
-                events.put(("thinking", chunk))
+                events.put(("thinking", chunk), block=False)  # Не блокировать, если очередь полна
 
         def _on_debug_event(kind: str, payload: dict[str, Any]) -> None:
             """Эмитить memory-debug событие в stream."""
@@ -420,7 +423,7 @@ def chat_stream(req: ChatRequest):
                 events.put((
                     "memory_debug",
                     json.dumps({"kind": kind, "payload": payload}, ensure_ascii=False)
-                ))
+                ), block=False)
             except Exception:
                 pass  # Игнорируем ошибки debug events
 
@@ -459,7 +462,7 @@ def chat_stream(req: ChatRequest):
 
         while not done.is_set() or not events.empty():
             try:
-                kind, payload = events.get(timeout=0.01)  # Уменьшенный timeout для быстрого стриминга
+                kind, payload = events.get(timeout=0.001)  # Минимальный timeout для быстрой отправки
             except queue.Empty:
                 continue
             if kind == "chunk":
@@ -515,6 +518,11 @@ def chat_stream(req: ChatRequest):
         if bool(req.store_turn) and _should_store_metadata(text=request_text, structured_output=structured):
             _append_metadata_row(model=_runtime.model, role="user", text=request_text, context=answer)
             _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=request_text)
+
+        # Safety fallback: если streaming не отдал ни одного chunk, но ответ есть
+        if not sent_answer and answer:
+            # Эмитим один поздний chunk перед final для совместимости UI
+            yield _ndjson("chunk", answer)
 
         log_json(
             LOGGER,

@@ -74,9 +74,8 @@ class ReplyWorker(QObject):
         self.store_turn = bool(store_turn)
         self.think = think
         self._cancel_requested = False
-        # A tiny pause keeps split display pieces visually progressive instead
-        # of collapsing a large provider chunk into one instant repaint.
-        self._stream_emit_pause_sec = 0.012
+        # Отключаем искусственную задержку для мгновенного стриминга
+        self._stream_emit_pause_sec = 0.0
         self._stream_emit_chunk_chars = 12
 
     def request_cancel(self):
@@ -88,21 +87,8 @@ class ReplyWorker(QObject):
             signal.emit("")
             return
 
-        parts = _split_stream_display_piece(text, max_chars=self._stream_emit_chunk_chars)
-        if len(parts) <= 1:
-            signal.emit(text)
-            return
-
-        pause_s = max(0.0, float(self._stream_emit_pause_sec or 0.0))
-        last_index = len(parts) - 1
-        for index, part in enumerate(parts):
-            if self._cancel_requested:
-                return
-            signal.emit(part)
-            if pause_s > 0.0 and index < last_index:
-                time.sleep(pause_s)
-            elif index < last_index:
-                time.sleep(0)
+        # Отправляем чанк сразу без разбиения и задержек
+        signal.emit(text)
 
     @Slot()
     def run(self):

@@ -187,7 +187,12 @@ class ApiClient:
         req = urllib_request.Request(
             self._url("/chat/stream"),
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/x-ndjson",
+                "Cache-Control": "no-cache, no-store",
+                "Pragma": "no-cache",
+            },
             method="POST",
         )
 

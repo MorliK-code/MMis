@@ -675,6 +675,8 @@ class _ConsoleChunkRenderer:
 
 
 class _StreamRealtimePrinter:
+    """Прямой вывод стриминга без буферизации (как в нативном Ollama)."""
+    
     def __init__(
         self,
         renderer: _ConsoleChunkRenderer,
@@ -684,18 +686,11 @@ class _StreamRealtimePrinter:
         debug_memory: bool = False,
     ):
         self.renderer = renderer
-        self.prefer_thinking_first = bool(prefer_thinking_first)
         self.show_thinking = bool(show_thinking)
         self.debug_memory = bool(debug_memory)
         self.answer_parts: list[str] = []
         self.thinking_parts: list[str] = []
-        self._pending_answer: list[str] = []
         self._thinking_started = False
-        self._printed_any = False
-        self._current_channel = ""
-        # Track how many sanitized characters have been physically printed
-        self._answer_printed_chars: int = 0
-        self._thinking_printed_chars: int = 0
         self._io_lock = threading.RLock()
         self._hidden_hint_frames = (
             "\u0434\u0443\u043c\u0430\u0435\u0442.",
@@ -770,6 +765,7 @@ class _StreamRealtimePrinter:
         self._printed_any = False
 
     def on_thinking(self, piece: str) -> None:
+        """Вывод thinking чанка сразу без буферизации."""
         text = _sanitize_stream_text(piece)
         if not text:
             return
@@ -779,62 +775,27 @@ class _StreamRealtimePrinter:
             self.start_hidden_thinking_hint()
             return
         with self._io_lock:
-            self._start_channel("thinking")
+            # Thinking выводится в отдельной строке перед ответом
             sys.stdout.write(text)
             sys.stdout.flush()
 
     def on_answer(self, piece: str) -> None:
+        """Вывод answer чанка сразу без буферизации (как в нативном Ollama)."""
         raw = str(piece or "")
         if not raw:
             return
         text = _sanitize_stream_text(raw)
         if not text:
             return
-        
-        # If this is the very first piece of the actual answer, strip leading whitespace/newlines
-        # so it doesn't drop to a new line below "assistant> "
-        if not self.answer_parts and not self._pending_answer:
-            text = text.lstrip()
-            if not text:
-                return
 
-        # Some backends can resend overlapping answer chunks.
-        # Drop any prefix already present at the tail of rendered/pending text.
-        already = self.rendered_answer() + "".join(self._pending_answer)
-        if already and text:
-            max_overlap = min(len(already), len(text))
-            cut = 0
-            for size in range(max_overlap, 0, -1):
-                if text.startswith(already[-size:]):
-                    cut = size
-                    break
-            if cut > 0:
-                text = text[cut:]
-                if not text:
-                    return
-
-        if self.prefer_thinking_first and not self._thinking_started:
-            # If we prefer thinking first, we only buffer if thinking hasn't started
-            # But we can't buffer forever. If we get a lot of answer and no thinking,
-            # we should just release it.
-            if len("".join(self._pending_answer)) + len(text) > 100:
-                self._emit_answer("".join(self._pending_answer) + text)
-                self._pending_answer = []
-                self.prefer_thinking_first = False
-            else:
-                self._pending_answer.append(text)
-            return
-
-        if self._pending_answer:
-            text = "".join(self._pending_answer) + text
-            self._pending_answer = []
-        self._emit_answer(text)
+        # Выводим сразу без буферизации
+        with self._io_lock:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        self.answer_parts.append(text)
 
     def finalize(self) -> None:
         self.stop_hidden_thinking_hint(clear_line=True)
-        if self._pending_answer:
-            self._emit_answer("".join(self._pending_answer))
-            self._pending_answer = []
 
     def rendered_answer(self) -> str:
         return "".join(self.answer_parts)
@@ -843,37 +804,9 @@ class _StreamRealtimePrinter:
         return "".join(self.thinking_parts)
 
     def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None, debug_trace: dict | None = None) -> None:
+        """Завершение стриминга с финальными данными."""
         self.stop_hidden_thinking_hint(clear_line=True)
-        # Flush any pending buffer first
-        if self._pending_answer:
-            self._emit_answer("".join(self._pending_answer))
-            self._pending_answer = []
 
-        # Append any tail characters not yet streamed.
-        if isinstance(answer_final, str) and answer_final:
-            final_san = _sanitize_stream_text(answer_final)
-            rendered = self.rendered_answer()
-            if not rendered:
-                if final_san:
-                    self._emit_answer(final_san)
-            elif final_san.startswith(rendered):
-                tail = final_san[len(rendered):]
-                if tail:
-                    self._emit_answer(tail)
-            # Out-of-sync stream/final mismatch: do not append fallback tail to avoid duplicates.
-
-        # Append any thinking tail not yet streamed.
-        if self.show_thinking and isinstance(thinking_final, str) and thinking_final:
-            final_t_san = _sanitize_stream_text(thinking_final)
-            rendered_t = self.rendered_thinking()
-            if not rendered_t:
-                if final_t_san:
-                    self._emit_thinking(final_t_san)
-            elif final_t_san.startswith(rendered_t):
-                tail_t = final_t_san[len(rendered_t):]
-                if tail_t:
-                    self._emit_thinking(tail_t)
-        
         # Show debug memory info (after answer and thinking)
         if self.debug_memory and not self._memory_retrieval_shown:
             self._show_debug_memory(debug_trace)
@@ -950,48 +883,6 @@ class _StreamRealtimePrinter:
             print(f"  stage: {stage}")
             sys.stdout.flush()
 
-    def _emit_thinking(self, text: str) -> None:
-        if not text:
-            return
-        self._thinking_started = False
-        self.thinking_parts.append(text)
-        self._thinking_printed_chars += len(text)
-        with self._io_lock:
-            self._start_channel("thinking")
-            sys.stdout.write(text)
-            sys.stdout.flush()
-
-    def _emit_answer(self, text: str) -> None:
-        if not text:
-            return
-        self.stop_hidden_thinking_hint(clear_line=True)
-        # Force strip leading whitespace on the very first text chunk
-        if not self.answer_parts:
-            text = text.lstrip()
-            if not text:
-                return
-        with self._io_lock:
-            self._start_channel("assistant")
-            self.answer_parts.append(text)
-            self._answer_printed_chars += len(text)
-            sys.stdout.write(text)
-            sys.stdout.flush()
-
-    def _start_channel(self, channel: str) -> None:
-        target = "thinking" if str(channel or "").lower() == "thinking" else "assistant"
-        if self._current_channel == target:
-            return
-        if self._current_channel == "thinking_hint":
-            self._clear_hidden_hint_line_locked()
-        if self._printed_any:
-            sys.stdout.write("\n")
-        if target == "thinking":
-            sys.stdout.write("[Thinking] ")
-        else:
-            sys.stdout.write("assistant> ")
-        self._printed_any = True
-        self._current_channel = target
-
 
 def _sanitize_stream_text(piece: str) -> str:
     src = str(piece or "")
@@ -1002,25 +893,32 @@ def _sanitize_stream_text(piece: str) -> str:
 
 
 def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) -> int:
+    """Отправка сообщения и прямой вывод ответа (как в нативном Ollama)."""
     try:
         reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
         if _is_generation_fallback(reply.answer):
-            print()
-            print("LLM backend недоступен. Пробую автоматически переключиться на локальный Ollama и повторить запрос...")
-            if _ensure_model_backend(state):
-                reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
+            # Проверяем, действительно ли backend недоступен
+            backend_dead = False
+            try:
+                state.api.health()
+            except Exception:
+                backend_dead = True
+
+            if backend_dead:
+                print()
+                print("LLM backend недоступен. Пробую автоматически переключиться на локальный Ollama и повторить запрос...")
+                if _ensure_model_backend(state):
+                    reply, streamed_text, streamed_thinking = _stream_once(state, text, command_output=command_output)
+
         if _is_generation_fallback(reply.answer):
             _print_backend_hint(state)
 
-        if (not str(streamed_text or "")) and str(reply.answer or ""):
-            # Print full answer only when stream produced no visible answer at all.
-            print(f"assistant> {str(reply.answer or '')}", end="")
+        # Новая строка после ответа
         print()
         if not bool(command_output):
             model = str(getattr(reply, "model", "") or "")
             if model:
                 print(f"[model: {model}]")
-            # Debug memory и thinking теперь показываются в _stream_once через printer
         state.online = True
         return 0
     except ApiClientError as exc:
@@ -1030,6 +928,7 @@ def _send_chat(state: ConsoleState, text: str, *, command_output: bool = False) 
         return 1
 
 def _stream_once(state: ConsoleState, text: str, *, command_output: bool = False):
+    """Стриминг запроса с прямым выводом в консоль."""
     renderer = _ConsoleChunkRenderer()
     prefer_thinking_first = bool(state.show_thinking and state.thinking_first)
     printer = _StreamRealtimePrinter(
@@ -1040,6 +939,12 @@ def _stream_once(state: ConsoleState, text: str, *, command_output: bool = False
     )
     if (not bool(command_output)) and (not bool(state.show_thinking)) and bool(state.think_enabled):
         printer.start_hidden_thinking_hint()
+    
+    # Печатаем префикс перед стримингом (как в нативном Ollama)
+    if not command_output:
+        sys.stdout.write("assistant> ")
+        sys.stdout.flush()
+    
     try:
         reply = state.api.stream_chat(
             text=text,

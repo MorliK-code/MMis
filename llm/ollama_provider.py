@@ -276,17 +276,35 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
-def _stitch_thinking_delta(prev_char: str, delta: str) -> tuple[str, str]:
-    text = str(delta or "")
-    if not text:
-        return "", str(prev_char or "")
-
-    next_prev = str(prev_char or "")
-    for ch in reversed(text):
-        if not ch.isspace():
-            next_prev = ch
-            break
-    return text, next_prev
+def _stitch_thinking_delta(prev_full: str, current_full: str) -> tuple[str, str]:
+    """
+    Вычисляет дельту thinking между предыдущим полным значением и текущим.
+    
+    Ollama в stream режиме возвращает полное накопленное значение thinking в каждом чанке,
+    а не только дельту. Поэтому нужно вычислять дельту самостоятельно.
+    
+    Args:
+        prev_full: Предыдущее полное значение thinking
+        current_full: Текущее полное значение thinking
+    
+    Returns:
+        Tuple[str, str]: (дельта для отправки в UI, новое полное значение)
+    """
+    current = str(current_full or "")
+    prev = str(prev_full or "")
+    
+    if not current:
+        # Пустой thinking в чанке — это нормально (только текст ответа)
+        return "", prev
+    
+    if current.startswith(prev):
+        # Нормальный случай: новое значение содержит старое как префикс
+        delta = current[len(prev):]
+        return delta, current
+    
+    # Edge case: если текущее не начинается с предыдущего (маловероятно)
+    # Отправляем всё текущее значение
+    return current, current
 
 
 class OllamaProvider(LLMProviderBase):
@@ -390,17 +408,18 @@ class OllamaProvider(LLMProviderBase):
         stream = self._chat_with_retry(req=req, model=model, stream=True)
         chunk_count = 0
         chars = 0
-        prev_thinking_char = ""
+        prev_thinking_full = ""
         for raw_chunk in stream:
             chunk = _as_dict(raw_chunk)
             msg = dict(chunk.get("message") or {})
             text_delta = str(msg.get("content") or "")
-            thinking_delta = _extract_thinking(msg, chunk)
-            thinking_delta, prev_thinking_char = _stitch_thinking_delta(prev_thinking_char, thinking_delta)
+            thinking_full = _extract_thinking(msg, chunk)
+            thinking_delta, prev_thinking_full = _stitch_thinking_delta(prev_thinking_full, thinking_full)
             tool_calls_delta = _parse_tool_calls_from_message(msg, text_fallback=text_delta)
             done = bool(chunk.get("done", False))
             chunk_count += 1
             chars += len(text_delta)
+            
             if done:
                 log_json(
                     LOGGER,

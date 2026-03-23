@@ -2,22 +2,45 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa",
-    "turn_id": 0,
+    "turn_id": 18,
     "active_character_id": "asya",
     "active_mode": "chatting",
-    "mode_lock": false,
+    "mode_lock": true,
     "mode_until": "",
     "web_mode": "auto",
     "thinking_enabled": false,
     "output_format": {
-      "show_parameters": null,
-      "show_summary": null
+      "show_parameters": false,
+      "show_summary": false
     },
     "quality_profile": "ASYA",
     "active_goal": "",
     "active_tasks": [],
-    "last_signals": {},
-    "last_actions": [],
+    "last_signals": {
+      "emotion_intensity": 0.0,
+      "emotion_arousal": 0.0,
+      "active_mode": "chatting",
+      "has_code": false,
+      "has_traceback": false
+    },
+    "last_actions": [
+      {
+        "type": "CHARACTER_PERSONA_UPDATED",
+        "character_id": "asya",
+        "ts": "2026-03-23T14:40:59.043+02:00"
+      },
+      {
+        "type": "CHARACTER_PERSONA_UPDATED",
+        "character_id": "asya",
+        "ts": "2026-03-23T14:40:59.072+02:00"
+      },
+      {
+        "type": "TURN_FINISHED",
+        "turn_id": 18,
+        "assistant_chars": 24,
+        "ts": "2026-03-23T14:41:06.269+02:00"
+      }
+    ],
     "context_stack": []
   },
   "characters": {
@@ -46,52 +69,89 @@
           "preferences_pending": [],
           "style_bias": {}
         },
-        "baseline_traits": {}
+        "baseline_traits": {},
+        "relation_state": {
+          "familiarity": 0.2896,
+          "trust": 0.5592,
+          "teasing_permission": 0.1075,
+          "softness_bias": 0.5045000000000001
+        }
       },
       "local_context": {
         "last_topic_weights": {},
-        "last_seen_ts": "2026-03-22T20:20:23.558+02:00"
+        "last_seen_ts": "2026-03-23T14:40:59.072+02:00",
+        "last_update_turn_id": 18,
+        "last_update_conversation_id": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa"
       }
     }
   },
   "conversation_id": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa",
-  "turn_id": 0,
+  "turn_id": 18,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
-  "mode_lock": false,
+  "mode_lock": true,
   "mode_until": "",
   "web_mode": "auto",
   "thinking_enabled": false,
   "output_format": {
-    "show_parameters": null,
-    "show_summary": null
+    "show_parameters": false,
+    "show_summary": false
   },
   "quality_profile": "ASYA",
   "active_goal": "",
   "active_tasks": [],
-  "last_signals": {},
-  "last_actions": [],
-  "context_tags": {},
+  "last_signals": {
+    "emotion_intensity": 0.0,
+    "emotion_arousal": 0.0,
+    "active_mode": "chatting",
+    "has_code": false,
+    "has_traceback": false
+  },
+  "last_actions": [
+    {
+      "type": "CHARACTER_PERSONA_UPDATED",
+      "character_id": "asya",
+      "ts": "2026-03-23T14:40:59.043+02:00"
+    },
+    {
+      "type": "CHARACTER_PERSONA_UPDATED",
+      "character_id": "asya",
+      "ts": "2026-03-23T14:40:59.072+02:00"
+    },
+    {
+      "type": "TURN_FINISHED",
+      "turn_id": 18,
+      "assistant_chars": 24,
+      "ts": "2026-03-23T14:41:06.269+02:00"
+    }
+  ],
+  "context_tags": {
+    "lang": "ru",
+    "intent": "chat",
+    "last_intent": "chat",
+    "mood": "neutral",
+    "last_mood": "neutral"
+  },
   "traits": {},
   "policies": {},
   "retrieved_memories": [],
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "",
-    "last_user_hash": "",
-    "last_user_ts": "",
-    "prev_user_ts": "",
-    "last_assistant_message": "",
-    "last_assistant_ts": "",
-    "last_action": "",
-    "last_action_ts": "",
+    "last_user_message": "привет",
+    "last_user_hash": "e24505f94db2b5df4c7c2596b0788e720e073021",
+    "last_user_ts": "2026-03-23T14:40:58.917+02:00",
+    "prev_user_ts": "2026-03-23T14:35:38.576+02:00",
+    "last_assistant_message": "привет! Как у тебя дела?",
+    "last_assistant_ts": "2026-03-23T14:41:06.247+02:00",
+    "last_action": "assistant_message",
+    "last_action_ts": "2026-03-23T14:41:06.269+02:00",
     "repeat_count": 0,
-    "session_id": "",
-    "prev_session_id": "",
-    "greeting_date_local": "",
-    "greeting_ts": ""
+    "session_id": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa",
+    "prev_session_id": "11a21d2c-b508-4ca2-9cd1-a5f0cc5d0efa",
+    "greeting_date_local": "2026-03-23",
+    "greeting_ts": "2026-03-23T14:41:06.247+02:00"
   },
   "address_terms": {
     "last_term_used_at": "",
@@ -104,10 +164,155 @@
     "last_enable_directive_ts": ""
   },
   "dialog_summary": "",
-  "history": [],
+  "history": [
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "нормально, а у тебя7"
+    },
+    {
+      "role": "assistant",
+      "content": "У меня тоже всё нормально, спасибо! Что нового в твоей жизни?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "I got stuck during generation. Please try again."
+    },
+    {
+      "role": "user",
+      "content": "как дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "I got stuck during generation. Please try again."
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "I got stuck during generation. Please try again."
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "I got stuck during generation. Please try again."
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "как дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "я спросил первый"
+    },
+    {
+      "role": "assistant",
+      "content": "понимаю, ты был первым, кто заговорил. как ты чувствуешь себя сейчас?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "привет! Как у тебя дела?"
+    }
+  ],
   "character_locked": false,
-  "character_last_switch_ts": "",
-  "active_personality_id": "default",
+  "character_last_switch_ts": "2026-03-22T20:39:48.455+02:00",
+  "active_personality_id": "asya",
   "personality_blend": {
     "active": false,
     "from": "default",

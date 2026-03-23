@@ -340,7 +340,10 @@ class ResponsePipelineAgentLoopTests(unittest.TestCase):
         self.assertEqual(result.tool_calls, [])
         self.assertEqual(int(result.stats.get("agent_tool_calls") or 0), 1)
 
-    def test_agent_loop_streaming_logs_and_falls_back_to_generate_on_stream_error(self) -> None:
+    def test_agent_loop_streaming_error_logged_not_fallback(self) -> None:
+        """
+        Проверить, что streaming ошибка логируется с деталями, а не маскируется fallback.
+        """
         provider = _StreamingFallbackProvider()
         pipeline = ResponsePipeline(provider=provider)
 
@@ -348,12 +351,12 @@ class ResponsePipelineAgentLoopTests(unittest.TestCase):
             route="chat",
             user_msg="Say hello",
             state={
-                "conversation_id": "conv-agent-loop-stream-fallback",
+                "conversation_id": "conv-agent-loop-stream-error",
                 "turn_id": 3,
                 "active_character_id": "asya",
             },
             meta={
-                "conversation_id": "conv-agent-loop-stream-fallback",
+                "conversation_id": "conv-agent-loop-stream-error",
                 "turn_id": 3,
                 "profile": PROFILE_AUTONOMOUS,
                 "stream_on_answer_chunk": lambda _piece: None,
@@ -363,11 +366,10 @@ class ResponsePipelineAgentLoopTests(unittest.TestCase):
             policies={},
         )
 
-        self.assertEqual(result.text, "Fallback final answer.")
-        self.assertEqual(len(provider.stream_requests), 1)
-        self.assertEqual(len(provider.generate_requests), 1)
-        self.assertTrue(any("agent_loop_stream_error=RuntimeError" in row for row in list(result.logs or [])))
-        self.assertTrue(any("agent_loop_stream_fallback=generate" in row for row in list(result.logs or [])))
+        # Ошибка должна быть залогирована с полным текстом
+        self.assertTrue(any("agent_loop_stream_error=RuntimeError:" in row for row in list(result.logs or [])))
+        # Не должно быть старого fallback лога
+        self.assertFalse(any("agent_loop_stream_fallback=generate" in row for row in list(result.logs or [])))
 
 
 if __name__ == "__main__":

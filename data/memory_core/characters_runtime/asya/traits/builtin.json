@@ -4,25 +4,37 @@
       "type": "scalar",
       "value": 0.32,
       "min": 0.0,
-      "max": 1.0,
+      "max": 0.4,
       "decay_per_day": 0.01,
       "confidence": 0.9,
       "tags": [
         "tone",
         "humor"
-      ]
+      ],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "",
+      "last_used_ts": "",
+      "decay_ts": ""
     },
     "warmth": {
       "type": "scalar",
       "value": 0.68,
       "min": 0.0,
-      "max": 1.0,
+      "max": 0.82,
       "decay_per_day": 0.01,
       "confidence": 0.9,
       "tags": [
         "tone",
         "support"
-      ]
+      ],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "",
+      "last_used_ts": "",
+      "decay_ts": ""
     },
     "romance": {
       "type": "scalar",
@@ -34,19 +46,31 @@
       "tags": [
         "tone",
         "warm"
-      ]
+      ],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "",
+      "last_used_ts": "",
+      "decay_ts": ""
     },
     "playfulness": {
       "type": "scalar",
       "value": 0.46,
       "min": 0.0,
-      "max": 1.0,
+      "max": 0.72,
       "decay_per_day": 0.01,
       "confidence": 0.7,
       "tags": [
         "tone",
         "humor"
-      ]
+      ],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "",
+      "last_used_ts": "",
+      "decay_ts": ""
     },
     "thoughtfulness": {
       "type": "scalar",
@@ -58,7 +82,13 @@
       "tags": [
         "tone",
         "care"
-      ]
+      ],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "",
+      "last_used_ts": "",
+      "decay_ts": ""
     }
   }
 }

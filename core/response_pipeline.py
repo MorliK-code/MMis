@@ -1664,14 +1664,19 @@ class GenerateStage(PipelineStage):
         use_agent_loop = bool(_to_bool(req.metadata.get("agent_loop"), default=False))
         stream_answer_cb = ctx.meta.get("stream_on_answer_chunk")
         stream_thinking_cb = ctx.meta.get("stream_on_thinking_chunk")
-        
+
         # Streaming теперь работает ВСЕГДА, даже с agent_loop
         # agent_loop будет вызывать on_answer/on_thinking callbacks во время генерации
         use_stream = bool(callable(stream_answer_cb) or callable(stream_thinking_cb))
-        
+
         if use_stream and not use_agent_loop:
             # Простой streaming без agent_loop
-            stream_result = self._generate_stream(ctx, req, on_answer=stream_answer_cb, on_thinking=stream_thinking_cb)
+            stream_result = self._generate_stream(
+                ctx,
+                req,
+                on_answer=stream_answer_cb,
+                on_thinking=stream_thinking_cb,
+            )
             if stream_result is not None:
                 text_out, thinking_out, model_name, stream_stats = stream_result
                 ctx.raw_output = text_out
@@ -1688,9 +1693,14 @@ class GenerateStage(PipelineStage):
                 }
                 stats.update(_as_dict(stream_stats))
                 ctx.stats = stats
-                ctx.logs.append(f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')} stream=1")
+                ctx.logs.append(
+                    f"stage=generate route={ctx.route} model={ctx.stats.get('served_model')} stream=1"
+                )
                 return ctx
-            ctx.logs.append("stage=generate stream=fallback_to_generate")
+
+            # None здесь означает только одно:
+            # provider.stream() вообще недоступен.
+            ctx.logs.append("stage=generate stream=provider_missing fallback_to_generate")
         elif use_stream and use_agent_loop:
             ctx.logs.append("stage=generate stream=enabled with agent_loop")
         elif not use_stream:
@@ -2200,7 +2210,7 @@ class GenerateStage(PipelineStage):
     ) -> LLMResponse:
         """
         Streaming генерация внутри agent_loop.
-        
+
         Использует provider.stream() вместо provider.generate() и вызывает
         callbacks для каждого chunk.
         """
@@ -2218,44 +2228,15 @@ class GenerateStage(PipelineStage):
         usage = Usage()
         timings = Timings()
 
-        probe_tool_calls = bool(list(req.tools or [])) and int(
-            _to_int(_pick_value(req.metadata.get("agent_loop_iteration"), 1), 1) or 1
-        ) == 1
-        probe_answer_buffer: list[str] = []
-        probe_thinking_buffer: list[str] = []
-        probe_visible_pieces = 0
-        probe_released = not probe_tool_calls
-
-        def _release_probe_buffers() -> None:
-            nonlocal probe_released
-            if probe_released:
-                return
-            if callable(on_thinking):
-                for piece in list(probe_thinking_buffer or []):
-                    try:
-                        on_thinking(piece)
-                    except Exception:
-                        pass
-            if callable(on_answer):
-                for piece in list(probe_answer_buffer or []):
-                    try:
-                        on_answer(piece)
-                    except Exception:
-                        pass
-            probe_answer_buffer.clear()
-            probe_thinking_buffer.clear()
-            probe_released = True
+        # Счётчики для диагностики streaming
+        visible_answer_chunks = 0
+        visible_thinking_chunks = 0
 
         def _handle_visible_answer(piece: str) -> None:
-            nonlocal probe_visible_pieces, probe_released
+            nonlocal visible_answer_chunks
             if not piece:
                 return
-            if probe_tool_calls and not tool_calls and not probe_released:
-                probe_answer_buffer.append(piece)
-                probe_visible_pieces += 1
-                if probe_visible_pieces >= 2:
-                    _release_probe_buffers()
-                return
+            visible_answer_chunks += 1
             if callable(on_answer):
                 try:
                     on_answer(piece)
@@ -2263,11 +2244,10 @@ class GenerateStage(PipelineStage):
                     pass
 
         def _handle_visible_thinking(piece: str) -> None:
+            nonlocal visible_thinking_chunks
             if not piece:
                 return
-            if probe_tool_calls and not tool_calls and not probe_released:
-                probe_thinking_buffer.append(piece)
-                return
+            visible_thinking_chunks += 1
             if callable(on_thinking):
                 try:
                     on_thinking(piece)
@@ -2282,10 +2262,6 @@ class GenerateStage(PipelineStage):
 
                 tool_calls_delta = list(getattr(chunk, "tool_calls_delta", []) or [])
                 if tool_calls_delta:
-                    if probe_tool_calls and not probe_released:
-                        probe_answer_buffer.clear()
-                        probe_thinking_buffer.clear()
-                        probe_released = True
                     for call in tool_calls_delta:
                         if not isinstance(call, ToolCall):
                             continue
@@ -2321,13 +2297,17 @@ class GenerateStage(PipelineStage):
             if visible:
                 answer_parts.append(visible)
                 _handle_visible_answer(visible)
-            if probe_tool_calls and not tool_calls and not probe_released:
-                _release_probe_buffers()
+            
+            ctx.logs.append(
+                f"stage=generate agent_loop_stream_visible answer_chunks={visible_answer_chunks} "
+                f"thinking_chunks={visible_thinking_chunks} tool_calls={len(tool_calls)}"
+            )
         except Exception as exc:
-            ctx.logs.append(f"stage=generate agent_loop_stream_error={type(exc).__name__}")
+            ctx.logs.append(
+                f"stage=generate agent_loop_stream_error={type(exc).__name__}:{exc}"
+            )
             ctx.errors.append(f"agent_loop_stream:{type(exc).__name__}:{exc}")
-            ctx.logs.append("stage=generate agent_loop_stream_fallback=generate")
-            return self.provider.generate(req)
+            raise
 
         return LLMResponse(
             text="".join(answer_parts).strip(),
@@ -2341,25 +2321,25 @@ class GenerateStage(PipelineStage):
     def _execute_memory_retrieve_tool(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
         """
         Выполнить memory_retrieve tool.
-        
+
         Эмитит debug events если доступен stream_on_debug_event.
         """
-        manager = ctx.meta.get("memory_manager")
+        memory_core = ctx.meta.get("memory_core")
         debug_event = ctx.meta.get("stream_on_debug_event")
-        
+
         def emit(kind: str, payload: dict[str, Any]) -> None:
             if callable(debug_event):
                 try:
                     debug_event(kind, payload)
                 except Exception:
                     pass
-        
-        if manager is None or not hasattr(manager, "build_context"):
-            emit("memory_error", {"tool": _MEMORY_TOOL_NAME, "error": "memory_manager_not_available"})
+
+        if memory_core is None:
+            emit("memory_error", {"tool": _MEMORY_TOOL_NAME, "error": "memory_core_not_available"})
             payload = {
                 "tool": _MEMORY_TOOL_NAME,
                 "status": "error",
-                "error": "memory manager is not available",
+                "error": "memory core is not available",
             }
             return _compact_json(payload), True
 
@@ -2697,9 +2677,9 @@ class GenerateStage(PipelineStage):
                     except Exception:
                         pass
         except Exception as exc:
-            ctx.logs.append(f"stage=generate stream_error={type(exc).__name__}")
+            ctx.logs.append(f"stage=generate stream_error={type(exc).__name__}:{exc}")
             ctx.errors.append(f"stream:{type(exc).__name__}:{exc}")
-            return None
+            raise
 
         return ("".join(answer_parts).strip(), "".join(thinking_parts).strip(), model_name, dict(stream_stats))
 
@@ -4737,8 +4717,8 @@ class ResponsePipeline:
             try:
                 ctx = stage.run(ctx)
             except Exception as exc:
-                ctx.errors.append(f"{name}:{exc}")
-                ctx.logs.append(f"stage={name} error={type(exc).__name__}")
+                ctx.errors.append(f"{name}:{type(exc).__name__}:{exc}")
+                ctx.logs.append(f"stage={name} error={type(exc).__name__}:{exc}")
                 if name == "generate":
                     if ctx.route == "command":
                         ctx.text = "Command processing failed. Check logs and command syntax."
@@ -5700,7 +5680,14 @@ def _memory_retrieve_tool_spec() -> ToolSpec:
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": [scope.value for scope in _default_memory_scopes()],
+                        "enum": [
+                            "conversation",
+                            "session",
+                            "project",
+                            "global_user",
+                            "character",
+                            "temporary",
+                        ],
                     },
                     "description": "Optional memory scopes to search.",
                 },
@@ -5976,11 +5963,11 @@ def _agent_loop_tools(ctx: PipelineContext) -> list[ToolSpec]:
     - history_read_recent (точные последние сообщения)
     - history_search (поиск по истории)
     """
-    manager = ctx.meta.get("memory_manager")
+    memory_core = ctx.meta.get("memory_core")
     tools: list[ToolSpec] = []
 
-    # Memory retrieve (semantic search)
-    if manager is not None and hasattr(manager, "build_context"):
+    # Memory retrieve (semantic search) — всегда добавляем, если memory_core доступен
+    if memory_core is not None:
         tools.append(_memory_retrieve_tool_spec())
 
     # History tools (exact DB reads)
