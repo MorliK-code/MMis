@@ -2,7 +2,8 @@
   "schema_version": 1,
   "traits": {
     "warmth": 0.41,
-    "sarcasm": 0.19
+    "sarcasm": 0.19,
+    "verbosity": 0.437
   },
   "mood": "playful",
   "locks": {
@@ -27,10 +28,13 @@
       "ban_word:could you clarify what you mean"
     ],
     "preferences_pending": [],
-    "style_bias": {},
+    "style_bias": {
+      "verbosity": -0.02300000000000002
+    },
     "baseline_traits": {
       "warmth": 0.41,
-      "sarcasm": 0.19
+      "sarcasm": 0.19,
+      "verbosity": 0.46
     }
   }
 }
