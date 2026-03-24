@@ -1,6 +1,6 @@
 {
   "mood": "teasing",
-  "last_update_ts": "2026-03-24T04:50:28.564+02:00",
+  "last_update_ts": "2026-03-24T05:25:18.926+02:00",
   "active_traits": [
     "directness",
     "emoji_rate",
@@ -39,21 +39,21 @@
   "emotional_state_before": {
     "schema_version": 1,
     "mood": "teasing",
-    "valence": 0.08233721753021303,
-    "arousal": 0.08953673418721957,
-    "intensity": 0.12532347993210105,
-    "trigger": "happy",
-    "last_update_ts": "2026-03-24T04:48:28.950+02:00",
+    "valence": 0.060261272296906934,
+    "arousal": 0.07003244908437392,
+    "intensity": 0.07134422056465922,
+    "trigger": "neutral",
+    "last_update_ts": "2026-03-24T05:21:19.284+02:00",
     "cooldown_until_ts": ""
   },
   "emotional_state_after": {
     "schema_version": 1,
     "mood": "teasing",
-    "valence": 0.07034687313301125,
-    "arousal": 0.07906731765309766,
-    "intensity": 0.09595792127065222,
+    "valence": 0.05173555352355422,
+    "arousal": 0.0622003407835322,
+    "intensity": 0.05061246874937725,
     "trigger": "",
-    "last_update_ts": "2026-03-24T04:50:28.562+02:00",
+    "last_update_ts": "2026-03-24T05:25:18.923+02:00",
     "cooldown_until_ts": ""
   },
   "persona_feedback_applied": [],

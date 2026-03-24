@@ -177,8 +177,9 @@ class ConfigManager:
             normalized, _ = self.normalize_and_fill_defaults(merged, defaults=defaults)
             normalized_changed = True
 
-        if exists and migrated_changed:
-            self._write_migration_backup(raw_text)
+        # Migration backup отключён
+        # if exists and migrated_changed:
+        #     self._write_migration_backup(raw_text)
 
         if (not exists) or migrated_changed or normalized_changed:
             self.save_atomic(normalized)
@@ -316,12 +317,6 @@ class ConfigManager:
         except Exception:
             return {}
         return payload if isinstance(payload, dict) else {}
-
-    def _write_migration_backup(self, raw_text: str) -> None:
-        cfg_path = Path(self.path).expanduser().resolve()
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = cfg_path.with_name(f"{cfg_path.stem}.pre_migration.{stamp}{cfg_path.suffix}")
-        backup.write_text(str(raw_text or ""), encoding="utf-8")
 
 
 def _as_dict(value: Any) -> dict[str, Any]:

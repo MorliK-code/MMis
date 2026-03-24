@@ -2,7 +2,7 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-    "turn_id": 31,
+    "turn_id": 33,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -27,18 +27,31 @@
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-03-24T04:50:28.581+02:00"
-      },
-      {
-        "type": "CHARACTER_PERSONA_UPDATED",
-        "character_id": "asya",
-        "ts": "2026-03-24T04:50:28.613+02:00"
+        "ts": "2026-03-24T05:21:19.336+02:00"
       },
       {
         "type": "TURN_FINISHED",
-        "turn_id": 31,
-        "assistant_chars": 17,
-        "ts": "2026-03-24T04:50:37.021+02:00"
+        "turn_id": 32,
+        "assistant_chars": 24,
+        "ts": "2026-03-24T05:21:27.665+02:00"
+      },
+      {
+        "type": "TURN_STARTED",
+        "turn_id": 33,
+        "signals": {
+          "emotion_intensity": 0.0,
+          "emotion_arousal": 0.0,
+          "active_mode": "chatting",
+          "has_code": false,
+          "has_traceback": false
+        },
+        "ts": "2026-03-24T05:25:18.720+02:00",
+        "state_diff": {
+          "turn_id": {
+            "old": 32,
+            "new": 33
+          }
+        }
       }
     ],
     "context_stack": []
@@ -79,14 +92,14 @@
       },
       "local_context": {
         "last_topic_weights": {},
-        "last_seen_ts": "2026-03-24T04:50:28.612+02:00",
-        "last_update_turn_id": 31,
+        "last_seen_ts": "2026-03-24T05:21:19.334+02:00",
+        "last_update_turn_id": 32,
         "last_update_conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d"
       }
     }
   },
   "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-  "turn_id": 31,
+  "turn_id": 33,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -112,18 +125,31 @@
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-03-24T04:50:28.581+02:00"
-    },
-    {
-      "type": "CHARACTER_PERSONA_UPDATED",
-      "character_id": "asya",
-      "ts": "2026-03-24T04:50:28.613+02:00"
+      "ts": "2026-03-24T05:21:19.336+02:00"
     },
     {
       "type": "TURN_FINISHED",
-      "turn_id": 31,
-      "assistant_chars": 17,
-      "ts": "2026-03-24T04:50:37.021+02:00"
+      "turn_id": 32,
+      "assistant_chars": 24,
+      "ts": "2026-03-24T05:21:27.665+02:00"
+    },
+    {
+      "type": "TURN_STARTED",
+      "turn_id": 33,
+      "signals": {
+        "emotion_intensity": 0.0,
+        "emotion_arousal": 0.0,
+        "active_mode": "chatting",
+        "has_code": false,
+        "has_traceback": false
+      },
+      "ts": "2026-03-24T05:25:18.720+02:00",
+      "state_diff": {
+        "turn_id": {
+          "old": 32,
+          "new": 33
+        }
+      }
     }
   ],
   "context_tags": {
@@ -141,17 +167,17 @@
   "cooldowns": {
     "last_user_message": "Привет",
     "last_user_hash": "2805ae8e7e12f182135f92fb90843bb1080d3be8",
-    "last_user_ts": "2026-03-24T04:50:28.433+02:00",
-    "prev_user_ts": "2026-03-24T04:48:28.820+02:00",
-    "last_assistant_message": "Привет! Как дела?",
-    "last_assistant_ts": "2026-03-24T04:50:36.995+02:00",
-    "last_action": "assistant_message",
-    "last_action_ts": "2026-03-24T04:50:37.022+02:00",
+    "last_user_ts": "2026-03-24T05:25:18.720+02:00",
+    "prev_user_ts": "2026-03-24T05:21:19.126+02:00",
+    "last_assistant_message": "Привет! Как у тебя дела?",
+    "last_assistant_ts": "2026-03-24T05:21:27.638+02:00",
+    "last_action": "user_message",
+    "last_action_ts": "2026-03-24T05:25:18.720+02:00",
     "repeat_count": 0,
     "session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
     "prev_session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
     "greeting_date_local": "2026-03-24",
-    "greeting_ts": "2026-03-24T04:50:36.995+02:00"
+    "greeting_ts": "2026-03-24T05:21:27.638+02:00"
   },
   "address_terms": {
     "last_term_used_at": "",
@@ -408,6 +434,18 @@
     {
       "role": "assistant",
       "content": "Привет! Как дела?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "Привет! Как у тебя дела?"
+    },
+    {
+      "role": "user",
+      "content": "Привет"
     }
   ],
   "character_locked": false,

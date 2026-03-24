@@ -1245,7 +1245,8 @@ def _start_api_process(state: ConsoleState) -> bool:
         return False
 
 
-def _wait_for_api(state: ConsoleState, timeout_s: float = 15.0) -> bool:
+def _wait_for_api(state: ConsoleState, timeout_s: float = 25.0) -> bool:
+    """Ждём запуска API (увеличено до 25 сек для надёжности)."""
     deadline = time.time() + max(2.0, float(timeout_s))
     while time.time() < deadline:
         if _ensure_connected(state):
@@ -1253,7 +1254,7 @@ def _wait_for_api(state: ConsoleState, timeout_s: float = 15.0) -> bool:
         proc = state.api_process
         if proc is not None and proc.poll() is not None:
             break
-        time.sleep(0.35)
+        time.sleep(0.5)  # Увеличили интервал проверки
     return False
 
 
