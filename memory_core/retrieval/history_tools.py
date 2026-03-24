@@ -137,3 +137,178 @@ def get_history_tools() -> list[ToolSpec]:
 def history_tools_list() -> list[ToolSpec]:
     """Алиас для get_history_tools()."""
     return get_history_tools()
+
+
+# ============================================================================
+# Execute functions — runtime handlers для history tools
+# ============================================================================
+
+def _normalize_role(role: str) -> str:
+    """Нормализует роль."""
+    role = str(role or "any").strip().lower()
+    if role in {"user", "assistant", "system", "any", "tool"}:
+        return role
+    return "any"
+
+
+def _normalize_order(order: str) -> str:
+    """Нормализует порядок."""
+    order = str(order or "newest_first").strip().lower()
+    if order in {"newest_first", "oldest_first"}:
+        return order
+    return "newest_first"
+
+
+def _execute_history_read_recent(
+    ctx: Any,
+    *,
+    limit: int = 10,
+    role: str = "any",
+    order: str = "newest_first",
+) -> HistoryReadResult:
+    """
+    Читает последние сообщения из истории.
+
+    Args:
+        ctx: Контекст pipeline.
+        limit: Максимальное количество сообщений.
+        role: Фильтр по роли (user | assistant | system | any).
+        order: Порядок (newest_first | oldest_first).
+
+    Returns:
+        HistoryReadResult.
+    """
+    history = list(ctx.state.get("history") or [])
+    normalized_role = _normalize_role(role)
+    normalized_order = _normalize_order(order)
+    
+    # Фильтруем по роли
+    if normalized_role != "any":
+        history = [
+            msg for msg in history
+            if str(msg.get("role") or "").strip().lower() == normalized_role
+        ]
+    
+    # Сортируем
+    if normalized_order == "newest_first":
+        history = list(reversed(history))
+    
+    # Ограничиваем
+    has_more = len(history) > limit
+    messages = history[:limit]
+    
+    return HistoryReadResult(
+        messages=messages,
+        total_count=len(history),
+        has_more=has_more,
+    )
+
+
+def _execute_history_search(
+    ctx: Any,
+    *,
+    query: str,
+    role: str = "any",
+    limit: int = 10,
+) -> HistoryReadResult:
+    """
+    Ищет сообщения в истории по тексту.
+
+    Args:
+        ctx: Контекст pipeline.
+        query: Поисковый запрос.
+        role: Фильтр по роли.
+        limit: Максимальное количество сообщений.
+
+    Returns:
+        HistoryReadResult.
+    """
+    history = list(ctx.state.get("history") or [])
+    normalized_role = _normalize_role(role)
+    query_lower = str(query or "").strip().lower()
+    
+    # Фильтруем по роли
+    if normalized_role != "any":
+        history = [
+            msg for msg in history
+            if str(msg.get("role") or "").strip().lower() == normalized_role
+        ]
+    
+    # Ищем по тексту
+    if query_lower:
+        history = [
+            msg for msg in history
+            if query_lower in str(msg.get("content") or "").lower()
+        ]
+    
+    # Сортируем по релевантности (простой heuristic)
+    if query_lower:
+        def score_msg(msg: dict) -> int:
+            content = str(msg.get("content") or "").lower()
+            if query_lower in content:
+                return content.count(query_lower)
+            return 0
+        history = sorted(history, key=score_msg, reverse=True)
+    
+    # Ограничиваем
+    has_more = len(history) > limit
+    messages = history[:limit]
+    
+    return HistoryReadResult(
+        messages=messages,
+        total_count=len(history),
+        has_more=has_more,
+    )
+
+
+def _execute_history_read_range(
+    ctx: Any,
+    *,
+    start_ts: str | None = None,
+    end_ts: str | None = None,
+    role: str = "any",
+    order: str = "newest_first",
+    limit: int = 50,
+) -> HistoryReadResult:
+    """
+    Читает сообщения из истории по диапазону.
+
+    Args:
+        ctx: Контекст pipeline.
+        start_ts: Начальная метка времени (ISO format).
+        end_ts: Конечная метка времени (ISO format).
+        role: Фильтр по роли.
+        order: Порядок.
+        limit: Максимальное количество сообщений.
+
+    Returns:
+        HistoryReadResult.
+    """
+    history = list(ctx.state.get("history") or [])
+    normalized_role = _normalize_role(role)
+    normalized_order = _normalize_order(order)
+    
+    # Фильтруем по роли
+    if normalized_role != "any":
+        history = [
+            msg for msg in history
+            if str(msg.get("role") or "").strip().lower() == normalized_role
+        ]
+    
+    # Фильтруем по времени (если указано)
+    # Примечание: это fallback для in-memory history
+    # Для полноценной фильтрации нужно использовать memory_core adapter
+    
+    # Сортируем
+    if normalized_order == "newest_first":
+        history = list(reversed(history))
+    
+    # Ограничиваем
+    has_more = len(history) > limit
+    messages = history[:limit]
+    
+    return HistoryReadResult(
+        messages=messages,
+        total_count=len(history),
+        has_more=has_more,
+    )

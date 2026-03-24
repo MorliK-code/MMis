@@ -93,6 +93,7 @@ class Database:
         self._create_workspaces_table()
         self._create_workspace_sources_table()
         self._create_runtime_state_table()
+        self._create_ingest_jobs_table()
     
     def _create_events_table(self) -> None:
         """Создаёт таблицу events."""
@@ -195,7 +196,34 @@ class Database:
                 updated_at REAL NOT NULL
             )
         """)
-    
+
+    def _create_ingest_jobs_table(self) -> None:
+        """Создаёт таблицу ingest_jobs для очереди обработки памяти."""
+        self._execute("""
+            CREATE TABLE IF NOT EXISTS ingest_jobs (
+                job_id TEXT PRIMARY KEY,
+                event_id TEXT NOT NULL,
+                job_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                priority INTEGER NOT NULL DEFAULT 5,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                locked_by TEXT,
+                locked_at REAL,
+                available_at REAL NOT NULL DEFAULT 0,
+                error_text TEXT,
+                payload_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+
+        # Индексы для ускорения поиска задач
+        self._execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON ingest_jobs(status)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_jobs_event ON ingest_jobs(event_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_jobs_available ON ingest_jobs(available_at)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_jobs_priority ON ingest_jobs(priority)")
+
     def close(self) -> None:
         """Закрывает соединение с базой данных."""
         if self._conn:

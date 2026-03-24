@@ -272,10 +272,121 @@ class IdentityCoreBuilder:
 
     @staticmethod
     def _adapt_memory_identity_core_snapshot(value: dict[str, Any] | None) -> dict[str, Any]:
+        """
+        Адаптирует memory identity snapshot в prompt-facing формат.
+
+        Поддерживает два формата:
+        1. Nested schema (addressing, interaction_style, boundaries, emotional_handling, assistant_trait_baseline)
+        2. Flat schema от memory_core.identity.IdentityProfile (user_name, assistant_style, etc.)
+        """
         row = dict(value or {})
         if not row:
             return {}
 
+        # 1. Если это nested schema — используем текущую логику
+        if any(key in row for key in (
+            "addressing",
+            "interaction_style",
+            "boundaries",
+            "emotional_handling",
+            "emotional_rules",
+            "assistant_trait_baseline",
+        )):
+            return IdentityCoreBuilder._adapt_nested_memory_identity_core_snapshot(row)
+
+        # 2. Если это flat schema от memory_core.identity.IdentityProfile
+        out: dict[str, Any] = {}
+
+        # Адресация
+        user_name = str(row.get("user_name") or "").strip()
+        user_address_form = str(row.get("user_address_form") or "").strip().lower()
+        
+        if user_name or user_address_form:
+            addressing: dict[str, Any] = {
+                "canonical_name": user_name,
+                "allowed_forms": [user_name] if user_name else [],
+                "forbidden_forms": [],
+                "use_name_by_default": bool(user_name),
+                "allow_diminutives": bool(user_address_form == "ты"),
+            }
+            out["addressing"] = addressing
+
+        # Interaction style из assistant_style и assistant_tone
+        assistant_style = str(row.get("assistant_style") or "").strip().lower()
+        assistant_tone = str(row.get("assistant_tone") or "").strip().lower()
+        
+        interaction_style: dict[str, Any] = {}
+        
+        if assistant_style == "concise":
+            interaction_style["prefers_short_answers"] = 1.0
+        elif assistant_style == "detailed":
+            interaction_style["prefers_short_answers"] = 0.0
+        
+        if assistant_tone == "warm":
+            interaction_style["prefers_directness"] = 0.72
+        elif assistant_tone == "professional":
+            interaction_style["prefers_directness"] = 0.82
+        
+        if interaction_style:
+            out["interaction_style"] = interaction_style
+
+        # Boundaries из never_do
+        never_do = IdentityCoreBuilder._to_clean_list(row.get("never_do"))
+        
+        if never_do:
+            boundaries: dict[str, Any] = {}
+            joined = " ".join(never_do).lower()
+            
+            if "не выдум" in joined or "не придумы" in joined or "not invent" in joined:
+                boundaries["do_not_invent_user_facts"] = True
+            if "не сюсюк" in joined or "baby" in joined:
+                boundaries["avoid_baby_talk"] = True
+            if "не перегруж" in joined or "overload" in joined:
+                boundaries["avoid_overloaded_intros"] = True
+            
+            if boundaries:
+                out["boundaries"] = boundaries
+
+        # Emotional handling из always_do
+        always_do = IdentityCoreBuilder._to_clean_list(row.get("always_do"))
+        
+        if always_do:
+            emotional_handling: dict[str, Any] = {}
+            joined = " ".join(always_do).lower()
+            
+            if "спокой" in joined or "деэскал" in joined or "deescalat" in joined:
+                emotional_handling["deescalate_on_irritation"] = True
+            if "поддерж" in joined or "тепл" in joined or "warm" in joined:
+                emotional_handling["warmth_upshift_on_user_distress"] = 0.2
+            
+            if emotional_handling:
+                out["emotional_handling"] = emotional_handling
+
+        # Assistant trait baseline из assistant_tone и assistant_style
+        trait_baseline: dict[str, float] = {}
+        
+        if assistant_tone == "warm":
+            trait_baseline["warmth_baseline"] = 0.78
+        if assistant_tone == "professional":
+            trait_baseline["professionalism_floor"] = 0.78
+        if assistant_style == "friendly":
+            trait_baseline["directness_baseline"] = 0.68
+        elif assistant_style == "formal":
+            trait_baseline["directness_baseline"] = 0.82
+        
+        if trait_baseline:
+            out["assistant_trait_baseline"] = trait_baseline
+
+        # Updated_at
+        updated_at = str(row.get("updated_at") or "").strip()
+        if updated_at:
+            out["updated_at"] = updated_at
+
+        return out
+
+    @staticmethod
+    def _adapt_nested_memory_identity_core_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+        """Адаптирует nested schema (старый формат)."""
         out: dict[str, Any] = {}
 
         addressing_in = dict(row.get("addressing") or {})

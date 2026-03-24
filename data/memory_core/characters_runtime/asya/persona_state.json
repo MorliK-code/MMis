@@ -2,8 +2,7 @@
   "schema_version": 1,
   "traits": {
     "warmth": 0.41,
-    "sarcasm": 0.19,
-    "verbosity": 0.437
+    "sarcasm": 0.19
   },
   "mood": "playful",
   "locks": {
@@ -28,13 +27,15 @@
       "ban_word:could you clarify what you mean"
     ],
     "preferences_pending": [],
-    "style_bias": {
-      "verbosity": -0.02300000000000002
-    },
+    "style_bias": {},
     "baseline_traits": {
       "warmth": 0.41,
-      "sarcasm": 0.19,
-      "verbosity": 0.46
+      "sarcasm": 0.19
     }
+  },
+  "stabilizer": {
+    "counters": {},
+    "last_promotion_at": "",
+    "last_decay_at": ""
   }
 }

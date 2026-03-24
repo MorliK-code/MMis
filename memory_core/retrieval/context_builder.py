@@ -35,42 +35,63 @@ class ContextBuilder:
     ) -> tuple[ContextPack, list[Citation]]:
         """
         Строит контекст из артефактов.
-        
+
         Args:
             artifacts: Список артефактов.
             query: Исходный запрос.
-            
+
         Returns:
             Кортеж (ContextPack, список Citation).
         """
         # Группируем артефакты по типам
         profile_facts = []
         active_tasks = []
-        episodes = []
+        runtime_episodes = []  # episode_event — runtime continuity
+        semantic_episodes = []  # episode — historical summaries
         facts = []
         document_chunks = []
-        
+
         for artifact in artifacts:
+            # Profile facts
             if artifact.artifact_type == "profile_fact":
                 profile_facts.append(artifact)
-            elif artifact.artifact_type == "task":
+
+            # Task states (новые + старые)
+            elif artifact.artifact_type in {"task", "task_state"}:
                 # Проверяем, активная ли задача
-                if artifact.metadata.get("task_status") == "open":
+                if artifact.metadata.get("task_status") == "open" or artifact.status == "active":
                     active_tasks.append(artifact)
+
+            # Runtime episodes (episode_event) — приоритет для continuity
+            elif artifact.artifact_type == "episode_event":
+                runtime_episodes.append(artifact)
+
+            # Semantic episodes (episode) — historical summaries
             elif artifact.artifact_type == "episode":
-                episodes.append(artifact)
-            elif artifact.artifact_type == "fact":
+                semantic_episodes.append(artifact)
+
+            # Facts, preferences, emotions
+            elif artifact.artifact_type in {"fact", "preference", "emotional_state"}:
                 facts.append(artifact)
-            elif artifact.artifact_type == "document_chunk":
+
+            # Documents
+            elif artifact.artifact_type in {"document_chunk", "document_summary"}:
                 document_chunks.append(artifact)
-        
+
         # Сортируем по важности и давности
         profile_facts = self._sort_by_relevance(profile_facts)[:5]
         active_tasks = self._sort_by_relevance(active_tasks)[:5]
-        episodes = self._sort_by_recency(episodes)[:3]
+        
+        # Runtime episodes имеют приоритет над semantic
+        runtime_episodes = self._sort_by_recency(runtime_episodes)[:2]
+        semantic_episodes = self._sort_by_recency(semantic_episodes)[:1]
+        
+        # Объединяем: сначала runtime, потом semantic
+        episodes = runtime_episodes + semantic_episodes
+        
         facts = self._sort_by_relevance(facts)[:10]
         document_chunks = self._sort_by_relevance(document_chunks)[:5]
-        
+
         # Создаём ContextPack
         context_pack = ContextPack(
             profile_facts=[a.summary or a.text for a in profile_facts],
@@ -79,7 +100,7 @@ class ContextBuilder:
             relevant_facts=[a.summary or a.text for a in facts],
             document_chunks=[a.text for a in document_chunks],
         )
-        
+
         # Создаём Citation
         citations = [
             Citation(

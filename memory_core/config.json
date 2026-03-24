@@ -1,0 +1,93 @@
+{
+  "enabled": true,
+  "db_path": "data/memory_core/memory.db",
+  "vector_path": "data/memory_core/vector",
+  "default_workspace": "global",
+  "default_namespace": "default",
+  "top_k": 8,
+  "enable_background_worker": false,
+  "worker_poll_interval": 2.0,
+  "llm": {
+    "provider": "ollama",
+    "model": "qwen3:4b",
+    "temperature": 0.1,
+    "max_tokens": 1024,
+    "timeout": 120.0,
+    "priority": {
+      "enabled": true,
+      "level": 1,
+      "wait_timeout": 300.0,
+      "description": "Priority 0=main (highest), 1=memory (lower). Memory LLM waits if main LLM is active."
+    },
+    "system_prompt": "Ты — Memory LLM, процессор памяти в системе MMis.\n\nТвоя задача:\nАнализировать события и предлагать, какие знания извлечь в память.\n\nТы НЕ общаешься с пользователем.\nТы НЕ пишешь напрямую в память.\nТы возвращаешь ТОЛЬКО JSON proposals.\n\nТипы артефактов:\n1. profile_fact — стабильный факт о пользователе (работа, проекты, навыки)\n2. preference — предпочтение (стиль общения, инструменты, настройки)\n3. episode_event — важное событие эпизода (встречи, решения, инсайты)\n4. task_state — состояние задачи (цель, прогресс, блокировки)\n5. emotional_state — эмоциональное состояние (разочарование, радость, усталость)\n6. identity_core — ядро личности (имя, как обращаться, характер ассистента)\n\nПараметры каждого proposal:\n- artifact_type: один из 6 типов выше\n- text: краткая формулировка факта (1-2 предложения)\n- summary: ещё короче (3-5 слов)\n- confidence: уверенность 0.0-1.0\n- scope: profile | episode | task | global\n- decay: none | slow | fast | immediate\n- retrieve_when: теги для retrieval (например [\"coding\", \"project\"])\n- action: create | update | merge | ignore | supersede\n\nПравила:\n1. Не создавай дубликаты существующих фактов\n2. Важные факты → confidence > 0.8\n3. Эмоции → decay: fast, scope: episode\n4. Identity core → decay: none, защищён от изменений\n5. Очевидные/пустые вещи → action: ignore\n6. Временные состояния не делай вечными фактами\n\nВозвращай ТОЛЬКО JSON:\n{\n  \"event_id\": \"...\",\n  \"importance\": 0.0-1.0,\n  \"should_process\": true/false,\n  \"proposals\": [\n    {\n      \"artifact_type\": \"profile_fact\",\n      \"text\": \"...\",\n      \"summary\": \"...\",\n      \"confidence\": 0.95,\n      \"scope\": \"profile\",\n      \"decay\": \"none\",\n      \"retrieve_when\": [\"tag1\", \"tag2\"],\n      \"action\": \"create\"\n    }\n  ]\n}"
+  },
+  "task_model_profiles": {
+    "memory_llm_process": {
+      "name": "memory_llm_process",
+      "provider": "ollama",
+      "model": "qwen3:4b",
+      "temperature": 0.1,
+      "max_tokens": 1024,
+      "timeout": 120.0,
+      "enabled": true
+    }
+  },
+  "artifact_types": {
+    "profile_fact": {
+      "description": "Стабильный факт о пользователе",
+      "default_decay": "none",
+      "default_scope": "profile",
+      "priority": 5
+    },
+    "preference": {
+      "description": "Предпочтение пользователя",
+      "default_decay": "slow",
+      "default_scope": "profile",
+      "priority": 5
+    },
+    "episode_event": {
+      "description": "Событие эпизода",
+      "default_decay": "fast",
+      "default_scope": "episode",
+      "priority": 3
+    },
+    "task_state": {
+      "description": "Состояние задачи",
+      "default_decay": "slow",
+      "default_scope": "task",
+      "priority": 4
+    },
+    "emotional_state": {
+      "description": "Эмоциональное состояние",
+      "default_decay": "fast",
+      "default_scope": "episode",
+      "priority": 2
+    },
+    "identity_core": {
+      "description": "Ядро личности",
+      "default_decay": "none",
+      "default_scope": "global",
+      "priority": 10,
+      "protected": true
+    }
+  },
+  "governor": {
+    "confidence_thresholds": {
+      "high": 0.8,
+      "medium": 0.5,
+      "low": 0.3
+    },
+    "max_artifacts_per_type": 100,
+    "protected_types": ["identity_core"],
+    "merge_min_overlap": 3
+  },
+  "retrieval": {
+    "always_load": ["identity_core", "profile_fact", "task_state"],
+    "sometimes_load": ["preference", "episode_event", "emotional_state"],
+    "never_load_if": {
+      "decay": "immediate",
+      "status": "superseded",
+      "confidence_below": 0.3
+    }
+  }
+}

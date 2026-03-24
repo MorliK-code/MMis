@@ -285,6 +285,8 @@ class AppSettings:
     memory_core_default_workspace: str = "global"
     memory_core_default_namespace: str = "default"
     memory_core_top_k: int = 8
+    memory_core_enable_background_worker: bool = True
+    memory_core_worker_poll_interval: float = 2.0
     model_fallbacks: list[str] = field(default_factory=list)
 
     # Hardware
@@ -929,9 +931,19 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
 
     memory_dir = MEMORY_DIR.expanduser().resolve()
     dirs = ensure_dirs(memory_dir=memory_dir)
-    cache_dir = _to_path(_get_dotted(row, "memory.cache_dir"), dirs["cache"])
-    log_dir = _to_path(_get_dotted(row, "memory.log_dir"), dirs["logs"])
-    db_path = _to_path(_get_dotted(row, "memory.db_path"), memory_dir / "memory.db")
+    # Поддержка legacy memory.* keys и новых memory_core.* keys
+    cache_dir = _to_path(
+        _get_dotted(row, "memory_core.cache_dir") or _get_dotted(row, "memory.cache_dir"),
+        dirs["cache"]
+    )
+    log_dir = _to_path(
+        _get_dotted(row, "memory_core.log_dir") or _get_dotted(row, "memory.log_dir"),
+        dirs["logs"]
+    )
+    db_path = _to_path(
+        _get_dotted(row, "memory_core.db_path") or _get_dotted(row, "memory.db_path"),
+        memory_dir / "memory.db"
+    )
 
     voice_input = _to_path(_get_dotted(row, "voice.paths.input_dir"), memory_dir / "voice" / "input")
     voice_output = _to_path(_get_dotted(row, "voice.paths.output_dir"), memory_dir / "voice" / "output")
@@ -1387,10 +1399,10 @@ def _bootstrap_seed_from_env(*, dotenv_cfg: dict[str, str]) -> dict[str, Any]:
         ("MMIS_VOICE_ENABLED", "voice.enabled", _to_bool),
         ("MMIS_DATA_DIR", "paths.data_dir", _norm_str),
         ("MMIS_MODELS_DIR", "paths.models_dir", _norm_str),
-        ("MMIS_MEMORY_DIR", "memory.memory_dir", _norm_str),
-        ("MMIS_CACHE_DIR", "memory.cache_dir", _norm_str),
-        ("MMIS_LOG_DIR", "memory.log_dir", _norm_str),
-        ("MMIS_DB_PATH", "memory.db_path", _norm_str),
+        ("MMIS_MEMORY_DIR", "memory_core.memory_dir", _norm_str),
+        ("MMIS_CACHE_DIR", "memory_core.cache_dir", _norm_str),
+        ("MMIS_LOG_DIR", "memory_core.log_dir", _norm_str),
+        ("MMIS_DB_PATH", "memory_core.db_path", _norm_str),
         ("MMIS_LOG_LEVEL", "logging.level", _norm_upper),
         ("MMIS_LOG_FILE", "logging.file", _norm_str),
         ("MMIS_LOG_COLORS", "logging.colors", _to_bool),
@@ -1418,7 +1430,8 @@ def _bootstrap_seed_from_env(*, dotenv_cfg: dict[str, str]) -> dict[str, Any]:
         _set_dotted(seed, dotted, parsed)
     use_legacy = _env_pick("MMIS_USE_LEGACY_MEMORY_DIR", dotenv_cfg=dotenv_cfg)
     if str(use_legacy or "").strip().lower() in {"1", "true", "yes", "on"}:
-        if _get_dotted(seed, "memory.memory_dir") is None:
+        # Поддержка legacy memory.memory_dir для обратной совместимости
+        if _get_dotted(seed, "memory_core.memory_dir") is None and _get_dotted(seed, "memory.memory_dir") is None:
             _set_dotted(seed, "memory.memory_dir", _path_to_config_string(LEGACY_MEMORY_DIR))
     return seed
 

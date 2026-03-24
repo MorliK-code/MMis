@@ -42,6 +42,12 @@ LOGGER = get_logger(__name__)
 # Регистрируем Memory Core API
 register_memory_core_api(app)
 
+# Регистрируем Memory Inspector UI
+from api.memory_inspector_router import create_memory_inspector_router
+from memory_core.adapter import get_memory_core_adapter
+memory_core_adapter = get_memory_core_adapter()
+app.include_router(create_memory_inspector_router(memory_core_adapter))
+
 
 class _Runtime:
     def __init__(self):
@@ -58,7 +64,12 @@ class _Runtime:
             self.quality_profile = quality_raw
         else:
             self.quality_profile = "BALANCED"
-        self.brain = Brain(provider=self.provider)
+        
+        # Используем ОДИН и тот же memory_core_adapter для Brain и Inspector
+        self.brain = Brain(
+            provider=self.provider,
+            memory_core=memory_core_adapter,
+        )
         self.model = str(self.settings.model_name or "").strip()
         self.thinking_enabled = bool(self.settings.thinking_enabled)
         self.verbose_enabled = bool(self.brain.state_manager.get("verbose_enabled", False))

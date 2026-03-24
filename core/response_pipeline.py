@@ -590,8 +590,9 @@ def _pick_memory_int(*values: Any, default: int, minimum: int) -> int:
 
 class EpisodeContinuityStage(PipelineStage):
     """
-    Заглушка EpisodeContinuityStage для обратной совместимости.
-    Функционал episode continuity перенесён в memory_core.
+    EpisodeContinuityStage — мост к memory_core для continuity.
+
+    Берёт session_id из context и получает continuity pack из memory_core.
     """
     name = "episode_continuity"
 
@@ -599,8 +600,28 @@ class EpisodeContinuityStage(PipelineStage):
         self.memory_core = memory_core or MemoryCoreAdapter()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        # Пустая заглушка - функционал перенесён в memory_core
-        ctx.logs.append("stage=episode_continuity skipped(use memory_core)")
+        memory_core = ctx.meta.get("memory_core") or self.memory_core
+        if memory_core is None:
+            ctx.logs.append("stage=episode_continuity skipped(no_memory_core)")
+            return ctx
+
+        session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "").strip()
+        workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global").strip()
+
+        if not session_id:
+            ctx.logs.append("stage=episode_continuity skipped(no_session_id)")
+            return ctx
+
+        continuity = memory_core.get_episode_continuity(
+            session_id=session_id,
+            workspace_id=workspace_id,
+        )
+
+        ctx.state["episode_continuity"] = continuity
+        ctx.logs.append(
+            f"stage=episode_continuity active={bool(continuity.get('active_episode'))} "
+            f"episode={continuity.get('active_episode', {}).get('episode_id', 'none')[:8]}"
+        )
         return ctx
 
 
@@ -647,6 +668,11 @@ class PromptBuildStage(PipelineStage):
 
     @staticmethod
     def _build_persona_memory_context(memory_context: dict[str, Any] | None) -> dict[str, Any]:
+        """
+        Строит memory context для persona builder.
+
+        Передаёт не только block_keys, но и distilled memory signals.
+        """
         row = _as_dict(memory_context)
         blocks = _as_dict(row.get("blocks"))
         block_keys = sorted(str(key) for key in list(blocks.keys()) if str(key).strip())
@@ -660,11 +686,41 @@ class PromptBuildStage(PipelineStage):
             )
             or ""
         ).strip()
+        
+        # Извлекаем selected артефакты для signals
+        selected = [dict(x) for x in _as_list(row.get("selected")) if isinstance(x, dict)]
+        
+        # Группируем по типам артефактов
+        profile_signals: list[str] = []
+        task_signals: list[str] = []
+        episode_signals: list[str] = []
+        emotion_signals: list[str] = []
+        
+        for item in selected:
+            artifact_type = str(item.get("artifact_type") or "").strip().lower()
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            
+            # Типизированные signals (усечённые)
+            if artifact_type == "profile_fact":
+                profile_signals.append(text)
+            elif artifact_type in {"task_state", "task"}:
+                task_signals.append(text)
+            elif artifact_type in {"episode_event", "episode"}:
+                episode_signals.append(text)
+            elif artifact_type == "emotional_state":
+                emotion_signals.append(text)
+        
         return {
             "input_mode": "distilled",
             "block_keys": block_keys,
-            "selected_count": int(len(_as_list(row.get("selected")))),
+            "selected_count": int(len(selected)),
             "recall_mode": recall_mode,
+            "profile_signals": profile_signals[:5],  # Усекаем
+            "task_signals": task_signals[:2],
+            "episode_signals": episode_signals[:3],
+            "emotion_signals": emotion_signals[:2],
         }
 
     def _apply_persona_snapshot_prompt_policies(
@@ -684,12 +740,12 @@ class PromptBuildStage(PipelineStage):
         if active_task:
             _append_policy_rule(
                 ctx.policies,
-                "Treat PERSONA_SNAPSHOT and ACTIVE_TASK as the primary continuity anchors for this turn; prefer them over loose recalled snippets unless the user clearly switches topic.",
+                "Treat PERSONA_SNAPSHOT and ACTIVE_TASK as continuity anchors only when they remain relevant to the current user message; prefer them over loose recalled snippets, but do not force old context onto a clear topic shift.",
             )
         if bool(relation_continuity.get("is_followup")):
             _append_policy_rule(
                 ctx.policies,
-                "This turn looks like a follow-up. Preserve relation and task continuity unless the user explicitly changes topic.",
+                "This turn likely continues the same thread. Preserve relation and task continuity only while the current user message stays on the same topic.",
             )
         if bool(recent_user_state.get("low_bandwidth")):
             _append_policy_rule(
@@ -734,8 +790,24 @@ class PromptBuildStage(PipelineStage):
         ).strip().lower() or "default"
         stored_identity_core: dict[str, Any] = {}
         memory_identity_core_snapshot: dict[str, Any] = {}
+        
+        # Используем memory_core вместо legacy memory_manager
+        memory_core = ctx.meta.get("memory_core")
+        if memory_core is not None and hasattr(memory_core, "get_identity_core_snapshot"):
+            try:
+                memory_identity_core = memory_core.get_identity_core_snapshot(namespace)
+                if memory_identity_core is not None:
+                    memory_identity_core_snapshot = (
+                        dict(memory_identity_core or {})
+                        if isinstance(memory_identity_core, dict)
+                        else {}
+                    )
+            except Exception:
+                memory_identity_core_snapshot = {}
+        
+        # Legacy fallback для обратной совместимости
         memory_manager = ctx.meta.get("memory_manager")
-        if memory_manager is not None and hasattr(memory_manager, "get_identity_core_snapshot"):
+        if not memory_identity_core_snapshot and memory_manager is not None and hasattr(memory_manager, "get_identity_core_snapshot"):
             try:
                 memory_identity_core = memory_manager.get_identity_core_snapshot(namespace)
                 if memory_identity_core is not None:
@@ -786,6 +858,23 @@ class PromptBuildStage(PipelineStage):
         persona_meta["current_user_message"] = str(_pick_value(ctx.clean_user_msg, ctx.user_msg, "") or "")
         persona_meta["route"] = str(ctx.route or "").strip().lower()
         persona_meta["context_tags"] = dict(ctx.tags or {})
+        
+        # Явно передаём текущие сигналы текущего turn-а
+        persona_meta["emotion"] = str(ctx.tags.get("emotion") or ctx.tags.get("mood") or "").strip().lower()
+        persona_meta["mood"] = str(ctx.tags.get("mood") or ctx.tags.get("emotion") or "").strip().lower()
+        persona_meta["metadata_tags"] = list(_as_list(ctx.tags.get("metadata_tags")))
+        persona_meta["emotion_intensity"] = float(_to_float(ctx.tags.get("emotion_intensity"), 0.0) or 0.0)
+        persona_meta["emotion_arousal"] = float(_to_float(ctx.tags.get("emotion_arousal"), 0.0) or 0.0)
+        persona_meta["same_calendar_day"] = _pick_value(ctx.tags.get("same_calendar_day"), ctx.meta.get("same_calendar_day"), False)
+        persona_meta["minutes_since_previous"] = _pick_value(ctx.tags.get("minutes_since_previous"), ctx.meta.get("minutes_since_previous"), None)
+        persona_meta["active_mode"] = str(
+            _pick_value(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), "") or ""
+        ).strip().lower()
+        persona_meta["is_technical"] = _to_bool(
+            _pick_value(ctx.tags.get("is_technical"), ctx.meta.get("is_technical"), False),
+            default=False,
+        )
+        
         persona_snapshot = self.persona_snapshot_builder.build(
             character_id=active_character_id,
             active_profile_snapshot=dict(ctx.state.get("active_profile_snapshot") or {}),
@@ -1314,13 +1403,7 @@ class PromptBuildStage(PipelineStage):
                 ctx.policies,
                 "If the previous user turn was within the same calendar day and within 180 minutes, do not phrase it as 'yesterday'/'day before yesterday'; use exact or neutral timing.",
             )
-        continuation_ref = str(ctx.meta.get("continuation_ref") or "").strip()
-        context_confidence = _to_float(ctx.meta.get("context_confidence"), 0.0) or 0.0
-        if continuation_ref and context_confidence >= 0.35:
-            _append_policy_rule(
-                ctx.policies,
-                "Treat short follow-up as continuation of active task unless the user explicitly switches topic.",
-            )
+        # Раннее follow-up policy удалено — continuity определяется после построения persona snapshot
         ctx.retrieved_memories = list(retrieved_for_prompt)
         self._build_persona_snapshot_payload(ctx=ctx, prompt_state=prompt_state)
         ctx.prompt_pack = self.character_runtime.build(
@@ -2501,43 +2584,43 @@ class GenerateStage(PipelineStage):
     def _execute_history_tool(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
         """
         Выполнить history tool (read_recent, read_range, search).
-        
+
         Эти tools читают точную историю из state["history"], а не semantic search.
         """
-        from memory.history_tools import (
+        from memory_core.retrieval.history_tools import (
             _execute_history_read_recent,
             _execute_history_search,
             HistoryReadResult,
         )
-        
+
         tool_name = str(call.name or "").strip().lower()
         args = dict(call.arguments or {})
-        
+
         try:
             if tool_name == "history_read_recent":
                 limit = _to_int(args.get("limit"), 10)
                 role = str(args.get("role", "any")).strip().lower()
                 order = str(args.get("order", "newest_first")).strip().lower()
-                
+
                 result: HistoryReadResult = _execute_history_read_recent(
                     ctx,
                     limit=limit,
                     role=role,
                     order=order,
                 )
-                
+
             elif tool_name == "history_search":
                 query = str(args.get("query", "")).strip()
                 limit = _to_int(args.get("limit"), 10)
                 role = str(args.get("role", "any")).strip().lower()
-                
+
                 result = _execute_history_search(
                     ctx,
                     query=query,
                     role=role,
                     limit=limit,
                 )
-                
+
             else:
                 payload = {
                     "tool": tool_name,
@@ -4804,6 +4887,37 @@ class ResponsePipeline:
             "retrieved_count": len(list(ctx.retrieved_memories or [])),
         }
         ctx.state["memory_debug_snapshot"] = dict(memory_debug_snapshot or {})
+        
+        # Сохраняем trace в trace_store если есть
+        trace_store = ctx.meta.get("memory_trace_store")
+        if trace_store is not None:
+            row = {
+                "trace_id": str(ctx.meta.get("trace_id") or ""),
+                "request_id": str(ctx.meta.get("request_id") or ""),
+                "conversation_id": str(_pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "")),
+                "turn_id": _pick_value(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), 0),
+                "created_at": str(ctx.meta.get("web_trace_started_at") or _utc_now_iso()),
+                "route": str(ctx.route or ""),
+                "user_text": str(ctx.clean_user_msg or ctx.user_msg or ""),
+                "pipeline": {
+                    **trace.to_dict(),
+                    "turn_log_summaries": _as_dict(ctx.meta.get("turn_log_summaries")),
+                    "turn_log_warnings": [str(x).strip() for x in list(_as_list(ctx.meta.get("turn_log_warnings"))) if str(x).strip()],
+                },
+                "memory": {
+                    "event_ids": [],
+                    "job_ids": [],
+                    "artifact_ids_created": [],
+                    "artifact_ids_updated": [],
+                    "indexed_ids": [],
+                },
+                "links": {
+                    "web_trace_detail_file_path": str(detail_trace_file),
+                    "web_trace_compact_file_path": str(compact_trace_file),
+                },
+            }
+            trace_store.append_turn_trace(row)
+        
         if isinstance(meta, dict):
             meta["trace_id"] = str(ctx.meta.get("trace_id") or "")
             meta["request_id"] = str(ctx.meta.get("request_id") or "")

@@ -202,13 +202,13 @@ class ArtifactStore:
     def update(self, artifact: MemoryArtifact) -> None:
         """
         Обновляет артефакт.
-        
+
         Args:
             artifact: Артефакт с обновлёнными данными.
         """
         sql = """
-            UPDATE artifacts 
-            SET text = ?, summary = ?, metadata_json = ?, 
+            UPDATE artifacts
+            SET text = ?, summary = ?, metadata_json = ?,
                 status = ?, updated_at = ?
             WHERE artifact_id = ?
         """
@@ -217,7 +217,7 @@ class ArtifactStore:
             artifact.summary,
             json.dumps(artifact.metadata),
             artifact.status,
-            time.time(),
+            artifact.updated_at,
             artifact.artifact_id,
         )
         try:

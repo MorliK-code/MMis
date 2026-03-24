@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MMis Memory Inspector</title>
+  <style>
+    :root {
+      --bg: #09090b;
+      --panel: rgba(24,24,27,.82);
+      --panel-2: rgba(9,9,11,.72);
+      --border: rgba(63,63,70,.9);
+      --text: #fafafa;
+      --muted: #a1a1aa;
+      --muted-2: #71717a;
+      --violet: #8b5cf6;
+      --green: #22c55e;
+      --blue: #3b82f6;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top left, rgba(76,29,149,.35), transparent 30%), var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 20px; display: grid; gap: 20px; }
+    .topbar { display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:16px; }
+    .pill {
+      display:inline-flex; align-items:center; gap:8px; padding:6px 12px; border-radius:999px;
+      border:1px solid rgba(139,92,246,.35); background:rgba(139,92,246,.14); color:#ddd6fe; font-size:12px; font-weight:600;
+    }
+    .pill.live { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+    h1 { margin:14px 0 0; font-size:34px; line-height:1.1; }
+    p.lead { margin-top:12px; max-width:900px; color:var(--muted); line-height:1.6; }
+    .btns { display:flex; gap:10px; flex-wrap:wrap; }
+    button, select, input { font: inherit; }
+    .btn {
+      border:1px solid var(--border); background:rgba(24,24,27,.92); color:var(--text);
+      border-radius:16px; padding:10px 14px; font-weight:600; cursor:pointer;
+      transition: all 0.2s;
+    }
+    .btn:hover { background:rgba(39,39,42,.92); }
+    .btn.primary { border-color: rgba(139,92,246,.55); background:linear-gradient(135deg, rgba(139,92,246,.35), rgba(99,102,241,.25)); }
+    .btn.danger { border-color: rgba(239,68,68,.55); background:rgba(239,68,68,.2); }
+    .btn.success { border-color: rgba(34,197,94,.55); background:rgba(34,197,94,.2); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .grid4 { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
+    .card {
+      background: var(--panel); border:1px solid var(--border); border-radius:24px; box-shadow:0 8px 30px rgba(0,0,0,.25);
+    }
+    .metric { padding:18px; }
+    .metric-top { display:flex; justify-content:space-between; gap:12px; }
+    .metric-title { color:var(--muted); font-size:14px; }
+    .metric-value { margin-top:8px; font-size:30px; font-weight:700; }
+    .metric-desc { margin-top:10px; font-size:12px; color:var(--muted-2); }
+    .metric-icon {
+      width:50px; height:50px; border-radius:18px; display:grid; place-items:center; background:rgba(9,9,11,.95); border:1px solid var(--border); font-size:22px;
+    }
+    .progress { margin-top:14px; height:8px; background:#27272a; border-radius:999px; overflow:hidden; }
+    .progress > div { height:100%; background:linear-gradient(90deg, #8b5cf6, #22c55e); transition: width 0.3s; }
+    .tabs { padding:8px; display:flex; gap:8px; flex-wrap:wrap; }
+    .tab { flex:1; min-width:0; }
+    .tab.active { border-color: rgba(139,92,246,.55); background:linear-gradient(135deg, rgba(139,92,246,.35), rgba(99,102,241,.2)); }
+    .layout2 { display:grid; grid-template-columns:minmax(0, 1.2fr) minmax(320px, .8fr); gap:16px; }
+    .layoutArtifacts { display:grid; grid-template-columns:minmax(320px, .95fr) minmax(360px, 1.05fr); gap:16px; }
+    .section { padding:22px; }
+    .section h2 { margin:0; font-size:20px; }
+    .section .desc { margin-top:6px; color:var(--muted); font-size:14px; }
+    .list { margin-top:18px; display:grid; gap:12px; }
+    .item { display:flex; gap:12px; padding:16px; border-radius:18px; border:1px solid var(--border); background:var(--panel-2); }
+    .item.vertical { display:block; }
+    .item-btn {
+      text-align:left; border-radius:18px; border:1px solid var(--border); background:rgba(9,9,11,.7); padding:16px; cursor:pointer; color:var(--text);
+      transition: all 0.2s;
+    }
+    .item-btn:hover { background:rgba(24,24,27,.9); }
+    .item-btn.active { border-color: rgba(139,92,246,.55); background: rgba(139,92,246,.12); }
+    .badge {
+      display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap;
+      border:1px solid rgba(113,113,122,.35); background:rgba(113,113,122,.2); color:#d4d4d8;
+    }
+    .meta { color:var(--muted-2); font-size:12px; }
+    .panel { background:var(--panel-2); border:1px solid var(--border); border-radius:18px; padding:16px; }
+    .tiny { color:var(--muted-2); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .row { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+    .search { width:100%; background:rgba(9,9,11,.85); color:var(--text); border:1px solid var(--border); border-radius:16px; padding:12px 14px; outline:none; }
+    .search:focus { border-color: var(--violet); }
+    .tools { margin-top:18px; display:grid; gap:12px; }
+    .controls { display:flex; gap:10px; flex-wrap:wrap; }
+    .scroll { max-height:540px; overflow:auto; padding-right:4px; display:grid; gap:10px; }
+    .scroll::-webkit-scrollbar { width: 8px; }
+    .scroll::-webkit-scrollbar-track { background: rgba(0,0,0,.2); border-radius: 4px; }
+    .scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    pre { margin:10px 0 0; font-size:12px; line-height:1.7; color:#d4d4d8; overflow-x:auto; white-space:pre-wrap; }
+    .loading { opacity: 0.6; pointer-events: none; }
+    .empty-state { text-align: center; padding: 40px; color: var(--muted); }
+    .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .stat-row:last-child { border-bottom: none; }
+    @media (max-width: 1000px) {
+      .layout2, .layoutArtifacts { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="app">
+    <div class="topbar">
+      <div>
+        <div class="pill live">🧠 MMis · Memory Inspector</div>
+        <h1>Инспектор памяти</h1>
+        <p class="lead">Мониторинг очереди ingest, артефактов, задач и состояния Background Worker</p>
+      </div>
+      <div class="btns">
+        <button class="btn" id="refreshBtn" title="Обновить (R)">↻ Обновить</button>
+        <button class="btn primary" id="autoRefreshBtn" title="Автообновление">⏱ Авто: <span id="autoRefreshState">вкл</span></button>
+      </div>
+    </div>
+
+    <div class="grid4" id="metrics"></div>
+
+    <div class="card tabs">
+      <button class="btn tab active" data-tab="overview">📊 Overview</button>
+      <button class="btn tab" data-tab="artifacts">🗃️ Artifacts</button>
+      <button class="btn tab" data-tab="queue">📚 Queue</button>
+      <button class="btn tab" data-tab="events">📝 Events</button>
+      <button class="btn tab" data-tab="checks">✅ Checks</button>
+    </div>
+
+    <div id="content"></div>
+  </div>
+
+<script>
+const API_BASE = '';
+
+const state = {
+  tab: 'overview',
+  query: '',
+  type: 'all',
+  includeSuperseded: true,
+  artifacts: [],
+  jobs: [],
+  events: [],
+  checks: [],
+  overview: {},
+  selectedArtifact: null,
+  selectedEvent: null,
+  autoRefresh: true,
+  refreshInterval: null,
+  loading: false,
+  lastUpdate: null,
+};
+
+const statusColors = {
+  done: { bg: 'rgba(16,185,129,.16)', color: '#a7f3d0', border: 'rgba(16,185,129,.35)' },
+  active: { bg: 'rgba(16,185,129,.16)', color: '#a7f3d0', border: 'rgba(16,185,129,.35)' },
+  queued: { bg: 'rgba(59,130,246,.16)', color: '#bfdbfe', border: 'rgba(59,130,246,.35)' },
+  processing: { bg: 'rgba(59,130,246,.16)', color: '#bfdbfe', border: 'rgba(59,130,246,.35)' },
+  retry_wait: { bg: 'rgba(245,158,11,.16)', color: '#fde68a', border: 'rgba(245,158,11,.35)' },
+  dead: { bg: 'rgba(239,68,68,.16)', color: '#fecaca', border: 'rgba(239,68,68,.35)' },
+  rejected: { bg: 'rgba(239,68,68,.16)', color: '#fecaca', border: 'rgba(239,68,68,.35)' },
+  superseded: { bg: 'rgba(113,113,122,.2)', color: '#d4d4d8', border: 'rgba(113,113,122,.35)' },
+  idle: { bg: 'rgba(139,92,246,.16)', color: '#ddd6fe', border: 'rgba(139,92,246,.35)' },
+};
+
+function badge(label, status='idle') {
+  const colors = statusColors[status] || statusColors.idle;
+  return `<span class="badge" style="background:${colors.bg};color:${colors.color};border-color:${colors.border}">${label}</span>`;
+}
+
+function typeIcon(type) {
+  const icons = {
+    identity_core: '🛡️',
+    profile_fact: '👤',
+    task_state: '📝',
+    emotional_state: '💓',
+    episode_event: '🔀',
+    preference: '⚙️',
+    document_chunk: '📄',
+  };
+  return icons[type] || '◻️';
+}
+
+function formatTime(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString('ru-RU', { hour: '2-digit', minute:'2-digit', second:'2-digit', day:'2-digit', month:'2-digit' });
+}
+
+function formatRelative(ts) {
+  if (!ts) return '-';
+  const diff = Date.now() - ts * 1000;
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}с назад`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}м назад`;
+  const hr = Math.floor(min / 60);
+  return `${hr}ч назад`;
+}
+
+async function fetchJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+  return r.json();
+}
+
+async function loadAll() {
+  if (state.loading) return;
+  state.loading = true;
+  document.getElementById('app').classList.add('loading');
+
+  try {
+    const [overview, artifacts, jobs, checks] = await Promise.all([
+      fetchJson(`${API_BASE}/api/memory-core/overview`).catch(() => ({})),
+      fetchJson(`${API_BASE}/api/memory-core/artifacts?limit=200`).catch(() => ([])),
+      fetchJson(`${API_BASE}/api/memory-core/jobs?limit=200`).catch(() => ([])),
+      fetchJson(`${API_BASE}/api/memory-core/checks`).catch(() => ([])),
+    ]);
+    state.overview = overview;
+    state.artifacts = artifacts;
+    state.jobs = jobs;
+    state.checks = checks;
+    state.lastUpdate = new Date();
+
+    if (!state.selectedArtifact && artifacts.length) state.selectedArtifact = artifacts[0];
+    render();
+  } catch (e) {
+    console.error('Failed to load data:', e);
+    alert('Ошибка загрузки данных: ' + e.message);
+  } finally {
+    state.loading = false;
+    document.getElementById('app').classList.remove('loading');
+  }
+}
+
+function renderMetrics() {
+  const m = state.overview || {};
+  const items = [
+    {
+      title: 'Artifacts',
+      value: m.artifacts_total || state.artifacts.length || 0,
+      desc: `${m.artifacts_active || 0} active · ${m.artifacts_superseded || 0} superseded`,
+      emoji: '🗃️',
+      progress: null,
+    },
+    {
+      title: 'Events',
+      value: m.events_total || 0,
+      desc: 'Сырые события',
+      emoji: '📝',
+      progress: null,
+    },
+    {
+      title: 'Queue',
+      value: m.jobs_total || state.jobs.length || 0,
+      desc: `${m.jobs_queued || 0} queued · ${m.jobs_processing || 0} processing · ${m.jobs_dead || 0} dead`,
+      emoji: '📚',
+      progress: null,
+    },
+    {
+      title: 'Worker',
+      value: m.worker_enabled ? (m.memory_llm_status || 'idle') : 'disabled',
+      desc: m.worker_enabled ? `${m.worker_jobs_processed || 0} processed` : 'Background worker отключён',
+      emoji: m.worker_enabled ? '⚙️' : '⏸️',
+      progress: m.worker_health || 0,
+    },
+  ];
+
+  document.getElementById('metrics').innerHTML = items.map(item => `
+    <div class="card metric">
+      <div class="metric-top">
+        <div>
+          <div class="metric-title">${item.title}</div>
+          <div class="metric-value">${item.value}</div>
+          <div class="metric-desc">${item.desc}</div>
+        </div>
+        <div class="metric-icon">${item.emoji}</div>
+      </div>
+      ${item.progress !== null ? `<div class="progress"><div style="width:${Math.max(0, Math.min(100, item.progress))}%"></div></div>` : ''}
+    </div>
+  `).join('');
+}
+
+function renderOverview() {
+  const m = state.overview || {};
+  const byType = m.artifacts_by_type || {};
+
+  return `
+    <div class="layout2">
+      <div class="card section">
+        <h2>Статистика артефактов по типам</h2>
+        <div class="desc">Распределение артефактов по типам</div>
+        <div class="list">
+          ${Object.entries(byType).length ? Object.entries(byType).map(([type, count]) => `
+            <div class="item">
+              <div style="font-size: 24px">${typeIcon(type)}</div>
+              <div style="flex:1">
+                <div class="row">
+                  <div><strong>${type}</strong></div>
+                  <div>${count}</div>
+                </div>
+              </div>
+            </div>
+          `).join('') : '<div class="empty-state">Нет артефактов</div>'}
+        </div>
+      </div>
+      <div class="card section">
+        <h2>Статус очереди</h2>
+        <div class="desc">Текущее состояние задач</div>
+        <div class="panel">
+          <div class="stat-row"><span>Всего задач</span><strong>${m.jobs_total || 0}</strong></div>
+          <div class="stat-row"><span>В очереди</span>${badge(m.jobs_queued || 0, 'queued')}</div>
+          <div class="stat-row"><span>Обработка</span>${badge(m.jobs_processing || 0, 'processing')}</div>
+          <div class="stat-row"><span>Повтор</span>${badge(m.jobs_retry_wait || 0, 'retry_wait')}</div>
+          <div class="stat-row"><span>Успешно</span>${badge(m.jobs_done || 0, 'done')}</div>
+          <div class="stat-row"><span>Мёртвые</span>${badge(m.jobs_dead || 0, 'dead')}</div>
+        </div>
+        ${m.worker_enabled ? `
+          <div class="panel" style="margin-top: 12px">
+            <div class="stat-row"><span>Worker</span>${badge('enabled', 'active')}</div>
+            <div class="stat-row"><span>Health</span>${m.worker_health || 0}%</div>
+            <div class="stat-row"><span>Обработано</span>${m.worker_jobs_processed || 0}</div>
+            <div class="stat-row"><span>Успешно</span>${m.worker_jobs_succeeded || 0}</div>
+            <div class="stat-row"><span>Ошибки</span>${m.worker_jobs_failed || 0}</div>
+          </div>
+        ` : '<div class="panel" style="margin-top: 12px">Worker отключён</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function filteredArtifacts() {
+  const q = state.query.trim().toLowerCase();
+  return state.artifacts.filter(item => {
+    if (!state.includeSuperseded && item.status === 'superseded') return false;
+    if (state.type !== 'all' && item.type !== state.type) return false;
+    if (!q) return true;
+    return (item.text || '').toLowerCase().includes(q)
+      || (item.type || '').toLowerCase().includes(q)
+      || ((item.tags || []).join(' ')).toLowerCase().includes(q);
+  });
+}
+
+function renderArtifacts() {
+  const items = filteredArtifacts();
+  const selected = state.selectedArtifact || (items.length ? items[0] : null);
+  if (selected && !state.selectedArtifact) state.selectedArtifact = selected;
+
+  return `
+    <div class="layoutArtifacts">
+      <div class="card section">
+        <h2>Artifacts Explorer</h2>
+        <div class="desc">Поиск и фильтрация памяти</div>
+        <div class="tools">
+          <input class="search" id="artifactSearch" placeholder="Поиск по text, type, tag..." value="${escapeHtml(state.query)}" />
+          <div class="controls">
+            <select id="artifactType" class="btn">
+              ${['all','identity_core','profile_fact','task_state','emotional_state','episode_event','preference'].map(v =>
+                `<option value="${v}" ${state.type === v ? 'selected' : ''}>${v === 'all' ? 'Все типы' : v}</option>`
+              ).join('')}
+            </select>
+            <label class="btn" style="display:inline-flex;align-items:center;gap:10px">
+              <input id="includeSuperseded" type="checkbox" ${state.includeSuperseded ? 'checked' : ''} />
+              <span>superseded</span>
+            </label>
+          </div>
+          <div class="meta" style="margin-top: 8px">Найдено: ${items.length}</div>
+        </div>
+        <div class="scroll" style="margin-top:18px">
+          ${items.length ? items.map(item => `
+            <button class="item-btn ${state.selectedArtifact && state.selectedArtifact.id === item.id ? 'active' : ''}" data-artifact-id="${item.id}">
+              <div class="row">
+                <div style="min-width:0">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                    <span>${typeIcon(item.type)}</span>
+                    <strong>${item.type}</strong>
+                    ${badge(item.status, item.status)}
+                  </div>
+                  <div style="margin-top:10px;color:#d4d4d8;font-size:14px;line-height:1.5;max-height:60px;overflow:hidden">${escapeHtml(item.text || '')}</div>
+                </div>
+                <div class="meta" style="white-space:nowrap;text-align:right">
+                  <div>conf ${Math.round((Number(item.confidence || 0)) * 100)}%</div>
+                  <div style="margin-top:4px">${formatRelative(item.updated_at)}</div>
+                </div>
+              </div>
+            </button>
+          `).join('') : '<div class="empty-state">Ничего не найдено</div>'}
+        </div>
+      </div>
+      <div class="card section">
+        <h2>Inspector</h2>
+        <div class="desc">Детали артефакта</div>
+        ${selected ? `
+          <div class="list">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              ${badge(selected.id)}
+              ${badge(selected.status, selected.status)}
+              ${badge(selected.type)}
+              ${badge(`scope: ${selected.scope || ''}`)}
+              ${badge(`decay: ${selected.decay || ''}`)}
+            </div>
+            <div class="panel">
+              <div class="tiny">Text</div>
+              <div style="margin-top:8px;font-size:14px;line-height:1.7;color:#e4e4e7">${escapeHtml(selected.text || '')}</div>
+            </div>
+            ${selected.summary ? `
+              <div class="panel">
+                <div class="tiny">Summary</div>
+                <div style="margin-top:8px;font-size:14px;line-height:1.7;color:#e4e4e7">${escapeHtml(selected.summary || '')}</div>
+              </div>
+            ` : ''}
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+              <div class="panel"><div class="tiny">Confidence</div><div style="margin-top:8px">${Math.round((Number(selected.confidence || 0)) * 100)}%</div></div>
+              <div class="panel"><div class="tiny">Scope</div><div style="margin-top:8px">${escapeHtml(selected.scope || 'global')}</div></div>
+              <div class="panel"><div class="tiny">Decay</div><div style="margin-top:8px">${escapeHtml(selected.decay || 'slow')}</div></div>
+              <div class="panel"><div class="tiny">Tags</div><div style="margin-top:8px">${escapeHtml((selected.tags || []).join(', ') || '-')}</div></div>
+            </div>
+            <div class="panel">
+              <div class="tiny">Metadata</div>
+              <div style="margin-top:8px" class="meta">
+                <div class="stat-row"><span>Created</span><span>${formatTime(selected.created_at)}</span></div>
+                <div class="stat-row"><span>Updated</span><span>${formatTime(selected.updated_at)}</span></div>
+                <div class="stat-row"><span>Source</span><span>${escapeHtml(selected.source_event_id || '-')}</span></div>
+              </div>
+            </div>
+          </div>
+        ` : '<div class="empty-state">Выберите артефакт</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderQueue() {
+  const jobsByStatus = {};
+  state.jobs.forEach(j => {
+    jobsByStatus[j.status] = jobsByStatus[j.status] || [];
+    jobsByStatus[j.status].push(j);
+  });
+
+  return `
+    <div class="card section">
+      <h2>Queue & Jobs</h2>
+      <div class="desc">Управление очередью задач</div>
+      <div class="list">
+        ${['queued', 'processing', 'retry_wait', 'dead', 'done'].map(status => {
+          const statusJobs = jobsByStatus[status] || [];
+          if (!statusJobs.length) return '';
+          return `
+            <div>
+              <h3 style="margin: 16px 0 8px; font-size: 16px">${status} (${statusJobs.length})</h3>
+              <div class="list">
+                ${statusJobs.map(job => `
+                  <div class="item vertical">
+                    <div class="row">
+                      <div style="min-width:0">
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                          ${badge(job.id.slice(0, 8) + '...', 'idle')}
+                          ${badge(job.status, job.status)}
+                          ${badge(job.type)}
+                          ${badge(`prio ${job.priority || 0}`)}
+                        </div>
+                        <div class="meta" style="margin-top:6px">
+                          event: ${escapeHtml(job.event_id || '')} ·
+                          attempts: ${job.attempts || 0}/${job.max_attempts || 3} ·
+                          updated: ${formatRelative(job.updated_at)}
+                          ${job.locked_by ? ` · locked: ${escapeHtml(job.locked_by)}` : ''}
+                          ${job.error_text ? `<br/>error: ${escapeHtml(job.error_text)}` : ''}
+                        </div>
+                      </div>
+                      <div style="display:flex;gap:8px">
+                        ${job.status === 'dead' ? `<button class="btn success" onclick="retryJob('${job.id}')">Retry</button>` : ''}
+                        <button class="btn danger" onclick="deleteJob('${job.id}')">Delete</button>
+                      </div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `;
+        }).join('')}
+        ${!state.jobs.length ? '<div class="empty-state">Очередь пуста</div>' : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderEvents() {
+  return `
+    <div class="card section">
+      <h2>Events</h2>
+      <div class="desc">Сырые события памяти</div>
+      <div class="empty-state">
+        <p>Раздел в разработке</p>
+        <p class="meta">Здесь будет список сырых событий с возможностью просмотра trace</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderChecks() {
+  return `
+    <div class="card section">
+      <h2>Проверки системы</h2>
+      <div class="desc">Валидация данных memory_core</div>
+      <div class="list">
+        ${state.checks.length ? state.checks.map(c => `
+          <div class="item row">
+            <div>${escapeHtml(c.name || '')}</div>
+            <div>${badge(c.ok ? 'PASS' : 'FAIL', c.ok ? 'done' : 'dead')}</div>
+          </div>
+        `).join('') : '<div class="empty-state">Нет проверок</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderContent() {
+  const content = document.getElementById('content');
+  switch (state.tab) {
+    case 'overview': content.innerHTML = renderOverview(); break;
+    case 'artifacts': content.innerHTML = renderArtifacts(); break;
+    case 'queue': content.innerHTML = renderQueue(); break;
+    case 'events': content.innerHTML = renderEvents(); break;
+    case 'checks': content.innerHTML = renderChecks(); break;
+  }
+
+  // Event listeners
+  const search = document.getElementById('artifactSearch');
+  if (search) search.addEventListener('input', e => { state.query = e.target.value; renderContent(); });
+
+  const type = document.getElementById('artifactType');
+  if (type) type.addEventListener('change', e => { state.type = e.target.value; renderContent(); });
+
+  const include = document.getElementById('includeSuperseded');
+  if (include) include.addEventListener('change', e => { state.includeSuperseded = !!e.target.checked; renderContent(); });
+
+  document.querySelectorAll('[data-artifact-id]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.selectedArtifact = state.artifacts.find(x => x.id === el.dataset.artifactId) || null;
+      renderContent();
+    });
+  });
+}
+
+function render() {
+  renderMetrics();
+  document.querySelectorAll('[data-tab]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === state.tab);
+    btn.onclick = () => { state.tab = btn.dataset.tab; renderContent(); };
+  });
+  renderContent();
+
+  // Update last update time
+  if (state.lastUpdate) {
+    const btn = document.getElementById('refreshBtn');
+    if (btn) btn.textContent = `↻ Обновлено: ${state.lastUpdate.toLocaleTimeString('ru-RU')}`;
+  }
+}
+
+function escapeHtml(v) {
+  return String(v ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+// Job actions
+async function retryJob(jobId) {
+  if (!confirm(`Повторить задачу ${jobId.slice(0, 8)}...?`)) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/memory-core/jobs/${jobId}/retry`, { method: 'POST' });
+    const result = await r.json();
+    if (result.success) {
+      alert('Задача отправлена на повтор');
+      loadAll();
+    } else {
+      alert(`Ошибка: ${result.error}`);
+    }
+  } catch (e) {
+    alert(`Ошибка: ${e.message}`);
+  }
+}
+
+async function deleteJob(jobId) {
+  if (!confirm(`Удалить задачу ${jobId.slice(0, 8)}...?`)) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/memory-core/jobs/${jobId}`, { method: 'DELETE' });
+    const result = await r.json();
+    if (result.success) {
+      alert('Задача удалена');
+      loadAll();
+    } else {
+      alert(`Ошибка: ${result.error}`);
+    }
+  } catch (e) {
+    alert(`Ошибка: ${e.message}`);
+  }
+}
+
+// Auto refresh
+function setupAutoRefresh() {
+  if (state.autoRefresh) {
+    state.refreshInterval = setInterval(loadAll, 5000); // 5 секунд
+  }
+}
+
+function toggleAutoRefresh() {
+  state.autoRefresh = !state.autoRefresh;
+  document.getElementById('autoRefreshState').textContent = state.autoRefresh ? 'вкл' : 'выкл';
+
+  if (state.autoRefresh) {
+    setupAutoRefresh();
+  } else {
+    clearInterval(state.refreshInterval);
+  }
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (e.key === 'r' && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    loadAll();
+  }
+});
+
+// Init
+document.getElementById('refreshBtn').addEventListener('click', loadAll);
+document.getElementById('autoRefreshBtn').addEventListener('click', toggleAutoRefresh);
+setupAutoRefresh();
+loadAll();
+</script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -48,7 +49,23 @@ class PersonaSnapshotBuilder:
         memory_context: dict[str, Any] | None,
         state: dict[str, Any] | None,
         meta: dict[str, Any] | None,
+        stabilized_profile_patch: dict[str, Any] | None = None,
     ) -> PersonaSnapshot:
+        """
+        Строит persona snapshot.
+
+        Args:
+            character_id: ID персонажа.
+            active_profile_snapshot: Активный профиль из retrieval.
+            identity_core_snapshot: Identity core snapshot.
+            memory_context: Memory context.
+            state: State.
+            meta: Meta.
+            stabilized_profile_patch: Stabilized profile patch от ProfileStabilizer.
+
+        Returns:
+            PersonaSnapshot.
+        """
         profile = self._flatten_profile_snapshot(active_profile_snapshot)
         memory = dict(memory_context or {})
         state_map = dict(state or {})
@@ -58,6 +75,20 @@ class PersonaSnapshotBuilder:
         character_trait_defaults = self._normalize_trait_defaults(
             state_map.get("character_trait_defaults") or meta_map.get("character_trait_defaults") or {}
         )
+        
+        # Применяем stabilized profile patch если есть
+        if stabilized_profile_patch:
+            # Merge stabilized traits
+            if "traits" in stabilized_profile_patch:
+                for key, value in stabilized_profile_patch["traits"].items():
+                    profile[key] = value
+                    persistent_profile_keys = sorted(set(persistent_profile_keys + [key]))
+            
+            # Merge stabilized interaction_style
+            if "interaction_style" in stabilized_profile_patch:
+                for key, value in stabilized_profile_patch["interaction_style"].items():
+                    profile[key] = value
+                    persistent_profile_keys = sorted(set(persistent_profile_keys + [key]))
 
         mood_source = "default"
         mood_raw = meta_map.get("emotion")
@@ -415,11 +446,34 @@ class PersonaSnapshotBuilder:
             for x in list(meta_map.get("metadata_tags") or [])
             if str(x).strip()
         ]
+        
+        # Memory signals (distilled, не raw snippets)
+        memory_profile_signals = list(memory.get("profile_signals") or [])
+        memory_task_signals = list(memory.get("task_signals") or [])
+        memory_episode_signals = list(memory.get("episode_signals") or [])
+        memory_emotion_signals = list(memory.get("emotion_signals") or [])
+        
         active_task = self._build_active_task_summary(state_map.get("active_task") or meta_map.get("active_task"))
+        
+        # Fallback на memory task signals если нет active_task в state
+        if not active_task and memory_task_signals:
+            active_task = {
+                "summary": memory_task_signals[0],
+                "source": "memory_signal",
+            }
+        
         relation_continuity = self._build_relation_continuity(
             meta_map=meta_map,
             active_task=active_task,
         )
+        
+        # Fallback на memory episode signals для continuity
+        if memory_episode_signals and not relation_continuity.get("is_followup"):
+            relation_continuity["is_followup"] = True
+            relation_continuity["summary"] = memory_episode_signals[0]
+            relation_continuity["sources"] = list(relation_continuity.get("sources") or [])
+            relation_continuity["sources"].append("memory_signal.episode")
+        
         emotional_handling = {
             key: identity_core_emotional_handling.get(key)
             for key in (
@@ -436,6 +490,13 @@ class PersonaSnapshotBuilder:
             metadata_tags=metadata_tags,
             emotional_handling=emotional_handling,
         )
+        
+        # Fallback на memory emotion signals (слабый сигнал, не absolute truth)
+        if memory_emotion_signals and not recent_user_state.get("frustrated"):
+            if any("устал" in s.lower() or "раздраж" in s.lower() for s in memory_emotion_signals):
+                recent_user_state["frustrated"] = True
+                recent_user_state["sources"] = list(recent_user_state.get("sources") or [])
+                recent_user_state["sources"].append("memory_signal.emotion")
         response_bias = {
             "technical_mode": 1.0 if bool(meta_map.get("is_technical")) else 0.0,
             "needs_short_answer": 1.0 if bool(recent_user_state.get("low_bandwidth")) else 0.0,
@@ -558,6 +619,7 @@ class PersonaSnapshotBuilder:
             debug={
                 "profile_keys": sorted(profile.keys()),
                 "memory_blocks": memory_block_keys,
+                "stabilizer_applied": bool(stabilized_profile_patch),
                 "sources": {
                     "persistent_profile_keys": persistent_profile_keys,
                     "profile_hint_fields": profile_hint_fields,
@@ -577,6 +639,7 @@ class PersonaSnapshotBuilder:
                         "active_profile_snapshot",
                         "identity_core",
                         "turn_local_modifiers",
+                        "stabilizer_patch" if stabilized_profile_patch else None,
                     ],
                     "assistant_trait_baseline_source": assistant_trait_baseline_source,
                     "assistant_trait_baseline_fields_from_identity_core": sorted(
@@ -723,17 +786,24 @@ class PersonaSnapshotBuilder:
         same_calendar_day = PersonaSnapshotBuilder._to_bool(meta_map.get("same_calendar_day"), default=False)
         minutes_since_previous = PersonaSnapshotBuilder._to_int(meta_map.get("minutes_since_previous"), None)
         has_active_task = bool(active_task)
+        message = str(meta_map.get("current_user_message") or "").strip()
+        topic_shift = PersonaSnapshotBuilder._looks_like_topic_shift(message, active_task)
+
         is_followup = bool(
-            (continuation_ref and context_confidence >= 0.35)
-            or (has_active_task and same_calendar_day and minutes_since_previous is not None and minutes_since_previous < 180)
+            not topic_shift and (
+                (continuation_ref and context_confidence >= 0.35)
+                or (has_active_task and same_calendar_day and minutes_since_previous is not None and minutes_since_previous < 180)
+            )
         )
         sources: list[str] = []
         if continuation_ref:
             sources.append("meta.continuation_ref")
-        if has_active_task:
+        if has_active_task and not topic_shift:
             sources.append("state.active_task")
         if same_calendar_day and minutes_since_previous is not None:
             sources.append("meta.recent_turn_window")
+        if topic_shift:
+            sources.append("meta.topic_shift")
         out = {
             "is_followup": is_followup,
             "continuation_ref": continuation_ref,
@@ -742,6 +812,7 @@ class PersonaSnapshotBuilder:
             "minutes_since_previous": minutes_since_previous,
             "active_task_attached": has_active_task,
             "task_id": str(active_task.get("task_id") or "").strip(),
+            "topic_shift": topic_shift,
             "sources": sources,
         }
         return {
@@ -749,6 +820,35 @@ class PersonaSnapshotBuilder:
             for key, value in out.items()
             if not PersonaSnapshotBuilder._is_empty(value) or value is False
         }
+
+    @staticmethod
+    def _looks_like_topic_shift(message: str, active_task: dict[str, Any]) -> bool:
+        """
+        Проверяет, похоже ли сообщение на смену темы.
+
+        Сравнивает текущее сообщение с active_task по lexical overlap.
+        Если overlap < 0.15, это похоже на новую тему.
+        """
+        msg = str(message or "").strip().lower()
+        if not msg:
+            return False
+
+        task_text = " ".join(
+            str(active_task.get(key) or "").strip().lower()
+            for key in ("topic", "summary", "current_goal")
+        ).strip()
+
+        if not task_text:
+            return False
+
+        msg_words = {w for w in re.findall(r"[a-zа-я0-9_]+", msg) if len(w) >= 3}
+        task_words = {w for w in re.findall(r"[a-zа-я0-9_]+", task_text) if len(w) >= 3}
+
+        if not msg_words or not task_words:
+            return False
+
+        overlap = len(msg_words & task_words) / max(1, len(msg_words))
+        return overlap < 0.15
 
     @staticmethod
     def _build_recent_user_state(

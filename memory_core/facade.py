@@ -22,6 +22,7 @@ from memory_core.storage.event_store import EventStore
 from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.storage.workspace_store import WorkspaceStore
 from memory_core.storage.state_store import StateStore
+from memory_core.storage.job_queue_store import JobQueueStore
 from memory_core.retrieval.retrieval_service import RetrievalService
 from memory_core.retrieval.query_models import ContextPack, Citation
 from memory_core.indexing.embeddings import EmbeddingProvider
@@ -33,6 +34,8 @@ from memory_core.processors.episode_processor import EpisodeProcessor
 from memory_core.processors.task_processor import TaskProcessor
 from memory_core.processors.document_processor import DocumentProcessor
 from memory_core.processors.dedupe_processor import DedupeProcessor
+from memory_core.processors.memory_llm_processor import MemoryLLMProcessor
+from memory_core.governor.governor import Governor
 from memory_core.inspect.inspector import MemoryInspector
 from memory_core.errors import MemoryError, IngestError
 
@@ -58,10 +61,11 @@ class MemoryService:
         vector_index: VectorIndex,
         embedding_provider: EmbeddingProvider,
         config: "MemoryServiceConfig",
+        job_queue: JobQueueStore | None = None,
     ):
         """
         Инициализирует MemoryService.
-        
+
         Args:
             event_store: Хранилище событий.
             artifact_store: Хранилище артефактов.
@@ -71,6 +75,7 @@ class MemoryService:
             vector_index: Векторный индекс.
             embedding_provider: Провайдер embeddings.
             config: Конфигурация.
+            job_queue: Очередь задач (опционально).
         """
         self.event_store = event_store
         self.artifact_store = artifact_store
@@ -80,7 +85,8 @@ class MemoryService:
         self.vector_index = vector_index
         self.embedding_provider = embedding_provider
         self.config = config
-        
+        self.job_queue = job_queue
+
         # Процессоры
         self.analyzer = IngestAnalyzer()
         self.fact_processor = FactProcessor()
@@ -89,55 +95,67 @@ class MemoryService:
         self.task_processor = TaskProcessor()
         self.document_processor = DocumentProcessor()
         self.dedupe_processor = DedupeProcessor()
-        
+
+        # Memory LLM Processor и Governor будут созданы в worker (service_factory)
+        # Здесь не создаём, чтобы избежать дублирования
+        self.memory_llm_processor = None
+        self.governor = None
+
         # Inspector
         self.inspector = MemoryInspector(event_store.db)
     
     def ingest_event(self, envelope: MemoryEnvelope) -> dict[str, Any]:
         """
         Принимает событие на обработку.
-        
+
+        Переведено в enqueue-only режим:
+        - записывает raw event
+        - создаёт job в очереди
+        - worker обработает в фоне
+
         Args:
             envelope: Конверт события.
-            
+
         Returns:
             Результат ingest.
         """
         try:
             # Шаг 1: Записываем raw event (канон)
             self.event_store.append(envelope)
-            
-            # Шаг 2: Анализируем событие
+
+            # Шаг 2: Анализируем событие (быстрый фильтр)
             analysis = self.analyzer.analyze(envelope)
-            
+
             if not analysis["should_process"]:
                 return {
                     "event_id": envelope.event_id,
                     "processed": False,
                     "reason": "skipped_by_analyzer",
+                    "queued": False,
                     "artifacts_created": 0,
                 }
-            
-            # Шаг 3: Запускаем процессоры
-            artifacts = self._run_processors(envelope, analysis)
-            
-            # Шаг 4: Дедупликация
-            artifacts = self.dedupe_processor.deduplicate_artifacts(artifacts)
-            
-            # Шаг 5: Сохраняем артефакты
-            if artifacts:
-                self.artifact_store.create_many(artifacts)
-                
-                # Шаг 6: Индексируем в vector index
-                self._index_artifacts(artifacts)
-            
+
+            # Шаг 3: Создаём job в очереди (enqueue-only!)
+            job_id = self.job_queue.enqueue(
+                event_id=envelope.event_id,
+                job_type=self.job_queue.TYPE_MEMORY_LLM_PROCESS,
+                payload={
+                    "workspace_id": envelope.workspace_id,
+                    "session_id": envelope.session_id,
+                    "source_kind": envelope.source_kind,
+                    "payload_type": envelope.payload_type,
+                },
+                priority=5,
+            )
+
             return {
                 "event_id": envelope.event_id,
                 "processed": True,
-                "artifacts_created": len(artifacts),
-                "artifact_ids": [a.artifact_id for a in artifacts],
+                "queued": True,
+                "job_id": job_id,
+                "artifacts_created": 0,  # Будут созданы worker-ом в фоне
             }
-            
+
         except Exception as e:
             raise IngestError(f"Failed to ingest event: {e}")
     
@@ -307,7 +325,7 @@ class MemoryService:
             artifacts.extend(self.document_processor.process(envelope))
         
         return artifacts
-    
+
     def _index_artifacts(self, artifacts: list[MemoryArtifact]) -> None:
         """Индексирует артефакты в vector index."""
         for artifact in artifacts:
@@ -320,7 +338,26 @@ class MemoryService:
                     "created_at": artifact.created_at,
                 },
             )
-    
+
+    def _index_artifact_data(self, artifact_data: dict[str, Any]) -> None:
+        """Индексирует артефакт из данных Governor."""
+        artifact_id = artifact_data.get("artifact_id", "")
+        text = artifact_data.get("text", "")
+        artifact_type = artifact_data.get("artifact_type", "fact")
+        workspace_id = artifact_data.get("workspace_id", "global")
+        created_at = artifact_data.get("created_at", time.time())
+
+        if artifact_id and text:
+            self.vector_index.add(
+                artifact_id=artifact_id,
+                text=text,
+                metadata={
+                    "artifact_type": artifact_type,
+                    "workspace_id": workspace_id,
+                    "created_at": created_at,
+                },
+            )
+
     def get_current_workspace(self) -> str:
         """Получает текущий workspace."""
         return self.state_store.get_current_workspace(self.config.default_workspace)

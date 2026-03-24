@@ -695,6 +695,12 @@ def _default_persona_state() -> dict[str, Any]:
             "style_bias": {},
             "baseline_traits": dict(baselines),
         },
+        # Stabilizer state для медленной эволюции личности
+        "stabilizer": {
+            "counters": {},
+            "last_promotion_at": "",
+            "last_decay_at": "",
+        },
     }
 
 
@@ -911,6 +917,23 @@ def _normalize_persona_state_payload(value: dict[str, Any] | None) -> dict[str, 
     payload["learned"] = learned
     # Canonical storage keeps baseline only under learned.baseline_traits.
     payload.pop("baseline_traits", None)
+    
+    # Normalize stabilizer state
+    stabilizer = dict(payload.get("stabilizer") or {})
+    stabilizer.setdefault("counters", {})
+    stabilizer.setdefault("last_promotion_at", "")
+    stabilizer.setdefault("last_decay_at", "")
+    
+    # Ensure counters is a dict and clean invalid entries
+    counters = dict(stabilizer.get("counters") or {})
+    cleaned_counters = {}
+    for key, counter in counters.items():
+        if isinstance(counter, dict):
+            cleaned_counters[key] = counter
+    stabilizer["counters"] = cleaned_counters
+    
+    payload["stabilizer"] = stabilizer
+    
     return payload
 
 

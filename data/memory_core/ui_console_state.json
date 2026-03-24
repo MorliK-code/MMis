@@ -1,0 +1,12 @@
+{
+  "show_thinking": true,
+  "thinking_first": true,
+  "store_turn": true,
+  "runtime": {
+    "mode_lock": true,
+    "output_parameters": false,
+    "output_summary": false,
+    "model": "qwen3:8b",
+    "think_enabled": false
+  }
+}

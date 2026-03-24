@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import dataclass, field
 
 from core import DebugTrace
 from core.character_runtime import CharacterRuntime, PromptBudgets, PromptPack
@@ -23,8 +24,22 @@ from core.response_pipeline import (
     _isolate_factual_prompt_context,
     _resolve_web_factual_response_mode,
 )
-from memory.governor import GovernorProfileSnapshot
-from memory.identity_core import IdentityCoreSnapshot
+
+
+# Lightweight stubs для snapshot models (вместо legacy memory.governor и memory.identity_core)
+@dataclass
+class GovernorProfileSnapshot:
+    namespace: str = ""
+    active_facts: dict = field(default_factory=dict)
+    conflicts: list = field(default_factory=list)
+    updated_at: float = 0.0
+
+
+@dataclass
+class IdentityCoreSnapshot:
+    addressing: dict = field(default_factory=dict)
+    interaction_style: dict = field(default_factory=dict)
+    boundaries: dict = field(default_factory=dict)
 
 
 class ResponsePipelineFactualIsolationTests(unittest.TestCase):

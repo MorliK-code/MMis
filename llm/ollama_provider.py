@@ -7,6 +7,7 @@ from typing import Any
 import ollama
 
 from config.settings import load_config
+from llm.priority_manager import get_priority_manager, LLMPriorityManager
 from llm.provider_base import (
     LLMChunk,
     LLMProviderBase,
@@ -345,48 +346,61 @@ class OllamaProvider(LLMProviderBase):
         if not model:
             raise RuntimeError("Ollama model is not configured.")
         verbose = bool(dict(req.metadata or {}).get("verbose", False))
+        
+        # Определяем приоритет LLM
+        is_memory_llm = "memory" in str(req.metadata.get("source", "")).lower()
+        priority = LLMPriorityManager.PRIORITY_MEMORY if is_memory_llm else LLMPriorityManager.PRIORITY_MAIN
+        
+        # Запрашиваем доступ с учётом приоритета
+        priority_mgr = get_priority_manager()
+        if not priority_mgr.wait_for_turn(priority, timeout=300.0):
+            raise TimeoutError(f"LLM {model} timed out waiting for higher priority task")
+        
+        try:
+            log_json(
+                LOGGER,
+                "llm_generate_start",
+                provider="ollama",
+                model=model,
+                messages=len(list(req.messages or [])),
+                tools=len(list(req.tools or [])),
+                json_mode=bool(req.json_mode),
+                think=bool(req.metadata.get("think", False)),
+                verbose=verbose,
+                priority="memory" if is_memory_llm else "main",
+            )
+            payload = self._chat_with_retry(req=req, model=model, stream=False)
+            msg = dict(payload.get("message") or {})
+            text = str(msg.get("content") or "")
+            thinking = _extract_thinking(msg, payload)
+            tool_calls = _parse_tool_calls_from_message(msg, text_fallback=text)
+            usage = self._extract_usage(payload)
+            timings = self._extract_timings(payload)
+            log_json(
+                LOGGER,
+                "llm_generate_done",
+                provider="ollama",
+                model=str(payload.get("model") or model),
+                latency_ms=round(float(timings.latency_ms or 0.0), 2),
+                prompt_tokens=int(usage.prompt_tokens or 0),
+                completion_tokens=int(usage.completion_tokens or 0),
+                total_tokens=int(usage.total_tokens or 0),
+                tool_calls=len(tool_calls),
+                text_chars=len(text),
+                thinking_chars=len(thinking),
+            )
 
-        log_json(
-            LOGGER,
-            "llm_generate_start",
-            provider="ollama",
-            model=model,
-            messages=len(list(req.messages or [])),
-            tools=len(list(req.tools or [])),
-            json_mode=bool(req.json_mode),
-            think=bool(req.metadata.get("think", False)),
-            verbose=verbose,
-        )
-        payload = self._chat_with_retry(req=req, model=model, stream=False)
-        msg = dict(payload.get("message") or {})
-        text = str(msg.get("content") or "")
-        thinking = _extract_thinking(msg, payload)
-        tool_calls = _parse_tool_calls_from_message(msg, text_fallback=text)
-        usage = self._extract_usage(payload)
-        timings = self._extract_timings(payload)
-        log_json(
-            LOGGER,
-            "llm_generate_done",
-            provider="ollama",
-            model=str(payload.get("model") or model),
-            latency_ms=round(float(timings.latency_ms or 0.0), 2),
-            prompt_tokens=int(usage.prompt_tokens or 0),
-            completion_tokens=int(usage.completion_tokens or 0),
-            total_tokens=int(usage.total_tokens or 0),
-            tool_calls=len(tool_calls),
-            text_chars=len(text),
-            thinking_chars=len(thinking),
-        )
-
-        return LLMResponse(
-            text=text,
-            tool_calls=tool_calls,
-            thinking=thinking,
-            usage=usage,
-            timings=timings,
-            model=str(payload.get("model") or model),
-            raw=(payload if (self.debug_raw or verbose) else None),
-        )
+            return LLMResponse(
+                text=text,
+                tool_calls=tool_calls,
+                thinking=thinking,
+                usage=usage,
+                timings=timings,
+                model=str(payload.get("model") or model),
+                raw=(payload if (self.debug_raw or verbose) else None),
+            )
+        finally:
+            priority_mgr.release(priority)
 
     def stream(self, req: LLMRequest):
         model = str(req.model or self.default_model or "").strip()

@@ -30,7 +30,7 @@
       "emotion": {
         "name": "emotion",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.15,
         "max_tokens": 128,
         "timeout": 20.0,
@@ -40,7 +40,7 @@
       "tagging": {
         "name": "tagging",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.1,
         "max_tokens": 128,
         "timeout": 20.0,
@@ -50,7 +50,7 @@
       "intent_judge": {
         "name": "intent_judge",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.1,
         "max_tokens": 160,
         "timeout": 20.0,
@@ -60,7 +60,7 @@
       "query_rewrite": {
         "name": "query_rewrite",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.2,
         "max_tokens": 192,
         "timeout": 25.0,
@@ -70,7 +70,7 @@
       "source_relevance": {
         "name": "source_relevance",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.1,
         "max_tokens": 160,
         "timeout": 20.0,
@@ -80,7 +80,7 @@
       "summary_mini_pass": {
         "name": "summary_mini_pass",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.2,
         "max_tokens": 96,
         "timeout": 20.0,
@@ -90,7 +90,7 @@
       "studio_seed_extract": {
         "name": "studio_seed_extract",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.35,
         "max_tokens": 540,
         "timeout": 45.0,
@@ -100,7 +100,7 @@
       "studio_options": {
         "name": "studio_options",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.55,
         "max_tokens": 220,
         "timeout": 25.0,
@@ -110,7 +110,7 @@
       "studio_pack_blueprint": {
         "name": "studio_pack_blueprint",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.55,
         "max_tokens": 4096,
         "timeout": 90.0,
@@ -120,7 +120,7 @@
       "fact_filter": {
         "name": "fact_filter",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.1,
         "max_tokens": 192,
         "timeout": 20.0,
@@ -130,7 +130,7 @@
       "final_response": {
         "name": "final_response",
         "provider": "ollama",
-        "model": "hf.co/Triangle104/Qwen3-4B-Q6_K-GGUF:Q6_K",
+        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
         "temperature": 0.7,
         "max_tokens": 1024,
         "timeout": 120.0,
@@ -538,7 +538,9 @@
         "vector_path": "{dir_path}\\data\\memory_core\\vector",
         "default_workspace": "global",
         "default_namespace": "default",
-        "top_k": 8
+        "top_k": 8,
+        "enable_background_worker": true,
+        "worker_poll_interval": 2.0
       }
     }
   },
