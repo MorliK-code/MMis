@@ -70,11 +70,21 @@ class MemoryCoreConfig:
     enable_background_worker: bool = True
     worker_poll_interval: float = 2.0
     
+    # Настройки паузы worker во время обработки запросов API
+    enable_worker_pause_during_api_request: bool = True
+    worker_pause_timeout: float = 0.0  # 0 = без ограничения, >0 = макс. время паузы в секундах
+    
+    # Таймаут завершения worker при простое
+    worker_shutdown_idle_timeout: float = 300.0  # 5 минут по умолчанию
+
     llm: MemoryLLMConfig = field(default_factory=MemoryLLMConfig)
     artifact_types: dict[str, ArtifactTypeConfig] = field(default_factory=dict)
     governor: GovernorConfig = field(default_factory=GovernorConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     
+    # Профили task model (основной источник настроек LLM)
+    task_model_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+
     # Полные пути
     db_path_full: str = ""
     vector_path_full: str = ""
@@ -119,6 +129,12 @@ class MemoryCoreConfig:
         config.top_k = int(data.get("top_k", 8))
         config.enable_background_worker = bool(data.get("enable_background_worker", True))
         config.worker_poll_interval = float(data.get("worker_poll_interval", 2.0))
+        config.enable_worker_pause_during_api_request = bool(data.get("enable_worker_pause_during_api_request", True))
+        config.worker_pause_timeout = float(data.get("worker_pause_timeout", 0.0))
+        config.worker_shutdown_idle_timeout = float(data.get("worker_shutdown_idle_timeout", 300.0))
+        
+        # Task model profiles (основной источник настроек LLM)
+        config.task_model_profiles = dict(data.get("task_model_profiles", {}))
 
         # Полные пути
         config.db_path_full = str(Path(BASE_DIR) / config.db_path)
@@ -188,6 +204,9 @@ class MemoryCoreConfig:
             "top_k": self.top_k,
             "enable_background_worker": self.enable_background_worker,
             "worker_poll_interval": self.worker_poll_interval,
+            "enable_worker_pause_during_api_request": self.enable_worker_pause_during_api_request,
+            "worker_pause_timeout": self.worker_pause_timeout,
+            "worker_shutdown_idle_timeout": self.worker_shutdown_idle_timeout,
             "llm": {
                 "provider": self.llm.provider,
                 "model": self.llm.model,
@@ -196,6 +215,7 @@ class MemoryCoreConfig:
                 "timeout": self.llm.timeout,
                 "system_prompt": self.llm.system_prompt,
             },
+            "task_model_profiles": self.task_model_profiles,
             "governor": {
                 "confidence_thresholds": {
                     "high": self.governor.confidence_high,

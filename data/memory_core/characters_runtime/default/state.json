@@ -2,8 +2,8 @@
   "mood": "neutral",
   "last_update_ts": "",
   "active_traits": [
-    "warmth",
-    "thoughtfulness"
+    "thoughtfulness",
+    "warmth"
   ],
   "disabled_traits": [],
   "counters": {
@@ -14,5 +14,6 @@
   "applied_rules": [],
   "emotional_state_before": {},
   "emotional_state_after": {},
-  "persona_feedback_applied": []
+  "persona_feedback_applied": [],
+  "emotion": ""
 }

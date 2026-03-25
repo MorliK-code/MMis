@@ -17,6 +17,10 @@ from memory_core.indexing.vector_index import VectorIndex
 from memory_core.retrieval.retrieval_service import RetrievalService
 from memory_core.inspect.memory_inspector import build_memory_inspector
 from memory_core.worker.background_worker import BackgroundWorker, WorkerConfig
+from utils.logger import get_logger
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass
@@ -36,6 +40,7 @@ class MemoryServiceConfig:
     enable_debug_inspector: bool = True
     enable_background_worker: bool = True
     worker_poll_interval: float = 2.0
+    worker_shutdown_idle_timeout: float = 300.0  # Таймаут простоя worker (сек)
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
 
@@ -112,6 +117,7 @@ def build_memory_service(config: MemoryServiceConfig | None = None) -> MemorySer
     )
 
     # Создаём и запускаем background worker если включено
+    # ЗАМЕЧАНИЕ: worker запускается явно в api/app.py lifespan startup
     if config.enable_background_worker:
         worker = _create_background_worker(
             job_queue=job_queue,
@@ -122,16 +128,11 @@ def build_memory_service(config: MemoryServiceConfig | None = None) -> MemorySer
             trace_store=trace_store,  # Добавляем trace_store
         )
         memory_service.worker = worker
-        worker.start()
-        
-        # Регистрируем shutdown handler для остановки worker
-        import atexit
-        def _shutdown_worker():
-            if hasattr(memory_service, 'worker') and memory_service.worker:
-                LOGGER.info("Stopping background worker...")
-                memory_service.worker.stop(timeout_sec=5.0)
-                LOGGER.info("Background worker stopped")
-        atexit.register(_shutdown_worker)
+        # worker.start()  # Не запускаем автоматически!
+
+        # Worker будет запущен явно в api/app.py lifespan startup
+        # Worker будет остановлен через lifespan shutdown в api/app.py
+        # atexit не используется, так как не срабатывает при taskkill /F
 
     # Инициализируем default workspace
     _ensure_default_workspace(workspace_store, config.default_workspace)
@@ -187,21 +188,29 @@ def _create_background_worker(
     # Создаём TaskModelRegistry
     # Загружаем профили из главного конфига
     registry = TaskModelRegistry.from_settings(cfg)
-    
-    # Добавляем профиль memory_llm_process из memory_core конфига если его нет
-    if "memory_llm_process" not in registry._profiles:
+
+    # Добавляем профиль memory_llm_process из memory_core конфига (task_model_profiles)
+    # Это основной источник настроек LLM для memory_core
+    memory_llm_profile_data = mc_config.task_model_profiles.get("memory_llm_process", {})
+    if memory_llm_profile_data and "memory_llm_process" not in registry._profiles:
         registry._profiles["memory_llm_process"] = TaskModelProfile(
-            name="memory_llm_process",
-            provider=mc_config.llm.provider,
-            model=mc_config.llm.model,
-            temperature=mc_config.llm.temperature,
-            max_tokens=mc_config.llm.max_tokens,
-            timeout=mc_config.llm.timeout,
-            enabled=True,
+            name=str(memory_llm_profile_data.get("name", "memory_llm_process")),
+            provider=str(memory_llm_profile_data.get("provider", "ollama")),
+            model=str(memory_llm_profile_data.get("model", "qwen3:4b")),
+            temperature=float(memory_llm_profile_data.get("temperature", 0.1)),
+            max_tokens=int(memory_llm_profile_data.get("max_tokens", 1024)),
+            timeout=float(memory_llm_profile_data.get("timeout", 60.0)),
+            enabled=bool(memory_llm_profile_data.get("enabled", True)),
         )
-    
+
     task_router = TaskModelRouter(registry=registry)
-    memory_llm_processor = MemoryLLMProcessor(task_router=task_router)
+    
+    # Получаем timeout из task_model_profiles
+    memory_llm_timeout = float(memory_llm_profile_data.get("timeout", 60.0))
+    memory_llm_processor = MemoryLLMProcessor(
+        task_router=task_router,
+        timeout_sec=memory_llm_timeout,
+    )
     
     # Создаём Governor
     governor = build_governor(artifact_store)
@@ -240,6 +249,7 @@ def _create_background_worker(
     worker_config = WorkerConfig(
         poll_interval_sec=config.worker_poll_interval,
         enabled=True,
+        shutdown_idle_timeout_sec=config.worker_shutdown_idle_timeout,
     )
 
     worker = BackgroundWorker(

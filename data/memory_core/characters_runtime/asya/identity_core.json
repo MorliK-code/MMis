@@ -8,9 +8,18 @@
     "use_name_by_default": false,
     "updated_at": ""
   },
-  "interaction_style": {},
-  "boundaries": {},
-  "emotional_handling": {},
+  "interaction_style": {
+    "prefers_directness": 0.82,
+    "prefers_short_answers": 0.55,
+    "allows_light_teasing": true,
+    "technical_collaboration_style": "high"
+  },
+  "boundaries": {
+    "avoid_baby_talk": false
+  },
+  "emotional_handling": {
+    "treat_short_replies_as_low_bandwidth": true
+  },
   "assistant_trait_baseline": {},
   "updated_at": ""
 }

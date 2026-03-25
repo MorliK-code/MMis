@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1232,12 +1233,25 @@ def _start_api_process(state: ConsoleState) -> bool:
     clean_mmis_api_processes(tag=MMIS_API_TAG, root=root)
 
     try:
-        state.api_process = subprocess.Popen(
-            [sys.executable, str(api_main), "--mmis-tag", MMIS_API_TAG],
-            cwd=str(root),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Запускаем с перенаправлением вывода в файл для отладки
+        import tempfile
+        log_file = Path(tempfile.gettempdir()) / f"mmis_api_{os.getpid()}.log"
+        with open(log_file, "w", encoding="utf-8") as f:
+            state.api_process = subprocess.Popen(
+                [sys.executable, str(api_main), "--mmis-tag", MMIS_API_TAG, "--quiet"],
+                cwd=str(root),
+                stdout=f,
+                stderr=subprocess.STDOUT,
+            )
+        # Ждём немного чтобы проверить запуск
+        time.sleep(2.0)
+        if state.api_process.poll() is not None:
+            # Процесс завершился, читаем лог
+            with open(log_file, "r", encoding="utf-8") as f:
+                error_log = f.read()
+            print(f"API process failed to start. Log: {error_log[:500]}")
+            state.api_process = None
+            return False
         return True
     except Exception as exc:
         print(f"Cannot start API automatically: {exc}")
@@ -1365,14 +1379,17 @@ def main() -> int:
 
     _print_header(state)
 
+    # НЕ проверяем подключение при старте - API будет запущен когда понадобится
+    # Это предотвращает запуск Memory LLM до появления поля ввода
+    api_available = False  # _ensure_connected(state)
+    
     if model_name:
-        if _ensure_connected_or_start(state):
-            try:
-                state.api.set_model(model_name)
-                print(f"Startup model set: {state.api.get_runtime_model() or model_name}")
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
+        # Пробуем установить модель только если API уже запущен
+        try:
+            state.api.set_model(model_name)
+            print(f"Startup model set: {state.api.get_runtime_model() or model_name}")
+        except ApiClientError:
+            pass  # API ещё не запущен, установим позже
 
     think_action = None
     if bool(args.think):
@@ -1383,12 +1400,11 @@ def main() -> int:
         think_action = bool(config.thinking_enabled)
 
     if think_action is not None:
-        if _ensure_connected_or_start(state):
-            try:
-                state.think_enabled = bool(state.api.set_thinking_enabled(think_action))
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
+        # Применяем настройку только если API доступен
+        try:
+            state.think_enabled = bool(state.api.set_thinking_enabled(think_action))
+        except ApiClientError:
+            pass  # API ещё не запущен
 
     json_action = None
     if bool(args.json):
@@ -1399,22 +1415,14 @@ def main() -> int:
         json_action = bool(config.json_mode_enabled)
 
     if json_action is not None:
-        if _ensure_connected_or_start(state):
-            try:
-                state.json_mode_enabled = bool(state.api.set_json_mode_enabled(json_action))
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
+        try:
+            state.json_mode_enabled = bool(state.api.set_json_mode_enabled(json_action))
+        except ApiClientError:
+            pass  # API ещё не запущен
 
-    if _ensure_connected_or_start(state):
-        web_mode_cfg = str(config.web_mode or "").strip().lower()
-        if web_mode_cfg in {"on", "off", "auto"}:
-            try:
-                state.web_mode = str(state.api.set_web_mode(web_mode_cfg))
-            except ApiClientError as exc:
-                state.online = False
-                print(f"API error: {exc}")
-        _apply_persisted_runtime_settings(state)
+    # НЕ применяем web_mode и persisted settings при старте
+    # if api_available:
+    #     ...
 
     if state.think_enabled is not None:
         print(f"Thinking: {'on' if state.think_enabled else 'off'}")

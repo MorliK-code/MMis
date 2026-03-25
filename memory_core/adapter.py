@@ -10,6 +10,15 @@ from memory_core.bootstrap.service_factory import build_memory_service, MemorySe
 from memory_core.schemas import MemoryEnvelope, MemoryQuery
 from memory_core.facade import MemoryService
 from memory_core.config_manager import get_memory_core_config
+from utils.logger import get_logger
+import threading
+
+
+LOGGER = get_logger(__name__)
+
+# Глобальная блокировка для Memory LLM
+# Используется для приостановки Memory LLM во время ответа основной модели
+_memory_llm_lock = threading.Lock()
 
 
 class MemoryCoreAdapter:
@@ -45,7 +54,7 @@ class MemoryCoreAdapter:
         """
         # Загружаем конфигурацию из файла
         config_file = get_memory_core_config(config_path)
-        
+
         # Переопределяем параметрами из конструктора
         self.config = MemoryServiceConfig(
             db_path=db_path or config_file.db_path,
@@ -54,21 +63,30 @@ class MemoryCoreAdapter:
             default_namespace=default_namespace or config_file.default_namespace,
             top_k=top_k or config_file.top_k,
             enable_background_worker=(
-                enable_background_worker 
-                if enable_background_worker is not None 
+                enable_background_worker
+                if enable_background_worker is not None
                 else config_file.enable_background_worker
             ),
             worker_poll_interval=(
-                worker_poll_interval 
-                if worker_poll_interval is not None 
+                worker_poll_interval
+                if worker_poll_interval is not None
                 else config_file.worker_poll_interval
             ),
+            worker_shutdown_idle_timeout=config_file.worker_shutdown_idle_timeout,
         )
 
         self.service = build_memory_service(self.config)
         self._current_workspace = self.config.default_workspace
         self._current_session = "default"
         self._config_file = config_file
+        
+        # Настройки паузы worker из конфига
+        self._enable_pause = bool(config_file.enable_worker_pause_during_api_request)
+        self._pause_timeout = float(config_file.worker_pause_timeout or 0.0)
+        
+        # Таймер для автоматического возобновления Memory LLM
+        self._auto_resume_timer: threading.Timer | None = None
+        self._auto_resume_delay = float(config_file.worker_pause_timeout or 0.0)
 
     def ingest_event(
         self,
@@ -469,6 +487,184 @@ class MemoryCoreAdapter:
         """Закрывает соединения (если требуется)."""
         # SQLite не требует явного закрытия в большинстве случаев
         pass
+
+    def pause_worker(self) -> None:
+        """
+        Ставит background worker на паузу и освобождает VRAM.
+        
+        Полезно для приостановки обработки памяти во время ответа пользователю.
+        Работает только если enable_worker_pause_during_api_request=True в конфиге.
+        """
+        if not self._enable_pause:
+            return  # Пауза отключена в конфиге
+        
+        # Отменяем предыдущий таймер если есть
+        self._cancel_auto_resume_timer()
+        
+        # Сначала блокируем Memory LLM
+        self._acquire_memory_llm_lock()
+        
+        if hasattr(self.service, 'worker') and self.service.worker is not None:
+            LOGGER.info("MemoryCoreAdapter: Pausing worker...")
+            self.service.worker.pause()
+            LOGGER.info("MemoryCoreAdapter: Worker paused")
+        
+        # Также ставим на паузу Memory LLM для освобождения VRAM
+        self._pause_memory_llm()
+        
+        # Планируем автоматическое возобновление через worker_pause_timeout
+        # Если timeout=0, то возобновление только после явного вызова resume_worker()
+        pause_timeout = self._pause_timeout
+        if pause_timeout > 0:
+            LOGGER.info(f"MemoryCoreAdapter: Auto-resume timer set for {pause_timeout}s")
+            self._auto_resume_timer = threading.Timer(
+                pause_timeout,
+                self._auto_resume_worker
+            )
+            self._auto_resume_timer.daemon = True
+            self._auto_resume_timer.start()
+
+    def _auto_resume_worker(self) -> None:
+        """Автоматически возобновляет worker после таймаута."""
+        LOGGER.info("MemoryCoreAdapter: Auto-resume timer triggered, resuming worker...")
+        self.resume_worker()
+
+    def _cancel_auto_resume_timer(self) -> None:
+        """Отменяет таймер автоматического возобновления."""
+        if self._auto_resume_timer is not None:
+            self._auto_resume_timer.cancel()
+            self._auto_resume_timer = None
+            LOGGER.debug("MemoryCoreAdapter: Auto-resume timer cancelled")
+
+    def resume_worker(self) -> None:
+        """
+        Снимает background worker с паузы и возобновляет Memory LLM.
+        
+        Возобновляет обработку задач памяти.
+        """
+        if not self._enable_pause:
+            return  # Пауза отключена в конфиге
+        
+        # Отменяем таймер если ещё активен
+        self._cancel_auto_resume_timer()
+        
+        # СНАЧАЛА выгружаем модель основной модели из VRAM
+        self._unload_main_model_from_vram()
+        
+        if hasattr(self.service, 'worker') and self.service.worker is not None:
+            LOGGER.info("MemoryCoreAdapter: Resuming worker...")
+            self.service.worker.resume()
+            LOGGER.info("MemoryCoreAdapter: Worker resumed")
+        
+        # Также возобновляем Memory LLM
+        self._resume_memory_llm()
+        
+        # Разблокируем Memory LLM
+        self._release_memory_llm_lock()
+
+    def _unload_main_model_from_vram(self) -> None:
+        """Выгружает модель основной модели из VRAM для освобождения памяти."""
+        try:
+            # Получаем provider из _runtime (основная модель)
+            from api.app import _runtime
+            provider = getattr(_runtime, "provider", None)
+            if provider and hasattr(provider, 'unload_model'):
+                LOGGER.info("MemoryCoreAdapter: Unloading main model from VRAM...")
+                provider.unload_model()
+                LOGGER.info("MemoryCoreAdapter: Main model unloaded from VRAM")
+        except Exception as exc:
+            LOGGER.debug(f"Failed to unload main model from VRAM: {exc}")
+
+    def _acquire_memory_llm_lock(self) -> None:
+        """Блокирует Memory LLM для предотвращения обработки."""
+        try:
+            # СНАЧАЛА устанавливаем флаг прерывания — это немедленно!
+            try:
+                from llm.ollama_provider import _memory_llm_interrupt
+                _memory_llm_interrupt.set()
+                LOGGER.debug("MemoryCoreAdapter: Memory LLM interrupt flag set (IMMEDIATE)")
+            except Exception:
+                pass
+            
+            # ЗАТЕМ захватываем lock — это предотвратит новые задачи
+            acquired = _memory_llm_lock.acquire(timeout=0.1)
+            if acquired:
+                LOGGER.debug("MemoryCoreAdapter: Memory LLM lock acquired")
+        except Exception as exc:
+            LOGGER.debug(f"Failed to acquire Memory LLM lock: {exc}")
+
+    def _release_memory_llm_lock(self) -> None:
+        """Разблокирует Memory LLM."""
+        try:
+            # СНАЧАЛА освобождаем lock
+            if _memory_llm_lock.locked():
+                _memory_llm_lock.release()
+                LOGGER.debug("MemoryCoreAdapter: Memory LLM lock released")
+            
+            # ЗАТЕМ сбрасываем флаг прерывания
+            try:
+                from llm.ollama_provider import _memory_llm_interrupt
+                _memory_llm_interrupt.clear()
+                LOGGER.debug("MemoryCoreAdapter: Memory LLM interrupt flag cleared")
+            except Exception:
+                pass
+        except Exception as exc:
+            LOGGER.debug(f"Failed to release Memory LLM lock: {exc}")
+
+    def _pause_memory_llm(self) -> None:
+        """Ставит Memory LLM на паузу для освобождения VRAM."""
+        try:
+            # Получаем memory_llm_processor из worker
+            if hasattr(self.service, 'worker') and self.service.worker is not None:
+                worker = self.service.worker
+                memory_llm_processor = getattr(worker, 'memory_llm_processor', None)
+                if memory_llm_processor:
+                    # Получаем task_router и provider
+                    task_router = getattr(memory_llm_processor, 'task_router', None)
+                    if task_router:
+                        # Получаем provider из task_router
+                        provider = getattr(task_router, '_provider', None)
+                        if provider and hasattr(provider, 'pause'):
+                            LOGGER.info("MemoryCoreAdapter: Pausing Memory LLM...")
+                            provider.pause()
+                            LOGGER.info("MemoryCoreAdapter: Memory LLM paused")
+        except Exception as exc:
+            LOGGER.debug(f"Failed to pause Memory LLM: {exc}")
+
+    def _resume_memory_llm(self) -> None:
+        """Возобновляет Memory LLM после паузы."""
+        try:
+            if hasattr(self.service, 'worker') and self.service.worker is not None:
+                worker = self.service.worker
+                memory_llm_processor = getattr(worker, 'memory_llm_processor', None)
+                if memory_llm_processor:
+                    task_router = getattr(memory_llm_processor, 'task_router', None)
+                    if task_router:
+                        provider = getattr(task_router, '_provider', None)
+                        if provider and hasattr(provider, 'resume'):
+                            LOGGER.info("MemoryCoreAdapter: Resuming Memory LLM...")
+                            provider.resume()
+                            LOGGER.info("MemoryCoreAdapter: Memory LLM resumed")
+        except Exception as exc:
+            LOGGER.debug(f"Failed to resume Memory LLM: {exc}")
+
+    def is_worker_paused(self) -> bool:
+        """Проверяет, на паузе ли worker."""
+        if not self._enable_pause:
+            return False
+        if hasattr(self.service, 'worker') and self.service.worker is not None:
+            return self.service.worker.is_paused()
+        return False
+    
+    @property
+    def worker_pause_enabled(self) -> bool:
+        """Проверяет, включена ли пауза worker."""
+        return self._enable_pause
+    
+    @property
+    def worker_pause_timeout(self) -> float:
+        """Получает таймаут паузы worker (сек)."""
+        return self._pause_timeout
 
 
 # Глобальный экземпляр для использования в main.py

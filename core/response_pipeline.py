@@ -1794,7 +1794,26 @@ class GenerateStage(PipelineStage):
         if use_agent_loop:
             resp, agent_tool_calls, agent_passes = self._generate_with_agent_loop(ctx, req)
         else:
+            # Приоритет для основной модели — захватываем turn перед генерацией
+            try:
+                from llm.priority_manager import get_priority_manager, LLMPriorityManager
+                manager = get_priority_manager()
+                if manager:
+                    # Основная модель имеет приоритет 0 (highest)
+                    manager.acquire_turn(LLMPriorityManager.PRIORITY_MAIN, timeout=30.0)
+            except Exception:
+                pass  # Игнорируем ошибки priority manager
+            
             resp = self.provider.generate(req)
+            
+            # Освобождаем приоритет после генерации
+            try:
+                from llm.priority_manager import get_priority_manager, LLMPriorityManager
+                manager = get_priority_manager()
+                if manager:
+                    manager.release_turn(LLMPriorityManager.PRIORITY_MAIN)
+            except Exception:
+                pass  # Игнорируем ошибки priority manager
         ctx.raw_output = str(resp.text or "")
         ctx.text = ctx.raw_output
         ctx.thinking = str(getattr(resp, "thinking", "") or "")

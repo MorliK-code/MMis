@@ -4,13 +4,57 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import socket
 import subprocess
 import sys
+import threading
+import time
+from pathlib import Path
 
 import uvicorn
 
 from config.settings import load_config, setup_logging
+
+
+# Глобальный флаг для обработки сигналов
+_shutdown_requested = False
+
+
+def _handle_shutdown_signal(signum, frame):
+    """Обработчик сигналов завершения."""
+    global _shutdown_requested
+    _shutdown_requested = True
+    print(f"\nSignal {signum} received, shutting down...")
+
+
+def _shutdown_memory_core_worker():
+    """Принудительно останавливает memory_core worker."""
+    try:
+        from memory_core.adapter import _memory_core_adapter
+        if _memory_core_adapter is not None:
+            memory_core = getattr(_memory_core_adapter, "service", None)
+            if memory_core is not None:
+                worker = getattr(memory_core, "worker", None)
+                if worker is not None and worker.is_running():
+                    print("Forcing worker shutdown...")
+                    worker.pause()
+                    worker.stop(timeout_sec=2.0)
+                    print("Worker stopped")
+    except Exception as exc:
+        print(f"Worker shutdown error: {exc}")
+
+
+# Регистрируем обработчики сигналов для Windows и Unix
+if os.name == "nt":
+    # Windows - CTRL_BREAK_EVENT
+    try:
+        signal.signal(signal.SIGBREAK, _handle_shutdown_signal)
+    except (AttributeError, ValueError):
+        pass
+# Unix - SIGTERM, SIGINT
+signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+signal.signal(signal.SIGINT, _handle_shutdown_signal)
 
 
 def _is_port_in_use(host: str, port: int) -> bool:
@@ -24,43 +68,41 @@ def _is_port_in_use(host: str, port: int) -> bool:
             return True
 
 
-def _kill_processes_on_port(port: int) -> int:
-    """Завершает процессы, использующие указанный порт."""
-    if os.name != "nt":
+def _cleanup_mmis_processes(tag: str = "mmis", *, quiet: bool = False) -> int:
+    """
+    Завершает все MMis API процессы с указанным тегом.
+
+    Использует внешний скрипт stop_api.py для корректного завершения.
+    """
+    script_path = Path(__file__).parent / "stop_api.py"
+    if not script_path.exists():
+        if not quiet:
+            print(f"stop_api.py not found at {script_path}")
         return 0
-    
-    killed = 0
+
     try:
-        # Находим PID процесса на порту
         result = subprocess.run(
-            ['netstat', '-ano'],
+            [sys.executable, str(script_path), "--tag", tag, "--timeout", "15"],
             capture_output=True,
             text=True,
             check=False,
-            timeout=5.0
+            timeout=20.0,
         )
-        
-        for line in result.stdout.splitlines():
-            if f':{port}' in line and 'LISTENING' in line:
-                parts = line.split()
-                if len(parts) >= 5:
-                    pid = int(parts[-1])
-                    if pid > 0 and pid != os.getpid():
-                        try:
-                            subprocess.run(
-                                ['taskkill', '/F', '/PID', str(pid)],
-                                capture_output=True,
-                                text=True,
-                                check=False,
-                                timeout=3.0
-                            )
-                            killed += 1
-                        except Exception:
-                            pass
-    except Exception:
-        pass
-    
-    return killed
+        # Выводим результат только если не quiet режим
+        if not quiet:
+            if result.stdout:
+                print(result.stdout)
+            if result.returncode != 0 and result.stderr:
+                print(f"Cleanup warning: {result.stderr}")
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        if not quiet:
+            print("Cleanup timed out")
+        return 0
+    except Exception as exc:
+        if not quiet:
+            print(f"Cleanup failed: {exc}")
+        return 0
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -71,6 +113,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not cleanup previously tagged MMis API processes before startup",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress non-essential output (for embedded/automated usage)",
+    )
     return parser
 
 
@@ -78,16 +125,50 @@ if __name__ == "__main__":
     args = _build_arg_parser().parse_args()
     cfg = load_config()
     setup_logging(cfg)
-    
+
+    quiet = bool(args.quiet)
+
+    # Очищаем старые процессы перед запуском
+    if not args.no_clean_tagged:
+        if not quiet:
+            print(f"Cleaning up existing MMis API processes (tag={args.mmis_tag})...")
+        _cleanup_mmis_processes(tag=args.mmis_tag, quiet=quiet)
+        time.sleep(0.5)
+
     # Проверяем, занят ли порт
     if _is_port_in_use(cfg.host, cfg.port):
-        print(f"⚠️  Port {cfg.port} is in use, cleaning up...")
-        killed = _kill_processes_on_port(cfg.port)
-        if killed > 0:
-            print(f"✅ Terminated {killed} process(es) on port {cfg.port}")
-            import time
-            time.sleep(1)  # Ждём освобождения порта
-    
+        if not quiet:
+            print(f"Port {cfg.port} is in use, forcing cleanup...")
+        _cleanup_mmis_processes(tag=args.mmis_tag, quiet=quiet)
+        time.sleep(1.5)  # Ждём освобождения порта
+
     # Start API server
-    print(f"🚀 Starting API server on {cfg.host}:{cfg.port}...")
-    uvicorn.run("api.app:app", host=cfg.host, port=cfg.port, reload=False)
+    if not quiet:
+        print(f"Starting API server on {cfg.host}:{cfg.port}...")
+        print("Press Ctrl+C to stop the server and shutdown all workers...")
+        print()
+
+    # Запускаем uvicorn с обработкой сигналов
+    # Uvicorn автоматически обрабатывает SIGINT/SIGTERM и вызывает lifespan shutdown
+    try:
+        uvicorn.run(
+            "api.app:app",
+            host=cfg.host,
+            port=cfg.port,
+            reload=False,
+            log_level="info",
+        )
+    except KeyboardInterrupt:
+        if not quiet:
+            print("\nCtrl+C received, shutting down gracefully...")
+    except Exception as exc:
+        if not quiet:
+            import traceback
+            print(f"\nAPI error: {exc}")
+            print("Traceback:")
+            traceback.print_exc()
+    finally:
+        # Принудительно останавливаем worker если он ещё работает
+        _shutdown_memory_core_worker()
+        if not quiet:
+            print("API server stopped")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -26,6 +27,10 @@ from utils.logger import get_logger, log_json
 
 LOGGER = get_logger(__name__)
 _cfg = load_config()
+
+# Глобальный флаг для прерывания Memory LLM
+# Устанавливается в True когда основная модель хочет ответить
+_memory_llm_interrupt = threading.Event()
 
 
 def _serialize_tool_arguments(call: ToolCall) -> Any:
@@ -618,6 +623,16 @@ class OllamaProvider(LLMProviderBase):
         }
         if think is not None:
             request_payload["think"] = think
+        
+        # Проверяем, является ли это Memory LLM
+        is_memory_llm = "memory" in str(req.metadata.get("source", "")).lower()
+        
+        if is_memory_llm:
+            # Проверяем флаг прерывания перед началом
+            if _memory_llm_interrupt.is_set():
+                LOGGER.warning("Memory LLM interrupted before start - main model responding")
+                raise InterruptedError("Memory LLM interrupted - main model has priority")
+        
         log_json(
             LOGGER,
             "llm_request_payload",
@@ -625,10 +640,30 @@ class OllamaProvider(LLMProviderBase):
             payload=request_payload,
             **_message_log_fields(messages),
         )
+        
+        if is_memory_llm and stream:
+            # Для streaming проверяем флаг прерывания во время генерации
+            return self._interruptible_chat_stream(req, model, request_payload)
+        
         payload = self._client.chat(**request_payload)
         if stream:
             return payload
         return _as_dict(payload)
+
+    def _interruptible_chat_stream(self, req: LLMRequest, model: str, request_payload: dict):
+        """Streaming генерация с проверкой прерывания для Memory LLM."""
+        try:
+            payload = self._client.chat(**request_payload)
+            # Проверяем прерывание для каждого чанка
+            for chunk in payload:
+                if _memory_llm_interrupt.is_set():
+                    LOGGER.warning("Memory LLM stream interrupted - main model responding")
+                    raise InterruptedError("Memory LLM interrupted - main model has priority")
+                yield chunk
+        except InterruptedError:
+            raise
+        except Exception:
+            raise
 
     @staticmethod
     def _is_thinking_unsupported_error(exc: Exception) -> bool:
@@ -713,3 +748,153 @@ class OllamaProvider(LLMProviderBase):
             prompt_eval_duration_ms=prompt_eval_duration_ms,
             eval_duration_ms=eval_duration_ms,
         )
+
+    def shutdown(self) -> None:
+        """
+        Полностью освобождает ресурсы LLM provider всеми способами.
+        
+        Для Ollama:
+        1. Выгружаем модель через API
+        2. Закрываем все соединения
+        3. Очищаем кэш
+        4. Сбрасываем приоритет
+        """
+        LOGGER.info("OllamaProvider.shutdown() called - FULL CLEANUP...")
+        
+        # Способ 1: Выгрузка модели через Ollama API
+        try:
+            import ollama
+            model_name = getattr(self, '_current_model', None)
+            if model_name:
+                LOGGER.info(f"OllamaProvider: Unloading model '{model_name}' via API...")
+                try:
+                    # Пытаемся выгрузить модель
+                    ollama.generate(model=model_name, prompt="")
+                    LOGGER.info(f"Ollama model '{model_name}' unloaded via generate()")
+                except Exception as e1:
+                    LOGGER.debug(f"Unload via generate() failed: {e1}")
+                    
+                try:
+                    # Альтернативный способ через chat
+                    ollama.chat(model=model_name, messages=[])
+                    LOGGER.info(f"Ollama model '{model_name}' unloaded via chat()")
+                except Exception as e2:
+                    LOGGER.debug(f"Unload via chat() failed: {e2}")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider: API unload failed: {exc}")
+        
+        # Способ 2: Закрытие клиента
+        try:
+            import ollama
+            if hasattr(ollama, '_client'):
+                client = getattr(ollama, '_client', None)
+                if client:
+                    if hasattr(client, 'close'):
+                        client.close()
+                        LOGGER.info("OllamaProvider: Client closed")
+                    if hasattr(client, 'transport') and hasattr(client.transport, 'close'):
+                        client.transport.close()
+                        LOGGER.info("OllamaProvider: Transport closed")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider: Client close failed: {exc}")
+        
+        # Способ 3: Принудительное закрытие HTTP сессий
+        try:
+            import ollama
+            if hasattr(ollama, 'client'):
+                client = getattr(ollama, 'client', None)
+                if client and hasattr(client, 'close'):
+                    client.close()
+                    LOGGER.info("OllamaProvider: ollama.client closed")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider: ollama.client close failed: {exc}")
+        
+        # Способ 4: Сброс приоритета
+        try:
+            from llm.priority_manager import get_priority_manager
+            manager = get_priority_manager()
+            if manager:
+                manager.release_turn(self)
+                LOGGER.info("OllamaProvider: LLM priority released")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider: Priority release failed: {exc}")
+        
+        # Способ 5: Очистка внутренних кэшей
+        try:
+            # Очищаем атрибуты provider
+            for attr in ['_current_model', '_session', '_client_cache']:
+                if hasattr(self, attr):
+                    setattr(self, attr, None)
+            LOGGER.info("OllamaProvider: Internal caches cleared")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider: Cache clear failed: {exc}")
+        
+        LOGGER.info("OllamaProvider.shutdown() COMPLETE - VRAM should be freed")
+
+    def pause(self) -> None:
+        """
+        Приостанавливает LLM provider, освобождая VRAM.
+        
+        Для Ollama это означает явную выгрузку модели из памяти.
+        """
+        LOGGER.info("OllamaProvider.pause() called - releasing VRAM...")
+        try:
+            # Явно выгружаем модель через Ollama API
+            # Ollama автоматически выгружает модель после 5 минут простоя
+            # Но мы можем принудительно выгрузить через unload
+            try:
+                # Пытаемся выгрузить модель через generate с пустым prompt
+                # Это заставит Ollama выгрузить модель из VRAM
+                import ollama
+                if hasattr(ollama, 'generate'):
+                    # Получаем текущую модель
+                    model_name = getattr(self, '_current_model', None)
+                    if model_name:
+                        # Пустой запрос для выгрузки
+                        ollama.generate(model=model_name, prompt="")
+                        LOGGER.info(f"Ollama model '{model_name}' unloaded from VRAM")
+            except Exception as unload_err:
+                LOGGER.debug(f"Ollama unload attempt: {unload_err}")
+            
+            # Закрываем клиент для сброса соединений
+            if hasattr(ollama, '_client'):
+                client = getattr(ollama, '_client', None)
+                if client and hasattr(client, 'close'):
+                    client.close()
+                    LOGGER.info("Ollama client closed")
+            
+            # Сбрасываем приоритет
+            manager = get_priority_manager()
+            if manager:
+                manager.release_turn(self)
+                LOGGER.info("LLM priority released")
+                
+            LOGGER.info("OllamaProvider.pause() complete - VRAM should be freed")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider.pause() error: {exc}")
+
+    def resume(self) -> None:
+        """
+        Возобновляет работу LLM provider.
+        
+        Для Ollama это означает готовность к новым запросам.
+        """
+        LOGGER.info("OllamaProvider.resume() called")
+        # Ollama client лениво загружает модель при первом запросе
+        # Ничего делать не нужно
+    
+    def unload_model(self) -> None:
+        """
+        Принудительно выгружает модель из VRAM.
+        
+        Для Ollama это означает отправку пустого запроса для выгрузки.
+        """
+        LOGGER.info("OllamaProvider.unload_model() called - unloading model from VRAM...")
+        try:
+            model_name = getattr(self, '_current_model', None) or getattr(self, 'default_model', None)
+            if model_name:
+                # Пустой запрос выгружает модель из памяти
+                ollama.generate(model=model_name, prompt="")
+                LOGGER.info(f"Ollama model '{model_name}' unloaded from VRAM")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider.unload_model() error: {exc}")

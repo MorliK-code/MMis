@@ -277,14 +277,27 @@ class ConfigManager:
         cfg_path = Path(self.path).expanduser().resolve()
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
-        
+
         # Удаляем llm.profiles из payload перед сохранением (profiles теперь только в performance_profiles.json)
         if 'llm' in payload and 'profiles' in payload['llm']:
             del payload['llm']['profiles']
-        
+
         text = json.dumps(payload, ensure_ascii=False, indent=2)
-        tmp_path.write_text(text, encoding="utf-8")
-        tmp_path.replace(cfg_path)
+        
+        try:
+            # Пробуем атомарную запись
+            tmp_path.write_text(text, encoding="utf-8")
+            tmp_path.replace(cfg_path)
+        except (PermissionError, OSError) as e:
+            # Fallback: прямая запись если атомарная не удалась
+            import logging
+            LOGGER = logging.getLogger(__name__)
+            LOGGER.warning(f"Atomic save failed: {e}, using direct write")
+            try:
+                cfg_path.write_text(text, encoding="utf-8")
+            except Exception as fallback_err:
+                LOGGER.error(f"Direct save also failed: {fallback_err}")
+                raise
 
     def update(self, dotted_path: str, value: Any) -> dict[str, Any]:
         return self.update_many({str(dotted_path or ""): value})
