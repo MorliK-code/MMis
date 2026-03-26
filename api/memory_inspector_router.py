@@ -28,9 +28,16 @@ def create_memory_inspector_router(memory_core: Any) -> APIRouter:
     page_path = Path(__file__).parent.parent / "memory_core" / "inspect" / "inspector_page.html"
 
     @router.get("/memory-core", response_class=HTMLResponse)
-    def memory_inspector_page() -> str:
+    def memory_inspector_page() -> HTMLResponse:
         """Страница Memory Inspector UI."""
-        return page_path.read_text(encoding="utf-8")
+        return HTMLResponse(
+            content=page_path.read_text(encoding="utf-8"),
+            headers={
+                "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
     @router.get("/api/memory-core/overview")
     def overview() -> dict[str, Any]:

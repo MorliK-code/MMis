@@ -139,6 +139,31 @@ class BackgroundWorker:
             return method
         return None
 
+    def _get_memory_llm_interrupt_epoch(self) -> int:
+        try:
+            from memory_core.adapter import _get_memory_llm_interrupt_epoch as runtime_interrupt_epoch
+            return int(runtime_interrupt_epoch())
+        except Exception:
+            return 0
+
+    def _get_memory_llm_preemption(self, *, since_epoch: int | None = None) -> InterruptedError | None:
+        try:
+            from memory_core.processors.memory_llm_processor import _get_memory_llm_preemption as runtime_preemption
+        except Exception:
+            return None
+        try:
+            return runtime_preemption(since_epoch=since_epoch)
+        except Exception:
+            return None
+
+    def _raise_if_memory_llm_preempted(self, *, since_epoch: int | None = None, stage: str = "") -> None:
+        preemption = self._get_memory_llm_preemption(since_epoch=since_epoch)
+        if preemption is None:
+            return
+        if stage:
+            LOGGER.info(f"Worker {self.config.worker_id}: preempted at stage '{stage}', requeueing job")
+        raise preemption
+
     def start(self) -> None:
         """Запускает воркер в фоновом потоке."""
         if self._running and self._thread is not None and self._thread.is_alive():
@@ -351,9 +376,9 @@ class BackgroundWorker:
             sys.stdout.flush()
             requeue_now = getattr(self.job_queue, "requeue_immediately", None)
             if callable(requeue_now):
-                requeue_now(job.job_id, str(e))
+                requeue_now(job.job_id, "")
             else:
-                self.job_queue.fail(job.job_id, str(e), retry=True)
+                self.job_queue.fail(job.job_id, "", retry=True)
             self.stats.jobs_retried += 1
             return True
         except Exception as e:
@@ -393,6 +418,7 @@ class BackgroundWorker:
         from datetime import datetime
         
         trace_id = f"trace_{job.job_id}"
+        interrupt_epoch = self._get_memory_llm_interrupt_epoch()
         LOGGER.debug(f"Processing job {job.job_id} for event {job.event_id}")
 
         # Загружаем raw event
@@ -436,6 +462,8 @@ class BackgroundWorker:
         else:
             llm_result = self.memory_llm_processor(envelope)
 
+        self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="after_memory_llm")
+
         # Пишем trace: memory_llm_done
         if self.trace_store:
             self.trace_store.append_worker_trace(trace_id, {
@@ -450,12 +478,15 @@ class BackgroundWorker:
 
         # Проверяем, нужно ли обрабатывать
         if not llm_result.should_process or not llm_result.proposals:
+            self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="before_complete_empty_result")
             LOGGER.debug(f"Job {job.job_id}: no proposals, skipping")
             self.job_queue.complete(job.job_id)
             return
 
         # Передаём proposals в Governor
+        self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="before_governor")
         governor_result = self.governor(llm_result.proposals, envelope)
+        self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="after_governor")
 
         # Пишем trace: governor_done
         if self.trace_store:
@@ -479,6 +510,7 @@ class BackgroundWorker:
 
         if self.vector_index_updater and artifacts_list:
             for artifact in artifacts_list:
+                self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="before_vector_index")
                 # Проверяем статус — может быть атрибут или ключ dict
                 status = None
                 if hasattr(artifact, 'status'):
@@ -507,9 +539,11 @@ class BackgroundWorker:
 
         # Обновляем episode context после обработки
         if episode_id:
+            self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="before_episode_update")
             self._update_episode_context(episode_id, envelope)
 
         # Помечаем задачу как выполненную
+        self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="before_complete")
         self.job_queue.complete(job.job_id)
 
         # Пишем trace: job_done

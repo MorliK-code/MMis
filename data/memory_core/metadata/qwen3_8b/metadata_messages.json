@@ -12888,5 +12888,3161 @@
         "lang_ru"
       ]
     }
+  },
+  {
+    "ts": "2026-03-27T00:32:34",
+    "model": "qwen3:8b",
+    "message_id": 157,
+    "role": "user",
+    "text": "как у тебя деал?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T22:32:34.179368+00:00",
+        "source": "text",
+        "chars": 16,
+        "words": 4,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:32:34",
+    "model": "qwen3:8b",
+    "message_id": 158,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:33:02",
+    "model": "qwen3:8b",
+    "message_id": 159,
+    "role": "user",
+    "text": "что у тебя нового?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T22:33:01.518279+00:00",
+        "source": "text",
+        "chars": 18,
+        "words": 4,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:33:02",
+    "model": "qwen3:8b",
+    "message_id": 160,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:33:43",
+    "model": "qwen3:8b",
+    "message_id": 161,
+    "role": "user",
+    "text": "круто",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "excited",
+        "intensity": 0.39999999999999997,
+        "arousal": 0.35,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.39999999999999997,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_excited",
+        "intent_chat",
+        "tone_teasing",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T22:33:42.679374+00:00",
+        "source": "text",
+        "chars": 5,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "excited",
+      "emotion_intensity": 0.39999999999999997,
+      "tags": [
+        "emotion_excited",
+        "intent_chat",
+        "tone_teasing",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:33:43",
+    "model": "qwen3:8b",
+    "message_id": 162,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:34:06",
+    "model": "qwen3:8b",
+    "message_id": 163,
+    "role": "user",
+    "text": "ага",
+    "meta": {
+      "lang": "unknown",
+      "lang_conf": 0.35,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_unknown"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T22:34:05.563426+00:00",
+        "source": "text",
+        "chars": 3,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "unknown",
+      "lang_conf": 0.35,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_unknown"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:34:06",
+    "model": "qwen3:8b",
+    "message_id": 164,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:44:15",
+    "model": "qwen3:8b",
+    "message_id": 165,
+    "role": "user",
+    "text": "как дела?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T21:28:49.170658+00:00",
+        "source": "text",
+        "chars": 9,
+        "words": 2,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:44:15",
+    "model": "qwen3:8b",
+    "message_id": 166,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:44:29",
+    "model": "qwen3:8b",
+    "message_id": 167,
+    "role": "user",
+    "text": "тоже отлично",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "happy",
+        "intensity": 0.39999999999999997,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.39999999999999997,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_happy",
+        "intent_chat",
+        "tone_teasing",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T22:44:28.483201+00:00",
+        "source": "text",
+        "chars": 12,
+        "words": 2,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "happy",
+      "emotion_intensity": 0.39999999999999997,
+      "tags": [
+        "emotion_happy",
+        "intent_chat",
+        "tone_teasing",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:44:29",
+    "model": "qwen3:8b",
+    "message_id": 168,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:44:43",
+    "model": "qwen3:8b",
+    "message_id": 169,
+    "role": "user",
+    "text": "не знаю",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T21:42:51.653735+00:00",
+        "source": "text",
+        "chars": 7,
+        "words": 2,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:44:43",
+    "model": "qwen3:8b",
+    "message_id": 170,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:45:00",
+    "model": "qwen3:8b",
+    "message_id": 171,
+    "role": "user",
+    "text": "сомневаюсь",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T22:45:00.110196+00:00",
+        "source": "text",
+        "chars": 10,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T00:45:00",
+    "model": "qwen3:8b",
+    "message_id": 172,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:11",
+    "model": "qwen3:8b",
+    "message_id": 173,
+    "role": "user",
+    "text": "ещё один тест",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "is_followup",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:02:11.839586+00:00",
+        "source": "text",
+        "chars": 13,
+        "words": 3,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "is_followup",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:11",
+    "model": "qwen3:8b",
+    "message_id": 174,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:22",
+    "model": "qwen3:8b",
+    "message_id": 175,
+    "role": "user",
+    "text": "как у тебя дела?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:02:21.930912+00:00",
+        "source": "text",
+        "chars": 16,
+        "words": 4,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:22",
+    "model": "qwen3:8b",
+    "message_id": 176,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:39",
+    "model": "qwen3:8b",
+    "message_id": 177,
+    "role": "user",
+    "text": "что нового?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:02:38.870060+00:00",
+        "source": "text",
+        "chars": 11,
+        "words": 2,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:39",
+    "model": "qwen3:8b",
+    "message_id": 178,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:55",
+    "model": "qwen3:8b",
+    "message_id": 179,
+    "role": "user",
+    "text": "да",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.58,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:02:54.347285+00:00",
+        "source": "text",
+        "chars": 2,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.58,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:02:55",
+    "model": "qwen3:8b",
+    "message_id": 180,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:03:22",
+    "model": "qwen3:8b",
+    "message_id": 181,
+    "role": "user",
+    "text": "супер",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "excited",
+        "intensity": 0.39999999999999997,
+        "arousal": 0.35,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.39999999999999997,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_excited",
+        "intent_chat",
+        "tone_teasing",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:03:21.522825+00:00",
+        "source": "text",
+        "chars": 5,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "excited",
+      "emotion_intensity": 0.39999999999999997,
+      "tags": [
+        "emotion_excited",
+        "intent_chat",
+        "tone_teasing",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:03:22",
+    "model": "qwen3:8b",
+    "message_id": 182,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:09:42",
+    "model": "qwen3:8b",
+    "message_id": 183,
+    "role": "user",
+    "text": "привет",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.269997+00:00",
+        "source": "text",
+        "chars": 6,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:09:42",
+    "model": "qwen3:8b",
+    "message_id": 184,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:09:55",
+    "model": "qwen3:8b",
+    "message_id": 185,
+    "role": "user",
+    "text": "как дела?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T21:28:49.170658+00:00",
+        "source": "text",
+        "chars": 9,
+        "words": 2,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:09:56",
+    "model": "qwen3:8b",
+    "message_id": 186,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:10:12",
+    "model": "qwen3:8b",
+    "message_id": 187,
+    "role": "user",
+    "text": "да",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.58,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:02:54.347285+00:00",
+        "source": "text",
+        "chars": 2,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.58,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:10:12",
+    "model": "qwen3:8b",
+    "message_id": 188,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:10:25",
+    "model": "qwen3:8b",
+    "message_id": 189,
+    "role": "user",
+    "text": "+",
+    "meta": {
+      "lang": "unknown",
+      "lang_conf": 0.3,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_unknown"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:10:24.316169+00:00",
+        "source": "text",
+        "chars": 1,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "unknown",
+      "lang_conf": 0.3,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_unknown"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:10:25",
+    "model": "qwen3:8b",
+    "message_id": 190,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:10:45",
+    "model": "qwen3:8b",
+    "message_id": 191,
+    "role": "user",
+    "text": "планы масштабные",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "planning",
+        "conf": 0.5925925925925926,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_planning",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:10:44.549208+00:00",
+        "source": "text",
+        "chars": 16,
+        "words": 2,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "planning",
+      "intent_conf": 0.5925925925925926,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_planning",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:10:45",
+    "model": "qwen3:8b",
+    "message_id": 192,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:11:12",
+    "model": "qwen3:8b",
+    "message_id": 193,
+    "role": "user",
+    "text": "потом",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T23:11:11.303795+00:00",
+        "source": "text",
+        "chars": 5,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-03-27T01:11:12",
+    "model": "qwen3:8b",
+    "message_id": 194,
+    "role": "assistant",
+    "text": "Я затупила. Повтори, пожалуйста, еще раз.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-03-26T20:10:29.386482+00:00",
+        "source": "text",
+        "chars": 41,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
   }
 ]

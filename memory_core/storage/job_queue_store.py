@@ -217,7 +217,7 @@ class JobQueueStore:
         self.db.execute(
             """
             UPDATE ingest_jobs
-            SET status = ?, locked_by = ?, locked_at = ?, updated_at = ?
+            SET status = ?, locked_by = ?, locked_at = ?, updated_at = ?, error_text = NULL
             WHERE job_id = ? AND (locked_by IS NULL OR locked_at IS NULL OR locked_at <= ?)
             """,
             (
@@ -252,7 +252,8 @@ class JobQueueStore:
         self.db.execute(
             """
             UPDATE ingest_jobs
-            SET status = ?, updated_at = ?
+            SET status = ?, updated_at = ?, error_text = NULL,
+                locked_by = NULL, locked_at = NULL
             WHERE job_id = ?
             """,
             (self.STATUS_DONE, now, job_id),

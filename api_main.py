@@ -33,14 +33,9 @@ def _shutdown_memory_core_worker():
     try:
         from memory_core.adapter import _memory_core_adapter
         if _memory_core_adapter is not None:
-            memory_core = getattr(_memory_core_adapter, "service", None)
-            if memory_core is not None:
-                worker = getattr(memory_core, "worker", None)
-                if worker is not None and worker.is_running():
-                    print("Forcing worker shutdown...")
-                    worker.pause()
-                    worker.stop(timeout_sec=2.0)
-                    print("Worker stopped")
+            print("Closing memory_core adapter...")
+            _memory_core_adapter.close()
+            print("Memory_core adapter closed")
     except Exception as exc:
         print(f"Worker shutdown error: {exc}")
 

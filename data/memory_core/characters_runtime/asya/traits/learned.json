@@ -38,7 +38,7 @@
     },
     "playfulness": {
       "type": "scalar",
-      "value": 0.7024185430515099,
+      "value": 0.6241666666666666,
       "min": 0.0,
       "max": 0.72,
       "decay_per_day": 0.01,
@@ -50,13 +50,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-26T23:56:28.746+02:00",
-      "last_used_ts": "2026-03-26T23:56:28.746+02:00",
+      "updated_at": "2026-03-27T01:11:02.127+02:00",
+      "last_used_ts": "2026-03-27T01:11:02.127+02:00",
       "decay_ts": ""
     },
     "verbosity": {
       "type": "scalar",
-      "value": 0.0,
+      "value": 0.02,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.0,
@@ -65,13 +65,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-26T23:56:09.986+02:00",
-      "last_used_ts": "2026-03-26T23:56:09.986+02:00",
+      "updated_at": "2026-03-27T01:10:32.954+02:00",
+      "last_used_ts": "2026-03-27T01:10:32.954+02:00",
       "decay_ts": ""
     },
     "directness": {
       "type": "scalar",
-      "value": 0.5805103454045965,
+      "value": 0.6283982856253907,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.0,
@@ -80,13 +80,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-26T23:56:09.986+02:00",
-      "last_used_ts": "2026-03-26T23:56:09.986+02:00",
+      "updated_at": "2026-03-27T01:09:45.314+02:00",
+      "last_used_ts": "2026-03-27T01:09:45.314+02:00",
       "decay_ts": ""
     },
     "humor": {
       "type": "scalar",
-      "value": 0.6464652387574049,
+      "value": 0.6969887000117948,
       "min": 0.0,
       "max": 0.78,
       "decay_per_day": 0.0,
@@ -95,13 +95,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-26T23:56:28.746+02:00",
-      "last_used_ts": "2026-03-26T23:56:28.746+02:00",
+      "updated_at": "2026-03-27T01:11:02.127+02:00",
+      "last_used_ts": "2026-03-27T01:11:02.127+02:00",
       "decay_ts": ""
     },
     "energy": {
       "type": "scalar",
-      "value": 0.5971221357265744,
+      "value": 0.6838550022820841,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.0,
@@ -110,13 +110,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-26T23:56:28.746+02:00",
-      "last_used_ts": "2026-03-26T23:56:28.746+02:00",
+      "updated_at": "2026-03-27T01:11:02.127+02:00",
+      "last_used_ts": "2026-03-27T01:11:02.127+02:00",
       "decay_ts": ""
     },
     "emoji_rate": {
       "type": "scalar",
-      "value": 0.29826042437186423,
+      "value": 0.3,
       "min": 0.0,
       "max": 0.3,
       "decay_per_day": 0.0,
@@ -125,8 +125,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-26T23:56:28.746+02:00",
-      "last_used_ts": "2026-03-26T23:56:28.746+02:00",
+      "updated_at": "2026-03-27T01:11:02.127+02:00",
+      "last_used_ts": "2026-03-27T01:11:02.127+02:00",
       "decay_ts": ""
     },
     "empathy": {
@@ -172,6 +172,36 @@
       "disabled": false,
       "updated_at": "2026-03-24T01:55:47.141+02:00",
       "last_used_ts": "2026-03-24T01:55:47.141+02:00",
+      "decay_ts": ""
+    },
+    "professionalism": {
+      "type": "scalar",
+      "value": 0.03,
+      "min": 0.0,
+      "max": 0.85,
+      "decay_per_day": 0.0,
+      "confidence": 0.48,
+      "tags": [],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-03-27T01:10:32.954+02:00",
+      "last_used_ts": "2026-03-27T01:10:32.954+02:00",
+      "decay_ts": ""
+    },
+    "curiosity": {
+      "type": "scalar",
+      "value": 0.02,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.0,
+      "confidence": 0.48,
+      "tags": [],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-03-27T01:10:32.954+02:00",
+      "last_used_ts": "2026-03-27T01:10:32.954+02:00",
       "decay_ts": ""
     }
   }

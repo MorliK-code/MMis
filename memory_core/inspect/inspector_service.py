@@ -80,6 +80,15 @@ class MemoryInspectorService:
             "memory_llm_status": "idle",
             "worker_health": 0,
             "worker_enabled": False,
+            "worker_jobs_processed": 0,
+            "worker_jobs_succeeded": 0,
+            "worker_jobs_failed": 0,
+            "worker_jobs_retried": 0,
+            "jobs_done_confirmed": 0,
+            "jobs_done_first_run": 0,
+            "jobs_done_after_restart": 0,
+            "jobs_restarted_total": 0,
+            "jobs_inferred_interruptions_total": 0,
         }
 
         # Используем inspector если доступен
@@ -111,6 +120,25 @@ class MemoryInspectorService:
                 overview["jobs_dead"] = job_stats.get("dead", 0)
                 overview["jobs_done"] = job_stats.get("done", 0)
                 overview["jobs_by_type"] = job_stats.get("by_type", {})
+            except Exception:
+                pass
+
+            try:
+                all_jobs = self._job_queue.list_jobs(limit=5000)
+                for job in all_jobs:
+                    lifecycle = self._get_job_lifecycle(job.job_id, attempts=job.attempts)
+                    restart_count = int(lifecycle.get("restart_count", 0) or 0)
+                    inferred_interruptions = int(lifecycle.get("inferred_interruptions", 0) or 0)
+                    if restart_count > 0:
+                        overview["jobs_restarted_total"] += 1
+                    if inferred_interruptions > 0:
+                        overview["jobs_inferred_interruptions_total"] += inferred_interruptions
+                    if str(job.status or "") == "done" and bool(lifecycle.get("has_job_done")):
+                        overview["jobs_done_confirmed"] += 1
+                        if restart_count > 0:
+                            overview["jobs_done_after_restart"] += 1
+                        else:
+                            overview["jobs_done_first_run"] += 1
             except Exception:
                 pass
 
@@ -146,12 +174,54 @@ class MemoryInspectorService:
                 overview["worker_jobs_processed"] = stats_data.get("jobs_processed", 0)
                 overview["worker_jobs_succeeded"] = stats_data.get("jobs_succeeded", 0)
                 overview["worker_jobs_failed"] = stats_data.get("jobs_failed", 0)
+                overview["worker_jobs_retried"] = stats_data.get("jobs_retried", 0)
             except Exception:
                 overview["worker_enabled"] = False
         else:
             overview["worker_enabled"] = False
 
         return overview
+
+    def _get_job_lifecycle(self, job_id: str, *, attempts: int = 0) -> dict[str, Any]:
+        if not self._trace_store or not str(job_id or "").strip():
+            return {
+                "run_count": 0,
+                "restart_count": 0,
+                "inferred_interruptions": 0,
+                "has_memory_llm_done": False,
+                "has_governor_done": False,
+                "has_job_done": False,
+                "last_stage": "",
+                "completed_at": None,
+            }
+
+        try:
+            rows = list(self._trace_store.get_worker_trace(f"trace_{job_id}") or [])
+        except Exception:
+            rows = []
+
+        stages = [str(row.get("stage") or "") for row in rows if isinstance(row, dict)]
+        run_count = stages.count("event_loaded")
+        restart_count = max(0, run_count - 1)
+        retry_count = max(0, int(attempts or 0))
+        inferred_interruptions = max(0, restart_count - retry_count)
+
+        completed_at = None
+        for row in reversed(rows):
+            if isinstance(row, dict) and str(row.get("stage") or "") == "job_done":
+                completed_at = row.get("created_at")
+                break
+
+        return {
+            "run_count": run_count,
+            "restart_count": restart_count,
+            "inferred_interruptions": inferred_interruptions,
+            "has_memory_llm_done": "memory_llm_done" in stages,
+            "has_governor_done": "governor_done" in stages,
+            "has_job_done": "job_done" in stages,
+            "last_stage": stages[-1] if stages else "",
+            "completed_at": completed_at,
+        }
 
     def list_artifacts(
         self,
@@ -218,26 +288,51 @@ class MemoryInspectorService:
         try:
             jobs = self._job_queue.list_jobs(status=status, limit=limit)
             return [
-                {
-                    "id": job.job_id,
-                    "event_id": job.event_id,
-                    "type": job.job_type,
-                    "status": job.status,
-                    "priority": job.priority,
-                    "attempts": job.attempts,
-                    "max_attempts": job.max_attempts,
-                    "locked_by": job.locked_by,
-                    "locked_at": job.locked_at,
-                    "available_at": job.available_at,
-                    "error_text": job.error_text,
-                    "created_at": job.created_at,
-                    "updated_at": job.updated_at,
-                    "summary": f"Job {job.job_type} for event {job.event_id}",
-                }
+                self._build_job_payload(job)
                 for job in jobs
             ]
         except Exception:
             return []
+
+    def _build_job_payload(self, job: Any) -> dict[str, Any]:
+        lifecycle = self._get_job_lifecycle(job.job_id, attempts=job.attempts)
+        run_count = int(lifecycle.get("run_count", 0) or 0)
+        restart_count = int(lifecycle.get("restart_count", 0) or 0)
+        inferred_interruptions = int(lifecycle.get("inferred_interruptions", 0) or 0)
+        has_job_done = bool(lifecycle.get("has_job_done"))
+
+        completion_label = ""
+        if str(job.status or "") == "done":
+            if has_job_done:
+                completion_label = "confirmed_done_after_restart" if restart_count > 0 else "confirmed_done_first_run"
+            else:
+                completion_label = "done_without_worker_trace"
+        elif restart_count > 0:
+            completion_label = "restarted_not_finished"
+
+        return {
+            "id": job.job_id,
+            "event_id": job.event_id,
+            "type": job.job_type,
+            "status": job.status,
+            "priority": job.priority,
+            "attempts": job.attempts,
+            "max_attempts": job.max_attempts,
+            "locked_by": job.locked_by,
+            "locked_at": job.locked_at,
+            "available_at": job.available_at,
+            "error_text": job.error_text,
+            "created_at": job.created_at,
+            "updated_at": job.updated_at,
+            "summary": f"Job {job.job_type} for event {job.event_id}",
+            "run_count": run_count,
+            "restart_count": restart_count,
+            "inferred_interruptions": inferred_interruptions,
+            "trace_last_stage": lifecycle.get("last_stage"),
+            "trace_has_job_done": has_job_done,
+            "trace_completed_at": lifecycle.get("completed_at"),
+            "completion_label": completion_label,
+        }
 
     def get_pipeline_trace(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """

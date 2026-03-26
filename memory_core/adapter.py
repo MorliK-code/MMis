@@ -19,6 +19,20 @@ LOGGER = get_logger(__name__)
 # Глобальная блокировка для Memory LLM
 # Используется для приостановки Memory LLM во время ответа основной модели
 _memory_llm_lock = threading.Lock()
+_memory_llm_interrupt_epoch = 0
+_memory_llm_interrupt_epoch_lock = threading.Lock()
+
+
+def _mark_memory_llm_interrupt() -> int:
+    global _memory_llm_interrupt_epoch
+    with _memory_llm_interrupt_epoch_lock:
+        _memory_llm_interrupt_epoch += 1
+        return int(_memory_llm_interrupt_epoch)
+
+
+def _get_memory_llm_interrupt_epoch() -> int:
+    with _memory_llm_interrupt_epoch_lock:
+        return int(_memory_llm_interrupt_epoch)
 
 
 class MemoryCoreAdapter:
@@ -486,9 +500,55 @@ class MemoryCoreAdapter:
         return updated
 
     def close(self) -> None:
-        """Закрывает соединения (если требуется)."""
-        # SQLite не требует явного закрытия в большинстве случаев
-        pass
+        """Закрывает background worker, Memory LLM provider и базу данных."""
+        self._cancel_auto_resume_timer()
+        self._bump_resume_epoch()
+
+        worker = self._get_worker()
+        if worker is not None:
+            pause = getattr(worker, "pause", None)
+            if callable(pause):
+                try:
+                    pause()
+                except Exception as exc:
+                    LOGGER.debug(f"MemoryCoreAdapter.close(): worker.pause() failed: {exc}")
+
+            is_running = getattr(worker, "is_running", None)
+            stop = getattr(worker, "stop", None)
+            if callable(stop):
+                try:
+                    if callable(is_running) and is_running():
+                        stop(timeout_sec=3.0)
+                except Exception as exc:
+                    LOGGER.debug(f"MemoryCoreAdapter.close(): worker.stop() failed: {exc}")
+
+            shutdown_memory_provider = getattr(worker, "_shutdown_memory_llm_provider", None)
+            if callable(shutdown_memory_provider):
+                try:
+                    shutdown_memory_provider()
+                except Exception as exc:
+                    LOGGER.debug(f"MemoryCoreAdapter.close(): memory provider shutdown failed: {exc}")
+            else:
+                memory_llm_processor = getattr(worker, "memory_llm_processor", None)
+                shutdown = getattr(memory_llm_processor, "shutdown", None)
+                if callable(shutdown):
+                    try:
+                        shutdown()
+                    except Exception as exc:
+                        LOGGER.debug(f"MemoryCoreAdapter.close(): memory processor shutdown failed: {exc}")
+
+        try:
+            self._release_memory_llm_lock()
+        except Exception as exc:
+            LOGGER.debug(f"MemoryCoreAdapter.close(): releasing memory lock failed: {exc}")
+
+        db = getattr(getattr(self.service, "event_store", None), "db", None)
+        close_db = getattr(db, "close", None)
+        if callable(close_db):
+            try:
+                close_db()
+            except Exception as exc:
+                LOGGER.debug(f"MemoryCoreAdapter.close(): db.close() failed: {exc}")
 
     def _bump_resume_epoch(self) -> int:
         if not hasattr(self, "_resume_epoch_lock"):
@@ -665,6 +725,7 @@ class MemoryCoreAdapter:
         """Блокирует Memory LLM для предотвращения обработки."""
         try:
             # СНАЧАЛА устанавливаем флаг прерывания — это немедленно!
+            _mark_memory_llm_interrupt()
             try:
                 from llm.ollama_provider import _memory_llm_interrupt
                 _memory_llm_interrupt.set()

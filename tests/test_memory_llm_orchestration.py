@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 import threading
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -15,8 +17,9 @@ from llm.provider_base import LLMRequest, Message
 from memory_core.adapter import MemoryCoreAdapter, _memory_llm_lock
 from memory_core.facade import MemoryService
 from memory_core.processors.memory_llm_processor import MemoryLLMProcessor
-from memory_core.storage.job_queue_store import IngestJob
+from memory_core.storage.job_queue_store import IngestJob, JobQueueStore
 from memory_core.schemas import MemoryEnvelope
+from memory_core.storage.sqlite_db import Database
 from memory_core.worker.background_worker import BackgroundWorker, WorkerConfig
 
 
@@ -68,6 +71,29 @@ class _FakeTaskRouter:
     def shutdown_cached_provider(self, task_name: str) -> None:
         if task_name == MemoryLLMProcessor.TASK_NAME:
             self.provider.shutdown()
+
+
+class _JsonTaskRouter(_FakeTaskRouter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.json_calls: list[dict] = []
+
+    def run_task_model_json(self, **kwargs):
+        self.json_calls.append(dict(kwargs))
+        return SimpleNamespace(
+            text=json.dumps(
+                {
+                    "event_id": "fake-event",
+                    "importance": 0.7,
+                    "should_process": True,
+                    "proposals": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    def run_task_model(self, **kwargs):
+        raise AssertionError("run_task_model should not be used when run_task_model_json is available")
 
 
 class _SlowTaskRouter(_FakeTaskRouter):
@@ -208,8 +234,10 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(len(router.calls), 1)
         call = dict(router.calls[0])
         self.assertEqual(call["task_name"], MemoryLLMProcessor.TASK_NAME)
-        self.assertEqual(dict(call.get("metadata") or {}).get("source"), MemoryLLMProcessor.TASK_NAME)
-        self.assertEqual(dict(call.get("metadata") or {}).get("keep_alive"), "30m")
+        metadata = dict(call.get("metadata") or {})
+        self.assertEqual(metadata.get("source"), MemoryLLMProcessor.TASK_NAME)
+        self.assertEqual(metadata.get("think"), False)
+        self.assertEqual(metadata.get("keep_alive"), "30m")
 
     def test_memory_processor_does_not_force_zero_keep_alive_by_default(self) -> None:
         router = _FakeTaskRouter()
@@ -225,7 +253,31 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
 
         metadata = dict(router.calls[0].get("metadata") or {})
         self.assertEqual(metadata.get("source"), MemoryLLMProcessor.TASK_NAME)
+        self.assertEqual(metadata.get("think"), False)
         self.assertNotIn("keep_alive", metadata)
+
+    def test_memory_processor_prefers_json_task_model_and_disables_fallback(self) -> None:
+        router = _JsonTaskRouter()
+        processor = MemoryLLMProcessor(task_router=router, keep_alive="30m")
+
+        processor.process(
+            MemoryEnvelope(
+                source_kind="assistant",
+                payload_type="message",
+                text="Пользователь просил запомнить рабочий контекст.",
+            )
+        )
+
+        self.assertEqual(len(router.json_calls), 1)
+        call = dict(router.json_calls[0])
+        self.assertEqual(call["task_name"], MemoryLLMProcessor.TASK_NAME)
+        self.assertEqual(tuple(call.get("required_fields") or ()), ("event_id", "importance", "should_process", "proposals"))
+        self.assertEqual(call.get("allow_array"), False)
+        self.assertEqual(call.get("allow_fallback"), False)
+        metadata = dict(call.get("metadata") or {})
+        self.assertEqual(metadata.get("source"), MemoryLLMProcessor.TASK_NAME)
+        self.assertEqual(metadata.get("think"), False)
+        self.assertEqual(metadata.get("keep_alive"), "30m")
 
     def test_memory_processor_hard_timeout_raises_and_resets_stuck_provider(self) -> None:
         router = _SlowTaskRouter(delay_sec=0.2)
@@ -271,6 +323,31 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
 
         with self.assertRaises(InterruptedError):
             processor.process(envelope)
+
+    def test_memory_processor_detects_interrupt_epoch_even_after_flag_clears(self) -> None:
+        processor = MemoryLLMProcessor(task_router=_SlowTaskRouter(delay_sec=0.3), timeout_sec=1.0)
+        envelope = MemoryEnvelope(
+            source_kind="user",
+            payload_type="message",
+            text="remember this after a short interrupt",
+        )
+
+        def _brief_interrupt() -> None:
+            time.sleep(0.05)
+            adapter_module._mark_memory_llm_interrupt()
+            _memory_llm_interrupt.set()
+            time.sleep(0.02)
+            _memory_llm_interrupt.clear()
+
+        interrupt_thread = threading.Thread(target=_brief_interrupt, daemon=True)
+        interrupt_thread.start()
+        started = time.perf_counter()
+
+        with self.assertRaises(InterruptedError):
+            processor.process(envelope)
+
+        interrupt_thread.join(timeout=0.2)
+        self.assertLess(time.perf_counter() - started, 0.25)
 
     def test_memory_processor_warmup_delegates_to_provider(self) -> None:
         router = _FakeTaskRouter()
@@ -427,6 +504,31 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
 
         self.assertIsNone(adapter._auto_resume_timer)
 
+    def test_adapter_close_shuts_down_memory_provider_even_if_worker_is_already_stopped(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        calls: list[str] = []
+        adapter._cancel_auto_resume_timer = lambda: calls.append("cancel_timer")
+        adapter._bump_resume_epoch = lambda: calls.append("bump_epoch") or 1
+        adapter._release_memory_llm_lock = lambda: calls.append("release_lock")
+
+        worker = SimpleNamespace(
+            is_running=lambda: False,
+            pause=lambda: calls.append("pause"),
+            _shutdown_memory_llm_provider=lambda: calls.append("shutdown_provider"),
+        )
+        db = SimpleNamespace(close=lambda: calls.append("db_close"))
+        adapter.service = SimpleNamespace(
+            worker=worker,
+            event_store=SimpleNamespace(db=db),
+        )
+
+        adapter.close()
+
+        self.assertEqual(
+            calls,
+            ["cancel_timer", "bump_epoch", "pause", "shutdown_provider", "release_lock", "db_close"],
+        )
+
     def test_worker_marks_itself_stopped_when_thread_is_dead(self) -> None:
         worker = BackgroundWorker(
             job_queue=SimpleNamespace(),
@@ -570,7 +672,7 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         handled = worker.process_one_job()
 
         self.assertTrue(handled)
-        self.assertEqual(queue.requeue_calls, [("job-1", "main llm")])
+        self.assertEqual(queue.requeue_calls, [("job-1", "")])
 
     def test_worker_requeues_job_when_memory_processor_detects_interrupt_before_llm_call(self) -> None:
         job = IngestJob(
@@ -604,8 +706,48 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         handled = worker.process_one_job()
 
         self.assertTrue(handled)
-        self.assertEqual(queue.requeue_calls, [("job-2", "Memory LLM interrupted by main model")])
+        self.assertEqual(queue.requeue_calls, [("job-2", "")])
         self.assertEqual(queue.complete_calls, [])
+
+    def test_worker_requeues_job_when_interrupt_happens_after_memory_result_before_empty_complete(self) -> None:
+        job = IngestJob(
+            job_id="job-2b",
+            event_id="event-2b",
+            job_type="memory_llm_process",
+            status="queued",
+            payload_json="{}",
+        )
+        event = SimpleNamespace(
+            event_id="event-2b",
+            source_kind="user",
+            payload_type="message",
+            text="hello after result",
+            metadata={},
+            namespace="default",
+            workspace_id="global",
+            session_id="default",
+            ts=0.0,
+        )
+
+        def _process(_envelope):
+            adapter_module._mark_memory_llm_interrupt()
+            return SimpleNamespace(should_process=False, proposals=[])
+
+        queue = _ImmediateRequeueQueue(job)
+        worker = BackgroundWorker(
+            job_queue=queue,
+            event_store=_EventStoreForInterrupt(event),
+            memory_llm_processor=SimpleNamespace(process=_process),
+            governor=lambda proposals, envelope: SimpleNamespace(decisions=[], artifacts=[]),
+            config=WorkerConfig(),
+        )
+
+        handled = worker.process_one_job()
+
+        self.assertTrue(handled)
+        self.assertEqual(queue.requeue_calls, [("job-2b", "")])
+        self.assertEqual(queue.complete_calls, [])
+        self.assertEqual(queue.fail_calls, [])
 
     def test_worker_retries_job_when_memory_processor_times_out_instead_of_completing(self) -> None:
         job = IngestJob(
@@ -710,9 +852,86 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         handled = worker.process_one_job()
 
         self.assertTrue(handled)
-        self.assertEqual(queue.requeue_calls, [("job-5", "Memory LLM interrupted by main model")])
+        self.assertEqual(queue.requeue_calls, [("job-5", "")])
         self.assertEqual(queue.complete_calls, [])
         self.assertEqual(queue.fail_calls, [])
+
+    def test_worker_requeues_job_when_interrupt_happens_after_governor_before_complete(self) -> None:
+        job = IngestJob(
+            job_id="job-5b",
+            event_id="event-5b",
+            job_type="memory_llm_process",
+            status="queued",
+            payload_json="{}",
+        )
+        event = SimpleNamespace(
+            event_id="event-5b",
+            source_kind="user",
+            payload_type="message",
+            text="interrupt after governor",
+            metadata={},
+            namespace="default",
+            workspace_id="global",
+            session_id="default",
+            ts=0.0,
+        )
+
+        def _governor(_proposals, _envelope):
+            adapter_module._mark_memory_llm_interrupt()
+            return SimpleNamespace(decisions=[], artifacts=[])
+
+        queue = _ImmediateRequeueQueue(job)
+        worker = BackgroundWorker(
+            job_queue=queue,
+            event_store=_EventStoreForInterrupt(event),
+            memory_llm_processor=SimpleNamespace(
+                process=lambda envelope: SimpleNamespace(
+                    should_process=True,
+                    proposals=[SimpleNamespace(text="fact")],
+                )
+            ),
+            governor=_governor,
+            config=WorkerConfig(),
+        )
+
+        handled = worker.process_one_job()
+
+        self.assertTrue(handled)
+        self.assertEqual(queue.requeue_calls, [("job-5b", "")])
+        self.assertEqual(queue.complete_calls, [])
+        self.assertEqual(queue.fail_calls, [])
+
+    def test_job_queue_clears_stale_error_text_on_dequeue_and_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db = Database(str(Path(tmp_dir) / "queue.db"))
+            try:
+                queue = JobQueueStore(db)
+                job_id = queue.enqueue(
+                    event_id="event-cleanup",
+                    job_type=JobQueueStore.TYPE_MEMORY_LLM_PROCESS,
+                    payload={},
+                )
+
+                queue.requeue_immediately(job_id, "transient error")
+                row = db.fetchone("SELECT status, error_text FROM ingest_jobs WHERE job_id = ?", (job_id,))
+                self.assertEqual(row["status"], "queued")
+                self.assertEqual(row["error_text"], "transient error")
+
+                job = queue.dequeue(worker_id="worker-test", job_type=JobQueueStore.TYPE_MEMORY_LLM_PROCESS)
+                self.assertIsNotNone(job)
+                row = db.fetchone("SELECT status, error_text, locked_by FROM ingest_jobs WHERE job_id = ?", (job_id,))
+                self.assertEqual(row["status"], "processing")
+                self.assertIsNone(row["error_text"])
+                self.assertEqual(row["locked_by"], "worker-test")
+
+                queue.complete(job_id)
+                row = db.fetchone("SELECT status, error_text, locked_by, locked_at FROM ingest_jobs WHERE job_id = ?", (job_id,))
+                self.assertEqual(row["status"], "done")
+                self.assertIsNone(row["error_text"])
+                self.assertIsNone(row["locked_by"])
+                self.assertIsNone(row["locked_at"])
+            finally:
+                db.close()
 
 
 if __name__ == "__main__":

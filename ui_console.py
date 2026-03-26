@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -384,11 +385,17 @@ def _handle_command(state: ConsoleState, line: str) -> bool:
 
     if key in {"/cleanapi", "/api-clean"}:
         stopped_model = _stop_runtime_ollama_model(state)
+        stopped_memory_model = _stop_memory_ollama_model()
+        stopped_owned_ollama = _stop_owned_ollama_process(state)
         killed = clean_mmis_api_processes(tag=MMIS_API_TAG, root=Path(__file__).resolve().parent)
         state.online = False
         state.api_process = None
         if stopped_model:
             print("Ollama runtime model unloaded.")
+        if stopped_memory_model:
+            print("Ollama memory model unloaded.")
+        if stopped_owned_ollama:
+            print("Owned Ollama process stopped.")
         print(f"MMis API cleanup: killed {killed} process(es).")
         return True
 
@@ -1052,6 +1059,49 @@ def _start_ollama_process(state: ConsoleState) -> bool:
         return False
 
 
+def _stop_owned_ollama_process(state: ConsoleState) -> bool:
+    proc = state.ollama_process
+    if proc is None:
+        return False
+    if proc.poll() is not None:
+        state.ollama_process = None
+        return True
+
+    try:
+        _stop_runtime_ollama_model(state, check_api_health=False)
+    except Exception:
+        pass
+
+    try:
+        if os.name == "nt":
+            result = subprocess.run(
+                ["taskkill", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5.0,
+            )
+            if int(result.returncode or 0) != 0:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=5.0,
+                )
+        else:
+            proc.terminate()
+            proc.wait(timeout=4.0)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    state.ollama_process = None
+    return True
+
+
 def _is_local_api_base_url(base_url: str) -> bool:
     raw = str(base_url or "").strip()
     if not raw:
@@ -1078,9 +1128,48 @@ def _stop_runtime_ollama_model(state: ConsoleState, *, check_api_health: bool = 
     if not callable(get_runtime_model):
         return False
     model = str(get_runtime_model() or "").strip()
-    if not model or not _looks_like_ollama_runtime(model):
+    if not model:
         return False
-    targets = _resolve_ollama_stop_targets(model)
+    return _stop_ollama_models([model])
+
+
+def _stop_memory_ollama_model() -> bool:
+    try:
+        payload = json.loads((Path(__file__).resolve().parent / "memory_core" / "config.json").read_text(encoding="utf-8-sig") or "{}")
+    except Exception:
+        return False
+
+    profiles = payload.get("task_model_profiles")
+    if not isinstance(profiles, dict):
+        return False
+
+    profile = profiles.get("memory_llm_process")
+    if not isinstance(profile, dict):
+        return False
+
+    provider = str(profile.get("provider") or "").strip().lower()
+    if provider and provider != "ollama":
+        return False
+
+    model = str(profile.get("model") or "").strip()
+    if not model:
+        return False
+    return _stop_ollama_models([model])
+
+
+def _stop_ollama_models(models: list[str]) -> bool:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for model in list(models or []):
+        src = str(model or "").strip()
+        if not _looks_like_ollama_runtime(src):
+            continue
+        for target in _resolve_ollama_stop_targets(src):
+            normalized = str(target or "").strip().lower()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            targets.append(str(target))
     if not targets:
         return False
 
@@ -1236,12 +1325,17 @@ def _start_api_process(state: ConsoleState) -> bool:
         # Запускаем с перенаправлением вывода в файл для отладки
         import tempfile
         log_file = Path(tempfile.gettempdir()) / f"mmis_api_{os.getpid()}.log"
+        popen_kwargs = {
+            "cwd": str(root),
+            "stderr": subprocess.STDOUT,
+        }
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         with open(log_file, "w", encoding="utf-8") as f:
             state.api_process = subprocess.Popen(
                 [sys.executable, str(api_main), "--mmis-tag", MMIS_API_TAG, "--quiet"],
-                cwd=str(root),
                 stdout=f,
-                stderr=subprocess.STDOUT,
+                **popen_kwargs,
             )
         # Ждём немного чтобы проверить запуск
         time.sleep(2.0)
@@ -1280,18 +1374,45 @@ def _restart_api_process(state: ConsoleState) -> bool:
     return _wait_for_api(state, timeout_s=18.0)
 
 
+def _graceful_stop_api_process(proc: subprocess.Popen | None) -> bool:
+    if proc is None or proc.poll() is not None:
+        return True
+
+    if os.name == "nt":
+        ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
+        if ctrl_break is not None:
+            try:
+                proc.send_signal(ctrl_break)
+                proc.wait(timeout=8.0)
+                return True
+            except Exception:
+                pass
+
+    try:
+        proc.terminate()
+        proc.wait(timeout=4.0)
+        return True
+    except Exception:
+        return False
+
+
 def _stop_api_process(state: ConsoleState) -> None:
     proc = state.api_process
     if proc is None:
         _stop_runtime_ollama_model(state)
+        _stop_memory_ollama_model()
+        _stop_owned_ollama_process(state)
         return
     if proc.poll() is not None:
         state.api_process = None
         _stop_runtime_ollama_model(state, check_api_health=False)
+        _stop_memory_ollama_model()
+        _stop_owned_ollama_process(state)
         return
     try:
-        proc.terminate()
-        proc.wait(timeout=4.0)
+        stopped_gracefully = _graceful_stop_api_process(proc)
+        if not stopped_gracefully and proc.poll() is None:
+            proc.kill()
     except Exception:
         try:
             proc.kill()
@@ -1299,6 +1420,8 @@ def _stop_api_process(state: ConsoleState) -> None:
             pass
     state.api_process = None
     _stop_runtime_ollama_model(state, check_api_health=False)
+    _stop_memory_ollama_model()
+    _stop_owned_ollama_process(state)
 
 
 def _cleanup(state: ConsoleState) -> None:

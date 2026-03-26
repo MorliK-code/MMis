@@ -42,36 +42,26 @@ memory_core_adapter = None
 
 def _shutdown_memory_core_worker() -> None:
     """Корректно останавливает memory_core background worker и LLM provider."""
+    logger = get_logger(__name__)
     try:
-        # Получаем worker из memory_core_adapter
-        memory_core = getattr(memory_core_adapter, "service", None)
-        if memory_core is not None:
-            worker = getattr(memory_core, "worker", None)
-            if worker is not None:
-                LOGGER = get_logger(__name__)
-                if worker.is_running():
-                    LOGGER.info("Stopping memory_core background worker...")
-                    # Сначала ставим на паузу, затем останавливаем
-                    worker.pause()
-                    worker.stop(timeout_sec=3.0)
-                    LOGGER.info("Memory_core background worker stopped")
-                else:
-                    LOGGER.debug("Worker already stopped")
-        
-        # Останавливаем LLM provider (Ollama) для освобождения VRAM
-        LOGGER.info("Shutting down LLM provider...")
+        if memory_core_adapter is not None:
+            logger.info("Closing memory_core adapter...")
+            memory_core_adapter.close()
+            logger.info("Memory_core adapter closed")
+        else:
+            logger.debug("Memory_core adapter is not initialized")
+
+        # Останавливаем main LLM provider для освобождения VRAM
+        logger.info("Shutting down LLM provider...")
         _safe_shutdown_provider()
-        LOGGER.info("LLM provider shutdown complete")
+        logger.info("LLM provider shutdown complete")
     except Exception as exc:
-        LOGGER = get_logger(__name__)
-        LOGGER.warning("Failed to shutdown memory_core: %s", exc)
+        logger.warning("Failed to shutdown memory_core: %s", exc)
 
 
 def _safe_shutdown_provider() -> None:
     """Безопасно закрывает LLM provider для освобождения VRAM."""
     try:
-        # Получаем provider из _runtime
-        from api.app import _runtime
         provider = getattr(_runtime, "provider", None)
         if provider is not None:
             # Пробуем shutdown/close методы

@@ -2,7 +2,7 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-    "turn_id": 86,
+    "turn_id": 105,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -27,18 +27,18 @@
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-03-26T23:56:28.776+02:00"
+        "ts": "2026-03-27T01:11:02.163+02:00"
       },
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-03-26T23:56:28.819+02:00"
+        "ts": "2026-03-27T01:11:02.211+02:00"
       },
       {
         "type": "TURN_FINISHED",
-        "turn_id": 86,
-        "assistant_chars": 13,
-        "ts": "2026-03-26T23:56:37.079+02:00"
+        "turn_id": 105,
+        "assistant_chars": 25,
+        "ts": "2026-03-27T01:11:11.300+02:00"
       }
     ],
     "context_stack": []
@@ -79,14 +79,14 @@
       },
       "local_context": {
         "last_topic_weights": {},
-        "last_seen_ts": "2026-03-26T23:56:28.819+02:00",
-        "last_update_turn_id": 86,
+        "last_seen_ts": "2026-03-27T01:11:02.209+02:00",
+        "last_update_turn_id": 105,
         "last_update_conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d"
       }
     }
   },
   "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-  "turn_id": 86,
+  "turn_id": 105,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -112,18 +112,18 @@
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-03-26T23:56:28.776+02:00"
+      "ts": "2026-03-27T01:11:02.163+02:00"
     },
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-03-26T23:56:28.819+02:00"
+      "ts": "2026-03-27T01:11:02.211+02:00"
     },
     {
       "type": "TURN_FINISHED",
-      "turn_id": 86,
-      "assistant_chars": 13,
-      "ts": "2026-03-26T23:56:37.079+02:00"
+      "turn_id": 105,
+      "assistant_chars": 25,
+      "ts": "2026-03-27T01:11:11.300+02:00"
     }
   ],
   "context_tags": {
@@ -139,19 +139,19 @@
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "тоже",
-    "last_user_hash": "135c15a7f9ab38ca334afe1e561495177e9acb18",
-    "last_user_ts": "2026-03-26T23:56:28.598+02:00",
-    "prev_user_ts": "2026-03-26T23:56:09.836+02:00",
-    "last_assistant_message": "Ну, я тоже! 😊",
-    "last_assistant_ts": "2026-03-26T23:56:37.054+02:00",
+    "last_user_message": "потом",
+    "last_user_hash": "8f0cc4b28e542bae689b915cf25f771a6af02e8e",
+    "last_user_ts": "2026-03-27T01:11:01.963+02:00",
+    "prev_user_ts": "2026-03-27T01:10:32.783+02:00",
+    "last_assistant_message": "Конечно! Чем могу помочь?",
+    "last_assistant_ts": "2026-03-27T01:11:11.270+02:00",
     "last_action": "assistant_message",
-    "last_action_ts": "2026-03-26T23:56:37.079+02:00",
+    "last_action_ts": "2026-03-27T01:11:11.301+02:00",
     "repeat_count": 0,
     "session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
     "prev_session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-    "greeting_date_local": "2026-03-26",
-    "greeting_ts": "2026-03-26T22:10:29.229+02:00"
+    "greeting_date_local": "2026-03-27",
+    "greeting_ts": "2026-03-27T01:09:42.083+02:00"
   },
   "address_terms": {
     "last_term_used_at": "",
@@ -165,158 +165,6 @@
   },
   "dialog_summary": "Earlier context: User said: привет. как тебя зовут? меня паша. я люблю мороженое, пиццу, суши, работают системным администратором, а ты? Assistant replied: Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты сис",
   "history": [
-    {
-      "role": "user",
-      "content": "как твоё ничего?"
-    },
-    {
-      "role": "assistant",
-      "content": "Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты системный администратор? Тогда, наверное, тебе пригодятся мои советы!"
-    },
-    {
-      "role": "user",
-      "content": "привет"
-    },
-    {
-      "role": "assistant",
-      "content": "Привет! Как ты?"
-    },
-    {
-      "role": "user",
-      "content": "нормально, а ты?"
-    },
-    {
-      "role": "assistant",
-      "content": "Я тоже нормально, спасибо! Рада, что ты хорошо! Что у тебя сегодня запланировано?"
-    },
-    {
-      "role": "user",
-      "content": "пойти на работу)"
-    },
-    {
-      "role": "assistant",
-      "content": "Кажется, у тебя были проблемы с работой? Всё в порядке?"
-    },
-    {
-      "role": "user",
-      "content": "да, спасибо что спросила. всё отлично, я отмазался)"
-    },
-    {
-      "role": "user",
-      "content": "Привет"
-    },
-    {
-      "role": "assistant",
-      "content": "Привет! Как ты?"
-    },
-    {
-      "role": "user",
-      "content": "Привет"
-    },
-    {
-      "role": "assistant",
-      "content": "Привет! Как дела?"
-    },
-    {
-      "role": "user",
-      "content": "Привет"
-    },
-    {
-      "role": "assistant",
-      "content": "Привет! Как дела?"
-    },
-    {
-      "role": "user",
-      "content": "привет"
-    },
-    {
-      "role": "assistant",
-      "content": "Привет! Как у тебя дела?"
-    },
-    {
-      "role": "user",
-      "content": "Привет"
-    },
-    {
-      "role": "user",
-      "content": "привет. как твои дела?"
-    },
-    {
-      "role": "assistant",
-      "content": "Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты как?"
-    },
-    {
-      "role": "user",
-      "content": "привет. ура, я наконец-то на работе. уже много чего успел сделать и теперь могу отдохнуть))"
-    },
-    {
-      "role": "assistant",
-      "content": "Рада, что ты наконец-то на работе и успел поработать. Теперь можно действительно отдохнуть — наверное, стоит взять паузу, чтобы восстановить силы. Как ты планируешь провести отдых? Может, сходить в кино или просто поспать?"
-    },
-    {
-      "role": "user",
-      "content": "та куда сходить, я ж на работе. так, проектом заняться, тобишь тобя улучшать"
-    },
-    {
-      "role": "assistant",
-      "content": "Поняла, ты на работе и теперь можешь отдохнуть. Если хочешь, могу предложить что-нибудь для развлечения или даже помочь с проектом — только не переживай, я не буду мешать. Что ты предпочитаешь?"
-    },
-    {
-      "role": "user",
-      "content": "расскажи как у тебя дела и чем занимаешься?"
-    },
-    {
-      "role": "assistant",
-      "content": "У меня всё отлично! Я просто живу, чтобы помогать и общаться. В свободное время люблю читать, смотреть фильмы и иногда даже участвовать в небольших проектах. А ты как? Что нового в твоей работе?"
-    },
-    {
-      "role": "user",
-      "content": "а как твоё настроени?"
-    },
-    {
-      "role": "assistant",
-      "content": "пока что всё нормально, Паша! Я в хорошем настроении и готова помочь с чем угодно. Расскажи, как у тебя дела?"
-    },
-    {
-      "role": "user",
-      "content": "как твои дела? снова проверки и ещё раз проверки, аахаха"
-    },
-    {
-      "role": "assistant",
-      "content": "пока что всё в порядке, Паша! Хотя проверки идут как-то часто, но я справляюсь. А ты, наверное, уже устал от них? 😊"
-    },
-    {
-      "role": "user",
-      "content": "та да, есть такое"
-    },
-    {
-      "role": "user",
-      "content": "и снова проверки. как твои дела?"
-    },
-    {
-      "role": "assistant",
-      "content": "Пока что всё в порядке, Паша! Проверки — это часть жизни, и я с ними справлюсь. А ты как? Скучаешь по работе или уже привык?"
-    },
-    {
-      "role": "user",
-      "content": "а сейчас как делае и чем занимаешься?"
-    },
-    {
-      "role": "assistant",
-      "content": "Ну, сейчас у меня всё в порядке! Я просто общаюсь с друзьями и помогаю им с различными вопросами. А ты как? Что нового?"
-    },
-    {
-      "role": "user",
-      "content": "та та привык я к работе"
-    },
-    {
-      "role": "assistant",
-      "content": "Поняла, ты уже привык к работе. Это хорошо, что ты нашел свой ритм! А как ты себя чувствуешь сейчас? Надо же, как быстро привыкаешь к чему-то новому."
-    },
-    {
-      "role": "user",
-      "content": "та на этой работе я уже давно, где-то почти 3 года как"
-    },
     {
       "role": "assistant",
       "content": "Поняла, ты давно на этой работе — почти три года. Это уже значительный опыт. Как ты себя чувствуешь? Ты уже привык к рутине или всё ещё находишься в процессе адаптации?"
@@ -644,6 +492,158 @@
     {
       "role": "assistant",
       "content": "Ну, я тоже! 😊"
+    },
+    {
+      "role": "user",
+      "content": "как у тебя деал?"
+    },
+    {
+      "role": "assistant",
+      "content": "всё нормально, спасибо за заботу! А у тебя как дела?"
+    },
+    {
+      "role": "user",
+      "content": "что у тебя нового?"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, я тоже! 😊"
+    },
+    {
+      "role": "user",
+      "content": "круто"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, я тоже! 😊"
+    },
+    {
+      "role": "user",
+      "content": "ага"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, я тоже! 😊"
+    },
+    {
+      "role": "user",
+      "content": "как дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "всё нормально, спасибо! а у тебя?"
+    },
+    {
+      "role": "user",
+      "content": "тоже отлично"
+    },
+    {
+      "role": "assistant",
+      "content": "Приятно слышать! 😊 Какие планы на сегодня?"
+    },
+    {
+      "role": "user",
+      "content": "не знаю"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, что не знаешь? Может, помогу?"
+    },
+    {
+      "role": "user",
+      "content": "сомневаюсь"
+    },
+    {
+      "role": "assistant",
+      "content": "Почему ты сомневаешься? Что тебя беспокоит?"
+    },
+    {
+      "role": "user",
+      "content": "ещё один тест"
+    },
+    {
+      "role": "assistant",
+      "content": "Ты снова тут? 😊 Что нового?"
+    },
+    {
+      "role": "user",
+      "content": "как у тебя дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "всё нормально, спасибо! а у тебя?"
+    },
+    {
+      "role": "user",
+      "content": "что нового?"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, новостей немного, но есть пара интересных моментов! Например, я всё ещё увлечён общениями и помогаю тем, кто нуждается. А ты, Паша, как дела? Надеюсь, всё хорошо!"
+    },
+    {
+      "role": "user",
+      "content": "да"
+    },
+    {
+      "role": "assistant",
+      "content": "Как ты?"
+    },
+    {
+      "role": "user",
+      "content": "супер"
+    },
+    {
+      "role": "assistant",
+      "content": "Пользователь не знает что делать — можешь подсказать, что ты хотел бы сделать?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "Привет! Как ты?"
+    },
+    {
+      "role": "user",
+      "content": "как дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "всё нормально, спасибо! а у тебя?"
+    },
+    {
+      "role": "user",
+      "content": "да"
+    },
+    {
+      "role": "assistant",
+      "content": "Паша! Рада, что ты здесь. Какие планы на сегодня?"
+    },
+    {
+      "role": "user",
+      "content": "+"
+    },
+    {
+      "role": "assistant",
+      "content": "Понял! Что ты хочешь сделать или узнать?"
+    },
+    {
+      "role": "user",
+      "content": "планы масштабные"
+    },
+    {
+      "role": "assistant",
+      "content": "Звучит как интересно! Расскажи подробнее — какие именно масштабные планы у тебя? Я с радостью помогу, если нужно!"
+    },
+    {
+      "role": "user",
+      "content": "потом"
+    },
+    {
+      "role": "assistant",
+      "content": "Конечно! Чем могу помочь?"
     }
   ],
   "character_locked": false,
@@ -665,12 +665,16 @@
     "task_id": "task_1cc85758e5ae",
     "query": "как дела",
     "base_query": "как дела",
-    "latest_query": "как дела",
+    "latest_query": "как дела планы масштабные",
     "resolved_intent": "generic",
-    "resolved_concepts": [],
+    "resolved_concepts": [
+      "general_question"
+    ],
     "resolved_location": "",
-    "turn_id": 85,
-    "turn_timestamp": "2026-03-26T21:56:10.083717+00:00"
+    "turn_id": 104,
+    "turn_timestamp": "2026-03-26T23:10:33.074500+00:00",
+    "continuation_ref": "task_1cc85758e5ae",
+    "context_confidence": 0.7421
   },
   "continuity_turns": [
     {
@@ -681,8 +685,23 @@
       "resolved_intent": "generic",
       "resolved_concepts": [],
       "resolved_location": "",
-      "turn_id": 85,
-      "turn_timestamp": "2026-03-26T21:56:10.083717+00:00"
+      "turn_id": 101,
+      "turn_timestamp": "2026-03-26T23:09:45.435960+00:00"
+    },
+    {
+      "task_id": "task_1cc85758e5ae",
+      "query": "как дела",
+      "base_query": "как дела",
+      "latest_query": "как дела планы масштабные",
+      "resolved_intent": "generic",
+      "resolved_concepts": [
+        "general_question"
+      ],
+      "resolved_location": "",
+      "turn_id": 104,
+      "turn_timestamp": "2026-03-26T23:10:33.074500+00:00",
+      "continuation_ref": "task_1cc85758e5ae",
+      "context_confidence": 0.7421
     }
   ]
 }

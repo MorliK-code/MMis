@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,7 +64,18 @@ def _get_memory_llm_interrupt():
         return None
 
 
-def _get_memory_llm_preemption() -> InterruptedError | None:
+def _get_memory_llm_interrupt_epoch() -> int:
+    try:
+        from memory_core.adapter import _get_memory_llm_interrupt_epoch as runtime_interrupt_epoch
+        return int(runtime_interrupt_epoch())
+    except Exception:
+        return 0
+
+
+def _get_memory_llm_preemption(*, since_epoch: int | None = None) -> InterruptedError | None:
+    if since_epoch is not None and _get_memory_llm_interrupt_epoch() > int(since_epoch):
+        return InterruptedError("Memory LLM interrupted by main model")
+
     memory_llm_lock = _get_memory_llm_lock()
     if memory_llm_lock is not None and memory_llm_lock.locked():
         return InterruptedError("Memory LLM paused by main model")
@@ -196,16 +208,17 @@ class MemoryLLMProcessor:
 
         # Формируем промпт
         prompt = self._build_prompt(envelope)
+        interrupt_epoch = _get_memory_llm_interrupt_epoch()
 
         # Вызываем LLM с таймаутом
         try:
-            response = self._call_llm(prompt, timeout_sec=self.timeout_sec)
+            response = self._call_llm(prompt, timeout_sec=self.timeout_sec, interrupt_epoch=interrupt_epoch)
         except InterruptedError:
             LOGGER.debug(f"MemoryLLMProcessor: Event {envelope.event_id[:8]}... interrupted, requeueing")
             raise
 
         # Парсим ответ
-        result = self._parse_response(envelope.event_id, response)
+        result = self._parse_response(envelope.event_id, response, interrupt_epoch=interrupt_epoch)
 
         return result
 
@@ -265,7 +278,12 @@ class MemoryLLMProcessor:
 """
         return prompt
 
-    def _call_llm(self, prompt: str, timeout_sec: float | None = None) -> str:
+    def _call_llm(
+        self,
+        prompt: str,
+        timeout_sec: float | None = None,
+        interrupt_epoch: int | None = None,
+    ) -> str:
         """
         Вызывает LLM для обработки.
 
@@ -277,17 +295,20 @@ class MemoryLLMProcessor:
             Ответ LLM.
         """
         timeout = float(timeout_sec or self.timeout_sec or 60.0)
+        if interrupt_epoch is None:
+            interrupt_epoch = _get_memory_llm_interrupt_epoch()
         
         if self.task_router:
             try:
                 # Проверяем прерывание ПЕРЕД вызовом LLM
-                preemption = _get_memory_llm_preemption()
+                preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                 if preemption is not None:
                     LOGGER.debug("MemoryLLMProcessor: Interrupted before LLM call")
                     raise preemption
 
                 metadata: dict[str, Any] = {
                     "source": self.TASK_NAME,
+                    "think": False,
                 }
                 keep_alive = self.keep_alive
                 if keep_alive is not None and str(keep_alive).strip() != "":
@@ -297,13 +318,27 @@ class MemoryLLMProcessor:
 
                 def _invoke_task_router() -> None:
                     try:
-                        result = self.task_router.run_task_model(
-                            task_name=self.TASK_NAME,
-                            prompt=prompt,
-                            system_prompt=MEMORY_LLM_SYSTEM_PROMPT,
-                            metadata=metadata,
-                            timeout=timeout,
-                        )
+                        run_task_model_json = getattr(self.task_router, "run_task_model_json", None)
+                        if callable(run_task_model_json):
+                            result = run_task_model_json(
+                                task_name=self.TASK_NAME,
+                                prompt=prompt,
+                                system_prompt=MEMORY_LLM_SYSTEM_PROMPT,
+                                metadata=metadata,
+                                timeout=timeout,
+                                required_fields=("event_id", "importance", "should_process", "proposals"),
+                                allow_array=False,
+                                allow_fallback=False,
+                            )
+                        else:
+                            result = self.task_router.run_task_model(
+                                task_name=self.TASK_NAME,
+                                prompt=prompt,
+                                system_prompt=MEMORY_LLM_SYSTEM_PROMPT,
+                                metadata=metadata,
+                                timeout=timeout,
+                                allow_fallback=False,
+                            )
                     except Exception as exc:
                         result_queue.put(("error", exc))
                         return
@@ -315,7 +350,17 @@ class MemoryLLMProcessor:
                     daemon=True,
                 )
                 call_thread.start()
-                call_thread.join(timeout=max(0.1, timeout))
+                deadline_at = time.perf_counter() + max(0.1, timeout)
+
+                while call_thread.is_alive():
+                    preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
+                    if preemption is not None:
+                        LOGGER.warning("MemoryLLMProcessor: preempted while waiting for TaskModelRouter")
+                        raise preemption
+                    remaining = deadline_at - time.perf_counter()
+                    if remaining <= 0.0:
+                        break
+                    call_thread.join(timeout=min(0.1, max(0.01, remaining)))
 
                 if call_thread.is_alive():
                     LOGGER.error(f"TaskModelRouter hard-timeout after {timeout}s; resetting memory provider")
@@ -323,7 +368,7 @@ class MemoryLLMProcessor:
                         self.shutdown()
                     except Exception as shutdown_exc:
                         LOGGER.warning(f"Failed to reset memory provider after timeout: {shutdown_exc}")
-                    preemption = _get_memory_llm_preemption()
+                    preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                     if preemption is not None:
                         raise preemption
                     raise TimeoutError(f"TaskModelRouter hard-timeout after {timeout}s")
@@ -334,7 +379,7 @@ class MemoryLLMProcessor:
                     raise RuntimeError("TaskModelRouter finished without result") from exc
 
                 if state == "error":
-                    preemption = _get_memory_llm_preemption()
+                    preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                     if preemption is not None:
                         raise preemption from payload
                     raise payload
@@ -346,13 +391,13 @@ class MemoryLLMProcessor:
                     return result.text
                 else:
                     LOGGER.warning(f"TaskModelRouter returned empty/short text: {len(result.text or '')} chars")
-                    preemption = _get_memory_llm_preemption()
+                    preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                     if preemption is not None:
                         raise preemption
                     raise ValueError(f"TaskModelRouter returned empty/short text: {len(result.text or '')} chars")
             except TimeoutError as e:
                 LOGGER.error(f"TaskModelRouter timeout after {timeout}s: {e}")
-                preemption = _get_memory_llm_preemption()
+                preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                 if preemption is not None:
                     raise preemption from e
                 raise
@@ -361,7 +406,7 @@ class MemoryLLMProcessor:
                 raise  # Пробрасываем прерывание выше
             except Exception as e:
                 LOGGER.error(f"TaskModelRouter error: {e}")
-                preemption = _get_memory_llm_preemption()
+                preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                 if preemption is not None:
                     raise preemption from e
                 raise
@@ -449,6 +494,7 @@ class MemoryLLMProcessor:
         self,
         event_id: str,
         response: str,
+        interrupt_epoch: int | None = None,
     ) -> MemoryLLMResult:
         """
         Парсит ответ LLM.
@@ -463,7 +509,7 @@ class MemoryLLMProcessor:
         # Проверяем пустой ответ
         if not response or len(response.strip()) < 10:
             LOGGER.warning(f"Empty or too short response for {event_id[:8]}...")
-            preemption = _get_memory_llm_preemption()
+            preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
             if preemption is not None:
                 raise preemption
             raise ValueError(f"Empty or too short Memory LLM response for event {event_id}")
@@ -498,7 +544,7 @@ class MemoryLLMProcessor:
 
         except json.JSONDecodeError as e:
             LOGGER.error(f"Failed to parse Memory LLM response: {e}")
-            preemption = _get_memory_llm_preemption()
+            preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
             if preemption is not None:
                 raise preemption from e
             raise ValueError(f"Failed to parse Memory LLM response for event {event_id}") from e

@@ -263,7 +263,9 @@ function renderMetrics() {
     {
       title: 'Worker',
       value: m.worker_enabled ? (m.memory_llm_status || 'idle') : 'disabled',
-      desc: m.worker_enabled ? `${m.worker_jobs_processed || 0} processed` : 'Background worker отключён',
+      desc: m.worker_enabled
+        ? `${m.worker_jobs_processed || 0} attempts · ${m.worker_jobs_retried || 0} retried`
+        : 'Background worker отключён',
       emoji: m.worker_enabled ? '⚙️' : '⏸️',
       progress: m.worker_health || 0,
     },
@@ -315,15 +317,20 @@ function renderOverview() {
           <div class="stat-row"><span>В очереди</span>${badge(m.jobs_queued || 0, 'queued')}</div>
           <div class="stat-row"><span>Обработка</span>${badge(m.jobs_processing || 0, 'processing')}</div>
           <div class="stat-row"><span>Повтор</span>${badge(m.jobs_retry_wait || 0, 'retry_wait')}</div>
-          <div class="stat-row"><span>Успешно</span>${badge(m.jobs_done || 0, 'done')}</div>
+          <div class="stat-row"><span>Финально завершено</span>${badge(m.jobs_done || 0, 'done')}</div>
+          <div class="stat-row"><span>Подтверждено trace</span>${badge(m.jobs_done_confirmed || 0, 'done')}</div>
+          <div class="stat-row"><span>С первого запуска</span>${m.jobs_done_first_run || 0}</div>
+          <div class="stat-row"><span>После перезапуска</span>${m.jobs_done_after_restart || 0}</div>
           <div class="stat-row"><span>Мёртвые</span>${badge(m.jobs_dead || 0, 'dead')}</div>
         </div>
         ${m.worker_enabled ? `
           <div class="panel" style="margin-top: 12px">
             <div class="stat-row"><span>Worker</span>${badge('enabled', 'active')}</div>
+            <div class="desc" style="margin-bottom: 10px">Ниже статистика попыток текущего запуска worker, а не финальный итог по очереди.</div>
             <div class="stat-row"><span>Health</span>${m.worker_health || 0}%</div>
-            <div class="stat-row"><span>Обработано</span>${m.worker_jobs_processed || 0}</div>
-            <div class="stat-row"><span>Успешно</span>${m.worker_jobs_succeeded || 0}</div>
+            <div class="stat-row"><span>Попыток в сессии</span>${m.worker_jobs_processed || 0}</div>
+            <div class="stat-row"><span>Успешных попыток</span>${m.worker_jobs_succeeded || 0}</div>
+            <div class="stat-row"><span>Повторов</span>${m.worker_jobs_retried || 0}</div>
             <div class="stat-row"><span>Ошибки</span>${m.worker_jobs_failed || 0}</div>
           </div>
         ` : '<div class="panel" style="margin-top: 12px">Worker отключён</div>'}
@@ -465,8 +472,16 @@ function renderQueue() {
                         <div class="meta" style="margin-top:6px">
                           event: ${escapeHtml(job.event_id || '')} ·
                           attempts: ${job.attempts || 0}/${job.max_attempts || 3} ·
+                          runs: ${job.run_count || 0}
+                          ${job.restart_count ? ` · restarts: ${job.restart_count}` : ''}
+                          ${job.inferred_interruptions ? ` · inferred interrupts: ${job.inferred_interruptions}` : ''} ·
                           updated: ${formatRelative(job.updated_at)}
                           ${job.locked_by ? ` · locked: ${escapeHtml(job.locked_by)}` : ''}
+                          ${job.trace_has_job_done ? `<br/>trace: confirmed job_done${job.trace_completed_at ? ` at ${escapeHtml(job.trace_completed_at)}` : ''}` : ''}
+                          ${job.completion_label === 'confirmed_done_after_restart' ? '<br/>result: completed after restart(s)' : ''}
+                          ${job.completion_label === 'confirmed_done_first_run' ? '<br/>result: completed on first run' : ''}
+                          ${job.completion_label === 'done_without_worker_trace' ? '<br/>result: queue says done, but worker trace not found' : ''}
+                          ${job.completion_label === 'restarted_not_finished' ? '<br/>result: restarted before final completion' : ''}
                           ${job.error_text ? `<br/>error: ${escapeHtml(job.error_text)}` : ''}
                         </div>
                       </div>
