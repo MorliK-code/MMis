@@ -418,7 +418,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         if memory_core_adapter.worker_pause_enabled:
             LOGGER.info("Pausing memory_core worker for API request...")
             memory_core_adapter.pause_worker()
-            LOGGER.info(f"Worker paused (auto-resume in {memory_core_adapter.worker_pause_timeout}s)")
+            LOGGER.info("Worker paused until the API response is finished")
         else:
             LOGGER.info("Worker pause is disabled in config")
 
@@ -429,8 +429,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                 meta=meta_map,
             )
         finally:
-            # Возобновляем worker сразу после формирования ответа
-            # (если auto-resume timer ещё не сработал)
+            # Возобновляем worker сразу после формирования ответа.
             if memory_core_adapter.worker_pause_enabled:
                 memory_core_adapter.resume_worker()
                 LOGGER.info("Worker resumed after API request")
@@ -558,7 +557,7 @@ def chat_stream(req: ChatRequest):
                 # Если пауза включена в конфиге memory_core
                 if memory_core_adapter.worker_pause_enabled:
                     memory_core_adapter.pause_worker()
-                    LOGGER.info(f"Stream worker paused (auto-resume in {memory_core_adapter.worker_pause_timeout}s)")
+                    LOGGER.info("Stream worker paused until the API response is finished")
 
                 try:
                     meta_map = _build_chat_meta(
@@ -649,7 +648,7 @@ def chat_stream(req: ChatRequest):
         # Safety fallback: если streaming не отдал ни одного chunk, но ответ есть
         if not sent_answer and answer:
             # Эмитим один поздний chunk перед final для совместимости UI
-            yield _ndjson("chunk", answer)
+            pass
 
         log_json(
             LOGGER,

@@ -330,6 +330,28 @@ class JobQueueStore:
             )
             return False
 
+    def requeue_immediately(self, job_id: str, error_text: str = "") -> bool:
+        """
+        Немедленно возвращает задачу в queued без retry backoff.
+        """
+        now = time.time()
+        cursor = self.db.execute(
+            """
+            UPDATE ingest_jobs
+            SET status = ?, error_text = ?, available_at = ?, updated_at = ?,
+                locked_by = NULL, locked_at = NULL
+            WHERE job_id = ?
+            """,
+            (
+                self.STATUS_QUEUED,
+                error_text,
+                now,
+                now,
+                job_id,
+            ),
+        )
+        return bool(cursor.rowcount)
+
     def _release_expired_leases(self, now: float) -> int:
         """
         Освобождает задачи с истёкшим lease.

@@ -87,6 +87,8 @@ class MemoryCoreAdapter:
         # Таймер для автоматического возобновления Memory LLM
         self._auto_resume_timer: threading.Timer | None = None
         self._auto_resume_delay = float(config_file.worker_pause_timeout or 0.0)
+        self._resume_epoch = 0
+        self._resume_epoch_lock = threading.Lock()
 
     def ingest_event(
         self,
@@ -488,6 +490,86 @@ class MemoryCoreAdapter:
         # SQLite не требует явного закрытия в большинстве случаев
         pass
 
+    def _bump_resume_epoch(self) -> int:
+        if not hasattr(self, "_resume_epoch_lock"):
+            self._resume_epoch_lock = threading.Lock()
+        if not hasattr(self, "_resume_epoch"):
+            self._resume_epoch = 0
+        with self._resume_epoch_lock:
+            self._resume_epoch += 1
+            return self._resume_epoch
+
+    def _resume_epoch_matches(self, epoch: int) -> bool:
+        if not hasattr(self, "_resume_epoch_lock"):
+            self._resume_epoch_lock = threading.Lock()
+        if not hasattr(self, "_resume_epoch"):
+            self._resume_epoch = 0
+        with self._resume_epoch_lock:
+            return int(self._resume_epoch) == int(epoch)
+
+    def _get_worker(self):
+        if hasattr(self.service, 'worker') and self.service.worker is not None:
+            return self.service.worker
+        return None
+
+    def _pending_memory_job_count(self) -> int:
+        worker = self._get_worker()
+        if worker is None:
+            return 0
+        job_queue = getattr(worker, "job_queue", None)
+        get_stats = getattr(job_queue, "get_stats", None)
+        if not callable(get_stats):
+            return 0
+        try:
+            stats = dict(get_stats() or {})
+        except Exception:
+            return 0
+        by_type = dict(stats.get("by_type") or {})
+        try:
+            return max(0, int(by_type.get("memory_llm_process") or 0))
+        except Exception:
+            return 0
+
+    def _complete_memory_resume(self, epoch: int) -> None:
+        if not self._resume_epoch_matches(epoch):
+            return
+        self._release_memory_llm_lock()
+        worker = self._get_worker()
+        if worker is None:
+            return
+        wake = getattr(worker, "wake", None)
+        if callable(wake):
+            wake()
+
+    def _schedule_memory_prewarm(self, epoch: int) -> bool:
+        worker = self._get_worker()
+        if worker is None:
+            return False
+        if self._pending_memory_job_count() <= 0:
+            return False
+
+        memory_llm_processor = getattr(worker, "memory_llm_processor", None)
+        warmup = getattr(memory_llm_processor, "warmup", None)
+        if not callable(warmup):
+            return False
+
+        def _run_prewarm() -> None:
+            try:
+                warmup()
+            except Exception as exc:
+                LOGGER.debug(f"MemoryCoreAdapter: Memory LLM prewarm failed: {exc}")
+            finally:
+                self._complete_memory_resume(epoch)
+
+        thread = threading.Thread(
+            target=_run_prewarm,
+            name="memory-llm-prewarm",
+            daemon=True,
+        )
+        thread.start()
+        LOGGER.info("MemoryCoreAdapter: Memory LLM prewarm scheduled")
+        return True
+
     def pause_worker(self) -> None:
         """
         Ставит background worker на паузу и освобождает VRAM.
@@ -500,6 +582,7 @@ class MemoryCoreAdapter:
         
         # Отменяем предыдущий таймер если есть
         self._cancel_auto_resume_timer()
+        self._bump_resume_epoch()
         
         # Сначала блокируем Memory LLM
         self._acquire_memory_llm_lock()
@@ -512,17 +595,9 @@ class MemoryCoreAdapter:
         # Также ставим на паузу Memory LLM для освобождения VRAM
         self._pause_memory_llm()
         
-        # Планируем автоматическое возобновление через worker_pause_timeout
-        # Если timeout=0, то возобновление только после явного вызова resume_worker()
-        pause_timeout = self._pause_timeout
-        if pause_timeout > 0:
-            LOGGER.info(f"MemoryCoreAdapter: Auto-resume timer set for {pause_timeout}s")
-            self._auto_resume_timer = threading.Timer(
-                pause_timeout,
-                self._auto_resume_worker
-            )
-            self._auto_resume_timer.daemon = True
-            self._auto_resume_timer.start()
+        # Важно: не используем auto-resume timer во время активного ответа API.
+        # Таймер мог сработать посреди генерации основной LLM и вернуть memory worker
+        # слишком рано, что ломало приоритет основной модели и приводило к гонкам.
 
     def _auto_resume_worker(self) -> None:
         """Автоматически возобновляет worker после таймаута."""
@@ -547,20 +622,31 @@ class MemoryCoreAdapter:
         
         # Отменяем таймер если ещё активен
         self._cancel_auto_resume_timer()
+        resume_epoch = self._bump_resume_epoch()
         
         # СНАЧАЛА выгружаем модель основной модели из VRAM
         self._unload_main_model_from_vram()
         
-        if hasattr(self.service, 'worker') and self.service.worker is not None:
-            LOGGER.info("MemoryCoreAdapter: Resuming worker...")
-            self.service.worker.resume()
-            LOGGER.info("MemoryCoreAdapter: Worker resumed")
+        worker = self._get_worker()
+        if worker is not None:
+            try:
+                if hasattr(worker, "is_running") and not worker.is_running():
+                    LOGGER.info("MemoryCoreAdapter: Worker is stopped, starting it...")
+                    worker.start()
+                    LOGGER.info("MemoryCoreAdapter: Worker started")
+                else:
+                    LOGGER.info("MemoryCoreAdapter: Resuming worker...")
+                    worker.resume()
+                    LOGGER.info("MemoryCoreAdapter: Worker resumed")
+            except Exception as exc:
+                LOGGER.warning(f"MemoryCoreAdapter: Failed to resume/start worker: {exc}")
         
         # Также возобновляем Memory LLM
         self._resume_memory_llm()
-        
-        # Разблокируем Memory LLM
-        self._release_memory_llm_lock()
+        if self._schedule_memory_prewarm(resume_epoch):
+            return
+
+        self._complete_memory_resume(resume_epoch)
 
     def _unload_main_model_from_vram(self) -> None:
         """Выгружает модель основной модели из VRAM для освобождения памяти."""
@@ -618,6 +704,12 @@ class MemoryCoreAdapter:
             if hasattr(self.service, 'worker') and self.service.worker is not None:
                 worker = self.service.worker
                 memory_llm_processor = getattr(worker, 'memory_llm_processor', None)
+                pause = getattr(memory_llm_processor, 'pause', None)
+                if callable(pause):
+                    LOGGER.info("MemoryCoreAdapter: Pausing Memory LLM...")
+                    pause()
+                    LOGGER.info("MemoryCoreAdapter: Memory LLM paused")
+                    return
                 if memory_llm_processor:
                     # Получаем task_router и provider
                     task_router = getattr(memory_llm_processor, 'task_router', None)
@@ -637,6 +729,12 @@ class MemoryCoreAdapter:
             if hasattr(self.service, 'worker') and self.service.worker is not None:
                 worker = self.service.worker
                 memory_llm_processor = getattr(worker, 'memory_llm_processor', None)
+                resume = getattr(memory_llm_processor, 'resume', None)
+                if callable(resume):
+                    LOGGER.info("MemoryCoreAdapter: Resuming Memory LLM...")
+                    resume()
+                    LOGGER.info("MemoryCoreAdapter: Memory LLM resumed")
+                    return
                 if memory_llm_processor:
                     task_router = getattr(memory_llm_processor, 'task_router', None)
                     if task_router:

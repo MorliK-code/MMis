@@ -93,7 +93,7 @@ class BackgroundWorker:
         self,
         job_queue: JobQueueStore,
         event_store: EventStore,
-        memory_llm_processor: MemoryLLMProcessorFn,
+        memory_llm_processor: MemoryLLMProcessorFn | Any,
         governor: GovernorFn,
         vector_index_updater: VectorIndexFn | None = None,
         config: WorkerConfig | None = None,
@@ -127,16 +127,30 @@ class BackgroundWorker:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()  # Event для паузы (установлен = пауза)
+        self._wake_event = threading.Event()
         self._running = False
+
+    def _memory_llm_control_method(self, method_name: str):
+        processor = getattr(self, "memory_llm_processor", None)
+        if processor is None:
+            return None
+        method = getattr(processor, method_name, None)
+        if callable(method):
+            return method
+        return None
 
     def start(self) -> None:
         """Запускает воркер в фоновом потоке."""
-        if self._running:
+        if self._running and self._thread is not None and self._thread.is_alive():
             LOGGER.warning(f"Worker {self.config.worker_id} already running")
             return
 
+        self._running = False
+        self._thread = None
+
         self._stop_event.clear()
         self._pause_event.clear()  # Не на паузе по умолчанию
+        self._wake_event.set()
         
         # НЕ daemon поток — должен завершиться корректно перед выходом
         self._thread = threading.Thread(
@@ -187,15 +201,11 @@ class BackgroundWorker:
     def _shutdown_memory_llm_provider(self) -> None:
         """Останавливает Memory LLM provider для освобождения VRAM."""
         try:
-            memory_llm_processor = getattr(self, 'memory_llm_processor', None)
-            if memory_llm_processor:
-                task_router = getattr(memory_llm_processor, 'task_router', None)
-                if task_router:
-                    provider = getattr(task_router, '_provider', None)
-                    if provider and hasattr(provider, 'shutdown'):
-                        LOGGER.info(f"Worker {self.config.worker_id}: Shutting down Memory LLM provider...")
-                        provider.shutdown()
-                        LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider shutdown complete")
+            shutdown = self._memory_llm_control_method("shutdown")
+            if shutdown is not None:
+                LOGGER.info(f"Worker {self.config.worker_id}: Shutting down Memory LLM provider...")
+                shutdown()
+                LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider shutdown complete")
         except Exception as exc:
             LOGGER.warning(f"Worker {self.config.worker_id}: Failed to shutdown Memory LLM provider: {exc}")
 
@@ -220,38 +230,42 @@ class BackgroundWorker:
         Memory LLM готов к обработке.
         """
         self._pause_event.clear()
+        self._wake_event.set()
         LOGGER.debug(f"Worker {self.config.worker_id} resumed")
         
         # Возобновляем Memory LLM
         self._resume_memory_llm_provider()
 
+    def wake(self) -> None:
+        """Будит воркер для немедленной проверки очереди."""
+        self._wake_event.set()
+
+    def _wait_or_wake(self, timeout_sec: float) -> None:
+        timeout = max(0.0, float(timeout_sec or 0.0))
+        if timeout <= 0.0:
+            return
+        self._wake_event.wait(timeout=timeout)
+        self._wake_event.clear()
+
     def _pause_memory_llm_provider(self) -> None:
         """Приостанавливает Memory LLM provider для освобождения VRAM."""
         try:
-            memory_llm_processor = getattr(self, 'memory_llm_processor', None)
-            if memory_llm_processor:
-                task_router = getattr(memory_llm_processor, 'task_router', None)
-                if task_router:
-                    provider = getattr(task_router, '_provider', None)
-                    if provider and hasattr(provider, 'pause'):
-                        LOGGER.info(f"Worker {self.config.worker_id}: Pausing Memory LLM provider...")
-                        provider.pause()
-                        LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider paused")
+            pause = self._memory_llm_control_method("pause")
+            if pause is not None:
+                LOGGER.info(f"Worker {self.config.worker_id}: Pausing Memory LLM provider...")
+                pause()
+                LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider paused")
         except Exception as exc:
             LOGGER.debug(f"Worker {self.config.worker_id}: Failed to pause Memory LLM provider: {exc}")
 
     def _resume_memory_llm_provider(self) -> None:
         """Возобновляет Memory LLM provider после паузы."""
         try:
-            memory_llm_processor = getattr(self, 'memory_llm_processor', None)
-            if memory_llm_processor:
-                task_router = getattr(memory_llm_processor, 'task_router', None)
-                if task_router:
-                    provider = getattr(task_router, '_provider', None)
-                    if provider and hasattr(provider, 'resume'):
-                        LOGGER.info(f"Worker {self.config.worker_id}: Resuming Memory LLM provider...")
-                        provider.resume()
-                        LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider resumed")
+            resume = self._memory_llm_control_method("resume")
+            if resume is not None:
+                LOGGER.info(f"Worker {self.config.worker_id}: Resuming Memory LLM provider...")
+                resume()
+                LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider resumed")
         except Exception as exc:
             LOGGER.debug(f"Worker {self.config.worker_id}: Failed to resume Memory LLM provider: {exc}")
 
@@ -261,6 +275,9 @@ class BackgroundWorker:
 
     def is_running(self) -> bool:
         """Проверяет, запущен ли воркер."""
+        if self._running and self._thread is not None and not self._thread.is_alive():
+            self._running = False
+            self._thread = None
         return self._running
 
     def get_stats(self) -> dict[str, Any]:
@@ -332,7 +349,11 @@ class BackgroundWorker:
             # Прервано основной моделью — возвращаем задачу в очередь
             print(f"[WORKER] {self.config.worker_id}: Job interrupted, requeuing", flush=True)
             sys.stdout.flush()
-            self.job_queue.fail(job.job_id, str(e), retry=True)
+            requeue_now = getattr(self.job_queue, "requeue_immediately", None)
+            if callable(requeue_now):
+                requeue_now(job.job_id, str(e))
+            else:
+                self.job_queue.fail(job.job_id, str(e), retry=True)
             self.stats.jobs_retried += 1
             return True
         except Exception as e:
@@ -410,7 +431,10 @@ class BackgroundWorker:
             envelope.metadata["episode_id"] = episode_id
 
         # Отправляем в Memory LLM processor
-        llm_result = self.memory_llm_processor(envelope)
+        if hasattr(self.memory_llm_processor, "process"):
+            llm_result = self.memory_llm_processor.process(envelope)
+        else:
+            llm_result = self.memory_llm_processor(envelope)
 
         # Пишем trace: memory_llm_done
         if self.trace_store:
@@ -565,75 +589,77 @@ class BackgroundWorker:
         loop_count = 0
         idle_start_time: float | None = None  # Время начала простоя
 
-        while not self._stop_event.is_set():
-            loop_count += 1
+        try:
+            while not self._stop_event.is_set():
+                loop_count += 1
 
-            if not self.config.enabled:
-                LOGGER.debug(f"Worker {self.config.worker_id}: Disabled, sleeping...")
-                # Sleep с проверкой stop_event
-                for _ in range(int(self.config.poll_interval_sec * 10)):
-                    if self._stop_event.is_set():
-                        break
-                    time.sleep(0.1)
-                continue
+                if not self.config.enabled:
+                    LOGGER.debug(f"Worker {self.config.worker_id}: Disabled, sleeping...")
+                    self._wait_or_wake(self.config.poll_interval_sec)
+                    continue
 
-            # Проверяем паузу - не обрабатываем задачи, но продолжаем цикл
-            if self._pause_event.is_set():
-                LOGGER.debug(f"Worker {self.config.worker_id}: Paused, waiting...")
-                # Короткая пауза с проверкой stop_event
-                for _ in range(5):  # 0.5 сек
-                    if self._stop_event.is_set():
-                        break
-                    time.sleep(0.1)
-                continue
-
-            # Обрабатываем пакет задач
-            jobs_count = 0
-            LOGGER.debug(f"Worker {self.config.worker_id}: Attempting to process jobs (loop {loop_count})...")
-
-            while jobs_count < self.config.max_jobs_per_cycle:
-                if self._stop_event.is_set():
-                    break
-
+                # Проверяем паузу - не обрабатываем задачи, но продолжаем цикл
                 if self._pause_event.is_set():
-                    # Пауза во время обработки - прерываем цикл
-                    break
+                    LOGGER.debug(f"Worker {self.config.worker_id}: Paused, waiting...")
+                    self._wait_or_wake(0.5)
+                    continue
 
-                if not self.process_one_job():
-                    # Нет задач — выходим из внутреннего цикла
-                    break
+                # Обрабатываем пакет задач
+                jobs_count = 0
+                LOGGER.debug(f"Worker {self.config.worker_id}: Attempting to process jobs (loop {loop_count})...")
 
-                jobs_count += 1
-                idle_start_time = None  # Сбрасываем простой при обработке задачи
-
-            # Если задач не было — проверяем idle timeout
-            if jobs_count == 0:
-                # Проверяем настройку shutdown_idle_timeout
-                if self.config.shutdown_idle_timeout_sec > 0:
-                    if idle_start_time is None:
-                        idle_start_time = time.time()
-
-                    idle_duration = time.time() - idle_start_time
-                    if idle_duration >= self.config.shutdown_idle_timeout_sec:
-                        LOGGER.info(
-                            f"Worker {self.config.worker_id}: Idle timeout "
-                            f"({idle_duration:.1f}s >= {self.config.shutdown_idle_timeout_sec}s), shutting down..."
-                        )
-                        self._stop_event.set()
-                        break
-                    LOGGER.debug(
-                        f"Worker {self.config.worker_id}: Idle for {idle_duration:.1f}s, "
-                        f"timeout in {self.config.shutdown_idle_timeout_sec - idle_duration:.1f}s"
-                    )
-                # Не сбрасываем idle_start_time здесь, чтобы отслеживать общий простой
-
-                LOGGER.info(f"Worker {self.config.worker_id}: No jobs, sleeping for {self.config.poll_interval_sec}s...")
-                # Sleep с проверкой stop_event
-                for _ in range(int(self.config.poll_interval_sec * 10)):
+                while jobs_count < self.config.max_jobs_per_cycle:
                     if self._stop_event.is_set():
                         break
-                    time.sleep(0.1)
 
+                    if self._pause_event.is_set():
+                        # Пауза во время обработки - прерываем цикл
+                        break
+
+                    try:
+                        processed = self.process_one_job()
+                    except Exception as exc:
+                        self.stats.jobs_failed += 1
+                        self.stats.last_error = str(exc)
+                        LOGGER.exception(f"Worker {self.config.worker_id}: Unhandled process_one_job error: {exc}")
+                        break
+
+                    if not processed:
+                        # Нет задач — выходим из внутреннего цикла
+                        break
+
+                    jobs_count += 1
+                    idle_start_time = None  # Сбрасываем простой при обработке задачи
+
+                # Если задач не было — проверяем idle timeout
+                if jobs_count == 0:
+                    # Проверяем настройку shutdown_idle_timeout
+                    if self.config.shutdown_idle_timeout_sec > 0:
+                        if idle_start_time is None:
+                            idle_start_time = time.time()
+
+                        idle_duration = time.time() - idle_start_time
+                        if idle_duration >= self.config.shutdown_idle_timeout_sec:
+                            LOGGER.info(
+                                f"Worker {self.config.worker_id}: Idle timeout "
+                                f"({idle_duration:.1f}s >= {self.config.shutdown_idle_timeout_sec}s), shutting down..."
+                            )
+                            self._stop_event.set()
+                            break
+                        LOGGER.debug(
+                            f"Worker {self.config.worker_id}: Idle for {idle_duration:.1f}s, "
+                            f"timeout in {self.config.shutdown_idle_timeout_sec - idle_duration:.1f}s"
+                        )
+                    # Не сбрасываем idle_start_time здесь, чтобы отслеживать общий простой
+
+                    LOGGER.info(f"Worker {self.config.worker_id}: No jobs, sleeping for {self.config.poll_interval_sec}s...")
+                    self._wait_or_wake(self.config.poll_interval_sec)
+        except Exception as exc:
+            self.stats.last_error = str(exc)
+            LOGGER.exception(f"Worker {self.config.worker_id}: Run loop crashed: {exc}")
+
+        self._running = False
+        self._thread = None
         LOGGER.info(f"Worker {self.config.worker_id} run loop exited after {loop_count} loops")
 
 

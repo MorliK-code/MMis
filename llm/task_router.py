@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Mapping
@@ -213,12 +214,36 @@ class TaskModelRouter:
     ) -> None:
         self._registry = registry or get_task_model_registry()
         self._provider_factory = provider_factory or _default_provider_factory
+        self._provider_cache_lock = threading.Lock()
+        self._provider_cache: dict[str, tuple[tuple[str, str, float], LLMProviderBase]] = {}
 
     def get_task_profile(self, task_name: str) -> TaskModelProfile | None:
         return self._registry.get_task_profile(task_name)
 
     def is_task_enabled(self, task_name: str) -> bool:
         return self._registry.is_task_enabled(task_name)
+
+    def get_cached_provider(self, task_name: str) -> LLMProviderBase | None:
+        cache_key = _normalize_name(task_name)
+        if not cache_key:
+            return None
+        with self._provider_cache_lock:
+            cached = self._provider_cache.get(cache_key)
+            return cached[1] if cached else None
+
+    def shutdown_cached_provider(self, task_name: str | None = None) -> None:
+        providers: list[LLMProviderBase] = []
+        with self._provider_cache_lock:
+            if task_name is None:
+                providers = [row[1] for row in self._provider_cache.values()]
+                self._provider_cache.clear()
+            else:
+                cached = self._provider_cache.pop(_normalize_name(task_name), None)
+                if cached is not None:
+                    providers = [cached[1]]
+
+        for provider in providers:
+            self._shutdown_provider(provider)
 
     def run_task_model(
         self,
@@ -471,7 +496,7 @@ class TaskModelRouter:
                     json_mode=bool(json_mode),
                 )
                 try:
-                    provider = self._provider_factory(profile)
+                    provider = self._get_provider(profile)
                     request = self._build_request(
                         profile=profile,
                         prompt=prompt,
@@ -623,6 +648,43 @@ class TaskModelRouter:
             f"attempted_profiles={list(attempted_profiles)}; errors={list(failure_context.errors)}"
         )
         raise TaskModelExecutionError(message) from last_error
+
+    def _get_provider(self, profile: TaskModelProfile) -> LLMProviderBase:
+        cache_key = _normalize_name(profile.name)
+        signature = (
+            _normalize_name(profile.provider),
+            str(profile.model or "").strip(),
+            float(profile.timeout or 0.0),
+        )
+
+        stale_provider: LLMProviderBase | None = None
+        with self._provider_cache_lock:
+            cached = self._provider_cache.get(cache_key)
+            if cached is not None and cached[0] == signature:
+                return cached[1]
+            if cached is not None:
+                stale_provider = cached[1]
+
+        provider = self._provider_factory(profile)
+
+        with self._provider_cache_lock:
+            self._provider_cache[cache_key] = (signature, provider)
+
+        if stale_provider is not None and stale_provider is not provider:
+            self._shutdown_provider(stale_provider)
+        return provider
+
+    @staticmethod
+    def _shutdown_provider(provider: LLMProviderBase) -> None:
+        for method_name in ("shutdown", "close", "cleanup"):
+            method = getattr(provider, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                method()
+            except Exception:
+                continue
+            break
 
     def _try_deterministic_fallback(
         self,

@@ -148,6 +148,26 @@ class MemoryService:
                 priority=5,
             )
 
+            worker = getattr(self, "worker", None)
+            if worker is not None and hasattr(worker, "is_running") and hasattr(worker, "start"):
+                try:
+                    is_memory_locked = False
+                    try:
+                        from memory_core.adapter import _memory_llm_lock
+                        is_memory_locked = bool(_memory_llm_lock is not None and _memory_llm_lock.locked())
+                    except Exception:
+                        is_memory_locked = False
+
+                    if not worker.is_running() and not is_memory_locked:
+                        worker.start()
+                    elif worker.is_running():
+                        wake = getattr(worker, "wake", None)
+                        if callable(wake):
+                            wake()
+                except Exception:
+                    # Не роняем ingest, если worker не поднялся с первого раза.
+                    pass
+
             return {
                 "event_id": envelope.event_id,
                 "processed": True,

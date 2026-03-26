@@ -59,7 +59,7 @@ class LLMPriorityManager:
             enabled: Включить управление приоритетами.
             wait_timeout: Максимальное время ожидания для Memory LLM (сек).
         """
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         
         # Счётчики активных запросов

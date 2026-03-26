@@ -339,6 +339,7 @@ class OllamaProvider(LLMProviderBase):
         self.retries = int(retries if retries is not None else _cfg.ollama_retries)
         self.debug_raw = bool(debug_raw if debug_raw is not None else False)
         self._client = ollama.Client(host=self.host, timeout=self.timeout_sec)
+        self._current_model = self.default_model
 
     @staticmethod
     def _is_reasoning_model(model: str) -> bool:
@@ -346,10 +347,16 @@ class OllamaProvider(LLMProviderBase):
         model_lower = str(model or "").lower()
         return any(pattern in model_lower for pattern in OllamaProvider.REASONING_MODEL_PATTERNS)
 
+    def _remember_model(self, model: str) -> None:
+        target = str(model or "").strip()
+        if target:
+            self._current_model = target
+
     def generate(self, req: LLMRequest) -> LLMResponse:
         model = str(req.model or self.default_model or "").strip()
         if not model:
             raise RuntimeError("Ollama model is not configured.")
+        self._remember_model(model)
         verbose = bool(dict(req.metadata or {}).get("verbose", False))
         
         # Определяем приоритет LLM
@@ -411,6 +418,7 @@ class OllamaProvider(LLMProviderBase):
         model = str(req.model or self.default_model or "").strip()
         if not model:
             raise RuntimeError("Ollama model is not configured.")
+        self._remember_model(model)
         verbose = bool(dict(req.metadata or {}).get("verbose", False))
 
         log_json(
@@ -598,6 +606,7 @@ class OllamaProvider(LLMProviderBase):
         raise RuntimeError(str(last_exc or "Ollama request failed"))
 
     def _chat_once(self, *, req: LLMRequest, model: str, stream: bool, disable_think: bool = False):
+        self._remember_model(model)
         messages = [_message_to_dict(m) for m in list(req.messages or [])]
         options = self._build_options(req)
         tools = [_tools for _tools in [_toolspec_to_ollama(t) for t in list(req.tools or [])] if _tools]
@@ -644,7 +653,9 @@ class OllamaProvider(LLMProviderBase):
         if is_memory_llm and stream:
             # Для streaming проверяем флаг прерывания во время генерации
             return self._interruptible_chat_stream(req, model, request_payload)
-        
+        if is_memory_llm:
+            return self._interruptible_chat_response(model, request_payload)
+
         payload = self._client.chat(**request_payload)
         if stream:
             return payload
@@ -664,6 +675,48 @@ class OllamaProvider(LLMProviderBase):
             raise
         except Exception:
             raise
+
+    def _interruptible_chat_response(self, model: str, request_payload: dict) -> dict[str, Any]:
+        stream_payload = dict(request_payload)
+        stream_payload["stream"] = True
+        payload = self._client.chat(**stream_payload)
+
+        content_parts: list[str] = []
+        tool_calls: list[Any] = []
+        last_chunk: dict[str, Any] = {}
+        prev_thinking_full = ""
+
+        for chunk in payload:
+            if _memory_llm_interrupt.is_set():
+                LOGGER.warning("Memory LLM response interrupted - main model responding")
+                raise InterruptedError("Memory LLM interrupted - main model has priority")
+
+            data = _as_dict(chunk)
+            if not data:
+                continue
+            last_chunk = data
+            message = dict(data.get("message") or {})
+            text_delta = str(message.get("content") or "")
+            if text_delta:
+                content_parts.append(text_delta)
+
+            thinking_full = _extract_thinking(message, data)
+            _thinking_delta, prev_thinking_full = _stitch_thinking_delta(prev_thinking_full, thinking_full)
+
+            chunk_tool_calls = list(message.get("tool_calls") or [])
+            if chunk_tool_calls:
+                tool_calls = chunk_tool_calls
+
+        payload_dict = dict(last_chunk or {})
+        message_dict = dict(payload_dict.get("message") or {})
+        message_dict["content"] = "".join(content_parts)
+        if prev_thinking_full:
+            message_dict["thinking"] = prev_thinking_full
+        if tool_calls:
+            message_dict["tool_calls"] = tool_calls
+        payload_dict["message"] = message_dict
+        payload_dict.setdefault("model", model)
+        return payload_dict
 
     @staticmethod
     def _is_thinking_unsupported_error(exc: Exception) -> bool:
@@ -749,6 +802,24 @@ class OllamaProvider(LLMProviderBase):
             eval_duration_ms=eval_duration_ms,
         )
 
+    def _unload_known_model(self, model_name: str | None = None) -> bool:
+        target = str(model_name or getattr(self, "_current_model", None) or self.default_model or "").strip()
+        if not target:
+            return False
+
+        unload_attempts = (
+            lambda: self._client.generate(model=target, prompt="", keep_alive=0),
+            lambda: self._client.chat(model=target, messages=[], keep_alive=0),
+        )
+        for attempt in unload_attempts:
+            try:
+                attempt()
+                LOGGER.info(f"Ollama model '{target}' unloaded from VRAM")
+                return True
+            except Exception as exc:
+                LOGGER.debug(f"Ollama unload attempt failed for '{target}': {exc}")
+        return False
+
     def shutdown(self) -> None:
         """
         Полностью освобождает ресурсы LLM provider всеми способами.
@@ -760,6 +831,7 @@ class OllamaProvider(LLMProviderBase):
         4. Сбрасываем приоритет
         """
         LOGGER.info("OllamaProvider.shutdown() called - FULL CLEANUP...")
+        self._unload_known_model()
         
         # Способ 1: Выгрузка модели через Ollama API
         try:
@@ -814,8 +886,7 @@ class OllamaProvider(LLMProviderBase):
             from llm.priority_manager import get_priority_manager
             manager = get_priority_manager()
             if manager:
-                manager.release_turn(self)
-                LOGGER.info("OllamaProvider: LLM priority released")
+                pass
         except Exception as exc:
             LOGGER.warning(f"OllamaProvider: Priority release failed: {exc}")
         
@@ -838,40 +909,8 @@ class OllamaProvider(LLMProviderBase):
         Для Ollama это означает явную выгрузку модели из памяти.
         """
         LOGGER.info("OllamaProvider.pause() called - releasing VRAM...")
-        try:
-            # Явно выгружаем модель через Ollama API
-            # Ollama автоматически выгружает модель после 5 минут простоя
-            # Но мы можем принудительно выгрузить через unload
-            try:
-                # Пытаемся выгрузить модель через generate с пустым prompt
-                # Это заставит Ollama выгрузить модель из VRAM
-                import ollama
-                if hasattr(ollama, 'generate'):
-                    # Получаем текущую модель
-                    model_name = getattr(self, '_current_model', None)
-                    if model_name:
-                        # Пустой запрос для выгрузки
-                        ollama.generate(model=model_name, prompt="")
-                        LOGGER.info(f"Ollama model '{model_name}' unloaded from VRAM")
-            except Exception as unload_err:
-                LOGGER.debug(f"Ollama unload attempt: {unload_err}")
-            
-            # Закрываем клиент для сброса соединений
-            if hasattr(ollama, '_client'):
-                client = getattr(ollama, '_client', None)
-                if client and hasattr(client, 'close'):
-                    client.close()
-                    LOGGER.info("Ollama client closed")
-            
-            # Сбрасываем приоритет
-            manager = get_priority_manager()
-            if manager:
-                manager.release_turn(self)
-                LOGGER.info("LLM priority released")
-                
-            LOGGER.info("OllamaProvider.pause() complete - VRAM should be freed")
-        except Exception as exc:
-            LOGGER.warning(f"OllamaProvider.pause() error: {exc}")
+        self._unload_known_model()
+        LOGGER.info("OllamaProvider.pause() complete - model unloaded, client kept alive")
 
     def resume(self) -> None:
         """
@@ -880,8 +919,39 @@ class OllamaProvider(LLMProviderBase):
         Для Ollama это означает готовность к новым запросам.
         """
         LOGGER.info("OllamaProvider.resume() called")
-        # Ollama client лениво загружает модель при первом запросе
-        # Ничего делать не нужно
+        try:
+            self._client = ollama.Client(host=self.host, timeout=self.timeout_sec)
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider.resume() failed to recreate client: {exc}")
+
+    def warmup(self, keep_alive: Any | None = None) -> bool:
+        """Прогревает модель в VRAM без полноценной генерации."""
+        target = str(getattr(self, "_current_model", None) or self.default_model or "").strip()
+        if not target:
+            return False
+
+        self._remember_model(target)
+        payload: dict[str, Any] = {
+            "model": target,
+            "prompt": "",
+            "options": {"num_predict": 0},
+        }
+        if keep_alive is not None and str(keep_alive).strip() != "":
+            payload["keep_alive"] = keep_alive
+
+        started_at = time.perf_counter()
+        try:
+            self._client.generate(**payload)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            LOGGER.info(
+                "OllamaProvider.warmup() complete for model '%s' in %.1fms",
+                target,
+                elapsed_ms,
+            )
+            return True
+        except Exception as exc:
+            LOGGER.debug(f"OllamaProvider.warmup() failed for '{target}': {exc}")
+            return False
     
     def unload_model(self) -> None:
         """
@@ -890,6 +960,8 @@ class OllamaProvider(LLMProviderBase):
         Для Ollama это означает отправку пустого запроса для выгрузки.
         """
         LOGGER.info("OllamaProvider.unload_model() called - unloading model from VRAM...")
+        self._unload_known_model()
+        return
         try:
             model_name = getattr(self, '_current_model', None) or getattr(self, 'default_model', None)
             if model_name:

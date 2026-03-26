@@ -207,9 +207,11 @@ def _create_background_worker(
     
     # Получаем timeout из task_model_profiles
     memory_llm_timeout = float(memory_llm_profile_data.get("timeout", 60.0))
+    memory_llm_keep_alive = memory_llm_profile_data.get("keep_alive")
     memory_llm_processor = MemoryLLMProcessor(
         task_router=task_router,
         timeout_sec=memory_llm_timeout,
+        keep_alive=memory_llm_keep_alive,
     )
     
     # Создаём Governor
@@ -257,7 +259,7 @@ def _create_background_worker(
         event_store=event_store,
         artifact_store=artifact_store,  # Добавляем artifact_store для episode planner
         trace_store=trace_store,  # Добавляем trace_store для inspector
-        memory_llm_processor=lambda env: memory_llm_processor.process(env),
+        memory_llm_processor=memory_llm_processor,
         governor=lambda proposals, env: governor.decide(proposals, env),
         vector_index_updater=vector_index_updater,
         config=worker_config,
