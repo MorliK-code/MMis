@@ -11,6 +11,11 @@ from typing import Any
 
 
 _SECTION_HEADER_RE = re.compile(r"(?im)^\s*\[(PARAMETERS|SUMMARY|RESPONSE)\]\s*$")
+_INTERNAL_ERROR_REPLIES = frozenset(
+    {
+        "Я затупила. Повтори, пожалуйста, еще раз.",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,13 @@ class AssistantTextSanitizeResult:
     reason: str
     changed: bool
     had_service_sections: bool
+
+
+def is_internal_error_reply(text: Any) -> bool:
+    normalized = _normalize_memory_text(text)
+    if not normalized:
+        return False
+    return normalized in _INTERNAL_ERROR_REPLIES
 
 
 def clean_assistant_text_for_memory(result: Any) -> AssistantTextSanitizeResult:
@@ -36,8 +48,23 @@ def sanitize_assistant_memory_text(
     normalized_source = _normalize_memory_text(source)
     had_sections = contains_memory_service_sections(source)
 
+    if is_internal_error_reply(normalized_source):
+        return AssistantTextSanitizeResult(
+            text="",
+            reason="internal_error_reply",
+            changed=bool(normalized_source),
+            had_service_sections=had_sections,
+        )
+
     structured = _coerce_text(_coerce_dict(structured_output).get("text"))
     if structured:
+        if is_internal_error_reply(structured):
+            return AssistantTextSanitizeResult(
+                text="",
+                reason="internal_error_reply",
+                changed=True,
+                had_service_sections=had_sections,
+            )
         normalized = _normalize_memory_text(structured)
         return AssistantTextSanitizeResult(
             text=normalized,

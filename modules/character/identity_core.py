@@ -11,17 +11,98 @@ def flatten_governor_profile_snapshot(
     layer_priority: tuple[str, ...] | None = None,
     include_active_facts: bool = True,
 ) -> dict:
-    """Заглушка для обратной совместимости."""
-    if not snapshot:
+    """Flatten governor profile snapshots into a stable legacy-compatible map."""
+    row = dict(snapshot or {})
+    if not row:
         return {}
-    result = {}
-    for key in ["traits", "mood", "relation", "active_task", "user_profile"]:
-        if key in snapshot:
-            result[key] = snapshot[key]
-    if "flat_traits" in snapshot:
-        result["flat_traits"] = snapshot["flat_traits"]
-    elif "traits" in snapshot and isinstance(snapshot["traits"], dict):
-        result["flat_traits"] = snapshot["traits"]
+
+    result: dict[str, Any] = {}
+    layered_names = ("persistent_traits", "volatile_preferences", "session_preferences")
+    active_fact_keys = {"active_facts", *layered_names}
+    passthrough_meta = {"namespace", "conflicts", "updated_at"}
+
+    def _normalize_key(raw_key: Any) -> str:
+        text = str(raw_key or "").strip()
+        if not text:
+            return ""
+        text = text.split("#", 1)[0]
+        if "." in text:
+            text = text.rsplit(".", 1)[-1]
+        return text.strip()
+
+    def _merge_value(predicate: str, value: Any, *, group_mode: str = "", allow_multi: bool = False) -> None:
+        key = _normalize_key(predicate)
+        if not key:
+            return
+        mode = str(group_mode or "").strip().lower()
+        if mode == "multi" or allow_multi:
+            bucket = result.get(key)
+            if isinstance(bucket, list):
+                if value not in bucket:
+                    bucket.append(value)
+                return
+            if bucket is None:
+                result[key] = [value]
+                return
+            if bucket == value:
+                result[key] = [bucket]
+                return
+            result[key] = [bucket, value]
+            return
+        if key not in result:
+            result[key] = value
+            return
+        existing = result.get(key)
+        if isinstance(existing, list):
+            if value not in existing:
+                existing.append(value)
+            return
+
+    def _merge_record(raw_key: Any, raw_value: Any) -> None:
+        raw_key_text = str(raw_key or "").strip()
+        allow_multi = "#" in raw_key_text
+        if isinstance(raw_value, dict):
+            predicate = str(raw_value.get("predicate") or raw_key or "").strip()
+            if not predicate:
+                predicate = _normalize_key(raw_key)
+            if "value" in raw_value:
+                _merge_value(
+                    predicate,
+                    raw_value.get("value"),
+                    group_mode=str(raw_value.get("group_mode") or ""),
+                    allow_multi=allow_multi,
+                )
+                return
+        _merge_value(raw_key, raw_value, allow_multi=allow_multi)
+
+    for key, value in row.items():
+        if key in active_fact_keys:
+            continue
+        if key in passthrough_meta:
+            result[key] = value
+            continue
+        if key == "flat_traits" and isinstance(value, dict):
+            for trait_key, trait_value in dict(value).items():
+                _merge_record(trait_key, trait_value)
+            continue
+        if key == "traits" and isinstance(value, dict):
+            for trait_key, trait_value in dict(value).items():
+                _merge_record(trait_key, trait_value)
+            continue
+        if isinstance(value, dict):
+            continue
+        _merge_record(key, value)
+
+    resolved_layers = tuple(layer_priority or layered_names)
+    for layer_name in resolved_layers:
+        layer = dict(row.get(layer_name) or {})
+        for layer_key, layer_value in layer.items():
+            _merge_record(layer_key, layer_value)
+
+    if include_active_facts:
+        for fact_key, fact_value in dict(row.get("active_facts") or {}).items():
+            _merge_record(fact_key, fact_value)
+
     return result
 
 

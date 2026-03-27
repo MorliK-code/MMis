@@ -23,6 +23,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from memory_core.schemas import MemoryEnvelope
+from memory_core.retrieval.prompt_adapter import (
+    resolve_artifact_exposure_mode,
+    resolve_artifact_prompt_view,
+    resolve_artifact_sensitivity,
+)
 from llm.task_router import TaskModelRouter
 from utils.logger import get_logger
 
@@ -166,6 +171,7 @@ class MemoryLLMProcessor:
         model_profile: str = "memory_llm",
         timeout_sec: float = 60.0,
         keep_alive: Any | None = None,
+        system_prompt: str = "",
     ):
         """
         Инициализирует процессор.
@@ -179,6 +185,7 @@ class MemoryLLMProcessor:
         self.model_profile = model_profile
         self.timeout_sec = float(timeout_sec or 60.0)
         self.keep_alive = keep_alive
+        self.system_prompt = str(system_prompt or MEMORY_LLM_SYSTEM_PROMPT).strip() or MEMORY_LLM_SYSTEM_PROMPT
 
     def process(self, envelope: MemoryEnvelope) -> MemoryLLMResult:
         """
@@ -323,7 +330,7 @@ class MemoryLLMProcessor:
                             result = run_task_model_json(
                                 task_name=self.TASK_NAME,
                                 prompt=prompt,
-                                system_prompt=MEMORY_LLM_SYSTEM_PROMPT,
+                                system_prompt=self.system_prompt,
                                 metadata=metadata,
                                 timeout=timeout,
                                 required_fields=("event_id", "importance", "should_process", "proposals"),
@@ -334,7 +341,7 @@ class MemoryLLMProcessor:
                             result = self.task_router.run_task_model(
                                 task_name=self.TASK_NAME,
                                 prompt=prompt,
-                                system_prompt=MEMORY_LLM_SYSTEM_PROMPT,
+                                system_prompt=self.system_prompt,
                                 metadata=metadata,
                                 timeout=timeout,
                                 allow_fallback=False,
@@ -519,16 +526,28 @@ class MemoryLLMProcessor:
 
             proposals = []
             for p in data.get("proposals", []):
-                proposal = ArtifactProposal(
+                normalized_metadata = self._normalize_proposal_metadata(
                     artifact_type=p.get("artifact_type", "fact"),
                     text=p.get("text", ""),
                     summary=p.get("summary", ""),
+                    metadata=p.get("metadata", {}),
+                )
+                normalized_text, normalized_summary = self._normalize_proposal_text_fields(
+                    artifact_type=p.get("artifact_type", "fact"),
+                    text=p.get("text", ""),
+                    summary=p.get("summary", ""),
+                    metadata=normalized_metadata,
+                )
+                proposal = ArtifactProposal(
+                    artifact_type=p.get("artifact_type", "fact"),
+                    text=normalized_text,
+                    summary=normalized_summary,
                     confidence=float(p.get("confidence", 0.5)),
                     scope=p.get("scope", "global"),
                     decay=p.get("decay", "slow"),
                     retrieve_when=p.get("retrieve_when", []),
                     action=p.get("action", "create"),
-                    metadata=p.get("metadata", {}),
+                    metadata=normalized_metadata,
                 )
                 # Валидация confidence
                 proposal.confidence = max(0.0, min(1.0, proposal.confidence))
@@ -549,10 +568,72 @@ class MemoryLLMProcessor:
                 raise preemption from e
             raise ValueError(f"Failed to parse Memory LLM response for event {event_id}") from e
 
+    @staticmethod
+    def _normalize_proposal_metadata(
+        *,
+        artifact_type: str,
+        text: Any,
+        summary: Any,
+        metadata: Any,
+    ) -> dict[str, Any]:
+        meta = dict(metadata or {})
+        exposure_mode = resolve_artifact_exposure_mode(str(artifact_type or ""), meta)
+        prompt_view = resolve_artifact_prompt_view(
+            str(artifact_type or ""),
+            text=str(text or ""),
+            summary=str(summary or ""),
+            metadata=meta,
+            exposure_mode=exposure_mode,
+        )
+        sensitivity = resolve_artifact_sensitivity(meta)
+        if prompt_view:
+            meta["prompt_view"] = prompt_view
+        meta["exposure_mode"] = exposure_mode
+        meta.setdefault("sensitivity", sensitivity)
+        return meta
+
+    @staticmethod
+    def _normalize_proposal_text_fields(
+        *,
+        artifact_type: str,
+        text: Any,
+        summary: Any,
+        metadata: dict[str, Any],
+    ) -> tuple[str, str]:
+        normalized_type = str(artifact_type or "").strip().lower()
+        raw_text = str(text or "").strip()
+        raw_summary = str(summary or "").strip()
+        if normalized_type != "emotional_state":
+            return raw_text, raw_summary
+
+        emotion = str(metadata.get("emotion") or "").strip().lower()
+        if not emotion:
+            low = " ".join(part for part in (raw_text, raw_summary) if part).lower()
+            if any(token in low for token in ("грусть", "груст", "sad", "печал")):
+                emotion = "sad"
+            elif any(token in low for token in ("устал", "усталость", "tired", "выгор")):
+                emotion = "tired"
+            elif any(token in low for token in ("раздраж", "frustrated", "бесит", "злит")):
+                emotion = "frustrated"
+            elif any(token in low for token in ("тревог", "anxious", "нервн")):
+                emotion = "anxious"
+        scope = str(metadata.get("scope") or "episode").strip().lower() or "episode"
+        if not raw_text.startswith("user emotion:"):
+            state_tail = "low-bandwidth" if bool(metadata.get("low_bandwidth")) or emotion in {"sad", "tired", "anxious"} else "tense" if emotion in {"frustrated", "angry"} else "episode-local"
+            emotion_value = emotion or "unspecified"
+            raw_text = f"user emotion: {emotion_value} / {state_tail} / {scope}-local"
+        if not raw_summary:
+            if emotion:
+                raw_summary = f"{emotion} / {scope}"
+            else:
+                raw_summary = f"emotion / {scope}"
+        return raw_text, raw_summary
+
 
 def build_memory_llm_processor(
     task_router: TaskModelRouter | None = None,
     keep_alive: Any | None = None,
+    system_prompt: str = "",
 ) -> MemoryLLMProcessor:
     """
     Строит процессор Memory LLM.
@@ -563,4 +644,4 @@ def build_memory_llm_processor(
     Returns:
         Процессор Memory LLM.
     """
-    return MemoryLLMProcessor(task_router=task_router, keep_alive=keep_alive)
+    return MemoryLLMProcessor(task_router=task_router, keep_alive=keep_alive, system_prompt=system_prompt)

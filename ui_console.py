@@ -699,6 +699,8 @@ class _StreamRealtimePrinter:
         self.answer_parts: list[str] = []
         self.thinking_parts: list[str] = []
         self._thinking_started = False
+        self._printed_any = False
+        self._answer_prefix_written = False
         self._io_lock = threading.RLock()
         self._hidden_hint_frames = (
             "\u0434\u0443\u043c\u0430\u0435\u0442.",
@@ -798,8 +800,15 @@ class _StreamRealtimePrinter:
         if not text:
             return
 
+        if not self.show_thinking and (self._hidden_hint_active or self._thinking_started):
+            self.answer_parts.append(text)
+            return
+
         # Выводим сразу без буферизации
         with self._io_lock:
+            if not self._answer_prefix_written:
+                sys.stdout.write("assistant> ")
+                self._answer_prefix_written = True
             sys.stdout.write(text)
             sys.stdout.flush()
         self.answer_parts.append(text)
@@ -816,6 +825,40 @@ class _StreamRealtimePrinter:
     def finalize_with_final(self, *, answer_final: str | None = None, thinking_final: str | None = None, debug_trace: dict | None = None) -> None:
         """Завершение стриминга с финальными данными."""
         self.stop_hidden_thinking_hint(clear_line=True)
+        final_answer = _sanitize_stream_text(answer_final or "")
+        rendered_answer = self.rendered_answer()
+        if not self.show_thinking:
+            stable_answer = final_answer or rendered_answer
+            if stable_answer:
+                self.answer_parts = [stable_answer]
+                with self._io_lock:
+                    if not self._answer_prefix_written:
+                        sys.stdout.write("assistant> ")
+                        self._answer_prefix_written = True
+                    sys.stdout.write(stable_answer)
+                    sys.stdout.flush()
+            # Show debug memory info (after answer and thinking)
+            if self.debug_memory and not self._memory_retrieval_shown:
+                self._show_debug_memory(debug_trace)
+                self._memory_retrieval_shown = True
+            return
+        if final_answer:
+            missing = ""
+            if not rendered_answer:
+                missing = final_answer
+            elif final_answer.startswith(rendered_answer):
+                missing = final_answer[len(rendered_answer):]
+            elif rendered_answer != final_answer:
+                missing = final_answer
+                self.answer_parts = []
+            if missing:
+                with self._io_lock:
+                    if not self._answer_prefix_written:
+                        sys.stdout.write("assistant> ")
+                        self._answer_prefix_written = True
+                    sys.stdout.write(missing)
+                    sys.stdout.flush()
+                self.answer_parts.append(missing)
 
         # Show debug memory info (after answer and thinking)
         if self.debug_memory and not self._memory_retrieval_shown:
@@ -951,9 +994,10 @@ def _stream_once(state: ConsoleState, text: str, *, command_output: bool = False
         printer.start_hidden_thinking_hint()
     
     # Печатаем префикс перед стримингом (как в нативном Ollama)
-    if not command_output:
+    if not command_output and not ((not bool(state.show_thinking)) and bool(state.think_enabled)):
         sys.stdout.write("assistant> ")
         sys.stdout.flush()
+        printer._answer_prefix_written = True
     
     try:
         reply = state.api.stream_chat(

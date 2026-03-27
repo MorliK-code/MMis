@@ -165,6 +165,12 @@ class MemoryQueryResult:
     hits: list[dict[str, Any]] = field(default_factory=list)
     context_blocks: list[str] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
+    blocks: dict[str, Any] = field(default_factory=dict)
+    selected: list[dict[str, Any]] = field(default_factory=list)
+    dropped: list[dict[str, Any]] = field(default_factory=list)
+    recent_user_state: dict[str, Any] = field(default_factory=dict)
+    response_bias: dict[str, Any] = field(default_factory=dict)
+    debug: dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> dict[str, Any]:
         """Преобразует в словарь."""
@@ -172,6 +178,12 @@ class MemoryQueryResult:
             "hits": self.hits,
             "context_blocks": self.context_blocks,
             "citations": self.citations,
+            "blocks": self.blocks,
+            "selected": self.selected,
+            "dropped": self.dropped,
+            "recent_user_state": self.recent_user_state,
+            "response_bias": self.response_bias,
+            "debug": self.debug,
         }
 
 

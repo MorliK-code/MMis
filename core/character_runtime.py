@@ -23,6 +23,7 @@ from config.settings import load_config
 from core.mode_selector import normalize_mode_name
 from metadata.taxonomy import normalize_emotion
 from memory_core.utils.summary_quality import is_meaningful_summary_turn, sanitize_session_summary_text
+from memory_core.utils.text_sanitizer import is_internal_error_reply
 from modules.character.composer import CharacterComposeResult, CharacterComposer, compute_context_trait_modifiers
 from modules.character.dialog_policies import (
     local_date_kyiv as dialog_local_date,
@@ -1582,6 +1583,8 @@ class CharacterRuntime:
     def update_on_assistant_message(self, message: str, meta: dict[str, Any] | None = None) -> None:
         text = str(message or "").strip()
         if not text:
+            return
+        if is_internal_error_reply(text):
             return
         meta_map = dict(meta or {})
         now_iso = now_local_ts()
@@ -3533,6 +3536,8 @@ class CharacterRuntime:
             or _normalize_text(state.get("summary"))
             or "none"
         )
+        if is_internal_error_reply(summary):
+            summary = "none"
         focus = _normalize_text(state.get("focus") or state.get("active_goal") or "")
         
         # Always-on memory state: рабочая память личности
@@ -3769,7 +3774,14 @@ class CharacterRuntime:
         raw_items = []
         for item in _as_list(retrieved_memories):
             row = _coerce_memory(item)
-            if not row["text"] or not row["relevant"]:
+            exposure_mode = str(row.get("exposure_mode") or "").strip().lower()
+            memory_text = str(row.get("prompt_view") or row.get("summary") or "").strip()
+            if not memory_text and exposure_mode == "exact_quote":
+                memory_text = str(row.get("text") or "").strip()
+            row["memory_text"] = memory_text
+            if exposure_mode == "latent":
+                continue
+            if not row["memory_text"] or not row["relevant"]:
                 continue
             raw_items.append(row)
 
@@ -3782,7 +3794,7 @@ class CharacterRuntime:
         lines: list[str] = []
         used_tokens = 0
         for row in raw_items:
-            memory_text, _ = _clip_to_tokens(row["text"], budgets.memory_item_tokens)
+            memory_text, _ = _clip_to_tokens(str(row.get("memory_text") or ""), budgets.memory_item_tokens)
             parts = [f"conf={row['confidence']:.2f}"]
             if row["source"]:
                 parts.append(f"src={row['source']}")
@@ -3852,6 +3864,8 @@ class CharacterRuntime:
             or "",
             max_chars=max(64, int(budgets.long_summary_tokens * 6)),
         )
+        if is_internal_error_reply(explicit):
+            explicit = ""
         if explicit:
             clipped, _ = _clip_to_tokens(explicit, budgets.long_summary_tokens)
             return clipped
@@ -4436,7 +4450,21 @@ class CharacterRuntime:
         if not value:
             return []
         if isinstance(value, list):
-            return [dict(x) for x in value if isinstance(x, dict)]
+            out: list[dict[str, str]] = []
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                role = str(row.get("role") or "user").strip().lower()
+                content = _normalize_text(row.get("content") or row.get("text") or "")
+                if role == "assistant" and is_internal_error_reply(content):
+                    continue
+                if "content" in row:
+                    row["content"] = content
+                elif "text" in row:
+                    row["text"] = content
+                out.append(row)
+            return out
         return []
 
     @staticmethod
@@ -4682,6 +4710,10 @@ def _coerce_memory(item) -> dict[str, Any]:
         )
         return {
             "text": _normalize_text(item.get("text") or item.get("content") or ""),
+            "summary": _normalize_text(item.get("summary") or ""),
+            "prompt_view": _normalize_text(item.get("prompt_view") or ""),
+            "exposure_mode": str(item.get("exposure_mode") or metadata.get("exposure_mode") or "").strip().lower(),
+            "artifact_type": str(item.get("artifact_type") or metadata.get("artifact_type") or "").strip().lower(),
             "source": _normalize_text(item.get("source") or ""),
             "topic": _normalize_text(item.get("topic") or ""),
             "score": score,
@@ -4692,6 +4724,10 @@ def _coerce_memory(item) -> dict[str, Any]:
         }
     return {
         "text": _normalize_text(item),
+        "summary": "",
+        "prompt_view": "",
+        "exposure_mode": "",
+        "artifact_type": "",
         "source": "",
         "topic": "",
         "score": 0.5,
@@ -4705,9 +4741,13 @@ def _coerce_memory(item) -> dict[str, Any]:
 def _coerce_turn(item) -> dict[str, str]:
     """Привести turn."""
     if isinstance(item, dict):
+        role = str(item.get("role") or "user").strip().lower()
+        content = _normalize_text(item.get("content") or item.get("text") or "")
+        if role == "assistant" and is_internal_error_reply(content):
+            content = ""
         return {
-            "role": str(item.get("role") or "user").strip().lower(),
-            "content": _normalize_text(item.get("content") or item.get("text") or ""),
+            "role": role,
+            "content": content,
         }
     return {"role": "user", "content": _normalize_text(item)}
 

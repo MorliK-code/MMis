@@ -40,6 +40,8 @@ class IdentityCoreSnapshot:
     addressing: dict = field(default_factory=dict)
     interaction_style: dict = field(default_factory=dict)
     boundaries: dict = field(default_factory=dict)
+    emotional_rules: dict = field(default_factory=dict)
+    assistant_trait_baseline: dict = field(default_factory=dict)
 
 
 class ResponsePipelineFactualIsolationTests(unittest.TestCase):

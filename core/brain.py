@@ -19,6 +19,7 @@ from memory_core.utils.summary_quality import sanitize_session_summary_text
 from memory_core.utils.text_sanitizer import (
     clean_assistant_text_for_memory,
     contains_memory_service_sections,
+    is_internal_error_reply,
     sanitize_assistant_memory_text,
 )
 from metadata.metadata_extractor import MetadataExtractor
@@ -233,6 +234,12 @@ class Brain:
                 conversation_id=conversation_id,
             )
         except Exception as exc:
+            LOGGER.exception(
+                "Brain.handle_message failed route=%s trace_id=%s request_id=%s",
+                route,
+                str(meta_for_pipeline.get("trace_id") or ""),
+                str(meta_for_pipeline.get("request_id") or ""),
+            )
             result = self._build_error_result(route=route, error=exc)
 
         with self._lock:
@@ -516,6 +523,8 @@ class Brain:
             return
 
         if route in {"chat", "command"} and result.text:
+            if is_internal_error_reply(result.text):
+                return
             self.state_manager.update_on_assistant_message(
                 result.text,
                 {
@@ -612,7 +621,12 @@ class Brain:
 
         assistant_sanitized = clean_assistant_text_for_memory(result)
         assistant_payload = str(assistant_sanitized.text or "").strip()
-        if assistant_sanitized.reason in {"structured_output_text", "response_block_extract", "fallback_strip"}:
+        if assistant_sanitized.reason in {
+            "structured_output_text",
+            "response_block_extract",
+            "fallback_strip",
+            "internal_error_reply",
+        }:
             log_json(
                 LOGGER,
                 "memory_text_sanitized",

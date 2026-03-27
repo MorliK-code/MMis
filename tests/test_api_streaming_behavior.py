@@ -5,12 +5,19 @@ import sys
 import unittest
 from importlib import import_module
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from fastapi.testclient import TestClient
 
 
-def _reply(*, text: str, thinking: str = "", stats: dict | None = None, model: str = "stub-model"):
+def _reply(
+    *,
+    text: str,
+    thinking: str = "",
+    stats: dict | None = None,
+    model: str = "stub-model",
+    status: str = "ok",
+):
     return SimpleNamespace(
         text=text,
         thinking=thinking,
@@ -19,6 +26,7 @@ def _reply(*, text: str, thinking: str = "", stats: dict | None = None, model: s
         model=model,
         debug_trace={},
         memory_debug_snapshot={},
+        status=status,
     )
 
 
@@ -76,6 +84,18 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
         self.assertEqual(str(payload.get("answer") or ""), "Hello world")
         self.assertTrue(bool(stats.get("streaming_live")))
         self.assertEqual(int(stats.get("streamed_answer_chars") or 0), len("Hello world"))
+
+    def test_chat_does_not_store_assistant_metadata_for_error_result(self) -> None:
+        api_app = self._api_app()
+        with TestClient(api_app.app) as client:
+            with patch.object(api_app._runtime.brain, "handle_message", return_value=_reply(text="Я затупила. Повтори, пожалуйста, еще раз.", status="error")):
+                with patch.object(api_app, "_append_metadata_row") as append_row:
+                    with patch.object(type(api_app.memory_core_adapter), "worker_pause_enabled", new_callable=PropertyMock, return_value=False):
+                        resp = client.post("/chat", json={"text": "hello", "store_turn": True})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(append_row.call_args_list), 1)
+        self.assertEqual(str(append_row.call_args.kwargs.get("role") or ""), "user")
 
 
 if __name__ == "__main__":

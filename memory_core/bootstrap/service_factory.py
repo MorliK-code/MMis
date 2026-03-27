@@ -212,6 +212,7 @@ def _create_background_worker(
         task_router=task_router,
         timeout_sec=memory_llm_timeout,
         keep_alive=memory_llm_keep_alive,
+        system_prompt=str(mc_config.llm.system_prompt or ""),
     )
     
     # Создаём Governor

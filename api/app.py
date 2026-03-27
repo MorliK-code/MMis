@@ -33,6 +33,7 @@ from core.brain import Brain
 from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
 from memory_core.adapter import get_memory_core_adapter
+from memory_core.utils.text_sanitizer import is_internal_error_reply
 from utils.logger import get_logger, log_json
 
 
@@ -380,9 +381,11 @@ def chat(req: ChatRequest) -> ChatResponse:
             else:
                 answer = str(native.get("answer") or "")
                 stats = {"served_model": _runtime.model, "native_command": True}
-                if bool(req.store_turn) and _should_store_metadata(text=text):
-                    _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
-                    _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+                if bool(req.store_turn):
+                    if _should_store_metadata(role="user", text=text):
+                        _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+                    if _should_store_metadata(role="assistant", text=answer):
+                        _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
                 return ChatResponse(
                     answer=answer,
                     thinking="",
@@ -443,10 +446,13 @@ def chat(req: ChatRequest) -> ChatResponse:
         stats.setdefault("served_model", _runtime.model)
         _runtime.last_stats = stats
         _runtime.last_thinking = thinking
+        assistant_metadata_allowed = str(getattr(result, "status", "") or "").strip().lower() != "error"
 
-        if bool(req.store_turn) and _should_store_metadata(text=text, structured_output=structured):
-            _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
-            _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+        if bool(req.store_turn):
+            if _should_store_metadata(role="user", text=text, structured_output=structured):
+                _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+            if assistant_metadata_allowed and _should_store_metadata(role="assistant", text=answer, structured_output=structured):
+                _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
 
         log_json(
             LOGGER,
@@ -494,10 +500,12 @@ def chat_stream(req: ChatRequest):
                     "parameters": None,
                     "summary": None,
                 }
-                if bool(req.store_turn) and _should_store_metadata(text=text):
+                if bool(req.store_turn):
                     with _runtime.lock:
-                        _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
-                        _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
+                        if _should_store_metadata(role="user", text=text):
+                            _append_metadata_row(model=_runtime.model, role="user", text=text, context=answer)
+                        if _should_store_metadata(role="assistant", text=answer):
+                            _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=text)
                 for chunk in _split_chunks(answer, chunk_size=48):
                     if chunk:
                         yield _ndjson("chunk", chunk)
@@ -630,10 +638,13 @@ def chat_stream(req: ChatRequest):
             "memory_debug_snapshot": memory_debug_snapshot or None,
         }
         _runtime.last_thinking = thinking
+        assistant_metadata_allowed = str(getattr(result, "status", "") or "").strip().lower() != "error"
 
-        if bool(req.store_turn) and _should_store_metadata(text=request_text, structured_output=structured):
-            _append_metadata_row(model=_runtime.model, role="user", text=request_text, context=answer)
-            _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=request_text)
+        if bool(req.store_turn):
+            if _should_store_metadata(role="user", text=request_text, structured_output=structured):
+                _append_metadata_row(model=_runtime.model, role="user", text=request_text, context=answer)
+            if assistant_metadata_allowed and _should_store_metadata(role="assistant", text=answer, structured_output=structured):
+                _append_metadata_row(model=_runtime.model, role="assistant", text=answer, context=request_text)
 
         # Safety fallback: если streaming не отдал ни одного chunk, но ответ есть
         if not sent_answer and answer:
@@ -950,9 +961,17 @@ def _metadata_model_dir(model: str) -> Path:
     return path
 
 
-def _should_store_metadata(*, text: str, structured_output: dict[str, Any] | None = None) -> bool:
+def _should_store_metadata(
+    *,
+    role: str,
+    text: str,
+    structured_output: dict[str, Any] | None = None,
+) -> bool:
+    role_name = str(role or "assistant").strip().lower()
     msg = str(text or "").strip()
     if not msg:
+        return False
+    if role_name == "assistant" and is_internal_error_reply(msg):
         return False
     if msg.startswith("/"):
         return False

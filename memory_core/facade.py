@@ -194,20 +194,46 @@ class MemoryService:
         
         # Формируем результат
         hits = []
-        for citation in citations:
-            hits.append({
-                "artifact_id": citation.artifact_id,
-                "artifact_type": citation.artifact_type,
-                "text": citation.text,
-                "score": 1.0,  # Score можно добавить из retrieval
-            })
-        
+        selected_rows = [dict(x) for x in list(getattr(context_pack, "selected_memories", []) or []) if isinstance(x, dict)]
+        if selected_rows:
+            for row in selected_rows:
+                hits.append({
+                    "artifact_id": row.get("artifact_id"),
+                    "artifact_type": row.get("artifact_type"),
+                    "text": row.get("text", ""),
+                    "summary": row.get("summary", ""),
+                    "prompt_view": row.get("prompt_view", ""),
+                    "exposure_mode": row.get("exposure_mode", ""),
+                    "sensitivity": row.get("sensitivity", ""),
+                    "channel": row.get("channel", ""),
+                    "score": row.get("score", 1.0),
+                    "confidence": row.get("confidence", 0.5),
+                    "metadata": row.get("metadata", {}),
+                })
+        else:
+            for citation in citations:
+                hits.append({
+                    "artifact_id": citation.artifact_id,
+                    "artifact_type": citation.artifact_type,
+                    "text": citation.text,
+                    "score": 1.0,  # Score можно добавить из retrieval
+                    "metadata": citation.metadata,
+                    "prompt_view": dict(citation.metadata or {}).get("prompt_view", ""),
+                    "exposure_mode": dict(citation.metadata or {}).get("exposure_mode", ""),
+                })
+
         context_blocks = context_pack.to_context_blocks()
         
         return MemoryQueryResult(
             hits=hits,
             context_blocks=context_blocks,
             citations=[c.to_dict() for c in citations],
+            blocks=dict(getattr(context_pack, "blocks", {}) or {}),
+            selected=selected_rows,
+            dropped=[dict(x) for x in list(getattr(context_pack, "dropped_memories", []) or []) if isinstance(x, dict)],
+            recent_user_state=dict(getattr(context_pack, "recent_user_state", {}) or {}),
+            response_bias=dict(getattr(context_pack, "response_bias", {}) or {}),
+            debug=dict(getattr(context_pack, "debug", {}) or {}),
         )
     
     def ingest_document(

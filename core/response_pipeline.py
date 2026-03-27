@@ -516,8 +516,8 @@ class MemoryNativeStateStage(PipelineStage):
 class MemoryRetrieveStage(PipelineStage):
     name = "memory_retrieve"
 
-    def __init__(self, memory_core: MemoryCoreAdapter | None = None):
-        self.memory_core = memory_core or MemoryCoreAdapter()
+    def __init__(self, memory_core: MemoryCoreAdapter | None = None, memory_manager: Any | None = None):
+        self.memory_core = memory_core or memory_manager
         self._cfg = load_config()
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
@@ -536,7 +536,7 @@ class MemoryRetrieveStage(PipelineStage):
             ctx.logs.append("stage=memory_retrieve skipped(empty)")
             return ctx
 
-        memory_core = ctx.meta.get("memory_core") or self.memory_core
+        memory_core = ctx.meta.get("memory_core") or ctx.meta.get("memory_manager") or self.memory_core
         if memory_core is None:
             ctx.logs.append("stage=memory_retrieve skipped(no_memory_core)")
             return ctx
@@ -547,19 +547,84 @@ class MemoryRetrieveStage(PipelineStage):
         
         # Выполняем запрос через memory_core
         try:
-            result = memory_core.query(
-                text=query,
-                workspace_id=workspace_id,
-                top_k=int(self._cfg.memory_core_top_k or 8),
-                include_citations=True,
-            )
-            
-            # Сохраняем результат в ctx.memory_context
+            if hasattr(memory_core, "query"):
+                result = memory_core.query(
+                    text=query,
+                    workspace_id=workspace_id,
+                    top_k=int(self._cfg.memory_core_top_k or 8),
+                    include_citations=True,
+                )
+            else:
+                request = {
+                    "text": query,
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "top_k": int(self._cfg.memory_core_top_k or 8),
+                    "include_citations": True,
+                }
+                raw_result = memory_core.build_context(request)
+                result = raw_result.to_dict() if hasattr(raw_result, "to_dict") else dict(raw_result or {})
+            result = dict(result or {})
+            result_blocks = dict(result.get("blocks", {}) or {})
+            if is_low_quality_session_summary(str(result_blocks.get("session_summary") or "").strip()):
+                result_blocks.pop("session_summary", None)
+
             ctx.memory_context = {
-                "context_blocks": result.get("context_blocks", []),
-                "hits": result.get("hits", []),
-                "citations": result.get("citations", []),
+                "context_blocks": list(result.get("context_blocks", []) or []),
+                "hits": list(result.get("hits", []) or []),
+                "citations": list(result.get("citations", []) or []),
+                "blocks": result_blocks,
+                "selected": list(result.get("selected", []) or []),
+                "dropped": list(result.get("dropped", []) or []),
+                "recent_user_state": dict(result.get("recent_user_state", {}) or {}),
+                "response_bias": dict(result.get("response_bias", {}) or {}),
+                "dialog_episode_hits": list(result.get("dialog_episode_hits", []) or []),
+                "task_continuity": dict(result.get("task_continuity", {}) or {}),
+                "open_questions": list(result.get("open_questions", []) or []),
+                "current_decisions": list(result.get("current_decisions", []) or []),
+                "fact_expectation": dict(result.get("fact_expectation", {}) or {}),
+                "self_facts_context": dict(result.get("self_facts_context", {}) or {}),
+                "recall_mode": str(result.get("recall_mode") or ""),
+                "debug": dict(result.get("debug", {}) or {}),
             }
+
+            governor_snapshot: dict[str, Any] = {}
+            if hasattr(memory_core, "get_governor_profile_snapshot"):
+                snapshot = memory_core.get_governor_profile_snapshot(session_id)
+                if snapshot is not None:
+                    if hasattr(snapshot, "to_dict"):
+                        governor_snapshot = dict(snapshot.to_dict() or {})
+                    elif hasattr(snapshot, "__dict__"):
+                        governor_snapshot = dict(vars(snapshot) or {})
+                    else:
+                        governor_snapshot = dict(snapshot or {})
+            if governor_snapshot:
+                ctx.state["active_profile_snapshot"] = dict(governor_snapshot)
+                ctx.meta["active_profile_snapshot"] = dict(governor_snapshot)
+
+            trace = _ensure_debug_trace(ctx)
+            selected_facts = []
+            for item in list(ctx.memory_context.get("selected") or []):
+                metadata = _as_dict(_as_dict(item).get("metadata"))
+                fact = _as_dict(metadata.get("fact"))
+                if fact:
+                    selected_facts.append(
+                        {
+                            "predicate": str(fact.get("predicate") or "").strip(),
+                            "value": fact.get("value"),
+                            "subject": str(fact.get("subject") or "").strip(),
+                        }
+                    )
+            trace.memory_retrieval = {
+                "query": query,
+                "selected_facts": selected_facts,
+                "exact_self_fact_hits": {
+                    "self_facts_context": dict(ctx.memory_context.get("self_facts_context") or {}),
+                    "fact_expectation": dict(ctx.memory_context.get("fact_expectation") or {}),
+                },
+            }
+            if governor_snapshot:
+                trace.active_profile = dict(governor_snapshot)
             
             ctx.logs.append(
                 f"stage=memory_retrieve done hits={len(result.get('hits', []))} "
@@ -596,28 +661,126 @@ class EpisodeContinuityStage(PipelineStage):
     """
     name = "episode_continuity"
 
-    def __init__(self, memory_core: MemoryCoreAdapter | None = None):
-        self.memory_core = memory_core or MemoryCoreAdapter()
+    def __init__(self, memory_core: MemoryCoreAdapter | None = None, memory_manager: Any | None = None):
+        self.memory_core = memory_core or memory_manager
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
-        memory_core = ctx.meta.get("memory_core") or self.memory_core
-        if memory_core is None:
-            ctx.logs.append("stage=episode_continuity skipped(no_memory_core)")
-            return ctx
-
+        trace = _ensure_debug_trace(ctx)
+        memory_core = ctx.meta.get("memory_core") or ctx.meta.get("memory_manager") or self.memory_core
         session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "").strip()
         workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global").strip()
+        now_ts = _pick_value(ctx.meta.get("now_ts"), now_local_ts())
+        user_text = str(ctx.clean_user_msg or ctx.user_msg or "").strip().lower()
 
         if not session_id:
             ctx.logs.append("stage=episode_continuity skipped(no_session_id)")
             return ctx
 
-        continuity = memory_core.get_episode_continuity(
-            session_id=session_id,
-            workspace_id=workspace_id,
-        )
+        continuity = {}
+        if memory_core is not None and hasattr(memory_core, "get_episode_continuity"):
+            try:
+                continuity = memory_core.get_episode_continuity(
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                )
+            except Exception:
+                continuity = {}
+        if not continuity:
+            continuity = dict(_as_dict(ctx.memory_context).get("task_continuity") or {})
 
         ctx.state["episode_continuity"] = continuity
+        existing_task = dict(ctx.state.get("active_task") or {})
+        if existing_task:
+            if user_text in {"done", "готово", "закрыли", "finished"}:
+                ctx.state["active_task"] = {}
+                ctx.state.pop("active_goal", None)
+                ctx.state.pop("active_tasks", None)
+                ctx.state.pop("current_decisions", None)
+                ctx.state.pop("_active_task_source", None)
+                trace.active_task = {"event": "close", "reason": "explicit_close_phrase", "source": "continuation"}
+                ctx.logs.append("stage=episode_continuity active_task_closed(reason=explicit_close_phrase)")
+                return ctx
+            if "another topic" in user_text or "другая тема" in user_text:
+                ctx.state["active_task"] = {}
+                ctx.state.pop("active_goal", None)
+                ctx.state.pop("active_tasks", None)
+                ctx.state.pop("current_decisions", None)
+                ctx.state.pop("_active_task_source", None)
+                trace.active_task = {"event": "clear", "reason": "switch_topic_phrase", "source": "continuation"}
+                ctx.logs.append("stage=episode_continuity active_task_cleared(reason=switch_topic_phrase)")
+                return ctx
+            if len(user_text.split()) <= 3:
+                kept_task = dict(existing_task)
+                kept_task["updated_at"] = now_ts
+                ctx.state["active_task"] = kept_task
+                ctx.state["active_goal"] = str(
+                    kept_task.get("current_goal") or kept_task.get("summary_short") or ctx.state.get("active_goal") or ""
+                ).strip()
+                if list(kept_task.get("decisions") or []):
+                    ctx.state["active_tasks"] = [dict(kept_task)]
+                    ctx.state["current_decisions"] = list(kept_task.get("decisions") or [])
+                trace.active_task = {"event": "keep", "reason": "short_followup", "source": "continuation"}
+                ctx.logs.append("stage=episode_continuity kept_active_task(reason=short_followup)")
+                return ctx
+
+        persisted_task = dict(_as_dict(continuity).get("active_task") or {})
+        if persisted_task:
+            ctx.state["active_task"] = persisted_task
+            ctx.state["active_goal"] = str(
+                persisted_task.get("current_goal") or persisted_task.get("summary_short") or ""
+            ).strip()
+            if list(persisted_task.get("decisions") or []):
+                ctx.state["current_decisions"] = list(persisted_task.get("decisions") or [])
+                ctx.state["active_tasks"] = [dict(persisted_task)]
+            trace.active_task = {"event": "restore", "reason": "persisted_task_continuity", "source": "continuation"}
+            ctx.logs.append("stage=episode_continuity restored_active_task(source=continuation)")
+            return ctx
+
+        memory_context = _as_dict(ctx.memory_context)
+        dialog_episode_hits = list(memory_context.get("dialog_episode_hits") or [])
+        if dialog_episode_hits:
+            top_hit = _as_dict(dialog_episode_hits[0])
+            episode = _as_dict(top_hit.get("episode"))
+            episode_id = str(episode.get("id") or top_hit.get("record_id") or "").strip()
+            active_task = {
+                "task_id": f"task:{episode_id}" if episode_id and not episode_id.startswith("task:") else episode_id,
+                "topic": str(episode.get("topic") or "").strip(),
+                "status": "waiting_user" if list(episode.get("open_questions") or []) else "active",
+                "summary_short": str(episode.get("summary_short") or top_hit.get("summary_short") or "").strip(),
+                "current_goal": str(top_hit.get("summary_reasoning") or "").strip(),
+                "decisions": list(top_hit.get("decisions") or episode.get("decisions") or []),
+                "open_questions": list(episode.get("open_questions") or []),
+                "source_episode_id": episode_id,
+                "updated_at": now_ts,
+            }
+            ctx.state["active_task"] = active_task
+            ctx.state["active_goal"] = active_task["current_goal"]
+            ctx.state["active_tasks"] = [dict(active_task)]
+            ctx.state["current_decisions"] = list(active_task.get("decisions") or [])
+            trace.active_task = {"event": "resolved", "reason": "episode_open_questions", "source": "episode_hit"}
+            ctx.logs.append("stage=episode_continuity resolved_active_task(source=episode_hit)")
+            return ctx
+
+        open_questions = list(memory_context.get("open_questions") or [])
+        current_decisions = list(memory_context.get("current_decisions") or [])
+        if open_questions or current_decisions:
+            active_task = {
+                "task_id": f"task:runtime:{session_id}",
+                "topic": "",
+                "status": "waiting_user",
+                "current_goal": str((current_decisions or [""])[0] or "").strip(),
+                "decisions": current_decisions,
+                "open_questions": open_questions,
+                "updated_at": now_ts,
+            }
+            ctx.state["active_task"] = active_task
+            ctx.state["active_goal"] = active_task["current_goal"]
+            ctx.state["active_tasks"] = [dict(active_task)]
+            ctx.state["current_decisions"] = list(current_decisions)
+            trace.active_task = {"event": "resolved", "reason": "runtime_open_questions_fallback", "source": "runtime_hints"}
+            ctx.logs.append("stage=episode_continuity resolved_active_task(source=runtime_hints)")
+            return ctx
+
         ctx.logs.append(
             f"stage=episode_continuity active={bool(continuity.get('active_episode'))} "
             f"episode={continuity.get('active_episode', {}).get('episode_id', 'none')[:8]}"
@@ -632,6 +795,10 @@ def _memory_tool_blocks(pack: dict[str, Any]) -> dict[str, str]:
         "self_facts",
         "fact_expectation_check",
         "relevant_claims",
+        "exact_recall",
+        "answer_support",
+        "continuity_hints",
+        "tone_hints",
         "recalled_dialog",
         "document_evidence",
         "exact_fact_evidence",
@@ -689,6 +856,8 @@ class PromptBuildStage(PipelineStage):
         
         # Извлекаем selected артефакты для signals
         selected = [dict(x) for x in _as_list(row.get("selected")) if isinstance(x, dict)]
+        structured_recent_user_state = _as_dict(row.get("recent_user_state"))
+        structured_response_bias = _as_dict(row.get("response_bias"))
         
         # Группируем по типам артефактов
         profile_signals: list[str] = []
@@ -697,9 +866,12 @@ class PromptBuildStage(PipelineStage):
         emotion_signals: list[str] = []
         
         for item in selected:
-            artifact_type = str(item.get("artifact_type") or "").strip().lower()
-            text = str(item.get("text") or "").strip()
+            artifact_type = str(item.get("artifact_type") or item.get("memory_type") or "").strip().lower()
+            exposure_mode = str(item.get("exposure_mode") or "prompt_safe").strip().lower()
+            text = str(item.get("prompt_view") or item.get("summary") or "").strip()
             if not text:
+                continue
+            if exposure_mode == "latent" and artifact_type != "emotional_state":
                 continue
             
             # Типизированные signals (усечённые)
@@ -721,6 +893,8 @@ class PromptBuildStage(PipelineStage):
             "task_signals": task_signals[:2],
             "episode_signals": episode_signals[:3],
             "emotion_signals": emotion_signals[:2],
+            "recent_user_state": dict(structured_recent_user_state),
+            "response_bias": dict(structured_response_bias),
         }
 
     def _apply_persona_snapshot_prompt_policies(
@@ -742,10 +916,14 @@ class PromptBuildStage(PipelineStage):
                 ctx.policies,
                 "Treat PERSONA_SNAPSHOT and ACTIVE_TASK as continuity anchors only when they remain relevant to the current user message; prefer them over loose recalled snippets, but do not force old context onto a clear topic shift.",
             )
+            _append_policy_rule(
+                ctx.policies,
+                "Use PERSONA_SNAPSHOT and ACTIVE_TASK as the primary continuity anchors for the current code or task when they still match the user message.",
+            )
         if bool(relation_continuity.get("is_followup")):
             _append_policy_rule(
                 ctx.policies,
-                "This turn likely continues the same thread. Preserve relation and task continuity only while the current user message stays on the same topic.",
+                "This turn is likely a follow-up. Preserve relation and task continuity only while the current user message stays on the same topic.",
             )
         if bool(recent_user_state.get("low_bandwidth")):
             _append_policy_rule(
@@ -814,7 +992,11 @@ class PromptBuildStage(PipelineStage):
                     memory_identity_core_snapshot = (
                         dict(memory_identity_core.to_dict() or {})
                         if hasattr(memory_identity_core, "to_dict")
-                        else dict(memory_identity_core or {})
+                        else (
+                            dict(vars(memory_identity_core) or {})
+                            if hasattr(memory_identity_core, "__dict__")
+                            else dict(memory_identity_core or {})
+                        )
                     )
             except Exception:
                 memory_identity_core_snapshot = {}
@@ -860,9 +1042,17 @@ class PromptBuildStage(PipelineStage):
         persona_meta["context_tags"] = dict(ctx.tags or {})
         
         # Явно передаём текущие сигналы текущего turn-а
-        persona_meta["emotion"] = str(ctx.tags.get("emotion") or ctx.tags.get("mood") or "").strip().lower()
-        persona_meta["mood"] = str(ctx.tags.get("mood") or ctx.tags.get("emotion") or "").strip().lower()
-        persona_meta["metadata_tags"] = list(_as_list(ctx.tags.get("metadata_tags")))
+        persona_meta["emotion"] = str(
+            _pick_value(ctx.tags.get("emotion"), ctx.tags.get("mood"), ctx.meta.get("emotion"), ctx.meta.get("mood"), "")
+            or ""
+        ).strip().lower()
+        persona_meta["mood"] = str(
+            _pick_value(ctx.tags.get("mood"), ctx.tags.get("emotion"), ctx.meta.get("mood"), ctx.meta.get("emotion"), "")
+            or ""
+        ).strip().lower()
+        persona_meta["metadata_tags"] = list(
+            _as_list(_pick_value(ctx.tags.get("metadata_tags"), ctx.meta.get("metadata_tags"), []))
+        )
         persona_meta["emotion_intensity"] = float(_to_float(ctx.tags.get("emotion_intensity"), 0.0) or 0.0)
         persona_meta["emotion_arousal"] = float(_to_float(ctx.tags.get("emotion_arousal"), 0.0) or 0.0)
         persona_meta["same_calendar_day"] = _pick_value(ctx.tags.get("same_calendar_day"), ctx.meta.get("same_calendar_day"), False)
@@ -1122,11 +1312,29 @@ class PromptBuildStage(PipelineStage):
         prompt_state["active_task"] = dict(_as_dict(ctx.state.get("active_task")))
         prompt_state["active_tasks"] = [dict(x) for x in list(_as_list(ctx.state.get("active_tasks"))) if isinstance(x, dict)]
         memory_context_for_prompt = _as_dict(ctx.memory_context)
+        if memory_context_for_prompt:
+            filtered_blocks = dict(_as_dict(memory_context_for_prompt.get("blocks")))
+            if is_low_quality_session_summary(str(filtered_blocks.get("session_summary") or "").strip()):
+                filtered_blocks.pop("session_summary", None)
+            memory_context_for_prompt = dict(memory_context_for_prompt)
+            memory_context_for_prompt["blocks"] = filtered_blocks
         memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
         if memory_context_for_prompt:
             selected = list(_as_list(memory_context_for_prompt.get("selected")))
             if selected:
                 ctx.retrieved_memories = selected
+            _append_policy_rule(
+                ctx.policies,
+                "Retrieved memory is internal guidance, not user-facing wording. Do not quote recalled memory snippets literally unless the user explicitly asks what you remember.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "Convert emotional or profile memory into tone adaptation, continuity, and response strategy instead of direct statements like 'you feel sad' or 'the user is frustrated'.",
+            )
+            _append_policy_rule(
+                ctx.policies,
+                "Never mention internal artifact text, retrieval metadata, memory labels, exposure modes, or system memory summaries in the final reply.",
+            )
         self_facts = str(memory_blocks.get("self_facts") or "").strip()
         if self_facts:
             _append_policy_rule(
@@ -1264,6 +1472,18 @@ class PromptBuildStage(PipelineStage):
             ctx.state["memory_context"] = dict(memory_context_for_prompt)
             prompt_state["memory_context"] = dict(memory_context_for_prompt)
             memory_blocks = _as_dict(memory_context_for_prompt.get("blocks"))
+            if str(memory_blocks.get("relevant_claims") or "").strip() and str(memory_blocks.get("session_summary") or "").strip():
+                memory_blocks = dict(memory_blocks)
+                memory_blocks.pop("session_summary", None)
+                claim_guard = {
+                    "applied": True,
+                    "reason": "self_memory_claim_prefers_relevant_claims",
+                }
+                ctx.memory_context["blocks"] = dict(memory_blocks)
+                ctx.memory_context["self_memory_claim_guard"] = dict(claim_guard)
+                ctx.state["memory_context"] = dict(ctx.memory_context)
+                prompt_state["memory_context"] = dict(ctx.memory_context)
+                ctx.meta["self_memory_claim_guard"] = dict(claim_guard)
         else:
             ctx.memory_context = {}
             ctx.state.pop("memory_context", None)
@@ -4430,8 +4650,8 @@ class OutputFormatStage(PipelineStage):
 class MemoryWriteStage(PipelineStage):
     name = "memory_write"
 
-    def __init__(self, memory_core: MemoryCoreAdapter | None = None):
-        self.memory_core = memory_core or MemoryCoreAdapter()
+    def __init__(self, memory_core: MemoryCoreAdapter | None = None, memory_manager: Any | None = None):
+        self.memory_core = memory_core or memory_manager
 
     def run(self, ctx: PipelineContext) -> PipelineContext:
         studio_active = bool(_as_dict(_as_dict(ctx.state).get(StudioGenerator.KEY)).get("active", False))
@@ -4561,9 +4781,55 @@ class MemoryWriteStage(PipelineStage):
         return ctx
 
     def _update_task_continuity_from_assistant_reply(self, ctx: PipelineContext) -> None:
-        # Упрощённая версия — больше не использует EpisodePlanner
-        # Task continuity теперь управляется через memory_core
-        pass
+        active_task = dict(ctx.state.get("active_task") or {})
+        if not active_task or not str(ctx.text or "").strip():
+            return
+
+        updated_task = dict(active_task)
+        updated_task["status"] = "active"
+        updated_task["planner_source"] = "assistant_reply"
+        next_steps = [
+            str(match.group(1) or "").strip().rstrip(".")
+            for match in re.finditer(r"(?m)^\s*\d+\.\s+(.+?)\s*$", str(ctx.text or ""))
+            if str(match.group(1) or "").strip()
+        ]
+        if next_steps:
+            updated_task["next_steps"] = next_steps
+        updated_task["open_questions"] = []
+        ctx.state["active_task"] = updated_task
+        ctx.state["open_questions"] = []
+        if list(updated_task.get("decisions") or []):
+            ctx.state["current_decisions"] = list(updated_task.get("decisions") or [])
+            ctx.state["active_tasks"] = [dict(updated_task)]
+        ctx.state["active_goal"] = str(
+            updated_task.get("current_goal") or updated_task.get("summary_short") or ctx.state.get("active_goal") or ""
+        ).strip()
+
+        memory_core = ctx.meta.get("memory_core") or ctx.meta.get("memory_manager") or self.memory_core
+        continuity_snapshot = {}
+        if memory_core is not None and hasattr(memory_core, "update_task_continuity"):
+            try:
+                continuity_snapshot = dict(
+                    memory_core.update_task_continuity(
+                        namespace=str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "default"),
+                        active_task=dict(updated_task),
+                        previous_active_task=dict(active_task),
+                        source="assistant_reply",
+                        now_ts=_pick_value(ctx.meta.get("now_ts"), now_local_ts()),
+                    )
+                    or {}
+                )
+            except Exception:
+                continuity_snapshot = {}
+        if continuity_snapshot:
+            ctx.state["task_continuity"] = dict(continuity_snapshot)
+        ctx.memory_ops.append(
+            {
+                "op": "task_continuity",
+                "source": "assistant_reply",
+                "active_task": dict(updated_task),
+            }
+        )
 
     def _update_working_state_from_memory(self, ctx: PipelineContext, memory_result: dict[str, Any]) -> None:
         """
@@ -4901,6 +5167,7 @@ class ResponsePipeline:
         }
         # Упрощённый memory_debug_snapshot
         memory_debug_snapshot = {
+            "user_text": str(ctx.clean_user_msg or ctx.user_msg or ""),
             "memory_context": dict(ctx.memory_context or {}),
             "memory_native_state": dict(ctx.state.get("memory_native_state") or {}),
             "retrieved_count": len(list(ctx.retrieved_memories or [])),
@@ -5535,7 +5802,7 @@ def _apply_memory_context_to_prompt_pack(
     if bool(claim_guard.get("applied")):
         merged.pop("long_summary", None)
     summary = sanitize_session_summary_text(blocks.get("session_summary") or "")
-    if summary:
+    if summary and not str(blocks.get("relevant_claims") or "").strip():
         merged["long_summary"] = summary
     user_msg = str(blocks.get("user_message") or "").strip()
     if user_msg:
@@ -5673,6 +5940,10 @@ def _render_memory_context_for_prompt(blocks: dict[str, Any]) -> str:
         ("SELF_FACTS", "self_facts"),
         ("FACT_EXPECTATION_CHECK", "fact_expectation_check"),
         ("RELEVANT_CLAIMS", "relevant_claims"),
+        ("EXACT_RECALL", "exact_recall"),
+        ("ANSWER_SUPPORT", "answer_support"),
+        ("CONTINUITY_HINTS", "continuity_hints"),
+        ("TONE_HINTS", "tone_hints"),
         ("RECALLED_DIALOG", "recalled_dialog"),
         ("DOCUMENT_EVIDENCE", "document_evidence"),
         ("EXACT_FACT_EVIDENCE", "exact_fact_evidence"),
@@ -6595,6 +6866,8 @@ _FACTUAL_CONTEXT_MARKERS = {
 }
 _FACTUAL_CONTEXT_BLOCK_KEYS = {
     "relevant_claims",
+    "exact_recall",
+    "answer_support",
     "recalled_dialog",
     "document_evidence",
     "supporting_messages",

@@ -14,7 +14,7 @@
   "startup": {
     "mode": "api",
     "active_profile": "BALANCED",
-    "safety_mode": "read_only_tools"
+    "safety_mode": "allow_os_actions"
   },
   "api": {
     "host": "127.0.0.1",
@@ -24,7 +24,7 @@
     "provider": "ollama",
     "model_name": "qwen3:8b",
     "model_fallbacks": [],
-    "thinking_enabled": false,
+    "thinking_enabled": true,
     "json_mode_enabled": false,
     "task_models": {
       "emotion": {
@@ -162,7 +162,7 @@
   },
   "internet": {
     "enabled": true,
-    "web_mode": "off",
+    "web_mode": "auto",
     "web_v2": {
       "enabled": true,
       "thresholds": {
@@ -261,12 +261,11 @@
         "актуально",
         "latest",
         "today",
+        "2026",
         "последняя версия",
         "цена",
         "сколько стоит",
-        "новости",
-        "2026",
-        "в этом году"
+        "новости"
       ],
       "never_search_categories": [
         "reasoning",
@@ -370,7 +369,7 @@
     "screen_enabled": true
   },
   "prompt": {
-    "response_safety_filter_enabled": true,
+    "response_safety_filter_enabled": false,
     "response_formatting_enabled": true
   },
   "memory": {
@@ -474,8 +473,8 @@
       "volume": "+0%"
     },
     "paths": {
-      "input_dir": "{dir_path}\\data\\memory_storage\\voice\\input",
-      "output_dir": "{dir_path}\\data\\memory_storage\\voice\\output"
+      "input_dir": "{dir_path}\\data\\memory_core\\voice\\input",
+      "output_dir": "{dir_path}\\data\\memory_core\\voice\\output"
     }
   },
   "logging": {
@@ -517,12 +516,12 @@
       "timeout_sec": 2.5,
       "stream_timeout_sec": 600.0,
       "store_turn": true,
-      "show_thinking": true,
+      "show_thinking": false,
       "thinking_first": true,
       "auto_start_api": true,
       "auto_start_ollama": true,
       "runtime": {
-        "mode_lock": true,
+        "mode_lock": false,
         "active_mode": "",
         "output_parameters": false,
         "output_summary": false
@@ -531,18 +530,7 @@
   },
   "features": {
     "flags": {},
-    "extra_legacy": {
-      "memory_core": {
-        "enabled": true,
-        "db_path": "{dir_path}\\data\\memory_core\\memory.db",
-        "vector_path": "{dir_path}\\data\\memory_core\\vector",
-        "default_workspace": "global",
-        "default_namespace": "default",
-        "top_k": 8,
-        "enable_background_worker": true,
-        "worker_poll_interval": 2.0
-      }
-    }
+    "extra_legacy": {}
   },
   "hardware": {
     "gpu_vram_gb": null

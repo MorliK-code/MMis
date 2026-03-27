@@ -45,6 +45,16 @@ class ContextPack:
     relevant_facts: list[str] = field(default_factory=list)
     document_chunks: list[str] = field(default_factory=list)
     workspace_info: str | None = None
+    tone_hints: list[str] = field(default_factory=list)
+    continuity_hints: list[str] = field(default_factory=list)
+    answer_support: list[str] = field(default_factory=list)
+    exact_recall: list[str] = field(default_factory=list)
+    blocks: dict[str, str] = field(default_factory=dict)
+    selected_memories: list[dict[str, Any]] = field(default_factory=list)
+    dropped_memories: list[dict[str, Any]] = field(default_factory=list)
+    recent_user_state: dict[str, Any] = field(default_factory=dict)
+    response_bias: dict[str, Any] = field(default_factory=dict)
+    debug: dict[str, Any] = field(default_factory=dict)
     
     def to_context_blocks(self) -> list[str]:
         """Преобразует в список текстовых блоков."""
@@ -67,6 +77,18 @@ class ContextPack:
         
         if self.document_chunks:
             blocks.append(f"## Document Context\n" + "\n".join(self.document_chunks))
+
+        if self.exact_recall:
+            blocks.append(f"## Exact Recall\n" + "\n".join(f"- {f}" for f in self.exact_recall))
+
+        if self.answer_support:
+            blocks.append(f"## Answer Support\n" + "\n".join(f"- {f}" for f in self.answer_support))
+
+        if self.continuity_hints:
+            blocks.append(f"## Continuity Hints\n" + "\n".join(f"- {f}" for f in self.continuity_hints))
+
+        if self.tone_hints:
+            blocks.append(f"## Tone Hints\n" + "\n".join(f"- {f}" for f in self.tone_hints))
         
         return blocks
     
@@ -78,6 +100,11 @@ class ContextPack:
             and not self.recent_episodes
             and not self.relevant_facts
             and not self.document_chunks
+            and not self.tone_hints
+            and not self.continuity_hints
+            and not self.answer_support
+            and not self.exact_recall
+            and not self.blocks
             and not self.workspace_info
         )
 

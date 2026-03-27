@@ -4,6 +4,7 @@ Context Builder - сборка итогового контекста для LLM.
 
 from memory_core.schemas import MemoryArtifact, MemoryQuery
 from memory_core.retrieval.query_models import ContextPack, Citation
+from memory_core.retrieval.prompt_adapter import distill_memory_artifacts, resolve_artifact_prompt_view
 
 
 class ContextBuilder:
@@ -49,6 +50,7 @@ class ContextBuilder:
         runtime_episodes = []  # episode_event — runtime continuity
         semantic_episodes = []  # episode — historical summaries
         facts = []
+        emotional_signals = []
         document_chunks = []
 
         for artifact in artifacts:
@@ -70,9 +72,13 @@ class ContextBuilder:
             elif artifact.artifact_type == "episode":
                 semantic_episodes.append(artifact)
 
-            # Facts, preferences, emotions
-            elif artifact.artifact_type in {"fact", "preference", "emotional_state"}:
+            # Facts and preferences
+            elif artifact.artifact_type in {"fact", "preference"}:
                 facts.append(artifact)
+
+            # Emotional signals should not go into generic facts path
+            elif artifact.artifact_type == "emotional_state":
+                emotional_signals.append(artifact)
 
             # Documents
             elif artifact.artifact_type in {"document_chunk", "document_summary"}:
@@ -90,15 +96,37 @@ class ContextBuilder:
         episodes = runtime_episodes + semantic_episodes
         
         facts = self._sort_by_relevance(facts)[:10]
+        emotional_signals = self._sort_by_relevance(emotional_signals)[:4]
         document_chunks = self._sort_by_relevance(document_chunks)[:5]
+        distilled = distill_memory_artifacts(
+            [
+                *profile_facts,
+                *active_tasks,
+                *episodes,
+                *facts,
+                *emotional_signals,
+                *document_chunks,
+            ],
+            query_text=str(query.text or ""),
+        )
 
         # Создаём ContextPack
         context_pack = ContextPack(
-            profile_facts=[a.summary or a.text for a in profile_facts],
-            active_tasks=[a.summary or a.text for a in active_tasks],
-            recent_episodes=[a.summary or a.text for a in episodes],
-            relevant_facts=[a.summary or a.text for a in facts],
-            document_chunks=[a.text for a in document_chunks],
+            profile_facts=distilled.legacy_lists.get("profile_facts", []) or [self._safe_memory_text(a) for a in profile_facts],
+            active_tasks=distilled.legacy_lists.get("active_tasks", []) or [self._safe_memory_text(a) for a in active_tasks],
+            recent_episodes=distilled.legacy_lists.get("recent_episodes", []) or [self._safe_memory_text(a) for a in episodes],
+            relevant_facts=distilled.legacy_lists.get("relevant_facts", []) or [self._safe_memory_text(a) for a in facts],
+            document_chunks=distilled.legacy_lists.get("document_chunks", []) or [self._safe_memory_text(a) for a in document_chunks],
+            tone_hints=self._block_to_items(distilled.blocks.get("tone_hints")),
+            continuity_hints=self._block_to_items(distilled.blocks.get("continuity_hints")),
+            answer_support=self._block_to_items(distilled.blocks.get("answer_support")),
+            exact_recall=self._block_to_items(distilled.blocks.get("exact_recall")),
+            blocks=dict(distilled.blocks),
+            selected_memories=list(distilled.selected),
+            dropped_memories=list(distilled.dropped),
+            recent_user_state=dict(distilled.recent_user_state),
+            response_bias=dict(distilled.response_bias),
+            debug=dict(distilled.debug),
         )
 
         # Создаём Citation
@@ -107,8 +135,16 @@ class ContextBuilder:
                 artifact_id=a.artifact_id,
                 artifact_type=a.artifact_type,
                 source_event_id=a.source_event_id,
-                text=a.text[:200],
-                metadata=a.metadata,
+                text=(self._safe_memory_text(a) or a.text)[:200],
+                metadata={
+                    **dict(a.metadata or {}),
+                    "prompt_view": resolve_artifact_prompt_view(
+                        a.artifact_type,
+                        text=a.text,
+                        summary=a.summary,
+                        metadata=a.metadata,
+                    ),
+                },
             )
             for a in artifacts[:20]  # Ограничиваем количество citation
         ]
@@ -189,3 +225,27 @@ class ContextBuilder:
             current_length += len(block)
         
         return result
+
+    @staticmethod
+    def _safe_memory_text(artifact: MemoryArtifact) -> str:
+        return str(
+            resolve_artifact_prompt_view(
+                artifact.artifact_type,
+                text=artifact.text,
+                summary=artifact.summary,
+                metadata=artifact.metadata,
+            )
+            or artifact.summary
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _block_to_items(value: str) -> list[str]:
+        rows: list[str] = []
+        for line in str(value or "").splitlines():
+            text = str(line or "").strip()
+            if text.startswith("- "):
+                text = text[2:].strip()
+            if text:
+                rows.append(text)
+        return rows

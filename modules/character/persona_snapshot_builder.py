@@ -452,6 +452,8 @@ class PersonaSnapshotBuilder:
         memory_task_signals = list(memory.get("task_signals") or [])
         memory_episode_signals = list(memory.get("episode_signals") or [])
         memory_emotion_signals = list(memory.get("emotion_signals") or [])
+        memory_recent_user_state = dict(memory.get("recent_user_state") or {})
+        memory_response_bias = dict(memory.get("response_bias") or {})
         
         active_task = self._build_active_task_summary(state_map.get("active_task") or meta_map.get("active_task"))
         
@@ -490,6 +492,15 @@ class PersonaSnapshotBuilder:
             metadata_tags=metadata_tags,
             emotional_handling=emotional_handling,
         )
+        for key in ("frustrated", "low_bandwidth", "short_reply"):
+            if key in memory_recent_user_state:
+                recent_user_state[key] = bool(recent_user_state.get(key)) or bool(memory_recent_user_state.get(key))
+        for key in ("emotion", "intensity", "arousal"):
+            if key in memory_recent_user_state and self._is_empty(recent_user_state.get(key)):
+                recent_user_state[key] = memory_recent_user_state.get(key)
+        recent_user_state["sources"] = self._to_clean_list(
+            list(recent_user_state.get("sources") or []) + list(memory_recent_user_state.get("sources") or [])
+        )
         
         # Fallback на memory emotion signals (слабый сигнал, не absolute truth)
         if memory_emotion_signals and not recent_user_state.get("frustrated"):
@@ -502,6 +513,11 @@ class PersonaSnapshotBuilder:
             "needs_short_answer": 1.0 if bool(recent_user_state.get("low_bandwidth")) else 0.0,
             "frustration_softening": 1.0 if bool(recent_user_state.get("frustrated")) else 0.0,
         }
+        for key, value in dict(memory_response_bias or {}).items():
+            response_bias[str(key)] = max(
+                float(response_bias.get(str(key), 0.0) or 0.0),
+                float(self._to_float(value, 0.0) or 0.0),
+            )
         dynamic_trait_modifiers = {
             "warmth_delta": 0.0,
             "directness_delta": 0.0,
@@ -635,11 +651,15 @@ class PersonaSnapshotBuilder:
                     "stable_traits_from_identity_core": sorted(set(stable_traits_from_identity_core)),
                     "stable_traits_ignored_runtime": ignored_runtime_traits,
                     "trait_layer_priority": [
-                        "character_specs_defaults",
-                        "active_profile_snapshot",
-                        "identity_core",
-                        "turn_local_modifiers",
-                        "stabilizer_patch" if stabilized_profile_patch else None,
+                        layer_name
+                        for layer_name in (
+                            "character_specs_defaults",
+                            "active_profile_snapshot",
+                            "identity_core",
+                            "turn_local_modifiers",
+                            "stabilizer_patch" if stabilized_profile_patch else None,
+                        )
+                        if layer_name
                     ],
                     "assistant_trait_baseline_source": assistant_trait_baseline_source,
                     "assistant_trait_baseline_fields_from_identity_core": sorted(

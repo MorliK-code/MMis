@@ -419,11 +419,19 @@ function renderArtifacts() {
                 <div style="margin-top:8px;font-size:14px;line-height:1.7;color:#e4e4e7">${escapeHtml(selected.summary || '')}</div>
               </div>
             ` : ''}
+            ${selected.prompt_view ? `
+              <div class="panel">
+                <div class="tiny">Prompt View</div>
+                <div style="margin-top:8px;font-size:14px;line-height:1.7;color:#e4e4e7">${escapeHtml(selected.prompt_view || '')}</div>
+              </div>
+            ` : ''}
             <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
               <div class="panel"><div class="tiny">Confidence</div><div style="margin-top:8px">${Math.round((Number(selected.confidence || 0)) * 100)}%</div></div>
               <div class="panel"><div class="tiny">Scope</div><div style="margin-top:8px">${escapeHtml(selected.scope || 'global')}</div></div>
               <div class="panel"><div class="tiny">Decay</div><div style="margin-top:8px">${escapeHtml(selected.decay || 'slow')}</div></div>
               <div class="panel"><div class="tiny">Tags</div><div style="margin-top:8px">${escapeHtml((selected.tags || []).join(', ') || '-')}</div></div>
+              <div class="panel"><div class="tiny">Exposure</div><div style="margin-top:8px">${escapeHtml(selected.exposure_mode || '-')}</div></div>
+              <div class="panel"><div class="tiny">Sensitivity</div><div style="margin-top:8px">${escapeHtml(selected.sensitivity || '-')}</div></div>
             </div>
             <div class="panel">
               <div class="tiny">Metadata</div>

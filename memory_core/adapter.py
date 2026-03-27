@@ -173,6 +173,12 @@ class MemoryCoreAdapter:
             "context_blocks": result.context_blocks,
             "hits": result.hits,
             "citations": result.citations,
+            "blocks": dict(result.blocks or {}),
+            "selected": list(result.selected or []),
+            "dropped": list(result.dropped or []),
+            "recent_user_state": dict(result.recent_user_state or {}),
+            "response_bias": dict(result.response_bias or {}),
+            "debug": dict(result.debug or {}),
         }
 
     def get_context(
@@ -224,18 +230,28 @@ class MemoryCoreAdapter:
             include_citations=True,
         )
 
-        selected = []
-        for hit in result.get("hits", []):
-            selected.append({
-                "artifact_id": hit.get("artifact_id"),
-                "artifact_type": hit.get("artifact_type"),
-                "text": hit.get("text"),
-                "score": hit.get("score", 1.0),
-            })
+        selected = [dict(x) for x in list(result.get("selected") or []) if isinstance(x, dict)]
+        if not selected:
+            for hit in result.get("hits", []):
+                selected.append({
+                    "artifact_id": hit.get("artifact_id"),
+                    "artifact_type": hit.get("artifact_type"),
+                    "text": hit.get("text"),
+                    "summary": hit.get("summary", ""),
+                    "prompt_view": hit.get("prompt_view", ""),
+                    "exposure_mode": hit.get("exposure_mode", ""),
+                    "score": hit.get("score", 1.0),
+                    "confidence": hit.get("confidence", 0.5),
+                    "metadata": hit.get("metadata", {}),
+                })
 
         return {
             "selected": selected,
-            "blocks": {"context_blocks": result.get("context_blocks", [])},
+            "blocks": dict(result.get("blocks") or {"context_blocks": result.get("context_blocks", [])}),
+            "dropped": list(result.get("dropped") or []),
+            "recent_user_state": dict(result.get("recent_user_state") or {}),
+            "response_bias": dict(result.get("response_bias") or {}),
+            "debug": dict(result.get("debug") or {}),
             "recall_mode": "memory_core_query",
             "citations": result.get("citations", []),
         }
