@@ -204,35 +204,6 @@ class Brain:
                 policies=policies,
             )
             result = self._to_brain_result(route=route, pipeline_result=pipeline_result)
-            memory_apply_summary = self._apply_memory_ops(result.memory_ops)
-            self._update_state_after_success(
-                route=route,
-                event_name=event_name,
-                meta=meta_for_pipeline,
-                result=result,
-                track_state=state_updates_enabled,
-            )
-            persisted_summary = self._persist_turns(
-                route=route,
-                user_text=text,
-                result=result,
-                meta=meta_for_pipeline,
-                non_persistent_turn=non_persistent_turn,
-            )
-            self._append_turn_summaries(
-                result=result,
-                route=route,
-                user_text=text,
-                meta=meta_for_pipeline,
-                memory_apply_summary=memory_apply_summary,
-                persisted_summary=persisted_summary,
-            )
-            self._harvest_response_stats(
-                result=result,
-                route=route,
-                meta=meta_for_pipeline,
-                conversation_id=conversation_id,
-            )
         except Exception as exc:
             LOGGER.exception(
                 "Brain.handle_message failed route=%s trace_id=%s request_id=%s",
@@ -241,6 +212,62 @@ class Brain:
                 str(meta_for_pipeline.get("request_id") or ""),
             )
             result = self._build_error_result(route=route, error=exc)
+        else:
+            try:
+                memory_apply_summary = self._apply_memory_ops(result.memory_ops)
+            except Exception as exc:
+                LOGGER.exception("memory_ops apply failed: %s", exc)
+                memory_apply_summary = self._empty_memory_write_summary()
+                result.logs.append(f"memory_ops_warning={type(exc).__name__}:{exc}")
+
+            try:
+                self._update_state_after_success(
+                    route=route,
+                    event_name=event_name,
+                    meta=meta_for_pipeline,
+                    result=result,
+                    track_state=state_updates_enabled,
+                )
+            except Exception as exc:
+                LOGGER.exception("post-success state update failed: %s", exc)
+                result.logs.append(f"post_success_warning={type(exc).__name__}:{exc}")
+
+            try:
+                persisted_summary = self._persist_turns(
+                    route=route,
+                    user_text=text,
+                    result=result,
+                    meta=meta_for_pipeline,
+                    non_persistent_turn=non_persistent_turn,
+                )
+            except Exception as exc:
+                LOGGER.exception("persist_turns failed: %s", exc)
+                persisted_summary = self._empty_memory_write_summary()
+                result.logs.append(f"persist_warning={type(exc).__name__}:{exc}")
+
+            try:
+                self._append_turn_summaries(
+                    result=result,
+                    route=route,
+                    user_text=text,
+                    meta=meta_for_pipeline,
+                    memory_apply_summary=memory_apply_summary,
+                    persisted_summary=persisted_summary,
+                )
+            except Exception as exc:
+                LOGGER.exception("append_turn_summaries failed: %s", exc)
+                result.logs.append(f"turn_summary_warning={type(exc).__name__}:{exc}")
+
+            try:
+                self._harvest_response_stats(
+                    result=result,
+                    route=route,
+                    meta=meta_for_pipeline,
+                    conversation_id=conversation_id,
+                )
+            except Exception as exc:
+                LOGGER.exception("harvest_response_stats failed: %s", exc)
+                result.logs.append(f"stats_warning={type(exc).__name__}:{exc}")
 
         with self._lock:
             self._remember(signature, now, result)

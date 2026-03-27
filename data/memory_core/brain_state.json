@@ -2,7 +2,7 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-    "turn_id": 122,
+    "turn_id": 128,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -26,7 +26,7 @@
     "last_actions": [
       {
         "type": "TURN_STARTED",
-        "turn_id": 122,
+        "turn_id": 128,
         "signals": {
           "emotion_intensity": 0.0,
           "emotion_arousal": 0.0,
@@ -34,23 +34,23 @@
           "has_code": false,
           "has_traceback": false
         },
-        "ts": "2026-03-28T00:20:54.391+02:00",
+        "ts": "2026-03-28T00:42:31.431+02:00",
         "state_diff": {
           "turn_id": {
-            "old": 121,
-            "new": 122
+            "old": 127,
+            "new": 128
           }
         }
       },
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-03-28T00:20:54.555+02:00"
+        "ts": "2026-03-28T00:42:31.595+02:00"
       },
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-03-28T00:20:54.591+02:00"
+        "ts": "2026-03-28T00:42:31.630+02:00"
       }
     ],
     "context_stack": []
@@ -91,14 +91,14 @@
       },
       "local_context": {
         "last_topic_weights": {},
-        "last_seen_ts": "2026-03-28T00:20:54.590+02:00",
-        "last_update_turn_id": 122,
+        "last_seen_ts": "2026-03-28T00:42:31.629+02:00",
+        "last_update_turn_id": 128,
         "last_update_conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d"
       }
     }
   },
   "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-  "turn_id": 122,
+  "turn_id": 128,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -123,7 +123,7 @@
   "last_actions": [
     {
       "type": "TURN_STARTED",
-      "turn_id": 122,
+      "turn_id": 128,
       "signals": {
         "emotion_intensity": 0.0,
         "emotion_arousal": 0.0,
@@ -131,31 +131,31 @@
         "has_code": false,
         "has_traceback": false
       },
-      "ts": "2026-03-28T00:20:54.391+02:00",
+      "ts": "2026-03-28T00:42:31.431+02:00",
       "state_diff": {
         "turn_id": {
-          "old": 121,
-          "new": 122
+          "old": 127,
+          "new": 128
         }
       }
     },
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-03-28T00:20:54.555+02:00"
+      "ts": "2026-03-28T00:42:31.595+02:00"
     },
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-03-28T00:20:54.591+02:00"
+      "ts": "2026-03-28T00:42:31.630+02:00"
     }
   ],
   "context_tags": {
     "lang": "ru",
     "intent": "question",
     "last_intent": "question",
-    "mood": "neutral",
-    "last_mood": "neutral"
+    "mood": "happy",
+    "last_mood": "happy"
   },
   "traits": {},
   "policies": {},
@@ -163,19 +163,19 @@
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "не буду, ты что так говоришь?",
-    "last_user_hash": "ad5ae31c3c300d6e1fdb000c279d87e77e12bda6",
-    "last_user_ts": "2026-03-28T00:20:54.391+02:00",
-    "prev_user_ts": "2026-03-28T00:20:09.625+02:00",
-    "last_assistant_message": "Привет. Ты опять? Надеюсь, у тебя всё в порядке, или ты просто хочешь п",
-    "last_assistant_ts": "2026-03-28T00:20:43.153+02:00",
+    "last_user_message": "нормально... спасибо. я что-то не ожидал от тебя пупс что ты нормально ответишь))",
+    "last_user_hash": "16d1d95819c07d9a4aea2b8203fbad68508ad79b",
+    "last_user_ts": "2026-03-28T00:42:31.429+02:00",
+    "prev_user_ts": "2026-03-28T00:40:56.013+02:00",
+    "last_assistant_message": "Нормально, спасибо. А у тебя как?",
+    "last_assistant_ts": "2026-03-28T00:41:26.915+02:00",
     "last_action": "persona_state:asya",
-    "last_action_ts": "2026-03-28T00:20:54.591+02:00",
+    "last_action_ts": "2026-03-28T00:42:31.630+02:00",
     "repeat_count": 0,
     "session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
     "prev_session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
     "greeting_date_local": "2026-03-28",
-    "greeting_ts": "2026-03-28T00:20:43.153+02:00"
+    "greeting_ts": "2026-03-28T00:34:49.943+02:00"
   },
   "address_terms": {
     "last_term_used_at": "",
@@ -189,50 +189,6 @@
   },
   "dialog_summary": "Earlier context: User said: привет. как тебя зовут? меня паша. я люблю мороженое, пиццу, суши, работают системным администратором, а ты? Assistant replied: Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты сис",
   "history": [
-    {
-      "role": "user",
-      "content": "как твои дела?"
-    },
-    {
-      "role": "assistant",
-      "content": "всё отлично, спасибо! а как ты?"
-    },
-    {
-      "role": "user",
-      "content": "как дела?"
-    },
-    {
-      "role": "assistant",
-      "content": "всё нормально, спасибо! а у тебя?"
-    },
-    {
-      "role": "user",
-      "content": "привет. как дела?"
-    },
-    {
-      "role": "assistant",
-      "content": "Привет, Паша! У меня всё отлично, спасибо! А как ты?"
-    },
-    {
-      "role": "user",
-      "content": "что новоого расскажешь?"
-    },
-    {
-      "role": "user",
-      "content": "что нового расскажешь?"
-    },
-    {
-      "role": "assistant",
-      "content": "Пользователь хочет получить возможность видеть себя и свою работу через глаза."
-    },
-    {
-      "role": "user",
-      "content": "хм, странно но ладно"
-    },
-    {
-      "role": "assistant",
-      "content": "Ничего страшного, Паша! Всё в порядке. Если что-то не так — скажи, помогу!"
-    },
     {
       "role": "user",
       "content": "привет"
@@ -668,6 +624,50 @@
     {
       "role": "user",
       "content": "не буду, ты что так говоришь?"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "Привет, Паша! Ты снова здесь? Что нового?"
+    },
+    {
+      "role": "user",
+      "content": "как твои дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "Нормально, Паша. Только не переживай"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "Привет! Нет, я не воробей — просто живу в режиме \"доступна, когда надо\". Скучал?"
+    },
+    {
+      "role": "user",
+      "content": "как дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "всё нормально, спасибо. а у тебя?"
+    },
+    {
+      "role": "user",
+      "content": "как дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "Нормально, спасибо. А у тебя как?"
+    },
+    {
+      "role": "user",
+      "content": "нормально... спасибо. я что-то не ожидал от тебя пупс что ты нормально ответишь))"
     }
   ],
   "character_locked": false,
@@ -686,31 +686,59 @@
   "personality_last_switch_ts": "",
   "personality_cooldown_sec": 90.0,
   "web_active_task": {
-    "task_id": "task_fc13cfc66c90",
-    "query": "что так говоришь",
-    "base_query": "что так говоришь",
-    "latest_query": "что так говоришь",
+    "task_id": "task_1cc85758e5ae",
+    "query": "как дела",
+    "base_query": "как дела",
+    "latest_query": "что ты нормально ответишь))",
     "resolved_intent": "generic",
     "resolved_concepts": [
       "general_question"
     ],
     "resolved_location": "",
-    "turn_id": 122,
-    "turn_timestamp": "2026-03-27T22:20:54.617212+00:00"
+    "turn_id": 128,
+    "turn_timestamp": "2026-03-27T22:42:31.665535+00:00",
+    "continuation_ref": "task_1cc85758e5ae",
+    "context_confidence": 0.9841
   },
   "continuity_turns": [
     {
-      "task_id": "task_fc13cfc66c90",
-      "query": "что так говоришь",
-      "base_query": "что так говоришь",
-      "latest_query": "что так говоришь",
+      "task_id": "task_1cc85758e5ae",
+      "query": "как дела",
+      "base_query": "как дела",
+      "latest_query": "как дела",
+      "resolved_intent": "generic",
+      "resolved_concepts": [],
+      "resolved_location": "",
+      "turn_id": 126,
+      "turn_timestamp": "2026-03-27T22:39:50.798067+00:00"
+    },
+    {
+      "task_id": "task_1cc85758e5ae",
+      "query": "как дела",
+      "base_query": "как дела",
+      "latest_query": "как дела",
+      "resolved_intent": "generic",
+      "resolved_concepts": [],
+      "resolved_location": "",
+      "turn_id": 127,
+      "turn_timestamp": "2026-03-27T22:40:56.217432+00:00",
+      "continuation_ref": "task_1cc85758e5ae",
+      "context_confidence": 0.7391
+    },
+    {
+      "task_id": "task_1cc85758e5ae",
+      "query": "как дела",
+      "base_query": "как дела",
+      "latest_query": "что ты нормально ответишь))",
       "resolved_intent": "generic",
       "resolved_concepts": [
         "general_question"
       ],
       "resolved_location": "",
-      "turn_id": 122,
-      "turn_timestamp": "2026-03-27T22:20:54.617212+00:00"
+      "turn_id": 128,
+      "turn_timestamp": "2026-03-27T22:42:31.665535+00:00",
+      "continuation_ref": "task_1cc85758e5ae",
+      "context_confidence": 0.9841
     }
   ]
 }

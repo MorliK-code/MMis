@@ -243,7 +243,7 @@ class PersonaContextBuilder:
         workspace_id: str,
     ) -> None:
         """Извлекает Identity Core."""
-        artifacts = self.artifact_store.get_by_type(
+        artifacts = self.artifact_store.list_artifacts(
             artifact_type=self.ARTIFACT_TYPE_IDENTITY,
             workspace_id=workspace_id,
             status="active",
@@ -279,7 +279,7 @@ class PersonaContextBuilder:
         workspace_id: str,
     ) -> None:
         """Извлекает факты о пользователе."""
-        artifacts = self.artifact_store.get_by_type(
+        artifacts = self.artifact_store.list_artifacts(
             artifact_type=self.ARTIFACT_TYPE_PROFILE,
             workspace_id=workspace_id,
             status="active",
@@ -302,7 +302,7 @@ class PersonaContextBuilder:
         workspace_id: str,
     ) -> None:
         """Извлекает предпочтения."""
-        artifacts = self.artifact_store.get_by_type(
+        artifacts = self.artifact_store.list_artifacts(
             artifact_type=self.ARTIFACT_TYPE_PREFERENCE,
             workspace_id=workspace_id,
             status="active",
@@ -318,7 +318,7 @@ class PersonaContextBuilder:
         workspace_id: str,
     ) -> None:
         """Извлекает текущую задачу."""
-        artifacts = self.artifact_store.get_by_type(
+        artifacts = self.artifact_store.list_artifacts(
             artifact_type=self.ARTIFACT_TYPE_TASK,
             workspace_id=workspace_id,
             status="active",
@@ -336,7 +336,7 @@ class PersonaContextBuilder:
         session_id: str,
     ) -> None:
         """Извлекает текущий эпизод."""
-        artifacts = self.artifact_store.get_by_type(
+        artifacts = self.artifact_store.list_artifacts(
             artifact_type=self.ARTIFACT_TYPE_EPISODE,
             workspace_id=snapshot.workspace_id,
             status="active",
@@ -359,7 +359,7 @@ class PersonaContextBuilder:
         session_id: str,
     ) -> None:
         """Извлекает эмоциональное состояние."""
-        artifacts = self.artifact_store.get_by_type(
+        artifacts = self.artifact_store.list_artifacts(
             artifact_type=self.ARTIFACT_TYPE_EMOTION,
             workspace_id=snapshot.workspace_id,
             status="active",
@@ -385,15 +385,15 @@ class PersonaContextBuilder:
         session_id: str,
     ) -> None:
         """Извлекает недавние события."""
-        events = self.event_store.get_recent(
+        events = self.event_store.list_events(
             session_id=session_id,
             limit=self.MAX_RECENT_EVENTS,
         )
 
         for event in events:
-            text = event.get("text", "")
+            text = str(event.text or "")
             if text:
-                snapshot.recent_events.append(f"[{event.get('source_kind', '?')}] {text}")
+                snapshot.recent_events.append(f"[{event.source_kind or '?'}] {text}")
 
     def _extract_relevant_facts(
         self,

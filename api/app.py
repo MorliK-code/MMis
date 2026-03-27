@@ -401,7 +401,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             model=_runtime.model,
             text_chars=len(text),
             store_turn=bool(req.store_turn),
-            think=_runtime.thinking_enabled if req.think is None else bool(req.think),
+            think=_requested_think_enabled(req),
             verbose=_runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
             json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
         )
@@ -547,7 +547,7 @@ def chat_stream(req: ChatRequest):
                     model=_runtime.model,
                     text_chars=len(request_text),
                     store_turn=bool(req.store_turn),
-                    think=_runtime.thinking_enabled if req.think is None else bool(req.think),
+                    think=_requested_think_enabled(req),
                     verbose=_runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
                     json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                 )
@@ -793,9 +793,10 @@ def _apply_runtime_model(target: str) -> tuple[bool, str, list[str]]:
 def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str, Any]:
     active_profile, quality_profile = _resolve_effective_profiles()
     profile = get_profile(active_profile)
+    requested_think = _requested_think_enabled(req)
     meta: dict[str, Any] = {
         "model": _runtime.model,
-        "think": _runtime.thinking_enabled if req.think is None else bool(req.think),
+        "think": requested_think,
         "verbose": _runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
         "web_mode": str(_runtime.web_mode),
         "json_mode": _runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
@@ -823,6 +824,14 @@ def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str
     if extra:
         meta.update(dict(extra))
     return meta
+
+
+def _requested_think_enabled(req: ChatRequest) -> bool:
+    requested_think = _runtime.thinking_enabled if req.think is None else bool(req.think)
+    model_lower = str(_runtime.model or "").strip().lower()
+    if requested_think and "qwen3" in model_lower:
+        return False
+    return requested_think
 
 
 def _handle_native_chat_command(text: str) -> dict[str, Any] | None:

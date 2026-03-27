@@ -241,6 +241,7 @@ class TestMemoryService:
         assert stats["events_count"] >= 1
 
 
+
 class TestEndToEnd:
     """End-to-end тесты."""
     

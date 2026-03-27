@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from memory_core.schemas import MemoryTrace
 from memory_core.storage.event_store import EventStore
 from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.storage.workspace_store import WorkspaceStore
@@ -126,19 +127,66 @@ class MemoryInspector:
         else:
             return {"error": f"Unknown inspect kind: {kind}"}
 
+    # Backward-compat wrappers for legacy callers such as MemoryService.inspect().
+    def list_events(
+        self,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        payload = self.inspect(kind="events", limit=limit, workspace_id=workspace_id)
+        return list(payload.get("items") or [])
+
+    def list_artifacts(
+        self,
+        artifact_type: str | None = None,
+        workspace_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        payload = self.inspect(kind="artifacts", limit=limit, workspace_id=workspace_id)
+        items = list(payload.get("items") or [])
+        if artifact_type:
+            token = str(artifact_type or "").strip().lower()
+            items = [
+                item
+                for item in items
+                if str(item.get("artifact_type") or item.get("type") or "").strip().lower() == token
+            ]
+        return items
+
+    def trace_event(self, event_id: str) -> MemoryTrace:
+        payload = self.inspect(kind="trace", event_id=event_id)
+        return MemoryTrace(
+            event=payload.get("event"),
+            artifacts=list(payload.get("artifacts") or []),
+            indexed=bool(payload.get("indexed")),
+            retrieved=bool(payload.get("retrieved")),
+        )
+
+    def list_workspaces(self) -> list[dict[str, Any]]:
+        payload = self.inspect(kind="workspaces", limit=1000)
+        return list(payload.get("workspaces") or [])
+
+    def get_profile_facts(
+        self,
+        workspace_id: str = "global",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        payload = self.inspect(kind="profile", limit=limit, workspace_id=workspace_id)
+        return list(payload.get("profile_facts") or [])
+
     def _inspect_events(
         self,
         limit: int = 50,
         workspace_id: str | None = None,
     ) -> dict[str, Any]:
         """Инспектирует события."""
-        if workspace_id:
-            events = self.event_store.get_by_workspace(workspace_id, limit=limit)
-        else:
-            events = self.event_store.get_recent(limit=limit)
+        events = self.event_store.list_events(
+            workspace_id=workspace_id,
+            limit=limit,
+        )
 
         return {
-            "items": [dict(e) for e in events],
+            "items": [e.to_dict() for e in events],
             "count": len(events),
             "limit": limit,
         }
@@ -149,10 +197,10 @@ class MemoryInspector:
         workspace_id: str | None = None,
     ) -> dict[str, Any]:
         """Инспектирует артефакты."""
-        if workspace_id:
-            artifacts = self.artifact_store.get_by_workspace(workspace_id, limit=limit)
-        else:
-            artifacts = self.artifact_store.get_all(limit=limit)
+        artifacts = self.artifact_store.list_artifacts(
+            workspace_id=workspace_id,
+            limit=limit,
+        )
 
         return {
             "items": [a.to_dict() for a in artifacts],
@@ -162,7 +210,7 @@ class MemoryInspector:
 
     def _inspect_workspaces(self, limit: int = 50) -> dict[str, Any]:
         """Инспектирует workspace."""
-        workspaces = self.workspace_store.get_all(limit=limit)
+        workspaces = list(self.workspace_store.list_workspaces())[:limit]
 
         return {
             "workspaces": [dict(w) for w in workspaces],
@@ -187,7 +235,7 @@ class MemoryInspector:
             ]
 
         # Profile Facts
-        profile_facts = self.artifact_store.get_by_type(
+        profile_facts = self.artifact_store.list_artifacts(
             artifact_type="profile_fact",
             workspace_id=ws_id,
             status="active",
@@ -196,7 +244,7 @@ class MemoryInspector:
         result["profile_facts"] = [a.to_dict() for a in profile_facts]
 
         # Preferences
-        preferences = self.artifact_store.get_by_type(
+        preferences = self.artifact_store.list_artifacts(
             artifact_type="preference",
             workspace_id=ws_id,
             status="active",
@@ -264,10 +312,10 @@ class MemoryInspector:
             return {"error": f"Event {event_id} not found"}
 
         # Находим связанные артефакты
-        artifacts = self.artifact_store.get_by_event(event_id)
+        artifacts = self.artifact_store.get_by_source_event(event_id)
 
         return {
-            "event": dict(event) if event else None,
+            "event": event.to_dict() if event else None,
             "artifacts": [a.to_dict() for a in artifacts],
             "artifact_count": len(artifacts),
             "indexed": True,  # TODO: проверить векторный индекс

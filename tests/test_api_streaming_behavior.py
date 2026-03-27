@@ -98,5 +98,21 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
         self.assertEqual(str(append_row.call_args.kwargs.get("role") or ""), "user")
 
 
+    def test_build_chat_meta_disables_qwen3_thinking_hotfix(self) -> None:
+        api_app = self._api_app()
+        req = api_app.ChatRequest(text="hello", think=True, store_turn=False)
+
+        with patch.object(api_app._runtime, "model", "qwen3:8b"):
+            with patch.object(api_app._runtime, "thinking_enabled", True):
+                qwen_meta = api_app._build_chat_meta(req=req, source="api")
+
+        with patch.object(api_app._runtime, "model", "llama3.1:8b"):
+            with patch.object(api_app._runtime, "thinking_enabled", True):
+                other_meta = api_app._build_chat_meta(req=req, source="api")
+
+        self.assertFalse(bool(qwen_meta.get("think")))
+        self.assertTrue(bool(other_meta.get("think")))
+
+
 if __name__ == "__main__":
     unittest.main()

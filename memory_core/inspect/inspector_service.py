@@ -432,7 +432,7 @@ class MemoryInspectorService:
                 return None
 
             # Получаем связанные артефакты
-            artifacts = self._artifact_store.get_by_event(event_id)
+            artifacts = self._artifact_store.get_by_source_event(event_id)
 
             # Получаем связанные jobs
             jobs = []

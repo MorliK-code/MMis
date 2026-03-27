@@ -143,12 +143,7 @@ class IdentityCore:
         Returns:
             IdentityProfile.
         """
-        artifacts = self.artifact_store.get_by_type(
-            artifact_type=self.ARTIFACT_TYPE,
-            workspace_id=workspace_id,
-            status="active",
-            limit=self.MAX_IDENTITY_ARTIFACTS,
-        )
+        artifacts = self._list_identity_artifacts(workspace_id)
 
         profile = IdentityProfile(workspace_id=workspace_id)
 
@@ -382,23 +377,18 @@ class IdentityCore:
         now = time.time()
 
         # Проверяем существующие артефакты
-        existing = self.artifact_store.get_by_type(
-            artifact_type=self.ARTIFACT_TYPE,
-            workspace_id=workspace_id,
-            status="active",
-            limit=self.MAX_IDENTITY_ARTIFACTS,
-        )
+        existing = self._list_identity_artifacts(workspace_id)
 
         # Ищем похожий артефакт
-        field_lower = field_text.lower()
+        slot_key = self._identity_slot_key(field_text)
         for artifact in existing:
-            if field_lower in artifact.text.lower():
+            if self._identity_slot_key(artifact.text) == slot_key:
                 # Обновляем существующий
                 artifact.text = field_text
                 artifact.updated_at = now
                 artifact.metadata["confidence"] = 1.0  # Максимальная уверенность
                 artifact.metadata["decay"] = "none"  # Без устаревания
-                self.artifact_store.save(artifact)
+                self.artifact_store.update(artifact)
                 LOGGER.info(f"Updated identity artifact: {artifact.artifact_id}")
                 return artifact
 
@@ -422,7 +412,7 @@ class IdentityCore:
             updated_at=now,
         )
 
-        self.artifact_store.save(artifact)
+        self.artifact_store.create(artifact)
         LOGGER.info(f"Created identity artifact: {artifact.artifact_id}")
 
         return artifact
@@ -437,12 +427,22 @@ class IdentityCore:
         Returns:
             Список артефактов.
         """
-        return self.artifact_store.get_by_type(
+        return self._list_identity_artifacts(workspace_id)
+
+    def _list_identity_artifacts(self, workspace_id: str) -> list[MemoryArtifact]:
+        return self.artifact_store.list_artifacts(
             artifact_type=self.ARTIFACT_TYPE,
             workspace_id=workspace_id,
             status="active",
             limit=self.MAX_IDENTITY_ARTIFACTS,
         )
+
+    @staticmethod
+    def _identity_slot_key(text: str) -> str:
+        value = str(text or "").strip().lower()
+        if ":" in value:
+            return value.split(":", 1)[0].strip()
+        return value
 
     def to_prompt(self, workspace_id: str = "global") -> str:
         """
