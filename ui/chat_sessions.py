@@ -1,4 +1,4 @@
-﻿"""Chat session persistence and migration helpers for the desktop UI."""
+"""Chat session persistence and migration helpers for the desktop UI."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 
 HistoryRow = tuple[str, str, str | None, int | None, str | None]
+SINGLE_VISIBLE_CHAT_ID = "visible-main-chat"
+SINGLE_VISIBLE_CHAT_TITLE = "Чат"
 
 
 def now_iso() -> str:
@@ -67,6 +69,34 @@ def make_new_chat_payload(existing_count: int, title: str | None = None, incogni
         "created_at": ts,
         "updated_at": ts,
         "history": [],
+    }
+
+
+def collapse_to_single_visible_chat(chats: list[dict] | None, active_chat_id: str | None = None) -> dict:
+    rows = [dict(chat or {}) for chat in list(chats or []) if isinstance(chat, dict) and not bool(chat.get("incognito", False))]
+    chosen: dict | None = None
+    target_id = str(active_chat_id or "").strip()
+    if target_id:
+        chosen = next((row for row in rows if str(row.get("id") or "").strip() == target_id), None)
+    if chosen is None and rows:
+        chosen = max(rows, key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""))
+    if chosen is None:
+        ts = now_iso()
+        return {
+            "id": SINGLE_VISIBLE_CHAT_ID,
+            "title": SINGLE_VISIBLE_CHAT_TITLE,
+            "incognito": False,
+            "created_at": ts,
+            "updated_at": ts,
+            "history": [],
+        }
+    return {
+        "id": SINGLE_VISIBLE_CHAT_ID,
+        "title": SINGLE_VISIBLE_CHAT_TITLE,
+        "incognito": False,
+        "created_at": str(chosen.get("created_at") or now_iso()),
+        "updated_at": str(chosen.get("updated_at") or now_iso()),
+        "history": list(chosen.get("history") or []),
     }
 
 

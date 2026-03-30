@@ -694,6 +694,7 @@ class _StreamRealtimePrinter:
         debug_memory: bool = False,
     ):
         self.renderer = renderer
+        self.prefer_thinking_first = bool(prefer_thinking_first)
         self.show_thinking = bool(show_thinking)
         self.debug_memory = bool(debug_memory)
         self.answer_parts: list[str] = []
@@ -701,6 +702,7 @@ class _StreamRealtimePrinter:
         self._thinking_started = False
         self._printed_any = False
         self._answer_prefix_written = False
+        self._thinking_prefix_written = False
         self._io_lock = threading.RLock()
         self._hidden_hint_frames = (
             "\u0434\u0443\u043c\u0430\u0435\u0442.",
@@ -712,6 +714,8 @@ class _StreamRealtimePrinter:
         self._hidden_hint_stop = threading.Event()
         self._hidden_hint_thread: threading.Thread | None = None
         self._hidden_hint_last_width = 0
+        self._hidden_hint_static_written = False
+        self._supports_inline_hidden_hint = bool(getattr(sys.stdout, "isatty", lambda: False)())
         # Channel tracking for streaming output
         self._current_channel: str | None = None
         # Debug memory state
@@ -726,6 +730,13 @@ class _StreamRealtimePrinter:
             self._hidden_hint_active = True
             self._hidden_hint_stop = threading.Event()
             self._hidden_hint_index = 1
+            if not self._supports_inline_hidden_hint:
+                sys.stdout.write("assistant> думает...\n")
+                sys.stdout.flush()
+                self._hidden_hint_static_written = True
+                self._printed_any = True
+                self._current_channel = None
+                return
             self._render_hidden_hint_locked(self._hidden_hint_frames[0])
             self._hidden_hint_thread = threading.Thread(
                 target=self._run_hidden_thinking_hint,
@@ -736,13 +747,18 @@ class _StreamRealtimePrinter:
 
     def stop_hidden_thinking_hint(self, *, clear_line: bool = True) -> None:
         thread: threading.Thread | None = None
+        static_hint = False
         with self._io_lock:
-            if not self._hidden_hint_active and self._current_channel != "thinking_hint":
+            static_hint = bool(self._hidden_hint_static_written)
+            if not self._hidden_hint_active and self._current_channel != "thinking_hint" and not static_hint:
                 return
             self._hidden_hint_active = False
             self._hidden_hint_stop.set()
             thread = self._hidden_hint_thread
             self._hidden_hint_thread = None
+            if static_hint:
+                self._hidden_hint_static_written = False
+                self._current_channel = None
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=0.25)
         with self._io_lock:
@@ -776,6 +792,24 @@ class _StreamRealtimePrinter:
         self._current_channel = None
         self._printed_any = False
 
+    def _emit_visible_channel_text_locked(self, channel: str, text: str) -> None:
+        if not text:
+            return
+        target = "thinking" if str(channel or "").strip().lower() == "thinking" else "answer"
+        prefix = "thinking> " if target == "thinking" else "assistant> "
+        if self._current_channel != target:
+            if self._printed_any and self._current_channel in {"thinking", "answer"}:
+                sys.stdout.write("\n")
+            sys.stdout.write(prefix)
+            if target == "thinking":
+                self._thinking_prefix_written = True
+            else:
+                self._answer_prefix_written = True
+            self._current_channel = target
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        self._printed_any = True
+
     def on_thinking(self, piece: str) -> None:
         """Вывод thinking чанка сразу без буферизации."""
         text = _sanitize_stream_text(piece)
@@ -787,9 +821,7 @@ class _StreamRealtimePrinter:
             self.start_hidden_thinking_hint()
             return
         with self._io_lock:
-            # Thinking выводится в отдельной строке перед ответом
-            sys.stdout.write(text)
-            sys.stdout.flush()
+            self._emit_visible_channel_text_locked("thinking", text)
 
     def on_answer(self, piece: str) -> None:
         """Вывод answer чанка сразу без буферизации (как в нативном Ollama)."""
@@ -806,11 +838,7 @@ class _StreamRealtimePrinter:
 
         # Выводим сразу без буферизации
         with self._io_lock:
-            if not self._answer_prefix_written:
-                sys.stdout.write("assistant> ")
-                self._answer_prefix_written = True
-            sys.stdout.write(text)
-            sys.stdout.flush()
+            self._emit_visible_channel_text_locked("answer", text)
         self.answer_parts.append(text)
 
     def finalize(self) -> None:
@@ -826,9 +854,14 @@ class _StreamRealtimePrinter:
         """Завершение стриминга с финальными данными."""
         self.stop_hidden_thinking_hint(clear_line=True)
         final_answer = _sanitize_stream_text(answer_final or "")
+        final_thinking = _sanitize_stream_text(thinking_final or "")
         rendered_answer = self.rendered_answer()
+        rendered_thinking = self.rendered_thinking()
         if not self.show_thinking:
             stable_answer = final_answer or rendered_answer
+            stable_thinking = final_thinking or rendered_thinking
+            if stable_thinking:
+                self.thinking_parts = [stable_thinking]
             if stable_answer:
                 self.answer_parts = [stable_answer]
                 with self._io_lock:
@@ -842,23 +875,60 @@ class _StreamRealtimePrinter:
                 self._show_debug_memory(debug_trace)
                 self._memory_retrieval_shown = True
             return
-        if final_answer:
+
+        def _emit_missing_thinking() -> None:
+            nonlocal rendered_thinking
+            if not final_thinking:
+                return
+            missing = ""
+            if not rendered_thinking:
+                missing = final_thinking
+            elif final_thinking.startswith(rendered_thinking):
+                missing = final_thinking[len(rendered_thinking):]
+            elif final_thinking in rendered_thinking:
+                return
+            elif rendered_thinking != final_thinking:
+                # In agent-loop streaming we can already have multiple live thinking
+                # passes, while the final payload often contains only the last one.
+                # Reprinting that subset after the answer looks like a glitch, so
+                # keep the streamed version unless the final payload only extends it.
+                return
+            if not missing:
+                return
+            with self._io_lock:
+                self._emit_visible_channel_text_locked("thinking", missing)
+            self.thinking_parts.append(missing)
+            rendered_thinking = self.rendered_thinking()
+
+        def _emit_missing_answer() -> None:
+            nonlocal rendered_answer
+            if not final_answer:
+                return
             missing = ""
             if not rendered_answer:
                 missing = final_answer
             elif final_answer.startswith(rendered_answer):
                 missing = final_answer[len(rendered_answer):]
+            elif final_answer in rendered_answer:
+                return
             elif rendered_answer != final_answer:
-                missing = final_answer
-                self.answer_parts = []
-            if missing:
-                with self._io_lock:
-                    if not self._answer_prefix_written:
-                        sys.stdout.write("assistant> ")
-                        self._answer_prefix_written = True
-                    sys.stdout.write(missing)
-                    sys.stdout.flush()
-                self.answer_parts.append(missing)
+                # The visible stream may already contain a provisional or reformatted
+                # answer. Reprinting the full final payload only makes the console
+                # output look duplicated, so prefer the streamed version here.
+                return
+            if not missing:
+                return
+            with self._io_lock:
+                self._emit_visible_channel_text_locked("answer", missing)
+            self.answer_parts.append(missing)
+            rendered_answer = self.rendered_answer()
+
+        if self.prefer_thinking_first:
+            _emit_missing_thinking()
+            _emit_missing_answer()
+        else:
+            _emit_missing_answer()
+            _emit_missing_thinking()
 
         # Show debug memory info (after answer and thinking)
         if self.debug_memory and not self._memory_retrieval_shown:
@@ -993,8 +1063,8 @@ def _stream_once(state: ConsoleState, text: str, *, command_output: bool = False
     if (not bool(command_output)) and (not bool(state.show_thinking)) and bool(state.think_enabled):
         printer.start_hidden_thinking_hint()
     
-    # Печатаем префикс перед стримингом (как в нативном Ollama)
-    if not command_output and not ((not bool(state.show_thinking)) and bool(state.think_enabled)):
+    # Печатаем префикс заранее только когда visible thinking точно не участвует.
+    if not command_output and (not bool(state.show_thinking)) and (not bool(state.think_enabled)):
         sys.stdout.write("assistant> ")
         sys.stdout.flush()
         printer._answer_prefix_written = True

@@ -93,6 +93,21 @@ from memory_core.planner.episode_planner import (
     EpisodeContext,
     build_episode_planner,
 )
+from memory_core.topic import (
+    RelatedTopicLink,
+    TopicThread,
+    TopicRouteDecision,
+    TopicRelationshipLinker,
+    TopicRouter,
+    TopicStore,
+    TopicSummaryBuilder,
+    TopicSummarySnapshot,
+    TopicToolService,
+    topic_read_tool_spec,
+    topic_related_tool_spec,
+    topic_search_tool_spec,
+    topic_tools_list,
+)
 
 __all__ = [
     # Schemas
@@ -176,4 +191,17 @@ __all__ = [
     "Episode",
     "EpisodeContext",
     "build_episode_planner",
+    "RelatedTopicLink",
+    "TopicThread",
+    "TopicRouteDecision",
+    "TopicRelationshipLinker",
+    "TopicRouter",
+    "TopicStore",
+    "TopicSummaryBuilder",
+    "TopicSummarySnapshot",
+    "TopicToolService",
+    "topic_read_tool_spec",
+    "topic_related_tool_spec",
+    "topic_search_tool_spec",
+    "topic_tools_list",
 ]

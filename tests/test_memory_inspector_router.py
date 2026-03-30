@@ -20,6 +20,8 @@ class MemoryInspectorRouterTests(unittest.TestCase):
         self.assertIn("no-store", response.headers.get("cache-control", ""))
         self.assertIn("Финально завершено", response.text)
         self.assertIn("Попыток в сессии", response.text)
+        self.assertIn('data-tab="topics"', response.text)
+        self.assertIn("/api/memory-core/topics", response.text)
 
 
 if __name__ == "__main__":

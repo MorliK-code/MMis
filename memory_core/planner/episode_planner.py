@@ -69,20 +69,22 @@ class Episode:
         Returns:
             MemoryArtifact.
         """
+        metadata = {
+            "episode_id": self.episode_id,
+            "session_id": self.session_id,
+            "workspace_id": self.workspace_id,
+            "context_tags": self.context_tags,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "status": self.status,
+        }
+        metadata.update(dict(self.metadata or {}))
         return MemoryArtifact(
             artifact_type="episode_event",
             source_event_id="episode_planner",
             text=self.title or f"Episode {self.episode_id[:8]}",
             summary=self.summary,
-            metadata={
-                "episode_id": self.episode_id,
-                "session_id": self.session_id,
-                "workspace_id": self.workspace_id,
-                "context_tags": self.context_tags,
-                "started_at": self.started_at,
-                "ended_at": self.ended_at,
-                "status": self.status,
-            },
+            metadata=metadata,
             namespace="episodes",
             workspace_id=self.workspace_id,
             status="active" if self.status == "active" else "archived",
@@ -156,6 +158,7 @@ class EpisodePlanner:
         self,
         session_id: str,
         workspace_id: str = "global",
+        topic_thread_id: str | None = None,
         envelope: MemoryEnvelope | None = None,
     ) -> Episode:
         """
@@ -169,8 +172,8 @@ class EpisodePlanner:
         Returns:
             Активный эпизод.
         """
-        # Проверяем кэш
-        cache_key = f"{session_id}:{workspace_id}"
+        topic_thread_id = self._resolve_topic_thread_id(topic_thread_id, envelope=envelope)
+        cache_key = self._build_cache_key(session_id, workspace_id, topic_thread_id)
         if cache_key in self._active_episodes:
             ctx = self._active_episodes[cache_key]
             # Проверяем, не устарел ли эпизод
@@ -181,14 +184,23 @@ class EpisodePlanner:
                 return ctx.episode
 
         # Ищем активный эпизод в хранилище
-        episode = self._find_active_episode(session_id, workspace_id)
+        episode = self._find_active_episode(
+            session_id,
+            workspace_id,
+            topic_thread_id=topic_thread_id,
+        )
         if episode:
             ctx = EpisodeContext(episode=episode)
             self._active_episodes[cache_key] = ctx
             return episode
 
         # Создаём новый эпизод
-        episode = self._create_episode(session_id, workspace_id, envelope)
+        episode = self._create_episode(
+            session_id,
+            workspace_id,
+            topic_thread_id=topic_thread_id,
+            envelope=envelope,
+        )
         ctx = EpisodeContext(episode=episode)
         self._active_episodes[cache_key] = ctx
 
@@ -198,6 +210,7 @@ class EpisodePlanner:
         self,
         session_id: str,
         workspace_id: str,
+        topic_thread_id: str | None = None,
     ) -> Episode | None:
         """
         Ищет активный эпизод.
@@ -209,6 +222,7 @@ class EpisodePlanner:
         Returns:
             Эпизод или None.
         """
+        wanted_topic = self._normalize_topic_thread_id(topic_thread_id)
         artifacts = self.artifact_store.list_artifacts(
             artifact_type="episode_event",
             workspace_id=workspace_id,
@@ -220,6 +234,8 @@ class EpisodePlanner:
         for artifact in artifacts:
             meta = artifact.metadata or {}
             if meta.get("session_id") == session_id:
+                if self._normalize_topic_thread_id(meta.get("topic_thread_id")) != wanted_topic:
+                    continue
                 # Проверяем, не устарел ли
                 if time.time() - artifact.updated_at < self.INACTIVITY_THRESHOLD_SEC:
                     return Episode(
@@ -241,6 +257,7 @@ class EpisodePlanner:
         self,
         session_id: str,
         workspace_id: str,
+        topic_thread_id: str | None = None,
         envelope: MemoryEnvelope | None = None,
     ) -> Episode:
         """
@@ -266,12 +283,26 @@ class EpisodePlanner:
             started_at=now,
             updated_at=now,
             status="active",
+            metadata={
+                "topic_thread_id": self._resolve_topic_thread_id(topic_thread_id, envelope=envelope),
+                "visible_chat_id": session_id,
+            },
         )
 
         # Извлекаем контекст из envelope
         if envelope:
             episode.title = self._extract_episode_title(envelope)
             episode.context_tags = self._extract_context_tags(envelope)
+            envelope_meta = dict(envelope.metadata or {})
+            if str(envelope_meta.get("topic_key") or "").strip():
+                episode.metadata["topic_key"] = str(envelope_meta.get("topic_key") or "").strip()
+            topic_title = str(
+                envelope_meta.get("topic_title")
+                or envelope_meta.get("topic_thread_title")
+                or ""
+            ).strip()
+            if topic_title:
+                episode.metadata["topic_title"] = topic_title
 
         # Сохраняем как артефакт
         self._save_episode(episode)
@@ -409,7 +440,11 @@ class EpisodePlanner:
             episode: Эпизод.
             envelope: Конверт события.
         """
-        cache_key = f"{episode.session_id}:{episode.workspace_id}"
+        topic_thread_id = self._resolve_topic_thread_id(
+            (episode.metadata or {}).get("topic_thread_id"),
+            envelope=envelope,
+        )
+        cache_key = self._build_cache_key(episode.session_id, episode.workspace_id, topic_thread_id)
 
         if cache_key not in self._active_episodes:
             self._active_episodes[cache_key] = EpisodeContext(episode=episode)
@@ -427,6 +462,18 @@ class EpisodePlanner:
         # Обновляем эпизод
         episode.updated_at = ctx.last_event_at
         episode.context_tags = ctx.topic_keywords
+        episode.metadata = dict(episode.metadata or {})
+        episode.metadata["topic_thread_id"] = topic_thread_id
+        envelope_meta = dict(envelope.metadata or {})
+        if str(envelope_meta.get("topic_key") or "").strip():
+            episode.metadata["topic_key"] = str(envelope_meta.get("topic_key") or "").strip()
+        topic_title = str(
+            envelope_meta.get("topic_title")
+            or envelope_meta.get("topic_thread_title")
+            or ""
+        ).strip()
+        if topic_title:
+            episode.metadata["topic_title"] = topic_title
 
         # Периодически сохраняем
         if ctx.event_count % 10 == 0:
@@ -516,6 +563,26 @@ class EpisodePlanner:
             del self._active_episodes[key]
 
         return closed_count
+
+    @staticmethod
+    def _normalize_topic_thread_id(value: Any) -> str:
+        return str(value or "").strip() or "default"
+
+    def _resolve_topic_thread_id(
+        self,
+        topic_thread_id: str | None,
+        *,
+        envelope: MemoryEnvelope | None = None,
+    ) -> str:
+        if str(topic_thread_id or "").strip():
+            return self._normalize_topic_thread_id(topic_thread_id)
+        if envelope is not None:
+            meta = dict(envelope.metadata or {})
+            return self._normalize_topic_thread_id(meta.get("topic_thread_id"))
+        return self._normalize_topic_thread_id("")
+
+    def _build_cache_key(self, session_id: str, workspace_id: str, topic_thread_id: str | None) -> str:
+        return f"{session_id}:{workspace_id}:{self._normalize_topic_thread_id(topic_thread_id)}"
 
 
 def build_episode_planner(

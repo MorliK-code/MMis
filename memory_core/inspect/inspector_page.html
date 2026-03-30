@@ -125,6 +125,7 @@
     <div class="card tabs">
       <button class="btn tab active" data-tab="overview">📊 Overview</button>
       <button class="btn tab" data-tab="artifacts">🗃️ Artifacts</button>
+      <button class="btn tab" data-tab="topics">🧵 Topics</button>
       <button class="btn tab" data-tab="queue">📚 Queue</button>
       <button class="btn tab" data-tab="events">📝 Events</button>
       <button class="btn tab" data-tab="checks">✅ Checks</button>
@@ -142,12 +143,17 @@ const state = {
   type: 'all',
   includeSuperseded: true,
   artifacts: [],
+  topics: [],
   jobs: [],
   events: [],
   checks: [],
   overview: {},
   selectedArtifact: null,
+  selectedTopic: null,
+  selectedTopicDetails: null,
   selectedEvent: null,
+  topicQuery: '',
+  topicStatus: 'all',
   autoRefresh: true,
   refreshInterval: null,
   loading: false,
@@ -178,6 +184,7 @@ function typeIcon(type) {
     task_state: '📝',
     emotional_state: '💓',
     episode_event: '🔀',
+    topic_thread: '🧵',
     preference: '⚙️',
     document_chunk: '📄',
   };
@@ -213,19 +220,33 @@ async function loadAll() {
   document.getElementById('app').classList.add('loading');
 
   try {
-    const [overview, artifacts, jobs, checks] = await Promise.all([
+    const [overview, artifacts, topics, jobs, checks] = await Promise.all([
       fetchJson(`${API_BASE}/api/memory-core/overview`).catch(() => ({})),
       fetchJson(`${API_BASE}/api/memory-core/artifacts?limit=200`).catch(() => ([])),
+      fetchJson(`${API_BASE}/api/memory-core/topics?limit=200`).catch(() => ([])),
       fetchJson(`${API_BASE}/api/memory-core/jobs?limit=200`).catch(() => ([])),
       fetchJson(`${API_BASE}/api/memory-core/checks`).catch(() => ([])),
     ]);
     state.overview = overview;
     state.artifacts = artifacts;
+    state.topics = topics;
     state.jobs = jobs;
     state.checks = checks;
     state.lastUpdate = new Date();
 
     if (!state.selectedArtifact && artifacts.length) state.selectedArtifact = artifacts[0];
+    const selectedTopicId = topics.some(item => item.thread_id === state.selectedTopic?.thread_id)
+      ? state.selectedTopic?.thread_id
+      : topics[0]?.thread_id;
+    if (selectedTopicId) {
+      state.selectedTopic = topics.find(item => item.thread_id === selectedTopicId) || null;
+      state.selectedTopicDetails = await fetchJson(
+        `${API_BASE}/api/memory-core/topics/${encodeURIComponent(selectedTopicId)}`
+      ).catch(() => state.selectedTopic);
+    } else {
+      state.selectedTopic = null;
+      state.selectedTopicDetails = null;
+    }
     render();
   } catch (e) {
     console.error('Failed to load data:', e);
@@ -238,6 +259,11 @@ async function loadAll() {
 
 function renderMetrics() {
   const m = state.overview || {};
+  const topicStats = state.topics.reduce((acc, item) => {
+    const key = String(item.status || 'active');
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
   const items = [
     {
       title: 'Artifacts',
@@ -251,6 +277,13 @@ function renderMetrics() {
       value: m.events_total || 0,
       desc: 'Сырые события',
       emoji: '📝',
+      progress: null,
+    },
+    {
+      title: 'Topics',
+      value: state.topics.length || 0,
+      desc: `${topicStats.active || 0} active / ${topicStats.sleeping || 0} sleeping / ${topicStats.archived || 0} archived`,
+      emoji: '🧵',
       progress: null,
     },
     {
@@ -349,6 +382,38 @@ function filteredArtifacts() {
       || (item.type || '').toLowerCase().includes(q)
       || ((item.tags || []).join(' ')).toLowerCase().includes(q);
   });
+}
+
+function filteredTopics() {
+  const q = state.topicQuery.trim().toLowerCase();
+  return state.topics.filter(item => {
+    if (state.topicStatus !== 'all' && String(item.status || 'active') !== state.topicStatus) return false;
+    if (!q) return true;
+    return [
+      item.thread_id,
+      item.topic_key,
+      item.title,
+      item.summary,
+      item.visible_chat_id,
+      (item.tags || []).join(' '),
+    ].join(' ').toLowerCase().includes(q);
+  });
+}
+
+async function selectTopic(threadId) {
+  const topic = state.topics.find(item => item.thread_id === threadId) || null;
+  state.selectedTopic = topic;
+  state.selectedTopicDetails = topic;
+  renderContent();
+  if (!threadId) return;
+  try {
+    state.selectedTopicDetails = await fetchJson(
+      `${API_BASE}/api/memory-core/topics/${encodeURIComponent(threadId)}`
+    );
+  } catch (e) {
+    console.error('Failed to load topic details:', e);
+  }
+  renderContent();
 }
 
 function renderArtifacts() {
@@ -523,6 +588,160 @@ function renderEvents() {
   `;
 }
 
+function renderTopics() {
+  const items = filteredTopics();
+  const selected = state.selectedTopic || (items.length ? items[0] : null);
+  const details = state.selectedTopicDetails && state.selectedTopicDetails.thread_id === selected?.thread_id
+    ? state.selectedTopicDetails
+    : selected;
+
+  return `
+    <div class="layoutArtifacts">
+      <div class="card section">
+        <h2>Hidden Topic Threads</h2>
+        <div class="desc">Скрытые тематические ветки внутри одного visible chat</div>
+        <div class="tools">
+          <input class="search" id="topicSearch" placeholder="Поиск по title, topic_key, summary, tag..." value="${escapeHtml(state.topicQuery)}" />
+          <div class="controls">
+            <select id="topicStatus" class="btn">
+              ${['all', 'active', 'sleeping', 'archived'].map(v =>
+                `<option value="${v}" ${state.topicStatus === v ? 'selected' : ''}>${v === 'all' ? 'Все статусы' : v}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div class="meta" style="margin-top: 8px">Найдено тем: ${items.length}</div>
+        </div>
+        <div class="scroll" style="margin-top:18px">
+          ${items.length ? items.map(item => `
+            <button class="item-btn ${selected && selected.thread_id === item.thread_id ? 'active' : ''}" data-topic-id="${item.thread_id}">
+              <div class="row">
+                <div style="min-width:0;flex:1">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                    <span>🧵</span>
+                    <strong>${escapeHtml(item.title || item.topic_key || item.thread_id)}</strong>
+                    ${badge(item.status || 'active', item.status || 'active')}
+                  </div>
+                  <div class="meta" style="margin-top:6px">
+                    ${escapeHtml(item.topic_key || '-')} · chat ${escapeHtml(item.visible_chat_id || '-')}
+                  </div>
+                  <div style="margin-top:10px;color:#d4d4d8;font-size:14px;line-height:1.5;max-height:60px;overflow:hidden">${escapeHtml(item.summary || 'Summary пока пустой')}</div>
+                </div>
+                <div class="meta" style="white-space:nowrap;text-align:right">
+                  <div>${item.artifact_count || 0} artifacts</div>
+                  <div style="margin-top:4px">${formatRelative(item.updated_at)}</div>
+                </div>
+              </div>
+            </button>
+          `).join('') : '<div class="empty-state">Темы пока не созданы</div>'}
+        </div>
+      </div>
+      <div class="card section">
+        <h2>Topic Inspector</h2>
+        <div class="desc">Детали выбранной скрытой темы</div>
+        ${details ? `
+          <div class="list">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              ${badge(details.thread_id)}
+              ${badge(details.status || 'active', details.status || 'active')}
+              ${badge(`key: ${details.topic_key || '-'}`)}
+              ${badge(`${details.artifact_count || 0} artifacts`)}
+              ${typeof details.episode_count === 'number' ? badge(`${details.episode_count} episodes`) : ''}
+            </div>
+            <div class="panel">
+              <div class="tiny">Summary</div>
+              <div style="margin-top:8px;font-size:14px;line-height:1.7;color:#e4e4e7">${escapeHtml(details.summary || 'Summary пока не собран')}</div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+              <div class="panel"><div class="tiny">Visible Chat</div><div style="margin-top:8px">${escapeHtml(details.visible_chat_id || '-')}</div></div>
+              <div class="panel"><div class="tiny">Session</div><div style="margin-top:8px">${escapeHtml(details.session_id || '-')}</div></div>
+              <div class="panel"><div class="tiny">Workspace</div><div style="margin-top:8px">${escapeHtml(details.workspace_id || '-')}</div></div>
+              <div class="panel"><div class="tiny">Updated</div><div style="margin-top:8px">${formatTime(details.updated_at)}</div></div>
+            </div>
+            <div class="panel">
+              <div class="tiny">Tags</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                ${(details.tags || []).length ? (details.tags || []).map(tag => badge(escapeHtml(tag))).join('') : '<span class="meta">Нет тегов</span>'}
+              </div>
+            </div>
+            <div class="panel">
+              <div class="tiny">Related Topics</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                ${(details.related_topics || []).length
+                  ? details.related_topics.map(topic => badge(escapeHtml(topic.title || topic.topic_key || topic.thread_id))).join('')
+                  : ((details.related_thread_ids || []).length
+                    ? details.related_thread_ids.map(id => badge(escapeHtml(id))).join('')
+                    : '<span class="meta">Нет связанных тем</span>')}
+              </div>
+            </div>
+            <div class="panel">
+              <div class="tiny">Open Questions</div>
+              ${(details.open_questions || []).length ? `
+                <div class="list" style="margin-top:10px">
+                  ${details.open_questions.map(question => `
+                    <div class="item" style="padding:12px">
+                      <div style="font-size:18px">?</div>
+                      <div style="font-size:14px;line-height:1.6">${escapeHtml(question)}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="meta" style="margin-top:8px">Открытых вопросов пока нет</div>'}
+            </div>
+            <div class="panel">
+              <div class="tiny">Decisions</div>
+              ${(details.current_decisions || []).length ? `
+                <div class="list" style="margin-top:10px">
+                  ${details.current_decisions.map(decision => `
+                    <div class="item" style="padding:12px">
+                      <div style="font-size:18px">!</div>
+                      <div style="font-size:14px;line-height:1.6">${escapeHtml(decision)}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="meta" style="margin-top:8px">Р РµС€РµРЅРёР№ РїРѕРєР° РЅРµС‚</div>'}
+            </div>
+            <div class="panel">
+              <div class="tiny">Linked Tasks</div>
+              ${(details.linked_tasks || []).length ? `
+                <div class="list" style="margin-top:10px">
+                  ${details.linked_tasks.map(task => `
+                    <div class="item vertical" style="padding:12px">
+                      <div class="row">
+                        <strong>${escapeHtml(task.text || task.summary || task.artifact_id || 'task')}</strong>
+                        ${badge(task.status || 'open', task.status || 'idle')}
+                      </div>
+                      ${task.summary ? `<div class="meta" style="margin-top:6px">${escapeHtml(task.summary)}</div>` : ''}
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="meta" style="margin-top:8px">Задач пока нет</div>'}
+            </div>
+            <div class="panel">
+              <div class="tiny">Recent Artifacts</div>
+              ${(details.recent_artifacts || []).length ? `
+                <div class="list" style="margin-top:10px">
+                  ${details.recent_artifacts.slice(0, 12).map(artifact => `
+                    <div class="item vertical" style="padding:12px">
+                      <div class="row">
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                          <span>${typeIcon(artifact.artifact_type)}</span>
+                          <strong>${escapeHtml(artifact.artifact_type || 'artifact')}</strong>
+                          ${badge(artifact.status || 'active', artifact.status || 'active')}
+                        </div>
+                        <div class="meta">${formatRelative(artifact.updated_at)}</div>
+                      </div>
+                      <div style="margin-top:8px;font-size:14px;line-height:1.6;color:#e4e4e7">${escapeHtml(artifact.summary || artifact.text || '')}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : '<div class="meta" style="margin-top:8px">Артефактов в теме пока нет</div>'}
+            </div>
+          </div>
+        ` : '<div class="empty-state">Выберите тему слева</div>'}
+      </div>
+    </div>
+  `;
+}
+
 function renderChecks() {
   return `
     <div class="card section">
@@ -545,6 +764,7 @@ function renderContent() {
   switch (state.tab) {
     case 'overview': content.innerHTML = renderOverview(); break;
     case 'artifacts': content.innerHTML = renderArtifacts(); break;
+    case 'topics': content.innerHTML = renderTopics(); break;
     case 'queue': content.innerHTML = renderQueue(); break;
     case 'events': content.innerHTML = renderEvents(); break;
     case 'checks': content.innerHTML = renderChecks(); break;
@@ -560,10 +780,22 @@ function renderContent() {
   const include = document.getElementById('includeSuperseded');
   if (include) include.addEventListener('change', e => { state.includeSuperseded = !!e.target.checked; renderContent(); });
 
+  const topicSearch = document.getElementById('topicSearch');
+  if (topicSearch) topicSearch.addEventListener('input', e => { state.topicQuery = e.target.value; renderContent(); });
+
+  const topicStatus = document.getElementById('topicStatus');
+  if (topicStatus) topicStatus.addEventListener('change', e => { state.topicStatus = e.target.value; renderContent(); });
+
   document.querySelectorAll('[data-artifact-id]').forEach(el => {
     el.addEventListener('click', () => {
       state.selectedArtifact = state.artifacts.find(x => x.id === el.dataset.artifactId) || null;
       renderContent();
+    });
+  });
+
+  document.querySelectorAll('[data-topic-id]').forEach(el => {
+    el.addEventListener('click', () => {
+      void selectTopic(el.dataset.topicId);
     });
   });
 }

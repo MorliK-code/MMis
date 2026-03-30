@@ -24,6 +24,7 @@ class ApiClientError(RuntimeError):
 class ApiReply:
     answer: str
     thinking: str
+    thinking_generated: bool
     stats: dict
     model: str
     parameters: dict | None = None
@@ -281,6 +282,7 @@ class ApiClient:
                         return ApiReply(
                             answer=answer,
                             thinking=thinking,
+                            thinking_generated=thinking_chunk_count > 0,
                             stats=stats,
                             model=model,
                             parameters=parameters,
@@ -319,6 +321,7 @@ class ApiClient:
         return ApiReply(
             answer="".join(answer_parts),
             thinking="".join(thinking_parts),
+            thinking_generated=thinking_chunk_count > 0,
             stats=stats,
             model=model,
             parameters=parameters,

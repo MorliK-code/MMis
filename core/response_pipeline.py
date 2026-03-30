@@ -31,7 +31,9 @@ from llm.provider_base import LLMProviderBase, LLMRequest, LLMResponse, Message,
 from llm.task_router import run_task_model
 from llm.tokenizer import estimate_tokens
 from memory_core.adapter import MemoryCoreAdapter
+from memory_core.processors.episode_processor import EpisodeProcessor
 from memory_core.retrieval.history_tools import history_tools_list, HistoryReadResult
+from memory_core.topic import TopicRouter, TopicStore, TopicToolService, topic_tools_list
 from memory_core.utils.summary_quality import is_low_quality_session_summary, sanitize_session_summary_text
 from metadata.metadata_extractor import MetadataExtractor
 from modules.character.evaluator import ResponseConstraintEvaluator
@@ -52,6 +54,7 @@ PROFILE_ASYA = "ASYA"
 PROFILE_AUTONOMOUS = "AUTONOMOUS"
 _SELF_MEMORY_EXACT_MODE = "self_memory_exact"
 _MEMORY_TOOL_NAME = "memory_retrieve"
+_TOPIC_TOOL_NAMES = {"topic_read", "topic_search", "topic_related"}
 _MEMORY_REASONING_TAG = "[MEMORY_REASONING_CHECK]"
 _AGENT_LOOP_MIN_TOOL_CALLS = 1
 _AGENT_LOOP_MAX_TOOL_CALLS = 2
@@ -464,6 +467,89 @@ class PersonalityStage(PipelineStage):
         return ctx
 
 
+class TopicRoutingStage(PipelineStage):
+    name = "topic_routing"
+
+    def __init__(self, topic_router: TopicRouter | None):
+        self.topic_router = topic_router
+
+    def run(self, ctx: PipelineContext) -> PipelineContext:
+        if self.topic_router is None:
+            ctx.logs.append("stage=topic_routing skipped(no_router)")
+            return ctx
+        if ctx.route != "chat":
+            ctx.logs.append("stage=topic_routing skipped(route)")
+            return ctx
+
+        text = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
+        if not text:
+            ctx.logs.append("stage=topic_routing skipped(empty)")
+            return ctx
+
+        conversation_id = str(
+            _pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "default")
+        ).strip() or "default"
+        workspace_id = str(
+            _pick(ctx.meta.get("workspace_id"), ctx.state.get("active_character_id"), "global")
+        ).strip() or "global"
+        previous_thread_id = str(
+            _pick(ctx.state.get("active_topic_thread_id"), ctx.state.get("topic_thread_id"), "")
+        ).strip()
+        decision = self.topic_router.route_turn(
+            text=text,
+            visible_chat_id=conversation_id,
+            workspace_id=workspace_id,
+            session_id=conversation_id,
+            current_state=ctx.state,
+            meta=ctx.meta,
+        )
+
+        ctx.state["topic_thread_id"] = decision.thread_id
+        ctx.state["topic_key"] = decision.topic_key
+        ctx.state["topic_thread_title"] = decision.title
+        ctx.state["active_topic_thread_id"] = decision.thread_id
+        ctx.state["active_topic_key"] = decision.topic_key
+        ctx.state["active_topic_title"] = decision.title
+        ctx.state["topic_route_reason"] = decision.reason
+        ctx.state["topic_route_score"] = float(decision.score)
+        ctx.state["related_topic_thread_ids"] = list(decision.related_thread_ids or [])
+        ctx.state["topic_candidates"] = list(decision.related_thread_ids or [])
+        ctx.state["topic_last_route_reason"] = decision.reason
+        ctx.state["topic_last_route_score"] = float(decision.score)
+        if previous_thread_id and previous_thread_id != decision.thread_id:
+            ctx.state["topic_last_switch_at"] = now_local_ts()
+        elif not previous_thread_id:
+            ctx.state["topic_last_switch_at"] = now_local_ts()
+        ctx.state["topic_stack"] = _update_topic_stack(
+            ctx.state.get("topic_stack"),
+            thread_id=decision.thread_id,
+            title=decision.title,
+            topic_key=decision.topic_key,
+        )
+
+        ctx.meta["visible_chat_id"] = conversation_id
+        ctx.meta["topic_thread_id"] = decision.thread_id
+        ctx.meta["topic_key"] = decision.topic_key
+        ctx.meta["topic_title"] = decision.title
+        ctx.meta["topic_thread_title"] = decision.title
+        ctx.meta["topic_route_reason"] = decision.reason
+        ctx.meta["topic_route_score"] = float(decision.score)
+        ctx.meta["related_topic_thread_ids"] = list(decision.related_thread_ids or [])
+
+        ctx.tags["topic"] = decision.topic_key
+        ctx.tags["topic_thread_id"] = decision.thread_id
+        ctx.tags["topic_title"] = decision.title
+        state_tags = _as_dict(ctx.state.get("context_tags"))
+        state_tags["topic"] = decision.topic_key
+        ctx.state["context_tags"] = state_tags
+
+        ctx.logs.append(
+            f"stage=topic_routing thread={decision.thread_id} "
+            f"reason={decision.reason} score={float(decision.score):.2f}"
+        )
+        return ctx
+
+
 class MemoryNativeStateStage(PipelineStage):
     """
     Построение memory_native_state — always-on memory layer.
@@ -551,14 +637,19 @@ class MemoryRetrieveStage(PipelineStage):
                 result = memory_core.query(
                     text=query,
                     workspace_id=workspace_id,
+                    session_id=session_id,
                     top_k=int(self._cfg.memory_core_top_k or 8),
                     include_citations=True,
+                    topic_thread_id=str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or ""),
+                    related_topic_ids=list(ctx.state.get("related_topic_thread_ids") or []),
                 )
             else:
                 request = {
                     "text": query,
                     "workspace_id": workspace_id,
                     "session_id": session_id,
+                    "topic_thread_id": str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or ""),
+                    "related_topic_ids": list(ctx.state.get("related_topic_thread_ids") or []),
                     "top_k": int(self._cfg.memory_core_top_k or 8),
                     "include_citations": True,
                 }
@@ -587,6 +678,11 @@ class MemoryRetrieveStage(PipelineStage):
                 "recall_mode": str(result.get("recall_mode") or ""),
                 "debug": dict(result.get("debug", {}) or {}),
             }
+            _augment_memory_context_with_topic_summary(
+                ctx,
+                workspace_id=workspace_id,
+                memory_core=memory_core,
+            )
 
             governor_snapshot: dict[str, Any] = {}
             if hasattr(memory_core, "get_governor_profile_snapshot"):
@@ -682,6 +778,7 @@ class EpisodeContinuityStage(PipelineStage):
                 continuity = memory_core.get_episode_continuity(
                     session_id=session_id,
                     workspace_id=workspace_id,
+                    topic_thread_id=str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or ""),
                 )
             except Exception:
                 continuity = {}
@@ -1803,11 +1900,13 @@ class GenerateStage(PipelineStage):
         self,
         provider: LLMProviderBase,
         character_runtime: CharacterRuntime,
+        memory_core: Any | None = None,
         studio_generator: StudioGenerator | None = None,
     ):
         self.provider = provider
         self.character_runtime = character_runtime
         self.character_engine = character_runtime
+        self.memory_core = memory_core
         self.persona_snapshot_builder = PersonaSnapshotBuilder()
         self.identity_core_builder = IdentityCoreBuilder()
         self.studio_generator = studio_generator or StudioGenerator()
@@ -2139,7 +2238,13 @@ class GenerateStage(PipelineStage):
             # Streaming или обычный generate
             if use_streaming:
                 # Streaming через provider.stream()
-                response = self._generate_with_agent_loop_streaming(ctx, loop_req, stream_answer_cb, stream_thinking_cb)
+                response = self._generate_with_agent_loop_streaming(
+                    ctx,
+                    loop_req,
+                    stream_answer_cb,
+                    stream_thinking_cb,
+                    emit_answer_live=not (memory_gate_triggered and pass_count == 1),
+                )
             else:
                 response = self.provider.generate(loop_req)
             if not response.tool_calls or not active_tools:
@@ -2499,6 +2604,10 @@ class GenerateStage(PipelineStage):
         if name in ("history_read_recent", "history_read_range", "history_search"):
             return self._execute_history_tool(ctx, call)
 
+        # Topic tools (hidden topic threads)
+        if name in _TOPIC_TOOL_NAMES:
+            return self._execute_topic_tool(ctx, call)
+
         executor = ctx.meta.get("tool_executor")
         if not callable(executor):
             payload = {
@@ -2529,6 +2638,8 @@ class GenerateStage(PipelineStage):
         req: LLMRequest,
         on_answer,
         on_thinking,
+        *,
+        emit_answer_live: bool = True,
     ) -> LLMResponse:
         """
         Streaming генерация внутри agent_loop.
@@ -2559,11 +2670,14 @@ class GenerateStage(PipelineStage):
             if not piece:
                 return
             visible_answer_chunks += 1
-            if callable(on_answer):
-                try:
-                    on_answer(piece)
-                except Exception:
-                    pass
+            if not emit_answer_live or not callable(on_answer):
+                return
+            if tool_calls:
+                return
+            try:
+                on_answer(piece)
+            except Exception:
+                pass
 
         def _handle_visible_thinking(piece: str) -> None:
             nonlocal visible_thinking_chunks
@@ -2646,7 +2760,7 @@ class GenerateStage(PipelineStage):
 
         Эмитит debug events если доступен stream_on_debug_event.
         """
-        memory_core = ctx.meta.get("memory_core")
+        memory_core = ctx.meta.get("memory_core") or ctx.meta.get("memory_manager") or self.memory_core
         debug_event = ctx.meta.get("stream_on_debug_event")
 
         def emit(kind: str, payload: dict[str, Any]) -> None:
@@ -2689,17 +2803,46 @@ class GenerateStage(PipelineStage):
 
         try:
             # Выполняем retrieval через memory_core напрямую
-            memory_core = ctx.meta.get("memory_core") or self.memory_core
+            memory_core = ctx.meta.get("memory_core") or ctx.meta.get("memory_manager") or self.memory_core
             if memory_core is None:
                 raise RuntimeError("memory_core not available")
 
-            # Простой retrieval без сложной логики
-            result = memory_core.retrieve(
-                query=base_query,
-                top_k=top_k,
-                workspace_id=str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global"),
-                session_id=str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or ""),
-            )
+            workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global")
+            session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "")
+            topic_thread_id = str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or "")
+            related_topic_ids = list(ctx.state.get("related_topic_thread_ids") or [])
+
+            if hasattr(memory_core, "retrieve"):
+                result = memory_core.retrieve(
+                    query=base_query,
+                    top_k=top_k,
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    topic_thread_id=topic_thread_id,
+                    related_topic_ids=related_topic_ids,
+                )
+            elif hasattr(memory_core, "query"):
+                result = memory_core.query(
+                    text=base_query,
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    top_k=top_k,
+                    include_citations=True,
+                    topic_thread_id=topic_thread_id,
+                    related_topic_ids=related_topic_ids,
+                )
+            else:
+                request = {
+                    "text": base_query,
+                    "workspace_id": workspace_id,
+                    "session_id": session_id,
+                    "topic_thread_id": topic_thread_id,
+                    "related_topic_ids": related_topic_ids,
+                    "top_k": top_k,
+                    "include_citations": True,
+                }
+                raw_result = memory_core.build_context(request)
+                result = raw_result.to_dict() if hasattr(raw_result, "to_dict") else dict(raw_result or {})
 
             # Сохраняем результат в ctx.memory_context
             pack = {
@@ -2715,6 +2858,15 @@ class GenerateStage(PipelineStage):
             retrieved = list(_as_list(pack.get("selected")))
             if retrieved:
                 ctx.retrieved_memories = retrieved
+
+            trace = _ensure_debug_trace(ctx)
+            trace.memory_retrieval = {
+                "stage": "agent_memory_retrieve",
+                "query": base_query,
+                "selected_count": len(retrieved),
+                "recall_mode": str(pack.get("recall_mode") or ""),
+                "tool_mode": str(args.get("mode") or "context"),
+            }
 
             selected_count = len(list(_as_list(pack.get("selected"))))
             emit("memory_retrieval_done", {
@@ -2742,6 +2894,7 @@ class GenerateStage(PipelineStage):
         payload = {
             "tool": _MEMORY_TOOL_NAME,
             "status": "ok",
+            "mode": str(args.get("mode") or "context"),
             "selected": [
                 _trace_compact_selected_memory(row)
                 for row in list(_as_list(ctx.memory_context.get("selected")))[:top_k]
@@ -2883,6 +3036,78 @@ class GenerateStage(PipelineStage):
                 "error": f"{type(exc).__name__}: {exc}",
             }
             return _compact_json(payload), True
+
+    def _execute_topic_tool(self, ctx: PipelineContext, call: ToolCall) -> tuple[str, bool]:
+        tool_name = str(call.name or "").strip().lower()
+        args = dict(call.arguments or {})
+        topic_store = _resolve_topic_store(ctx, self.memory_core)
+        if topic_store is None:
+            payload = {
+                "tool": tool_name,
+                "status": "error",
+                "error": "topic store is not available",
+            }
+            return _compact_json(payload), True
+
+        service = TopicToolService(topic_store)
+        workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global")
+        visible_chat_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "")
+        session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "")
+        default_thread_id = str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or "").strip()
+
+        try:
+            if tool_name == "topic_read":
+                thread_id = str(args.get("thread_id") or default_thread_id).strip()
+                if not thread_id:
+                    raise ValueError("thread_id is required")
+                result = service.read_topic(
+                    thread_id,
+                    limit=_to_int(args.get("limit"), 12) or 12,
+                    workspace_id=workspace_id,
+                )
+                if result is None:
+                    raise LookupError(f"topic '{thread_id}' not found")
+            elif tool_name == "topic_search":
+                result = service.search_topics(
+                    query=str(args.get("query") or args.get("topic") or "").strip(),
+                    visible_chat_id=visible_chat_id,
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    status=str(args.get("status") or "").strip().lower() or None,
+                    limit=_to_int(args.get("limit"), 6) or 6,
+                )
+            elif tool_name == "topic_related":
+                thread_id = str(args.get("thread_id") or default_thread_id).strip()
+                if not thread_id:
+                    raise ValueError("thread_id is required")
+                result = service.related_topics(
+                    thread_id,
+                    visible_chat_id=visible_chat_id,
+                    workspace_id=workspace_id,
+                    session_id=session_id,
+                    limit=_to_int(args.get("limit"), 6) or 6,
+                )
+            else:
+                payload = {
+                    "tool": tool_name,
+                    "status": "error",
+                    "error": f"Unknown topic tool: {tool_name}",
+                }
+                return _compact_json(payload), True
+        except Exception as exc:
+            payload = {
+                "tool": tool_name,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            return _compact_json(payload), True
+
+        payload = {
+            "tool": tool_name,
+            "status": "ok",
+            "result": result,
+        }
+        return _compact_json(payload), False
 
     @staticmethod
     def _merge_llm_stats(
@@ -4669,18 +4894,7 @@ class MemoryWriteStage(PipelineStage):
         context = _turn_log_context(ctx)
         self._update_task_continuity_from_assistant_reply(ctx)
         if ctx.route in {"chat", "command"} and ctx.clean_user_msg:
-            turn_tags = dict(ctx.tags)
-            turn_tags["active_mode"] = normalize_mode_name(
-                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "chatting"),
-                allow_custom=True,
-            )
-            personality_id = str(
-                ctx.state.get("active_character_id")
-                or ctx.state.get("active_personality_id")
-                or ""
-            ).strip().lower()
-            if personality_id:
-                turn_tags["personality_id"] = personality_id
+            turn_tags = self._build_turn_tags(ctx)
             ctx.memory_ops.append(
                 {
                     "op": "turn_user",
@@ -4694,18 +4908,7 @@ class MemoryWriteStage(PipelineStage):
                 }
             )
         if ctx.route in {"chat", "command"} and ctx.text:
-            turn_tags = dict(ctx.tags)
-            turn_tags["active_mode"] = normalize_mode_name(
-                _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "chatting"),
-                allow_custom=True,
-            )
-            personality_id = str(
-                ctx.state.get("active_character_id")
-                or ctx.state.get("active_personality_id")
-                or ""
-            ).strip().lower()
-            if personality_id:
-                turn_tags["personality_id"] = personality_id
+            turn_tags = self._build_turn_tags(ctx)
             ctx.memory_ops.append(
                 {
                     "op": "turn_assistant",
@@ -4747,6 +4950,15 @@ class MemoryWriteStage(PipelineStage):
                         {
                             "op": "conversation_summary",
                             "text": long_summary,
+                            "topic_thread_id": str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or ""),
+                            "topic_key": str(ctx.state.get("topic_key") or ctx.meta.get("topic_key") or ""),
+                            "topic_title": str(
+                                ctx.state.get("topic_thread_title")
+                                or ctx.meta.get("topic_title")
+                                or ctx.meta.get("topic_thread_title")
+                                or ""
+                            ),
+                            "related_topic_thread_ids": list(ctx.state.get("related_topic_thread_ids") or []),
                             "ts": now_local_ts(),
                             "trace_id": context.get("trace_id"),
                             "request_id": context.get("request_id"),
@@ -4779,6 +4991,46 @@ class MemoryWriteStage(PipelineStage):
             queued_prompt_stats=int(op_summary["prompt_stats"]),
         )
         return ctx
+
+    def _build_turn_tags(self, ctx: PipelineContext) -> dict[str, Any]:
+        turn_tags = dict(ctx.tags)
+        turn_tags["active_mode"] = normalize_mode_name(
+            _pick(ctx.state.get("active_mode"), ctx.meta.get("active_mode"), ctx.state.get("mode"), "chatting"),
+            allow_custom=True,
+        )
+        personality_id = str(
+            ctx.state.get("active_character_id")
+            or ctx.state.get("active_personality_id")
+            or ""
+        ).strip().lower()
+        if personality_id:
+            turn_tags["personality_id"] = personality_id
+        turn_tags["visible_chat_id"] = str(
+            _pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "")
+        ).strip()
+        turn_tags["topic_thread_id"] = str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or "").strip()
+        turn_tags["topic_key"] = str(ctx.state.get("topic_key") or ctx.meta.get("topic_key") or "").strip()
+        turn_tags["topic_title"] = str(
+            ctx.state.get("topic_thread_title")
+            or ctx.meta.get("topic_title")
+            or ctx.meta.get("topic_thread_title")
+            or ""
+        ).strip()
+        turn_tags["topic_route_reason"] = str(
+            ctx.state.get("topic_route_reason")
+            or ctx.meta.get("topic_route_reason")
+            or ""
+        ).strip()
+        turn_tags["topic_route_score"] = _to_float(
+            _pick_value(ctx.state.get("topic_route_score"), ctx.meta.get("topic_route_score"), 0.0),
+            0.0,
+        ) or 0.0
+        turn_tags["related_topic_thread_ids"] = [
+            str(item).strip()
+            for item in list(ctx.state.get("related_topic_thread_ids") or ctx.meta.get("related_topic_thread_ids") or [])
+            if str(item).strip()
+        ]
+        return turn_tags
 
     def _update_task_continuity_from_assistant_reply(self, ctx: PipelineContext) -> None:
         active_task = dict(ctx.state.get("active_task") or {})
@@ -4907,12 +5159,23 @@ class ResponsePipeline:
         metadata_extractor: MetadataExtractor | None = None,
         prompt_engine: PromptEngine | None = None,
         memory_core: MemoryCoreAdapter | None = None,
+        memory_manager: Any | None = None,
         studio_generator: StudioGenerator | None = None,
     ):
         self.provider = provider
         self.character_engine = character_runtime or CharacterRuntime()
         self.character_runtime = self.character_engine
-        self.memory_core = memory_core or MemoryCoreAdapter()
+        self.memory_core = memory_core or memory_manager or MemoryCoreAdapter()
+        artifact_store = getattr(getattr(self.memory_core, "service", None), "artifact_store", None)
+        self.topic_store = TopicStore(artifact_store) if artifact_store is not None else None
+        self.topic_router = (
+            TopicRouter(
+                self.topic_store,
+                hint_extractor=EpisodeProcessor().detect_topic_hints,
+            )
+            if self.topic_store is not None
+            else None
+        )
         self.prompt_engine = prompt_engine or PromptEngine(
             character_runtime=self.character_engine,
         )
@@ -4923,6 +5186,7 @@ class ResponsePipeline:
             "personality": PersonalityStage(
                 character_runtime=self.character_engine,
             ),
+            "topic_routing": TopicRoutingStage(topic_router=self.topic_router),
             "memory_native_state": MemoryNativeStateStage(memory_core=self.memory_core),
             "memory_retrieve": MemoryRetrieveStage(memory_core=self.memory_core),
             "episode_continuity": EpisodeContinuityStage(memory_core=self.memory_core),
@@ -4932,6 +5196,7 @@ class ResponsePipeline:
             "generate": GenerateStage(
                 provider=self.provider,
                 character_runtime=self.character_runtime,
+                memory_core=self.memory_core,
                 studio_generator=studio_generator,
             ),
             "postprocess": PostprocessStage(),
@@ -4948,6 +5213,7 @@ class ResponsePipeline:
                 "preprocess",
                 "mode_select",
                 "personality",
+                "topic_routing",
                 "memory_native_state",
                 "episode_continuity",
                 "prompt_build",
@@ -4963,6 +5229,7 @@ class ResponsePipeline:
                 "mode_select",
                 "plan",
                 "personality",
+                "topic_routing",
                 "memory_native_state",
                 "episode_continuity",
                 "web_retrieve",
@@ -4980,6 +5247,7 @@ class ResponsePipeline:
                 "mode_select",
                 "plan",
                 "personality",
+                "topic_routing",
                 "memory_native_state",
                 "episode_continuity",
                 "web_retrieve",
@@ -4997,6 +5265,7 @@ class ResponsePipeline:
                 "mode_select",
                 "plan",
                 "personality",
+                "topic_routing",
                 "episode_continuity",
                 "web_retrieve",
                 "prompt_build",
@@ -5031,6 +5300,12 @@ class ResponsePipeline:
             profile=self._resolve_profile(meta=meta, state=state, policies=policies),
         )
         _inject_temporal_grounding(ctx)
+        ctx.meta.setdefault("memory_core", self.memory_core)
+        if "memory_manager" not in ctx.meta and self.memory_core is not None:
+            ctx.meta["memory_manager"] = self.memory_core
+        if self.topic_store is not None:
+            ctx.meta.setdefault("topic_store", self.topic_store)
+        ctx.meta.setdefault("pipeline", self)
         ctx.meta.setdefault("conversation_id", ctx.state.get("conversation_id"))
         ctx.meta.setdefault("turn_id", ctx.state.get("turn_id"))
         turn_token = int(_to_int(_pick_value(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), 0), 0) or 0)
@@ -5171,6 +5446,7 @@ class ResponsePipeline:
             "memory_context": dict(ctx.memory_context or {}),
             "memory_native_state": dict(ctx.state.get("memory_native_state") or {}),
             "retrieved_count": len(list(ctx.retrieved_memories or [])),
+            "tool_loop": dict(_as_dict(ctx.state.get("agent_loop_trace"))),
         }
         ctx.state["memory_debug_snapshot"] = dict(memory_debug_snapshot or {})
         
@@ -5638,70 +5914,60 @@ class _ThinkStreamParser:
     """Split model stream into visible answer and hidden thinking blocks."""
 
     def __init__(self):
-        self._buf = ""
         self._in_think = False
-        self._open_tags = ("<think>", "<thinking>", "<reasoning>")
-        self._close_tags = ("</think>", "</thinking>", "</reasoning>")
+        self._open_tags = tuple(str(tag).lower() for tag in ("<think>", "<thinking>", "<reasoning>"))
+        self._close_tags = tuple(str(tag).lower() for tag in ("</think>", "</thinking>", "</reasoning>"))
+        self._pending_tag = ""
 
     def feed(self, chunk: str) -> tuple[str, str]:
-        self._buf += str(chunk or "")
-        return self._drain()
-
-    def flush(self) -> tuple[str, str]:
-        if not self._buf:
-            return "", ""
-        if self._in_think:
-            out = ("", self._buf)
-        else:
-            out = (self._buf, "")
-        self._buf = ""
-        return out
-
-    def _drain(self) -> tuple[str, str]:
         visible_parts: list[str] = []
         thinking_parts: list[str] = []
-
-        while self._buf:
-            if self._in_think:
-                close_idx, close_tag = self._find_first(self._close_tags)
-                if close_idx < 0:
-                    keep = max(len(x) for x in self._close_tags) - 1
-                    if len(self._buf) > keep:
-                        thinking_parts.append(self._buf[:-keep])
-                        self._buf = self._buf[-keep:]
-                    break
-                if close_idx > 0:
-                    thinking_parts.append(self._buf[:close_idx])
-                self._buf = self._buf[close_idx + len(close_tag) :]
-                self._in_think = False
-                continue
-
-            open_idx, open_tag = self._find_first(self._open_tags)
-            if open_idx < 0:
-                keep = max(len(x) for x in self._open_tags) - 1
-                if len(self._buf) > keep:
-                    visible_parts.append(self._buf[:-keep])
-                    self._buf = self._buf[-keep:]
-                break
-            if open_idx > 0:
-                visible_parts.append(self._buf[:open_idx])
-            self._buf = self._buf[open_idx + len(open_tag) :]
-            self._in_think = True
-
+        for ch in str(chunk or ""):
+            visible, thinking = self._feed_char(ch)
+            if visible:
+                visible_parts.append(visible)
+            if thinking:
+                thinking_parts.append(thinking)
         return "".join(visible_parts), "".join(thinking_parts)
 
-    def _find_first(self, tags: tuple[str, ...]) -> tuple[int, str]:
-        src = self._buf.lower()
-        best_idx = -1
-        best_tag = ""
-        for tag in tags:
-            idx = src.find(tag)
-            if idx < 0:
-                continue
-            if best_idx < 0 or idx < best_idx:
-                best_idx = idx
-                best_tag = tag
-        return best_idx, best_tag
+    def flush(self) -> tuple[str, str]:
+        if not self._pending_tag:
+            return "", ""
+        out = self._emit_literal(self._pending_tag)
+        self._pending_tag = ""
+        return out
+
+    def _feed_char(self, ch: str) -> tuple[str, str]:
+        if self._pending_tag:
+            return self._continue_pending_tag(ch)
+        if ch == "<":
+            self._pending_tag = "<"
+            return "", ""
+        return self._emit_literal(ch)
+
+    def _continue_pending_tag(self, ch: str) -> tuple[str, str]:
+        tags = self._close_tags if self._in_think else self._open_tags
+        candidate = self._pending_tag + str(ch or "")
+        candidate_low = candidate.lower()
+        if any(tag.startswith(candidate_low) for tag in tags):
+            self._pending_tag = candidate
+            if candidate_low in tags:
+                self._pending_tag = ""
+                self._in_think = not self._in_think
+            return "", ""
+
+        literal = self._pending_tag
+        self._pending_tag = ""
+        visible, thinking = self._emit_literal(literal)
+        extra_visible, extra_thinking = self._feed_char(ch)
+        return visible + extra_visible, thinking + extra_thinking
+
+    def _emit_literal(self, text: str) -> tuple[str, str]:
+        if not text:
+            return "", ""
+        if self._in_think:
+            return "", text
+        return text, ""
 
 
 def _tool_calls_from_row(row: dict[str, Any]) -> list[ToolCall]:
@@ -6113,6 +6379,113 @@ def _memory_retrieve_tool_spec() -> ToolSpec:
     )
 
 
+def _resolve_topic_store(ctx: PipelineContext, fallback_memory_core: Any | None = None) -> TopicStore | None:
+    existing = ctx.meta.get("topic_store")
+    if isinstance(existing, TopicStore):
+        return existing
+
+    memory_core = (
+        ctx.meta.get("memory_core")
+        or ctx.meta.get("memory_manager")
+        or getattr(ctx.meta.get("pipeline"), "memory_core", None)
+        or fallback_memory_core
+    )
+    artifact_store = getattr(getattr(memory_core, "service", None), "artifact_store", None)
+    if artifact_store is None:
+        return None
+    store = TopicStore(artifact_store)
+    ctx.meta["topic_store"] = store
+    return store
+
+
+def _augment_memory_context_with_topic_summary(
+    ctx: PipelineContext,
+    *,
+    workspace_id: str,
+    memory_core: Any | None = None,
+) -> None:
+    topic_thread_id = str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or "").strip()
+    if not topic_thread_id:
+        return
+    if not isinstance(ctx.memory_context, dict):
+        ctx.memory_context = {}
+    topic_store = _resolve_topic_store(ctx, memory_core)
+    if topic_store is None:
+        return
+    details = TopicToolService(topic_store).read_topic(
+        topic_thread_id,
+        workspace_id=str(workspace_id or "").strip(),
+        limit=8,
+    )
+    if not isinstance(details, dict) or not details:
+        return
+    blocks = dict(ctx.memory_context.get("blocks") or {})
+    prompt_blocks = _build_topic_prompt_blocks(details)
+    blocks.update(prompt_blocks)
+    ctx.memory_context["blocks"] = blocks
+    ctx.memory_context["topic_summary"] = dict(details)
+    ctx.memory_context["open_questions"] = _merge_compact_strings(
+        ctx.memory_context.get("open_questions"),
+        details.get("open_questions"),
+        limit=10,
+    )
+    ctx.memory_context["current_decisions"] = _merge_compact_strings(
+        ctx.memory_context.get("current_decisions"),
+        details.get("current_decisions"),
+        limit=10,
+    )
+
+
+def _build_topic_prompt_blocks(details: dict[str, Any]) -> dict[str, str]:
+    thread = dict(details.get("thread") or {})
+    title = str(thread.get("title") or thread.get("topic_key") or thread.get("thread_id") or "").strip()
+    status = str(thread.get("status") or "active").strip()
+    summary = str(details.get("summary") or thread.get("summary") or "").strip()
+    current_topic_lines: list[str] = []
+    if title:
+        current_topic_lines.append(f"- title: {title}")
+    topic_key = str(thread.get("topic_key") or "").strip()
+    if topic_key:
+        current_topic_lines.append(f"- key: {topic_key}")
+    if status:
+        current_topic_lines.append(f"- status: {status}")
+    if summary:
+        current_topic_lines.append(f"- summary: {summary}")
+    related_topics = [
+        str(dict(row or {}).get("title") or dict(row or {}).get("topic_key") or dict(row or {}).get("thread_id") or "").strip()
+        for row in list(details.get("related_topics") or [])
+        if str(dict(row or {}).get("title") or dict(row or {}).get("topic_key") or dict(row or {}).get("thread_id") or "").strip()
+    ]
+    return {
+        "current_topic": "\n".join(current_topic_lines).strip(),
+        "topic_open_questions": _render_topic_list_block(details.get("open_questions"), prefix="- "),
+        "topic_decisions": _render_topic_list_block(details.get("current_decisions"), prefix="- "),
+        "related_topics": _render_topic_list_block(related_topics, prefix="- "),
+    }
+
+
+def _render_topic_list_block(values: Any, *, prefix: str = "- ") -> str:
+    items = _merge_compact_strings(values, limit=8)
+    if not items:
+        return ""
+    return "\n".join(f"{prefix}{item}" for item in items)
+
+
+def _merge_compact_strings(*groups: Any, limit: int = 10) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for group in groups:
+        for value in list(group or []):
+            clean = " ".join(str(value or "").strip().split())
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            result.append(clean)
+            if len(result) >= max(1, int(limit or 10)):
+                return result
+    return result
+
+
 def _should_enable_agent_loop(ctx: PipelineContext) -> bool:
     """
     Определяет, нужно ли включать agent loop для текущего запроса.
@@ -6367,12 +6740,20 @@ def _agent_loop_tools(ctx: PipelineContext) -> list[ToolSpec]:
     - history_read_recent (точные последние сообщения)
     - history_search (поиск по истории)
     """
-    memory_core = ctx.meta.get("memory_core")
+    memory_core = (
+        ctx.meta.get("memory_core")
+        or ctx.meta.get("memory_manager")
+        or getattr(ctx.meta.get("pipeline"), "memory_core", None)
+    )
     tools: list[ToolSpec] = []
 
     # Memory retrieve (semantic search) — всегда добавляем, если memory_core доступен
     if memory_core is not None:
         tools.append(_memory_retrieve_tool_spec())
+
+    topic_store = _resolve_topic_store(ctx)
+    if topic_store is not None:
+        tools.extend(topic_tools_list())
 
     # History tools (exact DB reads)
     tools.extend(history_tools_list())
@@ -6395,17 +6776,32 @@ def _merge_tool_specs(current: list[ToolSpec], extra: list[ToolSpec]) -> list[To
 
 def _inject_agent_loop_messages(messages: list[Message], tools: list[ToolSpec]) -> list[Message]:
     tool_names = {str(row.name or "").strip().lower() for row in list(tools or []) if str(row.name or "").strip()}
-    if _MEMORY_TOOL_NAME not in tool_names:
+    has_memory_tool = _MEMORY_TOOL_NAME in tool_names
+    has_topic_tools = bool(tool_names & _TOPIC_TOOL_NAMES)
+    if not has_memory_tool and not has_topic_tools:
         return list(messages or [])
-    instruction = (
-        "Agent loop rules:\n"
-        "- If user-specific memory, prior dialogue, identity, preferences, plans, or unresolved context may matter, call memory_retrieve before answering.\n"
-        "- Call memory_retrieve with a structured retrieval plan: mode, topic_hints, time_hint, sources, top_k.\n"
-        "- Do not send a long natural-language query inside the tool call. The code will build fan-out retrieval queries for you.\n"
-        "- memory_retrieve returns memory candidates and context blocks, not a final answer.\n"
-        "- Use at most one memory_retrieve call unless a second pass is truly necessary.\n"
-        "- After tool results arrive, answer the user directly and do not mention the tool protocol."
-    )
+    lines = ["Agent loop rules:"]
+    if has_memory_tool:
+        lines.extend(
+            [
+                "- If user-specific memory, prior dialogue, identity, preferences, plans, or unresolved context may matter, call memory_retrieve before answering.",
+                "- Call memory_retrieve with a structured retrieval plan: mode, topic_hints, time_hint, sources, top_k.",
+                "- Do not send a long natural-language query inside the tool call. The code will build fan-out retrieval queries for you.",
+                "- memory_retrieve returns memory candidates and context blocks, not a final answer.",
+                "- Use at most one memory_retrieve call unless a second pass is truly necessary.",
+            ]
+        )
+    if has_topic_tools:
+        lines.extend(
+            [
+                "- Use topic_search to find hidden topic threads inside the current visible chat by subject or keyword.",
+                "- Use topic_read to inspect one topic thread in detail: summary, open questions, recent episodes, linked tasks, and recent artifacts.",
+                "- Use topic_related to expand a topic into nearby related threads before answering cross-topic questions.",
+                "- Prefer topic tools for navigating hidden project threads; prefer memory_retrieve for profile, fact, and continuity grounding.",
+            ]
+        )
+    lines.append("- After tool results arrive, answer the user directly and do not mention the tool protocol.")
+    instruction = "\n".join(lines)
     return [Message(role="system", content=instruction), *list(messages or [])]
 
 
@@ -9125,6 +9521,45 @@ def _turn_log_context(ctx: PipelineContext) -> dict[str, Any]:
         "turn_id": str(_pick(ctx.meta.get("turn_id"), ctx.state.get("turn_id"), "")).strip(),
         "conversation_id": str(_pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "")).strip(),
     }
+
+
+def _update_topic_stack(
+    stack: Any,
+    *,
+    thread_id: str,
+    title: str,
+    topic_key: str,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    target = str(thread_id or "").strip()
+    if not target:
+        return list(_as_list(stack))
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    now_value = now_local_ts()
+    new_entry = {
+        "thread_id": target,
+        "title": str(title or "").strip(),
+        "topic_key": str(topic_key or "").strip(),
+        "updated_at": now_value,
+    }
+    for row in [new_entry, *list(_as_list(stack))]:
+        item = _as_dict(row)
+        item_thread_id = str(item.get("thread_id") or "").strip()
+        if not item_thread_id or item_thread_id in seen:
+            continue
+        seen.add(item_thread_id)
+        items.append(
+            {
+                "thread_id": item_thread_id,
+                "title": str(item.get("title") or "").strip(),
+                "topic_key": str(item.get("topic_key") or "").strip(),
+                "updated_at": item.get("updated_at") or now_value,
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
 
 
 def _remember_turn_summary(ctx: PipelineContext, event: str, payload: dict[str, Any]) -> None:

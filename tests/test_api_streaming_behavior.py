@@ -85,6 +85,31 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
         self.assertTrue(bool(stats.get("streaming_live")))
         self.assertEqual(int(stats.get("streamed_answer_chars") or 0), len("Hello world"))
 
+    def test_chat_stream_splits_large_thinking_piece_into_multiple_live_events(self) -> None:
+        thinking = (
+            "Okay, let's think this through carefully. "
+            "The user wants the reasoning text to arrive in smaller live chunks."
+        )
+
+        def fake_handle_message(_text: str, meta: dict | None = None):
+            meta_map = dict(meta or {})
+            meta_map["stream_on_thinking_chunk"](thinking)
+            meta_map["stream_on_answer_chunk"]("done")
+            return _reply(text="done", thinking=thinking, stats={"served_model": "stub-model", "streaming": True})
+
+        api_app = self._api_app()
+        with TestClient(api_app.app) as client:
+            with patch.object(api_app._runtime.brain, "handle_message", side_effect=fake_handle_message):
+                events = self._collect_events(client, {"text": "hello", "store_turn": False})
+
+        thinking_events = [str(row.get("data") or "") for row in events if str(row.get("event") or "") == "thinking"]
+        self.assertGreater(len(thinking_events), 1)
+        self.assertEqual("".join(thinking_events), thinking)
+        payload = dict(events[-1].get("data") or {})
+        stats = dict(payload.get("stats") or {})
+        self.assertTrue(bool(stats.get("streaming_live")))
+        self.assertEqual(int(stats.get("streamed_thinking_chars") or 0), len(thinking))
+
     def test_chat_does_not_store_assistant_metadata_for_error_result(self) -> None:
         api_app = self._api_app()
         with TestClient(api_app.app) as client:
@@ -98,7 +123,7 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
         self.assertEqual(str(append_row.call_args.kwargs.get("role") or ""), "user")
 
 
-    def test_build_chat_meta_disables_qwen3_thinking_hotfix(self) -> None:
+    def test_build_chat_meta_keeps_requested_thinking_for_qwen3(self) -> None:
         api_app = self._api_app()
         req = api_app.ChatRequest(text="hello", think=True, store_turn=False)
 
@@ -110,7 +135,7 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
             with patch.object(api_app._runtime, "thinking_enabled", True):
                 other_meta = api_app._build_chat_meta(req=req, source="api")
 
-        self.assertFalse(bool(qwen_meta.get("think")))
+        self.assertTrue(bool(qwen_meta.get("think")))
         self.assertTrue(bool(other_meta.get("think")))
 
 

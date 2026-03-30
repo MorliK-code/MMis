@@ -527,7 +527,9 @@ def chat_stream(req: ChatRequest):
         def _on_thinking(piece: str) -> None:
             chunk = str(piece or "")
             if chunk:
-                events.put(("thinking", chunk), block=False)  # Не блокировать, если очередь полна
+                for subchunk in _split_stream_display_piece(chunk, max_chars=12):
+                    if subchunk:
+                        events.put(("thinking", subchunk), block=False)  # Не блокировать, если очередь полна
 
         def _on_debug_event(kind: str, payload: dict[str, Any]) -> None:
             """Эмитить memory-debug событие в stream."""
@@ -827,11 +829,7 @@ def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str
 
 
 def _requested_think_enabled(req: ChatRequest) -> bool:
-    requested_think = _runtime.thinking_enabled if req.think is None else bool(req.think)
-    model_lower = str(_runtime.model or "").strip().lower()
-    if requested_think and "qwen3" in model_lower:
-        return False
-    return requested_think
+    return bool(_runtime.thinking_enabled if req.think is None else req.think)
 
 
 def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
@@ -931,6 +929,38 @@ def _split_chunks(text: str, chunk_size: int = 64) -> list[str]:
     if not src:
         return [""]
     return [src[i : i + chunk_size] for i in range(0, len(src), max(1, int(chunk_size)))]
+
+
+def _split_stream_display_piece(text: str, *, max_chars: int = 12) -> list[str]:
+    src = str(text or "")
+    if not src:
+        return []
+    tokens = re.findall(r"\S+\s*|\s+", src, flags=re.UNICODE)
+    if not tokens:
+        return [src]
+
+    out: list[str] = []
+    carry = ""
+    limit = max(1, int(max_chars))
+
+    def _flush_carry() -> None:
+        nonlocal carry
+        if carry:
+            out.append(carry)
+            carry = ""
+
+    for token in tokens:
+        if len(token) > limit:
+            _flush_carry()
+            for start in range(0, len(token), limit):
+                out.append(token[start : start + limit])
+            continue
+        if carry and (len(carry) + len(token)) > limit:
+            _flush_carry()
+        carry += token
+
+    _flush_carry()
+    return out or [src]
 
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", flags=re.IGNORECASE | re.DOTALL)

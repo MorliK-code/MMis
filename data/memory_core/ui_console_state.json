@@ -7,6 +7,6 @@
     "output_parameters": false,
     "output_summary": false,
     "model": "qwen3:8b",
-    "think_enabled": true
+    "think_enabled": false
   }
 }

@@ -76,6 +76,10 @@ class EpisodeProcessor:
         # Убираем дубликаты
         return list(set(topics))
     
+    def detect_topic_hints(self, text: str) -> list[str]:
+        """Returns topic hints for router/fallback logic."""
+        return self._detect_topics(text)
+
     def _create_episode_artifact(
         self,
         topic: str,

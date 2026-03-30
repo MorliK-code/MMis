@@ -225,6 +225,34 @@ def test_agent_loop_streaming_thinking_live():
     assert resp.text == "Ответ"
 
 
+def test_think_stream_parser_emits_inline_thinking_without_tag_tail_delay() -> None:
+    from core.response_pipeline import _ThinkStreamParser
+
+    parser = _ThinkStreamParser()
+
+    visible, thinking = parser.feed("Hello <think>rea")
+    assert visible == "Hello "
+    assert thinking == "rea"
+
+    visible, thinking = parser.feed("son")
+    assert visible == ""
+    assert thinking == "son"
+
+
+def test_think_stream_parser_does_not_hold_recent_thinking_while_close_tag_is_incomplete() -> None:
+    from core.response_pipeline import _ThinkStreamParser
+
+    parser = _ThinkStreamParser()
+
+    visible, thinking = parser.feed("<think>abc</thi")
+    assert visible == ""
+    assert thinking == "abc"
+
+    visible, thinking = parser.feed("nk>done")
+    assert visible == "done"
+    assert thinking == ""
+
+
 def test_agent_loop_streaming_no_probe_delay_with_tools():
     """
     Проверить:

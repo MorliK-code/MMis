@@ -145,6 +145,8 @@ class MemoryCoreAdapter:
         session_id: str | None = None,
         top_k: int | None = None,
         include_citations: bool = True,
+        topic_thread_id: str | None = None,
+        related_topic_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Выполняет запрос к памяти.
@@ -165,6 +167,8 @@ class MemoryCoreAdapter:
             session_id=session_id or self._current_session,
             top_k=top_k or self.config.top_k,
             include_citations=include_citations,
+            topic_thread_id=topic_thread_id,
+            related_topic_ids=list(related_topic_ids or []),
         )
 
         result = self.service.query(query)
@@ -209,6 +213,8 @@ class MemoryCoreAdapter:
         top_k: int = 8,
         workspace_id: str | None = None,
         session_id: str | None = None,
+        topic_thread_id: str | None = None,
+        related_topic_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Compatibility shim для старого response_pipeline.
@@ -228,6 +234,8 @@ class MemoryCoreAdapter:
             session_id=session_id,
             top_k=top_k,
             include_citations=True,
+            topic_thread_id=topic_thread_id,
+            related_topic_ids=related_topic_ids,
         )
 
         selected = [dict(x) for x in list(result.get("selected") or []) if isinstance(x, dict)]
@@ -329,6 +337,7 @@ class MemoryCoreAdapter:
         self,
         session_id: str,
         workspace_id: str | None = None,
+        topic_thread_id: str | None = None,
     ) -> dict[str, Any]:
         """
         Получает continuity pack для эпизода.
@@ -353,10 +362,16 @@ class MemoryCoreAdapter:
         active_episode = planner.get_or_create_episode(
             session_id=session_id,
             workspace_id=workspace,
+            topic_thread_id=topic_thread_id,
         )
         
         # Получаем недавние эпизоды для контекста
-        recent_episodes = planner.get_active_episodes(session_id=session_id)[:3]
+        recent_episodes = [
+            ep
+            for ep in planner.get_active_episodes(session_id=session_id)
+            if str((ep.metadata or {}).get("topic_thread_id") or "default").strip()
+            == str(topic_thread_id or "default").strip()
+        ][:3]
         
         return {
             "active_episode": {
@@ -367,6 +382,7 @@ class MemoryCoreAdapter:
                 "status": active_episode.status,
                 "session_id": active_episode.session_id,
                 "workspace_id": active_episode.workspace_id,
+                "topic_thread_id": str((active_episode.metadata or {}).get("topic_thread_id") or ""),
             },
             "recent_episode_summaries": [
                 {
@@ -699,9 +715,11 @@ class MemoryCoreAdapter:
         # Отменяем таймер если ещё активен
         self._cancel_auto_resume_timer()
         resume_epoch = self._bump_resume_epoch()
+        pending_jobs = self._pending_memory_job_count()
         
-        # СНАЧАЛА выгружаем модель основной модели из VRAM
-        self._unload_main_model_from_vram()
+        # Выгружаем основную модель только если действительно есть отложенные memory-задачи.
+        if pending_jobs > 0:
+            self._unload_main_model_from_vram()
         
         worker = self._get_worker()
         if worker is not None:
@@ -719,7 +737,7 @@ class MemoryCoreAdapter:
         
         # Также возобновляем Memory LLM
         self._resume_memory_llm()
-        if self._schedule_memory_prewarm(resume_epoch):
+        if pending_jobs > 0 and self._schedule_memory_prewarm(resume_epoch):
             return
 
         self._complete_memory_resume(resume_epoch)

@@ -130,6 +130,8 @@ class MemoryQuery:
     top_k: int = 8
     include_citations: bool = True
     session_id: str | None = None
+    topic_thread_id: str | None = None
+    related_topic_ids: list[str] = field(default_factory=list)
     
     def to_dict(self) -> dict[str, Any]:
         """Преобразует в словарь."""
@@ -141,6 +143,8 @@ class MemoryQuery:
             "top_k": self.top_k,
             "include_citations": self.include_citations,
             "session_id": self.session_id,
+            "topic_thread_id": self.topic_thread_id,
+            "related_topic_ids": self.related_topic_ids,
         }
     
     @classmethod
@@ -154,6 +158,8 @@ class MemoryQuery:
             top_k=data.get("top_k", 8),
             include_citations=data.get("include_citations", True),
             session_id=data.get("session_id"),
+            topic_thread_id=data.get("topic_thread_id"),
+            related_topic_ids=data.get("related_topic_ids", []),
         )
 
 

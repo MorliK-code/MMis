@@ -7,7 +7,7 @@ import time
 import traceback
 from dataclasses import dataclass
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QThread, Signal
 
 from ui.api_client import ApiClient, ApiClientError
 
@@ -17,6 +17,7 @@ class ReplyResult:
     text: str
     stats: dict
     thinking: str = ""
+    thinking_generated: bool = False
     model: str = ""
     debug_trace: dict | None = None
     memory_debug_snapshot: dict | None = None
@@ -54,7 +55,7 @@ def _split_stream_display_piece(text: str, *, max_chars: int = 12) -> list[str]:
     return out or [src]
 
 
-class ReplyWorker(QObject):
+class ReplyWorker(QThread):
     finished = Signal(object)
     errored = Signal(str)
     chunk = Signal(str)
@@ -67,12 +68,14 @@ class ReplyWorker(QObject):
         user_text: str,
         store_turn: bool = True,
         think: bool | None = None,
+        verbose: bool | None = None,
     ):
         super().__init__()
         self.api = api
         self.user_text = user_text
         self.store_turn = bool(store_turn)
         self.think = think
+        self.verbose = verbose
         self._cancel_requested = False
         # Отключаем искусственную задержку для мгновенного стриминга
         self._stream_emit_pause_sec = 0.0
@@ -81,22 +84,44 @@ class ReplyWorker(QObject):
     def request_cancel(self):
         self._cancel_requested = True
 
-    def _emit_stream_piece(self, piece: str, signal: Signal) -> None:
+    def _emit_stream_piece(
+        self,
+        piece: str,
+        signal: Signal,
+        *,
+        split_large: bool = False,
+        max_chars: int | None = None,
+        pause_sec: float = 0.0,
+    ) -> None:
         text = str(piece or "")
         if not text:
             signal.emit("")
             return
 
-        # Отправляем чанк сразу без разбиения и задержек
-        signal.emit(text)
+        if not split_large:
+            signal.emit(text)
+            return
 
-    @Slot()
+        limit = max(1, int(max_chars or self._stream_emit_chunk_chars))
+        parts = _split_stream_display_piece(text, max_chars=limit)
+        if len(parts) <= 1:
+            signal.emit(text)
+            return
+
+        for index, part in enumerate(parts):
+            if self._cancel_requested:
+                return
+            signal.emit(part)
+            if pause_sec > 0.0 and index < len(parts) - 1:
+                time.sleep(float(pause_sec))
+
     def run(self):
         try:
             reply = self.api.stream_chat(
                 text=self.user_text,
                 store_turn=self.store_turn,
                 think=self.think,
+                verbose=self.verbose,
                 on_chunk=lambda piece: self._emit_stream_piece(piece, self.chunk),
                 on_thinking_chunk=lambda piece: self._emit_stream_piece(piece, self.thinking_chunk),
                 on_debug_event=self.debug_event.emit,
@@ -109,6 +134,7 @@ class ReplyWorker(QObject):
                     text=reply.answer,
                     stats=reply.stats,
                     thinking=reply.thinking,
+                    thinking_generated=bool(reply.thinking_generated),
                     model=reply.model,
                     debug_trace=reply.debug_trace,
                     memory_debug_snapshot=reply.memory_debug_snapshot,
@@ -119,5 +145,3 @@ class ReplyWorker(QObject):
         except Exception as exc:
             msg = str(exc or "").strip()
             self.errored.emit(msg if msg else traceback.format_exc())
-
-

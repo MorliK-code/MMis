@@ -31,6 +31,7 @@ from memory_core.storage.event_store import EventStore
 from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.schemas import MemoryEnvelope
 from memory_core.inspect.trace_store import MemoryTraceStore
+from memory_core.topic import TopicStore, TopicSummaryBuilder
 from utils.logger import get_logger
 
 
@@ -129,6 +130,7 @@ class BackgroundWorker:
         self._pause_event = threading.Event()  # Event для паузы (установлен = пауза)
         self._wake_event = threading.Event()
         self._running = False
+        self._memory_llm_provider_unloaded = False
 
     def _memory_llm_control_method(self, method_name: str):
         processor = getattr(self, "memory_llm_processor", None)
@@ -231,6 +233,7 @@ class BackgroundWorker:
                 LOGGER.info(f"Worker {self.config.worker_id}: Shutting down Memory LLM provider...")
                 shutdown()
                 LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider shutdown complete")
+                self._memory_llm_provider_unloaded = True
         except Exception as exc:
             LOGGER.warning(f"Worker {self.config.worker_id}: Failed to shutdown Memory LLM provider: {exc}")
 
@@ -280,6 +283,7 @@ class BackgroundWorker:
                 LOGGER.info(f"Worker {self.config.worker_id}: Pausing Memory LLM provider...")
                 pause()
                 LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider paused")
+                self._memory_llm_provider_unloaded = True
         except Exception as exc:
             LOGGER.debug(f"Worker {self.config.worker_id}: Failed to pause Memory LLM provider: {exc}")
 
@@ -291,6 +295,7 @@ class BackgroundWorker:
                 LOGGER.info(f"Worker {self.config.worker_id}: Resuming Memory LLM provider...")
                 resume()
                 LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider resumed")
+                self._memory_llm_provider_unloaded = False
         except Exception as exc:
             LOGGER.debug(f"Worker {self.config.worker_id}: Failed to resume Memory LLM provider: {exc}")
 
@@ -356,6 +361,8 @@ class BackgroundWorker:
             return False
 
         try:
+            if self._memory_llm_provider_unloaded:
+                self._resume_memory_llm_provider()
             print(f"[WORKER] {self.config.worker_id}: Processing job {job.job_id[:8]}...", flush=True)
             sys.stdout.flush()
             self._process_job(job)
@@ -505,6 +512,9 @@ class BackgroundWorker:
 
         # Обновляем векторный индекс (если есть)
         # governor_result.artifacts может быть list[dict] или list[MemoryArtifact]
+        self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="before_topic_summary_refresh")
+        self._refresh_topic_thread(envelope)
+
         artifacts_list = governor_result.artifacts if hasattr(governor_result, 'artifacts') else []
         indexed_ids = []
 
@@ -616,6 +626,16 @@ class BackgroundWorker:
         except Exception as e:
             LOGGER.debug(f"Failed to update episode context: {e}")
 
+    def _refresh_topic_thread(self, envelope: MemoryEnvelope) -> None:
+        topic_thread_id = str(dict(envelope.metadata or {}).get("topic_thread_id") or "").strip()
+        if not topic_thread_id or self.artifact_store is None:
+            return
+        try:
+            builder = TopicSummaryBuilder(TopicStore(self.artifact_store))
+            builder.rebuild_thread(topic_thread_id, workspace_id=envelope.workspace_id)
+        except Exception as exc:
+            LOGGER.debug(f"Failed to refresh topic thread {topic_thread_id}: {exc}")
+
     def _run_loop(self) -> None:
         """Основной цикл воркера."""
         LOGGER.info(f"Worker {self.config.worker_id} run loop started")
@@ -667,6 +687,10 @@ class BackgroundWorker:
 
                 # Если задач не было — проверяем idle timeout
                 if jobs_count == 0:
+                    if not self._memory_llm_provider_unloaded:
+                        LOGGER.info(f"Worker {self.config.worker_id}: Queue is empty, unloading Memory LLM provider...")
+                        self._pause_memory_llm_provider()
+
                     # Проверяем настройку shutdown_idle_timeout
                     if self.config.shutdown_idle_timeout_sec > 0:
                         if idle_start_time is None:

@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from memory_core.topic import TopicStore
+
 
 @dataclass(slots=True)
 class MemoryInspectorService:
@@ -29,6 +31,7 @@ class MemoryInspectorService:
     _worker: Any = None
     _vector_index: Any = None
     _trace_store: Any = None
+    _topic_store: TopicStore | None = None
 
     def __init__(self, memory_core: Any):
         """Инициализирует сервис."""
@@ -40,6 +43,7 @@ class MemoryInspectorService:
         self._worker = None
         self._vector_index = None
         self._trace_store = None
+        self._topic_store = None
 
         # Пытаемся получить доступ к внутренним компонентам memory_core
         if hasattr(self.memory_core, "service"):
@@ -60,6 +64,7 @@ class MemoryInspectorService:
             # Хранилища
             if hasattr(service, "artifact_store"):
                 self._artifact_store = service.artifact_store
+                self._topic_store = TopicStore(self._artifact_store)
             if hasattr(service, "event_store"):
                 self._event_store = service.event_store
 
@@ -468,6 +473,116 @@ class MemoryInspectorService:
             }
         except Exception:
             return None
+
+    def list_topics(
+        self,
+        *,
+        visible_chat_id: str = "",
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        if not self._topic_store:
+            return []
+
+        threads = self._topic_store.list_threads(
+            visible_chat_id=str(visible_chat_id or "").strip(),
+            status=status,
+            limit=limit,
+        )
+        return [self._serialize_topic(thread) for thread in threads]
+
+    def get_topic_details(self, thread_id: str) -> dict[str, Any] | None:
+        if not self._topic_store:
+            return None
+
+        thread = self._topic_store.get_thread(thread_id)
+        if thread is None:
+            return None
+
+        recent_artifacts = self._topic_store.list_thread_artifacts(
+            thread.thread_id,
+            workspace_id=thread.workspace_id,
+            limit=50,
+        )
+        episode_count = sum(1 for row in recent_artifacts if str(row.get("artifact_type") or "") == "episode_event")
+        thread_meta = dict(thread.metadata or {})
+        open_questions: list[str] = [
+            str(item).strip()
+            for item in list(thread_meta.get("open_questions") or [])
+            if str(item).strip()
+        ]
+        current_decisions: list[str] = [
+            str(item).strip()
+            for item in list(thread_meta.get("current_decisions") or [])
+            if str(item).strip()
+        ]
+        linked_tasks: list[dict[str, Any]] = []
+        for row in recent_artifacts:
+            metadata = dict(row.get("metadata") or {})
+            for question in list(metadata.get("open_questions") or []):
+                text = str(question or "").strip()
+                if text and text not in open_questions:
+                    open_questions.append(text)
+            for decision in list(metadata.get("decisions") or metadata.get("current_decisions") or []):
+                text = str(decision or "").strip()
+                if text and text not in current_decisions:
+                    current_decisions.append(text)
+            if str(row.get("artifact_type") or "") in {"task", "task_state"}:
+                linked_tasks.append(
+                    {
+                        "artifact_id": row.get("artifact_id"),
+                        "text": row.get("text"),
+                        "summary": row.get("summary"),
+                        "status": metadata.get("task_status") or row.get("status"),
+                    }
+                )
+
+        related_topics = [
+            self._serialize_topic(related)
+            for related_id in list(thread.related_thread_ids or [])
+            for related in [self._topic_store.get_thread(related_id)]
+            if related is not None
+        ]
+        return {
+            **self._serialize_topic(thread, recent_artifacts=recent_artifacts),
+            "episode_count": int(episode_count),
+            "open_questions": open_questions[:20],
+            "current_decisions": current_decisions[:20],
+            "linked_tasks": linked_tasks[:20],
+            "related_topics": related_topics,
+            "recent_artifacts": recent_artifacts[:50],
+        }
+
+    def _serialize_topic(
+        self,
+        thread: Any,
+        *,
+        recent_artifacts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if thread is None:
+            return {}
+        artifacts = list(recent_artifacts or self._topic_store.list_thread_artifacts(
+            thread.thread_id,
+            workspace_id=thread.workspace_id,
+            limit=100,
+        )) if self._topic_store else list(recent_artifacts or [])
+        return {
+            "thread_id": thread.thread_id,
+            "visible_chat_id": thread.visible_chat_id,
+            "workspace_id": thread.workspace_id,
+            "session_id": thread.session_id,
+            "topic_key": thread.topic_key,
+            "title": thread.title,
+            "status": thread.status,
+            "summary": thread.summary,
+            "tags": list(thread.tags or []),
+            "related_thread_ids": list(thread.related_thread_ids or []),
+            "created_at": thread.created_at,
+            "updated_at": thread.updated_at,
+            "metadata": dict(thread.metadata or {}),
+            "artifact_count": len(artifacts),
+            "recent_artifact_ids": [row.get("artifact_id") for row in artifacts[:5]],
+        }
 
     def retry_job(self, job_id: str) -> dict[str, Any]:
         """

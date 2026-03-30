@@ -178,9 +178,26 @@ class _FakeThread:
 class _FakeClosableClient:
     def __init__(self) -> None:
         self.close_calls = 0
+        self.transport_close_calls = 0
+        self.transport = SimpleNamespace(close=self._close_transport)
 
     def close(self) -> None:
         self.close_calls += 1
+
+    def _close_transport(self) -> None:
+        self.transport_close_calls += 1
+
+
+class _FakePriorityManager:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def wait_for_turn(self, priority: int, timeout: float | None = None) -> bool:
+        self.calls.append(("wait", priority))
+        return True
+
+    def release(self, priority: int) -> None:
+        self.calls.append(("release", priority))
 
 
 class _ImmediateRequeueQueue:
@@ -577,6 +594,35 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(fake_client.generate_calls[0].get("keep_alive"), "30m")
         self.assertEqual(dict(fake_client.generate_calls[0].get("options") or {}).get("num_predict"), 0)
 
+    def test_shutdown_uses_zero_keep_alive_for_module_level_unload_attempts(self) -> None:
+        provider = OllamaProvider(default_model="memory-model", timeout_sec=1.0)
+        provider._current_model = "memory-model"
+        provider._unload_known_model = lambda model_name=None: True
+        provider_client = _FakeClosableClient()
+        global_client = _FakeClosableClient()
+        old_global_client = getattr(ollama_provider_module.ollama, "_client", None)
+        old_global_module_client = getattr(ollama_provider_module.ollama, "client", None)
+        provider._client = provider_client
+        ollama_provider_module.ollama._client = global_client
+        ollama_provider_module.ollama.client = _FakeClosableClient()
+        try:
+            with mock.patch.object(ollama_provider_module.ollama, "generate", return_value={}) as generate:
+                with mock.patch.object(ollama_provider_module.ollama, "chat", return_value={}) as chat:
+                    provider.shutdown()
+        finally:
+            ollama_provider_module.ollama._client = old_global_client
+            ollama_provider_module.ollama.client = old_global_module_client
+
+        self.assertEqual(generate.call_count, 1)
+        self.assertEqual(chat.call_count, 1)
+        self.assertEqual(generate.call_args.kwargs.get("keep_alive"), 0)
+        self.assertEqual(chat.call_args.kwargs.get("keep_alive"), 0)
+        self.assertEqual(provider_client.close_calls, 1)
+        self.assertEqual(provider_client.transport_close_calls, 1)
+        self.assertEqual(global_client.close_calls, 1)
+        self.assertEqual(global_client.transport_close_calls, 1)
+        self.assertIsNone(provider._client)
+
     def test_adapter_resume_prewarms_memory_when_jobs_are_waiting(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
         adapter._enable_pause = True
@@ -607,6 +653,27 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(release_calls, ["release"])
         self.assertEqual(worker.wake_calls, 1)
 
+    def test_adapter_resume_keeps_main_model_loaded_without_pending_memory_jobs(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._enable_pause = True
+        adapter._cancel_auto_resume_timer = lambda: None
+        unload_calls: list[str] = []
+        adapter._unload_main_model_from_vram = lambda: unload_calls.append("unload")
+        adapter._resume_memory_llm = lambda: None
+        adapter._resume_epoch = 0
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._release_memory_llm_lock = lambda: None
+
+        worker = _FakeWorker(running=False)
+        worker.job_queue = SimpleNamespace(get_stats=lambda: {"by_type": {"memory_llm_process": 0}})
+        adapter.service = SimpleNamespace(worker=worker)
+
+        adapter.resume_worker()
+
+        self.assertEqual(unload_calls, [])
+        self.assertEqual(worker.start_calls, 1)
+        self.assertEqual(worker.wake_calls, 1)
+
     def test_priority_manager_memory_turn_is_immediate_without_main(self) -> None:
         manager = LLMPriorityManager(enabled=True, wait_timeout=0.1)
         result: dict[str, object] = {}
@@ -621,6 +688,166 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertTrue(bool(result.get("ok")))
         manager.release(LLMPriorityManager.PRIORITY_MEMORY)
+
+    def test_ollama_stream_uses_priority_manager_for_main_requests(self) -> None:
+        provider = OllamaProvider(default_model="main-model", timeout_sec=1.0)
+        provider._chat_with_retry = lambda **_kwargs: iter(
+            [
+                {
+                    "message": {"content": "hi"},
+                    "done": True,
+                    "model": "main-model",
+                }
+            ]
+        )
+        calls: list[tuple[str, int]] = []
+
+        class _FakePriorityManager:
+            def wait_for_turn(self, priority: int, timeout: float | None = None) -> bool:
+                calls.append(("wait", priority))
+                return True
+
+            def release(self, priority: int) -> None:
+                calls.append(("release", priority))
+
+        with mock.patch.object(ollama_provider_module, "get_priority_manager", return_value=_FakePriorityManager()):
+            chunks = list(
+                provider.stream(
+                    LLMRequest(
+                        model="main-model",
+                        messages=[Message(role="user", content="hello")],
+                        metadata={"source": "api"},
+                    )
+                )
+            )
+
+        self.assertEqual([row[0] for row in calls], ["wait", "release"])
+        self.assertEqual(calls[0][1], LLMPriorityManager.PRIORITY_MAIN)
+        self.assertEqual(calls[1][1], LLMPriorityManager.PRIORITY_MAIN)
+        self.assertEqual(len(chunks), 1)
+
+    def test_ollama_generate_retries_without_thinking_when_first_pass_has_no_answer(self) -> None:
+        provider = OllamaProvider(default_model="main-model", timeout_sec=1.0)
+        payloads = iter(
+            [
+                {
+                    "message": {
+                        "content": "",
+                        "thinking": "Long chain of thought",
+                    },
+                    "done": True,
+                    "model": "main-model",
+                },
+                {
+                    "message": {
+                        "content": "Final answer",
+                    },
+                    "done": True,
+                    "model": "main-model",
+                },
+            ]
+        )
+        think_flags: list[bool] = []
+
+        def _chat_with_retry(*, req, model, stream):
+            think_flags.append(bool(dict(req.metadata or {}).get("think")))
+            self.assertFalse(stream)
+            return next(payloads)
+
+        provider._chat_with_retry = _chat_with_retry
+        priority_mgr = _FakePriorityManager()
+
+        with mock.patch.object(ollama_provider_module, "get_priority_manager", return_value=priority_mgr):
+            response = provider.generate(
+                LLMRequest(
+                    model="main-model",
+                    messages=[Message(role="user", content="hello")],
+                    metadata={"source": "api", "think": True},
+                )
+            )
+
+        self.assertEqual(think_flags, [True, False])
+        self.assertEqual(response.text, "Final answer")
+        self.assertEqual(response.thinking, "Long chain of thought")
+        self.assertEqual(priority_mgr.calls, [("wait", LLMPriorityManager.PRIORITY_MAIN), ("release", LLMPriorityManager.PRIORITY_MAIN)])
+
+    def test_ollama_stream_retries_without_thinking_when_first_pass_has_no_answer(self) -> None:
+        provider = OllamaProvider(default_model="main-model", timeout_sec=1.0)
+        streams = iter(
+            [
+                [
+                    {
+                        "message": {
+                            "thinking": "Long ",
+                        },
+                        "done": False,
+                        "model": "main-model",
+                    },
+                    {
+                        "message": {
+                            "thinking": "Long chain of thought",
+                        },
+                        "done": True,
+                        "model": "main-model",
+                    },
+                ],
+                [
+                    {
+                        "message": {
+                            "content": "Final ",
+                        },
+                        "done": False,
+                        "model": "main-model",
+                    },
+                    {
+                        "message": {
+                            "content": "answer",
+                        },
+                        "done": True,
+                        "model": "main-model",
+                    },
+                ],
+            ]
+        )
+        think_flags: list[bool] = []
+
+        def _chat_with_retry(*, req, model, stream):
+            think_flags.append(bool(dict(req.metadata or {}).get("think")))
+            self.assertTrue(stream)
+            return iter(next(streams))
+
+        provider._chat_with_retry = _chat_with_retry
+        priority_mgr = _FakePriorityManager()
+
+        with mock.patch.object(ollama_provider_module, "get_priority_manager", return_value=priority_mgr):
+            chunks = list(
+                provider.stream(
+                    LLMRequest(
+                        model="main-model",
+                        messages=[Message(role="user", content="hello")],
+                        metadata={"source": "api", "think": True},
+                    )
+                )
+            )
+
+        self.assertEqual(think_flags, [True, False])
+        self.assertEqual("".join(chunk.thinking_delta for chunk in chunks), "Long chain of thought")
+        self.assertEqual("".join(chunk.text_delta for chunk in chunks), "Final answer")
+        self.assertEqual(sum(1 for chunk in chunks if chunk.done), 1)
+        self.assertTrue(chunks[-1].done)
+        self.assertEqual(priority_mgr.calls, [("wait", LLMPriorityManager.PRIORITY_MAIN), ("release", LLMPriorityManager.PRIORITY_MAIN)])
+
+    def test_ollama_build_options_preserves_unbounded_num_predict_sentinel(self) -> None:
+        options = OllamaProvider._build_options(
+            LLMRequest(
+                model="main-model",
+                messages=[Message(role="user", content="hello")],
+                max_tokens=-1,
+                metadata={"think": True},
+            )
+        )
+
+        self.assertEqual(options.get("num_predict"), -1)
 
     def test_priority_manager_memory_turn_resumes_after_main_release(self) -> None:
         manager = LLMPriorityManager(enabled=True, wait_timeout=0.5)
@@ -708,6 +935,61 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(queue.requeue_calls, [("job-2", "")])
         self.assertEqual(queue.complete_calls, [])
+
+    def test_worker_unloads_memory_provider_when_queue_becomes_empty(self) -> None:
+        worker = BackgroundWorker(
+            job_queue=SimpleNamespace(),
+            event_store=SimpleNamespace(),
+            memory_llm_processor=SimpleNamespace(),
+            governor=lambda proposals, envelope: SimpleNamespace(decisions=[], artifacts=[]),
+            config=WorkerConfig(poll_interval_sec=0.01),
+        )
+        calls: list[str] = []
+        worker.process_one_job = lambda: False
+        worker._pause_memory_llm_provider = lambda: calls.append("pause") or setattr(worker, "_memory_llm_provider_unloaded", True)
+        worker._wait_or_wake = lambda timeout: worker._stop_event.set()
+
+        worker._run_loop()
+
+        self.assertEqual(calls, ["pause"])
+        self.assertTrue(worker._memory_llm_provider_unloaded)
+
+    def test_worker_resumes_memory_provider_before_processing_next_job_after_idle_unload(self) -> None:
+        job = IngestJob(
+            job_id="job-idle",
+            event_id="event-idle",
+            job_type="memory_llm_process",
+            status="queued",
+            payload_json="{}",
+        )
+        event = SimpleNamespace(
+            event_id="event-idle",
+            source_kind="user",
+            payload_type="message",
+            text="resume after idle unload",
+            metadata={},
+            namespace="default",
+            workspace_id="global",
+            session_id="default",
+            ts=0.0,
+        )
+        queue = _ImmediateRequeueQueue(job)
+        worker = BackgroundWorker(
+            job_queue=queue,
+            event_store=_EventStoreForInterrupt(event),
+            memory_llm_processor=SimpleNamespace(process=lambda envelope: SimpleNamespace(should_process=False, proposals=[])),
+            governor=lambda proposals, envelope: SimpleNamespace(decisions=[], artifacts=[]),
+            config=WorkerConfig(),
+        )
+        calls: list[str] = []
+        worker._memory_llm_provider_unloaded = True
+        worker._resume_memory_llm_provider = lambda: calls.append("resume") or setattr(worker, "_memory_llm_provider_unloaded", False)
+
+        handled = worker.process_one_job()
+
+        self.assertTrue(handled)
+        self.assertEqual(calls, ["resume"])
+        self.assertEqual(queue.complete_calls, ["job-idle"])
 
     def test_worker_requeues_job_when_interrupt_happens_after_memory_result_before_empty_complete(self) -> None:
         job = IngestJob(

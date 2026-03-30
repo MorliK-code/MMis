@@ -30,6 +30,7 @@ class _FakeApi:
         return ApiReply(
             answer=self.answer_piece,
             thinking=self.thinking_piece,
+            thinking_generated=bool(self.thinking_piece),
             stats={},
             model="fake-model",
         )
@@ -43,7 +44,7 @@ def test_split_stream_display_piece_breaks_large_sentence_into_small_parts() -> 
     assert all(len(part) <= 12 for part in parts)
 
 
-def test_reply_worker_emits_large_answer_piece_incrementally_before_finish() -> None:
+def test_reply_worker_emits_large_answer_piece_without_forced_ui_splitting() -> None:
     answer = "Привет! 😊 Как ты? Рада, что ты снова заговорил — чувствую, что наша беседа становится всё интереснее. "
     worker = ReplyWorker(_FakeApi(answer), user_text="hello", store_turn=True, think=False)
     worker._stream_emit_pause_sec = 0.0
@@ -56,13 +57,13 @@ def test_reply_worker_emits_large_answer_piece_incrementally_before_finish() -> 
     worker.run()
 
     chunk_events = [value for kind, value in events if kind == "chunk"]
-    assert len(chunk_events) > 1
+    assert len(chunk_events) == 1
     assert "".join(chunk_events) == answer
     assert events[-1] == ("finished", answer)
-    assert chunk_events[0] != answer
+    assert chunk_events[0] == answer
 
 
-def test_reply_worker_default_stream_split_uses_visible_pause(monkeypatch) -> None:
+def test_reply_worker_default_answer_stream_does_not_use_artificial_pause(monkeypatch) -> None:
     answer = "Привет! Как ты? Рада, что ты снова заговорил и продолжаешь разговор."
     worker = ReplyWorker(_FakeApi(answer), user_text="hello", store_turn=True, think=False)
     worker._stream_emit_chunk_chars = 12
@@ -78,5 +79,22 @@ def test_reply_worker_default_stream_split_uses_visible_pause(monkeypatch) -> No
 
     worker.run()
 
-    assert sleep_calls
-    assert max(sleep_calls) >= 0.01
+    assert sleep_calls == []
+
+
+def test_reply_worker_passes_thinking_chunks_through_without_forced_ui_splitting() -> None:
+    thinking = (
+        "Okay, let's think this through carefully. "
+        "The user wants the reasoning text to appear in smaller live chunks."
+    )
+    worker = ReplyWorker(_FakeApi(answer_piece="ok", thinking_piece=thinking), user_text="hello", store_turn=True, think=True)
+
+    events: list[tuple[str, str]] = []
+    worker.thinking_chunk.connect(lambda piece: events.append(("thinking", piece)))
+    worker.finished.connect(lambda res: events.append(("finished", res.text)))
+
+    worker.run()
+
+    thinking_events = [value for kind, value in events if kind == "thinking"]
+    assert len(thinking_events) == 1
+    assert "".join(thinking_events) == thinking

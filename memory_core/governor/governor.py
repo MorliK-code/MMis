@@ -92,6 +92,7 @@ class Governor:
 
     # Максимальное количество артефактов одного типа
     MAX_ARTIFACTS_PER_TYPE = 100
+    TOPIC_SCOPED_ARTIFACT_TYPES = {"episode_event", "task_state", "emotional_state"}
 
     def __init__(
         self,
@@ -226,6 +227,8 @@ class Governor:
         proposal_text_lower = proposal.text.lower()
 
         for artifact in existing:
+            if self._is_topic_scoped_proposal(proposal) and not self._topic_matches(artifact, envelope):
+                continue
             artifact_text_lower = artifact.text.lower()
 
             # Проверка на частичное совпадение
@@ -285,7 +288,7 @@ class Governor:
             text=proposal.text,
             summary=proposal.summary,
             metadata={
-                **proposal.metadata,
+                **self._merged_artifact_metadata(proposal=proposal, envelope=envelope),
                 "confidence": proposal.confidence,
                 "scope": proposal.scope,
                 "decay": proposal.decay,
@@ -413,7 +416,7 @@ class Governor:
         existing.text = proposal.text
         existing.summary = proposal.summary
         existing.metadata.update({
-            **proposal.metadata,
+            **self._merged_artifact_metadata(proposal=proposal, envelope=envelope),
             "confidence": proposal.confidence,
             "scope": proposal.scope,
             "decay": proposal.decay,
@@ -458,7 +461,7 @@ class Governor:
         existing.text = merged_text
         existing.summary = merged_summary
         existing.metadata.update({
-            **proposal.metadata,
+            **self._merged_artifact_metadata(proposal=proposal, envelope=envelope),
             "confidence": max(
                 float(existing.metadata.get("confidence", 0.5)),
                 proposal.confidence,
@@ -530,7 +533,7 @@ class Governor:
             text=proposal.text,
             summary=proposal.summary,
             metadata={
-                **proposal.metadata,
+                **self._merged_artifact_metadata(proposal=proposal, envelope=envelope),
                 "confidence": proposal.confidence,
                 "scope": proposal.scope,
                 "decay": proposal.decay,
@@ -565,6 +568,55 @@ class Governor:
             superseded_artifact_ids=superseded_ids,
             reason=f"Superseded {len(superseded_ids)} artifacts",
         )
+
+    def _merged_artifact_metadata(
+        self,
+        *,
+        proposal: ArtifactProposal,
+        envelope: MemoryEnvelope,
+    ) -> dict[str, Any]:
+        metadata = dict(proposal.metadata or {})
+        envelope_meta = dict(envelope.metadata or {})
+        for key in (
+            "topic_thread_id",
+            "topic_key",
+            "topic_title",
+            "visible_chat_id",
+            "topic_route_reason",
+            "topic_route_score",
+            "episode_id",
+        ):
+            value = envelope_meta.get(key)
+            if value in (None, "", []):
+                continue
+            metadata.setdefault(key, value)
+        related_topic_ids = [
+            str(item).strip()
+            for item in list(
+                envelope_meta.get("related_topic_thread_ids")
+                or envelope_meta.get("related_topic_ids")
+                or []
+            )
+            if str(item).strip()
+        ]
+        if related_topic_ids:
+            metadata.setdefault("related_topic_thread_ids", related_topic_ids)
+        return metadata
+
+    def _is_topic_scoped_proposal(self, proposal: ArtifactProposal) -> bool:
+        scope = str(proposal.scope or "").strip().lower()
+        if scope in {"episode", "task"}:
+            return True
+        artifact_type = str(proposal.artifact_type or "").strip().lower()
+        return artifact_type in self.TOPIC_SCOPED_ARTIFACT_TYPES
+
+    @staticmethod
+    def _topic_matches(artifact: MemoryArtifact, envelope: MemoryEnvelope) -> bool:
+        envelope_topic = str(dict(envelope.metadata or {}).get("topic_thread_id") or "").strip()
+        if not envelope_topic:
+            return True
+        artifact_topic = str(dict(artifact.metadata or {}).get("topic_thread_id") or "").strip()
+        return artifact_topic == envelope_topic
 
 
 def build_governor(artifact_store: ArtifactStore) -> Governor:

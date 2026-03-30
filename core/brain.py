@@ -414,6 +414,10 @@ class Brain:
                                 "source": "rolling_summary",
                                 "importance": 0.6,
                                 "confidence": 0.7,
+                                "topic_thread_id": str(op.get("topic_thread_id") or ""),
+                                "topic_key": str(op.get("topic_key") or ""),
+                                "topic_title": str(op.get("topic_title") or ""),
+                                "related_topic_thread_ids": list(op.get("related_topic_thread_ids") or []),
                                 "trace_id": str(op.get("trace_id") or ""),
                                 "request_id": str(op.get("request_id") or ""),
                                 "turn_id": op.get("turn_id"),
@@ -1135,10 +1139,33 @@ class Brain:
         tags = [str(x).strip().lower() for x in list(merged.get("tags") or []) if str(x).strip()]
         extra = dict(op_tags or {})
 
-        for key in ("lang", "intent", "mood", "topic", "active_mode"):
+        for key in (
+            "lang",
+            "intent",
+            "mood",
+            "topic",
+            "active_mode",
+            "visible_chat_id",
+            "topic_thread_id",
+            "topic_key",
+            "topic_title",
+            "topic_route_reason",
+        ):
             value = str(extra.get(key) or "").strip()
             if value and not str(merged.get(key) or "").strip():
                 merged[key] = value
+
+        if "topic_route_score" in extra and merged.get("topic_route_score") in {None, ""}:
+            try:
+                merged["topic_route_score"] = float(extra.get("topic_route_score") or 0.0)
+            except Exception:
+                pass
+        if "related_topic_thread_ids" in extra and not merged.get("related_topic_thread_ids"):
+            merged["related_topic_thread_ids"] = [
+                str(item).strip()
+                for item in list(extra.get("related_topic_thread_ids") or [])
+                if str(item).strip()
+            ]
 
         for key in ("lang", "intent", "mood", "topic", "active_mode"):
             value = str(merged.get(key) or "").strip().lower()

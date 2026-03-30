@@ -72,6 +72,24 @@ def create_memory_inspector_router(memory_core: Any) -> APIRouter:
         """Trace pipeline memory LLM."""
         return service.get_pipeline_trace(limit=limit)
 
+    @router.get("/api/memory-core/topics")
+    def topics(
+        visible_chat_id: str = Query(default=""),
+        status: str | None = Query(default=None),
+        limit: int = Query(default=200, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        """Список скрытых topic threads."""
+        return service.list_topics(
+            visible_chat_id=visible_chat_id,
+            status=status,
+            limit=limit,
+        )
+
+    @router.get("/api/memory-core/topics/{thread_id}")
+    def topic_details(thread_id: str) -> dict[str, Any] | None:
+        """Детали одной скрытой темы."""
+        return service.get_topic_details(thread_id)
+
     @router.get("/api/memory-core/checks")
     def checks() -> list[dict[str, Any]]:
         """Встроенные проверки."""

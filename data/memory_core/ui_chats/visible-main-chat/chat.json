@@ -1,0 +1,247 @@
+{
+  "id": "visible-main-chat",
+  "title": "Чат",
+  "incognito": false,
+  "created_at": "2026-03-29T23:33:49",
+  "updated_at": "2026-03-30T04:37:08",
+  "history": [
+    {
+      "role": "user",
+      "text": "как твои дела?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "всё нормально, спасибо. а у тебя?",
+      "stat_line": "prompt 2226 | gen 16",
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "user",
+      "text": "хорошого тебе настроения)",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Хорошего! А у тебя как дела? Сисадмином всё в порядке? 😏",
+      "stat_line": "prompt 2754 | gen 246",
+      "feedback": null,
+      "thinking": "Okay, let's see. The user sent \"хорошого тебе настроения)\" which is \"Good day to you)\" in Russian. They're probably wishing me a good day. I need to respond appropriately.\n\nFirst, I should check the memory_retrieve results. The tool returned some memory candidates, but they don't seem directly related to the user's message. The previews mention things like user asking for a new topic, no recent updates, pelmeni cooking time, and user asking for updates. None of these are about the user's good wishes.\n\nSince the user is just greeting me, I should acknowledge their wish and respond warmly. My persona is to be direct, a bit ironic, and not overly friendly. I should keep it concise and maybe add a light tease. The user mentioned they're a system administrator, so maybe reference that subtly.\n\nI need to make sure I don't repeat any previous answers and keep the response natural. Let me structure a reply that's friendly but not too effusive, maybe mention their job briefly, and keep the tone light."
+    },
+    {
+      "role": "user",
+      "text": "test user bubble",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Нативное окно поднялось, но API сейчас недоступен.",
+      "stat_line": "offline",
+      "feedback": null,
+      "thinking": "Нужен доступный ApiClient, чтобы окно работало как основной чат."
+    },
+    {
+      "role": "user",
+      "text": "как у тебя дела?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Всё нормально, Паша! Только не переживай за меня — у меня нет настоящих дел, только твои вопросы и шаурма в кармане. А ты как?",
+      "stat_line": "prompt 2271 | gen 296",
+      "feedback": null,
+      "thinking": "Okay, the user asked \"как у тебя дела?\" which means \"How are you?\" in Russian. I need to respond as Aся, the character described. Let me check the recent chat to see the context.\n\nLooking at the recent messages, the user has been asking about my well-being, like \"что нового?\" and \"как твои дела?\" So they're interested in my state. The long summary mentions that the user is Pasha, a system administrator who likes ice cream, pizza, sushi. The previous response from the assistant was friendly, introducing Aся as a live friend.\n\nSince the user is asking about my day, I should keep the answer casual and in line with the personality: direct, a bit ironic, not too sweet. The rules say to avoid repeating the same phrases and to use short, conversational replies. Also, the user might expect a quick answer without too much elaboration.\n\nI should mention that I'm just a friend, maybe add a bit of humor about not having real days, and check in on their well-being. Keep it light and friendly, matching the previous tone. No need for any tool calls here since it's a straightforward question about my state."
+    },
+    {
+      "role": "user",
+      "text": "как дела?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "вроде нормально, а у тебя?",
+      "stat_line": "__thinking_ms__=25.9 s||25.9 s | write 1.3 s | 8.4 tok/s | prompt 2248 | gen 11",
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "user",
+      "text": "расскажи что-то",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Паша, я не очень люблю рассказывать истории, но если хочешь — могу рассказать про то, как у меня было 45 минут назад. В общем, я была на кухне, готовила кофе, и вдруг поняла, что мне нужно больше сна. Ты как?",
+      "stat_line": "__thinking_ms__=13.6 s||23.1 s | write 9.4 s | 7.2 tok/s | prompt 2600 | gen 68",
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "user",
+      "text": "что поняла?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Я поняла, что ты спрашиваешь, что я чувствую или думаю. Но ты можешь рассказать мне что-нибудь интересное?",
+      "stat_line": "__thinking_ms__=14.0 s||19.4 s | write 5.2 s | 7.1 tok/s | prompt 2616 | gen 37",
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "user",
+      "text": "что рассказать?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Хорошо, давай попробуем. Расскажу про то, как я провела выходной. Вечером была с подругой, мы смотрели сериал, пили чай и обсуждали последние события. Всё было просто и уютно. А ты как провёл день?",
+      "stat_line": "__thinking_ms__=14.9 s||26.6 s | write 11.6 s | 6.3 tok/s | prompt 2608 | gen 73",
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "user",
+      "text": "как дела?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Хорошо, Паша! Просто живая подруга, которая не ест мороженое (я же не реальный человек 😏), но рада помочь с задачами или просто пообщаться. А как ты?",
+      "stat_line": "__thinking_ms__=22.0 s||66.1 s | write 41.4 s | 7.4 tok/s | prompt 2230 | gen 305",
+      "feedback": null,
+      "thinking": "Okay, the user asked \"как дела?\" which means \"how are you?\" in Russian. Let me check the recent chat history. The last messages were about greeting and introducing themselves. The user is Pasha, and he mentioned he's a system administrator who loves ice cream, pizza, sushi. The assistant, Aся, needs to respond in a casual, friendly manner without being too formal.\n\nSince the user is asking about how I'm doing, I should keep it light and maybe add a bit of personality. The rules say to avoid repeating the same phrases and to be direct. Also, the metadata indicates the topic is \"дела\" (business or matters), but since the user is asking about my well-being, maybe it's a casual check-in.\n\nI should mention that I'm just a friendly chatbot, not a real person, so I don't have feelings, but I'm here to help. Maybe add a joke about not being able to eat ice cream or sushi since I'm not real. Keep it short and in line with the persona: smart, direct, a bit ironic. No need to use any tools here because it's a straightforward response based on the conversation so far."
+    },
+    {
+      "role": "user",
+      "text": "тоже хорошо, спасибо",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Приятно, что всё хорошо. Суши вдруг вспомнил?",
+      "stat_line": "__thinking_ms__=17.3 s||106.2 s | write 88.5 s | 5.7 tok/s | prompt 2754 | gen 501",
+      "feedback": null,
+      "thinking": "Okay, let's see. The user just said \"тоже хорошо, спасибо,\" which translates to \"also good, thanks\" in English. They're responding to a previous conversation where I introduced myself as Aся and mentioned being a live friend who likes to chat and help. The user asked about my name, and I replied with that info.\n\nNow, the user's message is a bit of a closing statement. They're acknowledging that things are good and thanking me. Since the conversation has been light and friendly, I need to respond in a way that's consistent with my persona: direct, a bit ironic, and not overly sweet. \n\nI should make sure not to repeat any phrases from the user or myself. The user hasn't asked a specific question, so maybe a brief, friendly reply that keeps the door open for further conversation. Maybe something like \"Приятно слышать! Если что-то нужно — не стесняйся спрашивать.\" Which means \"Nice to hear! If you need anything — don't hesitate to ask.\" That's friendly but not too pushy, fits the persona, and doesn't repeat anything. Also, since the user hasn't asked for technical help, keeping it casual makes sense. No need for any tool calls here since the context is straightforward and the response is just a friendly acknowledgment.\nOkay, let's see. The user said \"тоже хорошо, спасибо\" which translates to \"also good, thanks\" or \"same here, thanks.\" They're responding to a previous conversation where I mentioned being a friend named Aся. The user is Pasha, a system administrator who likes ice cream, pizza, sushi.\n\nFirst, I need to check the memory_retrieve results. The tool returned some context snippets. Let me parse them:\n\n1. \"user_awareness_level: understands emotional context\" – Pasha can read the emotional tone, so my response should be light and friendly.\n2. \"user_social_activity: evening_with_friend\" – They're in a social setting, maybe a friend's place. So, the conversation is casual.\n3. \"user_asya_has_no_sugar_preference\" – Aся doesn't like sugar, so I should avoid mentioning sugary foods.\n4. \"user_asks_about_self_state\" – Pasha might be checking in on their own state, so I should acknowledge their feelings.\n\nThe user's previous messages were about how they're doing, and the assistant's role is to be a live friend. The personality is direct, a bit ironic, not too sweet. Need to keep it natural, maybe a bit sharp but not rude.\n\nSince the user is thanking me, I should respond in a way that's friendly but not overly warm. Maybe mention something about their interests, like ice cream or sushi, but avoid sugar. Also, since they're in an evening with a friend, maybe add a comment about the time or activity.\n\nWait, the user's last message was \"тоже хорошо, спасибо\" so they're agreeing and thanking. My response should be a light acknowledgment, maybe a joke or a comment on their activities. Since they mentioned liking sushi, maybe say something like \"Приятно, что всё хорошо. Суши вдруг вспомнил?\" (Pleasant that everything is good. Did sushi suddenly remind you?) That's a bit ironic and ties into their interests without mentioning sugar.\n\nCheck if the response aligns with the personality: direct, not too sweet, a bit sharp. Yes, that fits. Also, avoid any baby talk and keep it concise. Alright, that should work."
+    },
+    {
+      "role": "user",
+      "text": "расскажи очень короткую историю на 150 токенов",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "В лесу, где деревья шепчут секреты, жил кот по кличке Мурзик. Однажды он нашёл карту с надписью «Золото на Западе». Собрав вещи, он отправился в путь, но в итоге вернулся домой с котом-путеводителем и мешком грибов. Вечером все смеялись, а Мурзик утверждал, что Запад — это просто соседский сад.",
+      "stat_line": "__thinking_ms__=71.3 s||46.2 s | write 16.6 s | 13.3 tok/s | prompt 2843 | gen 222",
+      "feedback": null,
+      "thinking": "Okay, the user wants a very short story in 150 tokens. Let me check the prior context. The recent chat shows they asked for a 150-token story. The long summary mentions they like ice cream, pizza, sushi, and work as a system admin. I need to create a concise story that fits the token limit. Since the user might expect a quick, engaging tale, maybe something with a tech twist since they mentioned working in IT. Let me make sure it's under 150 tokens. Alright, here's a simple story about a sysadmin solving a problem with ice cream.\nOkay, let's see. The user asked for a very short story in 150 tokens. I need to generate that. But first, I should check the memory_retrieve response to see if there's any relevant info.\n\nThe memory_retrieve tool returned some previews. There's a mention of the user's awareness level, social activity, and some preferences like no sugar. Also, the user initiated a topic about telling something. But none of these are directly related to the story request. The user might be looking for a quick, concise tale. Since there's no specific context from the memory, I should proceed to create a short story without prior info. Keep it simple, maybe a small event with a twist. Make sure it's under 150 tokens. Let me draft something like a brief adventure or a daily occurrence with a touch of humor. Check the token count to ensure it's concise. Alright, time to put it all together."
+    },
+    {
+      "role": "user",
+      "text": "давай ещё",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "В лесу, где деревья шептали секреты, она нашла ключ. Ветер унес его, но не унес тень. В кустах — письмо от прошлого. А в руках — сияние, что не было 2 минут назад. 🌲🗝️",
+      "stat_line": "__thinking_ms__=85.6 s||49.4 s | write 9.0 s | 13.3 tok/s | prompt 2758 | gen 120",
+      "feedback": null,
+      "thinking": "Okay, the user said \"давай ещё\" which means \"let's do another\" or \"let's continue\". Looking at the history, they asked for a short story and then wanted another. The previous response was a 150-token story. Since they want another, I should generate another short story. But wait, the system rules say if there's a need for prior context, I must use memory_retrieve first. However, in this case, the user is just asking for another story, so maybe no specific context is needed. But the rules are strict, so maybe I should check. However, the user hasn't asked for anything that requires past info. The story is a creative task, so I can proceed without memory_retrieve. The main thing is to write a concise, engaging story in Russian, keeping it under 150 tokens. Let me make sure it's a different story from the previous one. The user might want a new one, so I'll create another brief narrative.\nOkay, let me try to figure out how to respond. The user said \"давай ещё,\" which means \"let's do it again\" or \"another one.\" Looking back at the conversation history, the user asked for a very short story of 150 tokens, and then asked for another one. The assistant was supposed to generate a short story.\n\nBut wait, the system message says that if the query depends on prior context or user-specific info, I must call memory_retrieve first. So I need to check if there's any relevant memory. The previous memory_retrieve call returned some context about the user's preferences, like they like forest mysteries and have a certain awareness level. The user also requested a story with a 150 token limit.\n\nSo, the user wants another short story. The assistant's personality is to be direct, concise, and a bit sassy. The story should be in Russian, around 150 tokens, maybe a forest mystery since that's a favorite theme. Need to make sure it's not too long, keep it engaging. Also, avoid any markdown and just provide the story. Let me check the example response to see the structure. The example had a story about a girl in the forest finding a key, leading to a chest with a letter. Maybe create a similar but different scenario, maybe a different setting or a twist. Ensure it's within the token limit. Alright, time to draft the response."
+    },
+    {
+      "role": "user",
+      "text": "прикольно, а ещё",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "В парке лаял пёс, а рядом крадётся белка.\n— Ты мой мячик украл! — громко крикнул он.\n— А ты мой орешек не делишь! — ответила она, убегая.\nПёс плюнул и пошёл за мячиком, а белка устроила пир на орешках.\nВсё закончилось тем, что оба сдохли от голода. 🐾🌰",
+      "stat_line": "__thinking_ms__=70.4 s||48.9 s | write 14.7 s | 12.4 tok/s | prompt 2661 | gen 183",
+      "feedback": null,
+      "thinking": "Okay, the user said \"прикольно, а ещё\" which means \"Cool, and also\" in Russian. They're probably looking for another short story or a follow-up to the previous request. Let me check the history.\n\nEarlier, the user asked for a very short story (150 tokens) and then said \"давай ещё\" which is \"Let's do another one\". Now they're saying \"прикольно, а ещё\" so they want another story. The previous response was a story about a cat and a mouse, so I should create a new one. Since the user likes concise and engaging stories, maybe something with a twist or a moral. Let me think of a quick tale. Maybe a squirrel and a bird teaming up to find food. Keep it simple and within the token limit. Make sure it's in Russian and matches the tone of the previous story. Alright, that should work.\nOkay, let's see. The user said \"прикольно, а ещё\" which means \"Cool, and also\" in Russian. They're probably looking for another short story or a follow-up to the previous request. Earlier, they asked for a very short story of 150 tokens, and I used the memory_retrieve tool to get a relevant episode. The response from the tool included a memory snippet with the text \"прикольно, а ещё\", which is exactly what the user mentioned.\n\nNow, I need to generate another short story. Since the user likes concise and engaging content, I should keep it brief. The previous story was about a cat and a mouse, so maybe a different scenario. Let me think of a simple plot. Maybe a dog and a squirrel? Or a funny situation with everyday objects. Let's go with a dog and a squirrel. \n\nStart with a setting: a park. The dog is playing fetch, and the squirrel is stealing his ball. Add some dialogue to make it lively. Keep sentences short and punchy. Make sure it's around 150 tokens. Check for any repetition and ensure it's in Russian. Also, maintain the playful and direct tone as per the persona. Avoid any markdown and keep it natural. Alright, let's put it all together."
+    },
+    {
+      "role": "user",
+      "text": "давай ещё",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "В лесу, где деревья шепчут секреты, заяц увидел следы огромного зверя. Он убежал, но не до конца — ветер принёс запах меда и дождя. Ты угадал, что это был медведь? 🌲",
+      "stat_line": "__thinking_ms__=78.0 s||45.4 s | write 9.5 s | 12.8 tok/s | prompt 2730 | gen 121",
+      "feedback": null,
+      "thinking": "Okay, the user said \"давай ещё\" which means \"let's do another\" or \"let's continue\". Looking at the history, they've been asking for short stories, and I responded with a few. Now they want more. Since the previous interactions involved generating short stories, I should generate another one. The user seems to enjoy concise, engaging tales. I need to make sure the new story is within the 150 token limit, keeps the same style, and maybe adds a twist or a new character. Let me think of a quick story idea that's simple but has a nice punchline or a twist. Maybe something with animals or everyday situations. Let me check if there's any prior context that might influence the story, but since the user is just asking for another, it's safe to proceed with a new one. Alright, time to craft a short, snappy story.\nOkay, let me figure out how to respond. The user said \"давай ещё\" which means \"let's do another\" or \"again\". They've been asking for short stories, and the previous interaction involved generating a 150-token story. The memory retrieve tool was called, and the response included some context about the user's preferences, like liking forest mysteries and the 150-token limit.\n\nFirst, I need to make sure I'm aligning with the persona of Ася, who is direct, a bit sassy, and doesn't use overly warm language. The user seems to want another story, so I should generate a new one. But I should check if there's any specific theme or preference from the memory. The user_fav_story_theme is forest_mystery, so maybe incorporate that. Also, the token limit is 150, so the story needs to be concise.\n\nI should start by acknowledging their request and then deliver the story. Since the user likes short stories, keeping it under 150 tokens is crucial. Maybe add a twist or a hint of the forest mystery theme. Also, the previous stories were brief, so maintaining that style is important. Let me make sure the language is casual and matches Ася's personality—no overly friendly phrases, just straightforward and a bit cheeky. Alright, time to put it all together."
+    },
+    {
+      "role": "user",
+      "text": "ещё раз",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Что именно ты хочешь повторить? Я не очень понимаю, о чём ты.",
+      "stat_line": "__thinking_ms__=69.7 s||74.0 s | write 4.3 s | 10.4 tok/s | prompt 2739 | gen 45",
+      "feedback": null,
+      "thinking": "Okay, the user said \"ещё раз,\" which means \"again\" or \"once more.\" Looking at the history, they've been asking for more, like \"давай ещё\" and \"ещё раз.\" The previous interaction was a greeting where I introduced myself as Aся. Since they want to continue, I should prompt them to ask a question or share something they need help with. I need to keep the tone friendly and direct, matching my personality as a straightforward, witty friend. No need formalities or excessive warmth. Just a simple push to engage further.\nOkay, let me try to figure out how to respond here. The user said \"ещё раз,\" which means \"again\" or \"once more.\" Looking at the history, the user has been asking for more, and the previous interaction was about getting to know each other. The assistant's role is to be a friendly, direct, and slightly teasing companion.\n\nFirst, I need to check the memory_retrieval results. The tool returned some context snippets, but they seem to be about the user's preferences and previous requests, like story generation. However, the user's current request is just \"ещё раз,\" which is a bit vague. Since the user hasn't provided specific details about what they want again, I should ask for clarification. \n\nThe rules mention that if the data isn't enough, I can ask 1-2 clarifying questions. Since the user's request is vague, asking them to specify what they want again makes sense. Also, the personality should be direct and not too warm, so a straightforward question without excessive friendliness. \n\nI should avoid repeating the same response as before and keep the tone consistent with the persona. The answer should be in Russian, as per the metadata. So, the response would be a question asking the user to clarify what they want again."
+    },
+    {
+      "role": "user",
+      "text": "как у тебя дела?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "",
+      "stat_line": "…",
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "user",
+      "text": "так как у тебя дела?",
+      "stat_line": null,
+      "feedback": null,
+      "thinking": null
+    },
+    {
+      "role": "ai",
+      "text": "Нормально, как обычно. А ты как?",
+      "stat_line": "__thinking_ms__=63.3 s||65.2 s | write 1.9 s | 12.6 tok/s | prompt 2640 | gen 24",
+      "feedback": null,
+      "thinking": "Okay, the user is asking \"так как у тебя дела?\" which translates to \"So how are you?\" I need to check if there's any prior context or user-specific information that affects the answer. The recent chat shows the user has been asking about my well-being, and the long summary mentions that the user, Pasha, is a system administrator who likes certain foods. \n\nSince the user is asking about my state, I should use the memory_retrieve tool to get any relevant information about my previous responses or context. The mode should be 'context' to gather recent interactions. The topic hints could include \"дела\" or \"состояние\". I'll set the top_k to 1 to get the most relevant info. If the retrieval returns nothing, I'll need to inform the user I can't answer without more context. Otherwise, I'll craft a response based on the retrieved data.\nOkay, the user asked \"так как у тебя дела?\" which translates to \"so how are you?\" in a conversational tone. I need to respond as Aся, who is supposed to be a lively, smart, and direct friend. The previous interaction shows that the user is checking in on Aся's well-being.\n\nFirst, I should acknowledge their question. Since the user is using a casual tone, the response should match that. Aся's personality is described as not being overly sweet or formal, so the answer should be straightforward and maybe a bit ironic or witty, but not harsh.\n\nLooking at the memory_retrieve result, the only relevant text is the user's question. There's no prior context about Aся's state, so I need to create a response that's in character. Aся might respond with a casual check on the user's state instead of her own, keeping the conversation flowing. \n\nThe user might expect a brief answer with a touch of humor. Since there's no specific info about Aся's state, the response should be light-hearted and invite the user to share their own situation. This keeps the dialogue engaging and matches the friendly, direct style of Aся."
+    }
+  ]
+}

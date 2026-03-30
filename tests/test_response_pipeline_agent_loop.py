@@ -345,7 +345,8 @@ class ResponsePipelineAgentLoopTests(unittest.TestCase):
         Проверить, что streaming ошибка логируется с деталями, а не маскируется fallback.
         """
         provider = _StreamingFallbackProvider()
-        pipeline = ResponsePipeline(provider=provider)
+        manager = _MemoryManager()
+        pipeline = ResponsePipeline(provider=provider, memory_manager=manager)
 
         result = pipeline.run(
             route="chat",

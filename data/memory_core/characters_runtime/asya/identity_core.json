@@ -1,12 +1,18 @@
 {
   "schema_version": 1,
   "addressing": {
-    "canonical_name": "",
-    "allowed_forms": [],
-    "forbidden_forms": [],
+    "canonical_name": "игнорирует",
+    "allowed_forms": [
+      "на",
+      "игнорирует"
+    ],
+    "forbidden_forms": [
+      "ответил",
+      "сегд"
+    ],
     "allow_diminutives": false,
     "use_name_by_default": false,
-    "updated_at": ""
+    "updated_at": "2026-03-29T15:40:23.584+03:00"
   },
   "interaction_style": {
     "prefers_directness": 0.82,
@@ -21,5 +27,5 @@
     "treat_short_replies_as_low_bandwidth": true
   },
   "assistant_trait_baseline": {},
-  "updated_at": ""
+  "updated_at": "2026-03-29T15:40:23.584+03:00"
 }

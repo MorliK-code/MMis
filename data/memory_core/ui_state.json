@@ -1,0 +1,7 @@
+{
+  "think_enabled": true,
+  "verbose_enabled": true,
+  "json_mode_enabled": false,
+  "screen_enabled": false,
+  "web_mode": "off"
+}

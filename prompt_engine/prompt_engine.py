@@ -554,6 +554,10 @@ class PromptEngine:
             return fallback
         order = [
             ("MEMORY_RECALL_MODE", "memory_recall_mode"),
+            ("CURRENT_TOPIC", "current_topic"),
+            ("TOPIC_OPEN_QUESTIONS", "topic_open_questions"),
+            ("TOPIC_DECISIONS", "topic_decisions"),
+            ("RELATED_TOPICS", "related_topics"),
             ("ACTIVE_TASK", "__active_task__"),
             ("SELF_FACTS", "self_facts"),
             ("FACT_EXPECTATION_CHECK", "fact_expectation_check"),
@@ -882,7 +886,11 @@ def _select_long_summary_block(
     # Проверяем, есть ли свежий memory_retrieval
     if memory_blocks:
         has_retrieval = bool(
-            memory_blocks.get("recalled_dialog")
+            memory_blocks.get("current_topic")
+            or memory_blocks.get("topic_open_questions")
+            or memory_blocks.get("topic_decisions")
+            or memory_blocks.get("related_topics")
+            or memory_blocks.get("recalled_dialog")
             or memory_blocks.get("relevant_claims")
             or memory_blocks.get("self_facts")
             or memory_blocks.get("active_task")

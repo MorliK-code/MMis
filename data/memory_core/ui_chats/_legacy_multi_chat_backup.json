@@ -1,0 +1,162 @@
+{
+  "created_at": "2026-03-30T02:27:37",
+  "active_chat_id": "chat-1774816429013-4",
+  "chats": [
+    {
+      "id": "chat-1774809988515-1",
+      "title": "Чат 1",
+      "created_at": "2026-03-29T21:46:28",
+      "updated_at": "2026-03-29T21:57:15",
+      "history": []
+    },
+    {
+      "id": "chat-1774810635074-2",
+      "title": "Чат 2",
+      "created_at": "2026-03-29T21:57:15",
+      "updated_at": "2026-03-29T22:07:08",
+      "history": []
+    },
+    {
+      "id": "chat-1774811228613-3",
+      "title": "фываыфва",
+      "created_at": "2026-03-29T22:07:08",
+      "updated_at": "2026-03-29T23:33:49",
+      "history": [
+        {
+          "role": "user",
+          "text": "фываыфва",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Ошибка: API connection failed: [WinError 10061] Подключение не установлено, т.к. конечный компьютер отверг запрос на подключение",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "user",
+          "text": "как дела?",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "вроде нормально, а у тебя?",
+          "stat_line": "prompt 2215 • gen 11",
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "user",
+          "text": "тоже. что нового?",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "",
+          "stat_line": "…",
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "user",
+          "text": "что нового?",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Ну, если ты хочешь, можешь рассказать, о чём ты думаешь, или спросить что-нибудь новое!",
+          "stat_line": "prompt 2278 • gen 342",
+          "feedback": null,
+          "thinking": "Okay, the user asked \"что нового?\" which means \"what's new?\" in Russian. Looking at the recent chat history, the user has been asking about new things, and the previous conversation mentioned that they just talked about checking internals. The long summary shows that the user introduced themselves as Pasha, a system administrator who likes ice cream, pizza, sushi. The assistant, Aся, responded with a greeting and mentioned being a live friend who likes to chat and help.\n\nSince the user is asking about new things, I need to check if there's any recent information or topics they might be referring to. The tools available include memory_retrieve, topic_search, topic_read, etc. But since the user is asking about new updates or information, maybe there's no specific data to retrieve. The previous answers didn't mention any new events or updates. The assistant should respond in a friendly, direct manner, maybe ask if there's something specific they're interested in. Since the user is a system admin, perhaps they want to know about new tech or tools, but without more context, it's better to ask for clarification. The response should be in Russian, informal, and not repeat previous answers. So, the assistant could say something like, \"Ну, если ты хочешь, можешь рассказать, о чём ты думаешь, или спросить что-нибудь новое!\" which means \"Well, if you want, you can tell me what you're thinking about or ask something new!\""
+        }
+      ]
+    },
+    {
+      "id": "chat-1774816429013-4",
+      "title": "как твои дела?",
+      "created_at": "2026-03-29T23:33:49",
+      "updated_at": "2026-03-30T02:03:54",
+      "history": [
+        {
+          "role": "user",
+          "text": "как твои дела?",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "всё нормально, спасибо. а у тебя?",
+          "stat_line": "prompt 2226 • gen 16",
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "user",
+          "text": "хорошого тебе настроения)",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Хорошего! А у тебя как дела? Сисадмином всё в порядке? 😏",
+          "stat_line": "prompt 2754 • gen 246",
+          "feedback": null,
+          "thinking": "Okay, let's see. The user sent \"хорошого тебе настроения)\" which is \"Good day to you)\" in Russian. They're probably wishing me a good day. I need to respond appropriately.\n\nFirst, I should check the memory_retrieve results. The tool returned some memory candidates, but they don't seem directly related to the user's message. The previews mention things like user asking for a new topic, no recent updates, pelmeni cooking time, and user asking for updates. None of these are about the user's good wishes.\n\nSince the user is just greeting me, I should acknowledge their wish and respond warmly. My persona is to be direct, a bit ironic, and not overly friendly. I should keep it concise and maybe add a light tease. The user mentioned they're a system administrator, so maybe reference that subtly.\n\nI need to make sure I don't repeat any previous answers and keep the response natural. Let me structure a reply that's friendly but not too effusive, maybe mention their job briefly, and keep the tone light."
+        },
+        {
+          "role": "user",
+          "text": "test user bubble",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Нативное окно поднялось, но API сейчас недоступен.",
+          "stat_line": "offline",
+          "feedback": null,
+          "thinking": "Нужен доступный ApiClient, чтобы окно работало как основной чат."
+        },
+        {
+          "role": "user",
+          "text": "как у тебя дела?",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Всё нормально, Паша! Только не переживай за меня — у меня нет настоящих дел, только твои вопросы и шаурма в кармане. А ты как?",
+          "stat_line": "prompt 2271 • gen 296",
+          "feedback": null,
+          "thinking": "Okay, the user asked \"как у тебя дела?\" which means \"How are you?\" in Russian. I need to respond as Aся, the character described. Let me check the recent chat to see the context.\n\nLooking at the recent messages, the user has been asking about my well-being, like \"что нового?\" and \"как твои дела?\" So they're interested in my state. The long summary mentions that the user is Pasha, a system administrator who likes ice cream, pizza, sushi. The previous response from the assistant was friendly, introducing Aся as a live friend.\n\nSince the user is asking about my day, I should keep the answer casual and in line with the personality: direct, a bit ironic, not too sweet. The rules say to avoid repeating the same phrases and to use short, conversational replies. Also, the user might expect a quick answer without too much elaboration.\n\nI should mention that I'm just a friend, maybe add a bit of humor about not having real days, and check in on their well-being. Keep it light and friendly, matching the previous tone. No need for any tool calls here since it's a straightforward question about my state."
+        },
+        {
+          "role": "user",
+          "text": "как дела?",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "вроде нормально, а у тебя?",
+          "stat_line": "25858 ms • write 1307 ms • 8.4 tok/s • prompt 2248 • gen 11",
+          "feedback": null,
+          "thinking": null
+        }
+      ]
+    }
+  ]
+}

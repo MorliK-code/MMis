@@ -104,6 +104,9 @@ class Reranker:
         if session_id and meta.get("session_id") == session_id:
             score += self.weights["session_match"]
 
+        # Topic-aware reranking hook attached by RetrievalService.
+        score += max(0.0, min(float(meta.get("_topic_boost", 0.0) or 0.0), 0.5))
+
         # retrieve_when overlap
         retrieve_when = {str(x).lower() for x in meta.get("retrieve_when", [])}
         query_words = {w for w in query.lower().split() if len(w) >= 3}

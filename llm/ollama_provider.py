@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 import ollama
@@ -257,6 +258,29 @@ def _wrap_thinking(text: str, thinking: str, *, trim: bool = True) -> str:
     return f"<think>{think}</think>\n{visible}"
 
 
+def _request_with_thinking_disabled(req: LLMRequest) -> LLMRequest:
+    metadata = dict(req.metadata or {})
+    metadata["think"] = False
+    metadata["think_retry_without_reasoning"] = True
+    return replace(req, metadata=metadata)
+
+
+def _should_retry_without_thinking(
+    *,
+    req: LLMRequest,
+    text: str,
+    thinking: str,
+    tool_calls: list[ToolCall],
+) -> bool:
+    if not bool(dict(req.metadata or {}).get("think", False)):
+        return False
+    if str(text or "").strip():
+        return False
+    if list(tool_calls or []):
+        return False
+    return bool(str(thinking or "").strip())
+
+
 def _as_text(value: Any) -> str:
     if value is None:
         return ""
@@ -386,6 +410,29 @@ class OllamaProvider(LLMProviderBase):
             text = str(msg.get("content") or "")
             thinking = _extract_thinking(msg, payload)
             tool_calls = _parse_tool_calls_from_message(msg, text_fallback=text)
+            if _should_retry_without_thinking(req=req, text=text, thinking=thinking, tool_calls=tool_calls):
+                LOGGER.warning(
+                    "ollama generate finished with thinking but no visible answer; retrying without think model=%s",
+                    model,
+                )
+                retry_payload = self._chat_with_retry(
+                    req=_request_with_thinking_disabled(req),
+                    model=model,
+                    stream=False,
+                )
+                retry_msg = dict(retry_payload.get("message") or {})
+                retry_text = str(retry_msg.get("content") or "")
+                retry_tool_calls = _parse_tool_calls_from_message(retry_msg, text_fallback=retry_text)
+                if str(retry_text or "").strip() or retry_tool_calls:
+                    payload = retry_payload
+                    msg = retry_msg
+                    text = retry_text
+                    tool_calls = retry_tool_calls
+                else:
+                    LOGGER.warning(
+                        "ollama retry without think still returned no visible answer model=%s",
+                        model,
+                    )
             usage = self._extract_usage(payload)
             timings = self._extract_timings(payload)
             log_json(
@@ -420,54 +467,140 @@ class OllamaProvider(LLMProviderBase):
             raise RuntimeError("Ollama model is not configured.")
         self._remember_model(model)
         verbose = bool(dict(req.metadata or {}).get("verbose", False))
+        is_memory_llm = "memory" in str(req.metadata.get("source", "")).lower()
+        priority = LLMPriorityManager.PRIORITY_MEMORY if is_memory_llm else LLMPriorityManager.PRIORITY_MAIN
+        priority_mgr = get_priority_manager()
+        if not priority_mgr.wait_for_turn(priority, timeout=300.0):
+            raise TimeoutError(f"LLM {model} timed out waiting for higher priority task")
 
-        log_json(
-            LOGGER,
-            "llm_stream_start",
-            provider="ollama",
-            model=model,
-            messages=len(list(req.messages or [])),
-            tools=len(list(req.tools or [])),
-            json_mode=bool(req.json_mode),
-            think=bool(req.metadata.get("think", False)),
-            verbose=verbose,
-        )
-        stream = self._chat_with_retry(req=req, model=model, stream=True)
-        chunk_count = 0
-        chars = 0
-        prev_thinking_full = ""
-        for raw_chunk in stream:
-            chunk = _as_dict(raw_chunk)
-            msg = dict(chunk.get("message") or {})
-            text_delta = str(msg.get("content") or "")
-            thinking_full = _extract_thinking(msg, chunk)
-            thinking_delta, prev_thinking_full = _stitch_thinking_delta(prev_thinking_full, thinking_full)
-            tool_calls_delta = _parse_tool_calls_from_message(msg, text_fallback=text_delta)
-            done = bool(chunk.get("done", False))
-            chunk_count += 1
-            chars += len(text_delta)
-            
-            if done:
-                log_json(
-                    LOGGER,
-                    "llm_stream_done",
-                    provider="ollama",
-                    model=str(chunk.get("model") or model),
-                    chunks=chunk_count,
-                    text_chars=chars,
-                )
-            usage = self._extract_usage(chunk) if done else Usage()
-            timings = self._extract_timings(chunk) if done else Timings()
-            yield LLMChunk(
-                text_delta=text_delta,
-                thinking_delta=thinking_delta,
-                tool_calls_delta=tool_calls_delta,
-                usage=usage,
-                timings=timings,
-                model=str(chunk.get("model") or model),
-                done=done,
-                raw=(chunk if (self.debug_raw or (verbose and done)) else None),
+        try:
+            log_json(
+                LOGGER,
+                "llm_stream_start",
+                provider="ollama",
+                model=model,
+                messages=len(list(req.messages or [])),
+                tools=len(list(req.tools or [])),
+                json_mode=bool(req.json_mode),
+                think=bool(req.metadata.get("think", False)),
+                verbose=verbose,
+                priority="memory" if is_memory_llm else "main",
             )
+            stream = self._chat_with_retry(req=req, model=model, stream=True)
+            chunk_count = 0
+            chars = 0
+            prev_thinking_full = ""
+            streamed_text_parts: list[str] = []
+            streamed_tool_calls: list[ToolCall] = []
+            try:
+                for raw_chunk in stream:
+                    chunk = _as_dict(raw_chunk)
+                    msg = dict(chunk.get("message") or {})
+                    text_delta = str(msg.get("content") or "")
+                    thinking_full = _extract_thinking(msg, chunk)
+                    thinking_delta, prev_thinking_full = _stitch_thinking_delta(prev_thinking_full, thinking_full)
+                    tool_calls_delta = _parse_tool_calls_from_message(msg, text_fallback=text_delta)
+                    done = bool(chunk.get("done", False))
+                    chunk_count += 1
+                    chars += len(text_delta)
+
+                    if done:
+                        log_json(
+                            LOGGER,
+                            "llm_stream_done",
+                            provider="ollama",
+                            model=str(chunk.get("model") or model),
+                            chunks=chunk_count,
+                            text_chars=chars,
+                        )
+                    usage = self._extract_usage(chunk) if done else Usage()
+                    timings = self._extract_timings(chunk) if done else Timings()
+                    chunk_obj = LLMChunk(
+                        text_delta=text_delta,
+                        thinking_delta=thinking_delta,
+                        tool_calls_delta=tool_calls_delta,
+                        usage=usage,
+                        timings=timings,
+                        model=str(chunk.get("model") or model),
+                        done=done,
+                        raw=(chunk if (self.debug_raw or (verbose and done)) else None),
+                    )
+                    if text_delta:
+                        streamed_text_parts.append(text_delta)
+                    if tool_calls_delta:
+                        streamed_tool_calls.extend(list(tool_calls_delta))
+                    if done and _should_retry_without_thinking(
+                        req=req,
+                        text="".join(streamed_text_parts),
+                        thinking=prev_thinking_full,
+                        tool_calls=streamed_tool_calls,
+                    ):
+                        if text_delta or thinking_delta or tool_calls_delta:
+                            yield replace(
+                                chunk_obj,
+                                usage=Usage(),
+                                timings=Timings(),
+                                done=False,
+                                raw=None,
+                            )
+                        LOGGER.warning(
+                            "ollama stream finished with thinking but no visible answer; retrying without think model=%s",
+                            model,
+                        )
+                        retry_stream = self._chat_with_retry(
+                            req=_request_with_thinking_disabled(req),
+                            model=model,
+                            stream=True,
+                        )
+                        try:
+                            for retry_raw_chunk in retry_stream:
+                                retry_chunk = _as_dict(retry_raw_chunk)
+                                retry_msg = dict(retry_chunk.get("message") or {})
+                                retry_text_delta = str(retry_msg.get("content") or "")
+                                retry_tool_calls_delta = _parse_tool_calls_from_message(
+                                    retry_msg,
+                                    text_fallback=retry_text_delta,
+                                )
+                                retry_done = bool(retry_chunk.get("done", False))
+                                chunk_count += 1
+                                chars += len(retry_text_delta)
+                                if retry_done:
+                                    log_json(
+                                        LOGGER,
+                                        "llm_stream_done",
+                                        provider="ollama",
+                                        model=str(retry_chunk.get("model") or model),
+                                        chunks=chunk_count,
+                                        text_chars=chars,
+                                    )
+                                yield LLMChunk(
+                                    text_delta=retry_text_delta,
+                                    thinking_delta="",
+                                    tool_calls_delta=retry_tool_calls_delta,
+                                    usage=(self._extract_usage(retry_chunk) if retry_done else Usage()),
+                                    timings=(self._extract_timings(retry_chunk) if retry_done else Timings()),
+                                    model=str(retry_chunk.get("model") or model),
+                                    done=retry_done,
+                                    raw=(retry_chunk if (self.debug_raw or (verbose and retry_done)) else None),
+                                )
+                        finally:
+                            close_retry_stream = getattr(retry_stream, "close", None)
+                            if callable(close_retry_stream):
+                                try:
+                                    close_retry_stream()
+                                except Exception:
+                                    pass
+                        continue
+                    yield chunk_obj
+            finally:
+                close_stream = getattr(stream, "close", None)
+                if callable(close_stream):
+                    try:
+                        close_stream()
+                    except Exception:
+                        pass
+        finally:
+            priority_mgr.release(priority)
 
     def healthcheck(self) -> ProviderHealth:
         try:
@@ -748,6 +881,10 @@ class OllamaProvider(LLMProviderBase):
         # Для thinking моделей увеличиваем лимит, чтобы хватило и на thinking, и на ответ
         max_tokens = req.max_tokens
         if max_tokens is not None:
+            max_tokens = int(max_tokens)
+        if max_tokens is not None and max_tokens <= 0:
+            options["num_predict"] = int(max_tokens)
+        elif max_tokens is not None:
             think_enabled = bool(dict(req.metadata or {}).get("think", False))
             # Reasoning модели всегда используют thinking
             model = str(req.model or "")
@@ -832,6 +969,18 @@ class OllamaProvider(LLMProviderBase):
         """
         LOGGER.info("OllamaProvider.shutdown() called - FULL CLEANUP...")
         self._unload_known_model()
+        try:
+            client = getattr(self, "_client", None)
+            if client:
+                if hasattr(client, "close"):
+                    client.close()
+                    LOGGER.info("OllamaProvider: Provider client closed")
+                transport = getattr(client, "transport", None)
+                if transport and hasattr(transport, "close"):
+                    transport.close()
+                    LOGGER.info("OllamaProvider: Provider transport closed")
+        except Exception as exc:
+            LOGGER.warning(f"OllamaProvider: Provider client close failed: {exc}")
         
         # Способ 1: Выгрузка модели через Ollama API
         try:
@@ -841,14 +990,14 @@ class OllamaProvider(LLMProviderBase):
                 LOGGER.info(f"OllamaProvider: Unloading model '{model_name}' via API...")
                 try:
                     # Пытаемся выгрузить модель
-                    ollama.generate(model=model_name, prompt="")
+                    ollama.generate(model=model_name, prompt="", keep_alive=0)
                     LOGGER.info(f"Ollama model '{model_name}' unloaded via generate()")
                 except Exception as e1:
                     LOGGER.debug(f"Unload via generate() failed: {e1}")
                     
                 try:
                     # Альтернативный способ через chat
-                    ollama.chat(model=model_name, messages=[])
+                    ollama.chat(model=model_name, messages=[], keep_alive=0)
                     LOGGER.info(f"Ollama model '{model_name}' unloaded via chat()")
                 except Exception as e2:
                     LOGGER.debug(f"Unload via chat() failed: {e2}")
@@ -893,7 +1042,7 @@ class OllamaProvider(LLMProviderBase):
         # Способ 5: Очистка внутренних кэшей
         try:
             # Очищаем атрибуты provider
-            for attr in ['_current_model', '_session', '_client_cache']:
+            for attr in ['_client', '_current_model', '_session', '_client_cache']:
                 if hasattr(self, attr):
                     setattr(self, attr, None)
             LOGGER.info("OllamaProvider: Internal caches cleared")

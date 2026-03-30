@@ -65,12 +65,18 @@ class RetrievalService:
 
         # Объединяем
         merged = self._merge_artifact_lists(mandatory, continuity, semantic, lexical)
+        merged = self._apply_topic_boost(merged, query)
 
         # Применяем runtime rules
         filtered = self._apply_runtime_rules(merged, query)
 
         # Rerank
-        ranked = self.reranker.rerank(filtered, query.text, top_k=query.top_k)
+        ranked = self.reranker.rerank(
+            filtered,
+            query.text,
+            top_k=query.top_k,
+            session_id=query.session_id,
+        )
 
         # Строим контекст
         context_pack, citations = self.context_builder.build(ranked, query)
@@ -177,15 +183,32 @@ class RetrievalService:
         )
 
         result: list[MemoryArtifact] = []
+        same_topic: list[MemoryArtifact] = []
+        related_topic: list[MemoryArtifact] = []
+        session_fallback: list[MemoryArtifact] = []
+        wanted_topic = str(query.topic_thread_id or "").strip()
+        related_topics = {
+            str(item).strip()
+            for item in list(query.related_topic_ids or [])
+            if str(item).strip()
+        }
         for artifact in candidates:
             meta = artifact.metadata or {}
             if meta.get("session_id") != query.session_id:
                 continue
             if artifact.artifact_type in {"episode_event", "emotional_state", "task_state", "task"}:
-                result.append(artifact)
+                artifact_topic = str(meta.get("topic_thread_id") or "").strip()
+                if wanted_topic and artifact_topic == wanted_topic:
+                    same_topic.append(artifact)
+                elif artifact_topic and artifact_topic in related_topics:
+                    related_topic.append(artifact)
+                else:
+                    session_fallback.append(artifact)
 
-        # Сортируем по свежести
-        return sorted(result, key=lambda a: a.updated_at, reverse=True)[:12]
+        result.extend(sorted(same_topic, key=lambda a: a.updated_at, reverse=True))
+        result.extend(sorted(related_topic, key=lambda a: a.updated_at, reverse=True))
+        result.extend(sorted(session_fallback, key=lambda a: a.updated_at, reverse=True))
+        return result[:12]
 
     def _collect_semantic_artifacts(self, query: MemoryQuery) -> list[MemoryArtifact]:
         """
@@ -239,6 +262,41 @@ class RetrievalService:
             artifact_types=query.artifact_types if query.artifact_types else None,
             limit=max(query.top_k * 3, 12),
         )
+
+    def _apply_topic_boost(
+        self,
+        artifacts: list[MemoryArtifact],
+        query: MemoryQuery,
+    ) -> list[MemoryArtifact]:
+        topic_id = str(query.topic_thread_id or "").strip()
+        related = {
+            str(item).strip()
+            for item in list(query.related_topic_ids or [])
+            if str(item).strip()
+        }
+        if not topic_id and not related:
+            return artifacts
+
+        boosted: list[MemoryArtifact] = []
+        for artifact in list(artifacts or []):
+            meta = dict(artifact.metadata or {})
+            artifact_topic_id = str(meta.get("topic_thread_id") or "").strip()
+            score_boost = 0.0
+            if topic_id and artifact_topic_id == topic_id:
+                score_boost += 0.35
+            elif artifact_topic_id and artifact_topic_id in related:
+                score_boost += 0.15
+            meta["_topic_boost"] = float(score_boost)
+            meta["_topic_scope"] = (
+                "same_topic"
+                if topic_id and artifact_topic_id == topic_id
+                else "related_topic"
+                if artifact_topic_id and artifact_topic_id in related
+                else "session_or_global"
+            )
+            artifact.metadata = meta
+            boosted.append(artifact)
+        return boosted
 
     def _merge_artifact_lists(
         self,
