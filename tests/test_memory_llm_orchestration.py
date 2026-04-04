@@ -13,7 +13,9 @@ import memory_core.adapter as adapter_module
 import llm.ollama_provider as ollama_provider_module
 from llm.ollama_provider import OllamaProvider, _memory_llm_interrupt
 from llm.priority_manager import LLMPriorityManager
-from llm.provider_base import LLMRequest, Message
+from llm.provider_base import LLMRequest, LLMResponse, Message, ModelInfo, ProviderHealth
+from llm.task_models import TaskModelProfile, TaskModelRegistry
+from llm.task_router import TaskModelRouter
 from memory_core.adapter import MemoryCoreAdapter, _memory_llm_lock
 from memory_core.facade import MemoryService
 from memory_core.processors.memory_llm_processor import MemoryLLMProcessor
@@ -200,6 +202,30 @@ class _FakePriorityManager:
         self.calls.append(("release", priority))
 
 
+class _ScriptedProvider:
+    def __init__(self, scripted) -> None:
+        self._scripted = scripted
+
+    def generate(self, req: LLMRequest) -> LLMResponse:
+        if not self._scripted:
+            raise RuntimeError("No scripted response")
+        action = self._scripted.pop(0)
+        if isinstance(action, Exception):
+            raise action
+        if isinstance(action, LLMResponse):
+            return action
+        return LLMResponse(text=str(action), model=str(req.model or "fake-memory-model"))
+
+    def healthcheck(self) -> ProviderHealth:
+        return ProviderHealth(ok=True, provider="fake", detail="ok", model="fake-memory-model")
+
+    def model_info(self, model: str = "") -> ModelInfo:
+        return ModelInfo(provider="fake", model=model or "fake-memory-model")
+
+    def list_models(self) -> list[str]:
+        return ["fake-memory-model"]
+
+
 class _ImmediateRequeueQueue:
     def __init__(self, job) -> None:
         self._job = job
@@ -288,13 +314,95 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(len(router.json_calls), 1)
         call = dict(router.json_calls[0])
         self.assertEqual(call["task_name"], MemoryLLMProcessor.TASK_NAME)
-        self.assertEqual(tuple(call.get("required_fields") or ()), ("event_id", "importance", "should_process", "proposals"))
+        self.assertEqual(tuple(call.get("required_fields") or ()), ("event_id", "importance", "should_process"))
         self.assertEqual(call.get("allow_array"), False)
         self.assertEqual(call.get("allow_fallback"), False)
         metadata = dict(call.get("metadata") or {})
         self.assertEqual(metadata.get("source"), MemoryLLMProcessor.TASK_NAME)
         self.assertEqual(metadata.get("think"), False)
         self.assertEqual(metadata.get("keep_alive"), "30m")
+
+    def test_memory_processor_uses_empty_result_fallback_after_validation_failure(self) -> None:
+        registry = TaskModelRegistry(
+            {
+                MemoryLLMProcessor.TASK_NAME: TaskModelProfile(
+                    name=MemoryLLMProcessor.TASK_NAME,
+                    provider="ollama",
+                    model="fake-memory-model",
+                    temperature=0.1,
+                    max_tokens=256,
+                    timeout=5.0,
+                    enabled=True,
+                )
+            }
+        )
+        scripted = {MemoryLLMProcessor.TASK_NAME: ["   "]}
+
+        def _provider_factory(profile):
+            return _ScriptedProvider(scripted.setdefault(profile.name, []))
+
+        processor = MemoryLLMProcessor(
+            task_router=TaskModelRouter(registry=registry, provider_factory=_provider_factory)
+        )
+
+        result = processor.process(
+            MemoryEnvelope(
+                source_kind="user",
+                payload_type="message",
+                text="remember that the background task can safely skip empty outputs",
+            )
+        )
+
+        self.assertFalse(result.should_process)
+        self.assertEqual(result.proposals, [])
+        self.assertEqual(result.importance, 0.0)
+        self.assertIn('"proposals": []', result.raw_response)
+
+    def test_memory_processor_treats_missing_proposals_field_as_empty_list(self) -> None:
+        registry = TaskModelRegistry(
+            {
+                MemoryLLMProcessor.TASK_NAME: TaskModelProfile(
+                    name=MemoryLLMProcessor.TASK_NAME,
+                    provider="ollama",
+                    model="fake-memory-model",
+                    temperature=0.1,
+                    max_tokens=256,
+                    timeout=5.0,
+                    enabled=True,
+                )
+            }
+        )
+        scripted = {
+            MemoryLLMProcessor.TASK_NAME: [
+                json.dumps(
+                    {
+                        "event_id": "fake-event",
+                        "importance": 0.25,
+                        "should_process": True,
+                    },
+                    ensure_ascii=False,
+                )
+            ]
+        }
+
+        def _provider_factory(profile):
+            return _ScriptedProvider(scripted.setdefault(profile.name, []))
+
+        processor = MemoryLLMProcessor(
+            task_router=TaskModelRouter(registry=registry, provider_factory=_provider_factory)
+        )
+
+        result = processor.process(
+            MemoryEnvelope(
+                source_kind="user",
+                payload_type="message",
+                text="hello there",
+            )
+        )
+
+        self.assertTrue(result.should_process)
+        self.assertEqual(result.proposals, [])
+        self.assertEqual(result.importance, 0.25)
 
     def test_memory_processor_hard_timeout_raises_and_resets_stuck_provider(self) -> None:
         router = _SlowTaskRouter(delay_sec=0.2)

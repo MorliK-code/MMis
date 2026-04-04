@@ -141,6 +141,21 @@ class TaskModelRouterTests(unittest.TestCase):
         self.assertEqual(result.json_payload, {"query": "usd rate kyiv"})
         self.assertEqual(result.attempts[0].status, "validation_failed")
 
+    def test_required_fields_allow_empty_array_payloads(self) -> None:
+        router, _ = self._router(
+            scripted={
+                "query_rewrite": ['{"query":"usd rate kyiv","filters":[]}'],
+            }
+        )
+
+        result = router.run_task_model_json(
+            "query_rewrite",
+            "Rewrite the query.",
+            required_fields=("query", "filters"),
+        )
+
+        self.assertEqual(result.json_payload, {"query": "usd rate kyiv", "filters": []})
+
     def test_retry_on_same_profile_before_succeeding(self) -> None:
         router, _ = self._router(
             scripted={

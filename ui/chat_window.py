@@ -236,11 +236,7 @@ class ChatWindow(proto.ExactChatWindow):
     def _bind_popups(self) -> None:
         super()._bind_popups()
         try:
-            self.clear_btn.clicked.disconnect()
-        except Exception:
-            pass
-        try:
-            self.search_btn.clicked.disconnect()
+            self.clear_btn.clicked.disconnect(self._clear_messages)
         except Exception:
             pass
         self.search_btn.clicked.connect(self._clear_messages)

@@ -34,8 +34,6 @@ TEXT_EXTS = {
 
 SKIP_DIRS = {
     ".git",
-    ".venv",
-    "venv",
     "__pycache__",
     ".mypy_cache",
     ".pytest_cache",
@@ -84,7 +82,7 @@ class PlannedChange:
 def should_process(path: Path) -> bool:
     if path.is_dir():
         return False
-    if any(part in SKIP_DIRS for part in path.parts):
+    if should_skip_path(path):
         return False
     ext = path.suffix.lower()
     if ext in TEXT_EXTS:
@@ -92,6 +90,18 @@ def should_process(path: Path) -> bool:
     if path.name.lower() in {"dockerfile", "makefile"}:
         return True
     return False
+
+
+def is_virtualenv_root(path: Path) -> bool:
+    return (path / "pyvenv.cfg").exists() or (
+        (path / "Scripts").is_dir() and (path / "Lib" / "site-packages").is_dir()
+    )
+
+
+def should_skip_path(path: Path) -> bool:
+    if any(part in SKIP_DIRS for part in path.parts):
+        return True
+    return any(is_virtualenv_root(parent) for parent in path.parents)
 
 
 def find_project_root(start: Path) -> Path:

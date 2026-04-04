@@ -29,6 +29,7 @@ from memory_core.retrieval.prompt_adapter import (
     resolve_artifact_sensitivity,
 )
 from llm.task_router import TaskModelRouter
+from llm.task_router import TaskModelValidationError
 from utils.logger import get_logger
 
 
@@ -219,7 +220,12 @@ class MemoryLLMProcessor:
 
         # Вызываем LLM с таймаутом
         try:
-            response = self._call_llm(prompt, timeout_sec=self.timeout_sec, interrupt_epoch=interrupt_epoch)
+            response = self._call_llm(
+                prompt,
+                event_id=envelope.event_id,
+                timeout_sec=self.timeout_sec,
+                interrupt_epoch=interrupt_epoch,
+            )
         except InterruptedError:
             LOGGER.debug(f"MemoryLLMProcessor: Event {envelope.event_id[:8]}... interrupted, requeueing")
             raise
@@ -288,6 +294,8 @@ class MemoryLLMProcessor:
     def _call_llm(
         self,
         prompt: str,
+        *,
+        event_id: str,
         timeout_sec: float | None = None,
         interrupt_epoch: int | None = None,
     ) -> str:
@@ -333,9 +341,13 @@ class MemoryLLMProcessor:
                                 system_prompt=self.system_prompt,
                                 metadata=metadata,
                                 timeout=timeout,
-                                required_fields=("event_id", "importance", "should_process", "proposals"),
+                                required_fields=("event_id", "importance", "should_process"),
                                 allow_array=False,
                                 allow_fallback=False,
+                                deterministic_fallback=lambda failure: self._build_validation_failure_fallback(
+                                    failure=failure,
+                                    event_id=event_id,
+                                ),
                             )
                         else:
                             result = self.task_router.run_task_model(
@@ -389,19 +401,25 @@ class MemoryLLMProcessor:
                     preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                     if preemption is not None:
                         raise preemption from payload
+                    fallback_text = self._validation_error_fallback_text(
+                        error=payload,
+                        event_id=event_id,
+                    )
+                    if fallback_text is not None:
+                        return fallback_text
                     raise payload
 
                 result = payload
 
-                # TaskModelExecutionResult имеет атрибут 'text', а не 'output'
-                if result.text and len(result.text.strip()) >= 10:
-                    return result.text
-                else:
-                    LOGGER.warning(f"TaskModelRouter returned empty/short text: {len(result.text or '')} chars")
-                    preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
-                    if preemption is not None:
-                        raise preemption
-                    raise ValueError(f"TaskModelRouter returned empty/short text: {len(result.text or '')} chars")
+                normalized_text = self._normalize_task_router_result_text(result)
+                if normalized_text and len(normalized_text.strip()) >= 10:
+                    return normalized_text
+
+                LOGGER.warning(f"TaskModelRouter returned empty/short text: {len(result.text or '')} chars")
+                preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
+                if preemption is not None:
+                    raise preemption
+                raise ValueError(f"TaskModelRouter returned empty/short text: {len(result.text or '')} chars")
             except TimeoutError as e:
                 LOGGER.error(f"TaskModelRouter timeout after {timeout}s: {e}")
                 preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
@@ -412,6 +430,12 @@ class MemoryLLMProcessor:
                 LOGGER.warning(f"MemoryLLMProcessor interrupted: {e}")
                 raise  # Пробрасываем прерывание выше
             except Exception as e:
+                fallback_text = self._validation_error_fallback_text(
+                    error=e,
+                    event_id=event_id,
+                )
+                if fallback_text is not None:
+                    return fallback_text
                 LOGGER.error(f"TaskModelRouter error: {e}")
                 preemption = _get_memory_llm_preemption(since_epoch=interrupt_epoch)
                 if preemption is not None:
@@ -421,6 +445,56 @@ class MemoryLLMProcessor:
             # Fallback: простой ответ (для тестов)
             LOGGER.warning("TaskRouter not available, using fallback")
             return self._fallback_response(prompt)
+
+    @staticmethod
+    def _normalize_task_router_result_text(result: Any) -> str:
+        payload = getattr(result, "json_payload", None)
+        if payload is not None:
+            try:
+                return json.dumps(payload, ensure_ascii=False)
+            except Exception:
+                pass
+        return str(getattr(result, "text", "") or "")
+
+    @staticmethod
+    def _is_validation_failure_only(failure: Any) -> bool:
+        attempts = list(getattr(failure, "attempts", ()) or ())
+        if not attempts:
+            return False
+        return all(str(getattr(attempt, "status", "")).strip().lower() == "validation_failed" for attempt in attempts)
+
+    def _build_validation_failure_fallback(self, *, failure: Any, event_id: str) -> dict[str, Any] | None:
+        if not self._is_validation_failure_only(failure):
+            return None
+        LOGGER.warning(
+            "MemoryLLMProcessor: using empty fallback for event %s after validation failures: %s",
+            event_id[:8],
+            list(getattr(failure, "errors", ()) or ()),
+        )
+        return {
+            "event_id": event_id,
+            "importance": 0.0,
+            "should_process": False,
+            "proposals": [],
+        }
+
+    def _validation_error_fallback_text(self, *, error: Exception, event_id: str) -> str | None:
+        if not isinstance(error, TaskModelValidationError):
+            return None
+        fallback_payload = self._build_validation_failure_fallback(
+            failure=type(
+                "_ValidationFailure",
+                (),
+                {
+                    "attempts": (type("_Attempt", (), {"status": "validation_failed"})(),),
+                    "errors": (str(error),),
+                },
+            )(),
+            event_id=event_id,
+        )
+        if fallback_payload is None:
+            return None
+        return json.dumps(fallback_payload, ensure_ascii=False)
 
     def get_provider(self):
         if self.task_router is None:

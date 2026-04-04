@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+import warnings
 from math import exp
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -37,7 +38,13 @@ except Exception:  # pragma: no cover
     psutil = None
 
 try:
-    import pynvml  # type: ignore
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"The pynvml package is deprecated\..*",
+            category=FutureWarning,
+        )
+        import pynvml  # type: ignore
 except Exception:  # pragma: no cover
     pynvml = None
 

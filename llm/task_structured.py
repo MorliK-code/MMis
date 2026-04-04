@@ -120,7 +120,9 @@ def parse_json_task_output(text: str, spec: TaskOutputSpec | None = None) -> Any
         missing = [
             field_name
             for field_name in cfg.required_fields
-            if field_name not in parsed or parsed.get(field_name) in (None, "", [], {})
+            if field_name not in parsed
+            or parsed.get(field_name) is None
+            or (isinstance(parsed.get(field_name), str) and not str(parsed.get(field_name) or "").strip())
         ]
         if missing:
             raise TaskOutputValidationError(
