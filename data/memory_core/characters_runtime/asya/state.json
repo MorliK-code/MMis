@@ -1,6 +1,6 @@
 {
   "mood": "neutral",
-  "last_update_ts": "2026-03-30T04:35:46.277+03:00",
+  "last_update_ts": "2026-04-04T10:52:10.792+03:00",
   "active_traits": [
     "directness",
     "emoji_rate",
@@ -28,7 +28,7 @@
     "emotion_arousal": 0.2,
     "mode": "chatting",
     "topics": [
-      "topic_дела_тебя"
+      "topic_спасибо_хорошо"
     ],
     "tags": [
       "lang_ru"
@@ -43,22 +43,22 @@
   ],
   "emotional_state_before": {
     "schema_version": 1,
-    "mood": "neutral",
-    "valence": 0.027723884331599745,
-    "arousal": 0.03579407718466924,
-    "intensity": 0.004761737938216095,
-    "trigger": "neutral",
-    "last_update_ts": "2026-03-30T04:33:54.697+03:00",
+    "mood": "teasing",
+    "valence": 0.0796783964483185,
+    "arousal": 0.08087278471537535,
+    "intensity": 0.12319999999999999,
+    "trigger": "happy",
+    "last_update_ts": "2026-04-04T10:48:16.138+03:00",
     "cooldown_until_ts": ""
   },
   "emotional_state_after": {
     "schema_version": 1,
     "mood": "neutral",
-    "valence": 0.023943297397146672,
-    "arousal": 0.03238051121614461,
-    "intensity": 0.0,
+    "valence": 0.06808823666696834,
+    "arousal": 0.07165883655457575,
+    "intensity": 0.09418245375999999,
     "trigger": "",
-    "last_update_ts": "2026-03-30T04:35:46.272+03:00",
+    "last_update_ts": "2026-04-04T10:52:10.790+03:00",
     "cooldown_until_ts": ""
   },
   "persona_feedback_applied": [],

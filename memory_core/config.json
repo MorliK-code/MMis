@@ -20,7 +20,7 @@
     "memory_llm_process": {
       "name": "memory_llm_process",
       "provider": "ollama",
-      "model": "qwen3:4b",
+      "model": "gpt-oss:20b",
       "temperature": 0.1,
       "max_tokens": 1024,
       "timeout": 60.0,

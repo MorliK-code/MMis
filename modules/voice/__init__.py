@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from modules.voice.stt import STTConfig, STTResult, STTSegment, STTService, transcribe, transcribe_result
 from modules.voice.tts import AudioChunk, TTSConfig, TTSService, speak, synthesize

@@ -1,4 +1,4 @@
-﻿"""HTTP client used by desktop UI to work with MMis API."""
+"""HTTP client used by desktop UI to work with MMis API."""
 
 from __future__ import annotations
 

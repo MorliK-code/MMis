@@ -22,7 +22,7 @@
   },
   "llm": {
     "provider": "ollama",
-    "model_name": "qwen3:8b",
+    "model_name": "gpt-oss:20b",
     "model_fallbacks": [],
     "thinking_enabled": false,
     "json_mode_enabled": false,

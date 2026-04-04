@@ -1,4 +1,4 @@
-﻿"""Background workers used by the desktop UI."""
+"""Background workers used by the desktop UI."""
 
 from __future__ import annotations
 
