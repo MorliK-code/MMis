@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "mood": "soft_supportive",
-  "valence": 0.026902272080342543,
-  "arousal": 0.10706247310206535,
-  "intensity": 0.23825134829168826,
-  "trigger": "tired",
-  "last_update_ts": "2026-04-04T16:33:32.333+03:00",
+  "mood": "teasing",
+  "valence": 0.014088973524587267,
+  "arousal": 0.06546647825904989,
+  "intensity": 0.0880541901843391,
+  "trigger": "neutral",
+  "last_update_ts": "2026-04-08T15:08:54.391+03:00",
   "cooldown_until_ts": ""
 }

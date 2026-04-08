@@ -60,8 +60,13 @@ class TopicSummaryBuilder:
             workspace_id=str(workspace_id or thread.workspace_id or "").strip(),
             limit=200,
         )
+        thread_meta = dict(thread.metadata or {})
         open_questions = self._collect_open_questions(artifacts)
         current_decisions = self._collect_decisions(artifacts)
+        if not open_questions:
+            open_questions = _clean_strings(thread_meta.get("open_questions"))[:10]
+        if not current_decisions:
+            current_decisions = _clean_strings(thread_meta.get("current_decisions"))[:10]
         linked_tasks = self._collect_linked_tasks(artifacts)
         recent_episodes = self._collect_recent_episodes(artifacts)
         episode_count = sum(
@@ -118,6 +123,23 @@ class TopicSummaryBuilder:
             artifact_count=len(artifacts),
             episode_count=episode_count,
         )
+
+    @staticmethod
+    def needs_refresh(thread: TopicThread | None) -> bool:
+        if thread is None:
+            return False
+        summary = str(thread.summary or "").strip()
+        metadata = dict(thread.metadata or {})
+        summary_updated_at = float(metadata.get("summary_updated_at") or 0.0)
+        summary_build_version = int(metadata.get("summary_build_version") or 0)
+        updated_at = float(thread.updated_at or 0.0)
+        if not summary:
+            return True
+        if summary_build_version < 1:
+            return True
+        if summary_updated_at <= 0:
+            return True
+        return updated_at > (summary_updated_at + 1e-6)
 
     def _sync_artifact_links(
         self,
@@ -266,6 +288,13 @@ class TopicSummaryBuilder:
                 for item in list(recent_episodes or [])[:2]
                 if str(item.get("summary") or "").strip()
             ]
+        if not focus:
+            metadata = dict(thread.metadata or {})
+            focus = _clean_strings(metadata.get("recent_turn_texts"))[:2]
+        if not focus:
+            last_user_text = " ".join(str(dict(thread.metadata or {}).get("last_user_text") or "").strip().split())
+            if last_user_text:
+                focus = [last_user_text[:180]]
         if focus:
             parts.append("Focus: " + "; ".join(focus[:2]))
         if current_decisions:

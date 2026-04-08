@@ -56,7 +56,66 @@ def test_topic_router_reuses_existing_thread_for_similar_followup(tmp_path) -> N
     assert first.is_new_thread is True
     assert second.is_new_thread is False
     assert second.thread_id == first.thread_id
-    assert second.reason in {"semantic_match", "prefer_current_topic", "short_followup"}
+    assert second.reason in {"semantic_match", "prefer_current_topic", "short_followup", "continue_current_topic"}
+
+
+def test_topic_router_keeps_current_thread_as_default_continuation(tmp_path) -> None:
+    _, artifact_store, _ = _build_stores(tmp_path)
+    store = TopicStore(artifact_store)
+    router = TopicRouter(store)
+
+    first = router.route_turn(
+        text="hello",
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        current_state={},
+        meta={},
+    )
+    second = router.route_turn(
+        text="let us redesign memory retrieval for agents",
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        current_state={"topic_thread_id": first.thread_id},
+        meta={},
+    )
+
+    assert first.is_new_thread is True
+    assert second.is_new_thread is False
+    assert second.thread_id == first.thread_id
+    assert second.reason in {"continue_current_topic", "prefer_current_topic"}
+    thread = store.get_thread(first.thread_id)
+    assert thread is not None
+    assert str(thread.summary or "").strip()
+
+
+def test_topic_router_starts_new_thread_on_explicit_switch_marker(tmp_path) -> None:
+    _, artifact_store, _ = _build_stores(tmp_path)
+    store = TopicStore(artifact_store)
+    router = TopicRouter(store)
+
+    first = router.route_turn(
+        text="hello",
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        current_state={},
+        meta={},
+    )
+    second = router.route_turn(
+        text="another topic: docker networking",
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        current_state={"topic_thread_id": first.thread_id},
+        meta={},
+    )
+
+    assert first.is_new_thread is True
+    assert second.is_new_thread is True
+    assert second.thread_id != first.thread_id
+    assert second.reason == "explicit_new_topic"
 
 
 def test_episode_planner_scopes_active_episode_by_topic_thread_id(tmp_path) -> None:
@@ -172,6 +231,10 @@ def test_topic_routing_stage_updates_state_and_meta() -> None:
     assert updated.tags["topic"] == "memory"
     assert updated.state["context_tags"]["topic"] == "memory"
     assert updated.state["topic_stack"][0]["thread_id"] == "thr-memory"
+    patch_op = next(item for item in updated.memory_ops if item["op"] == "state_patch")
+    assert patch_op["value"]["topic_thread_id"] == "thr-memory"
+    assert patch_op["value"]["active_topic_thread_id"] == "thr-memory"
+    assert patch_op["value"]["context_tags"]["topic"] == "memory"
 
 
 def test_memory_write_stage_attaches_topic_metadata_to_turn_ops() -> None:
@@ -404,6 +467,56 @@ def test_topic_tool_service_search_read_and_related(tmp_path) -> None:
     assert read["current_decisions"] == ["Сначала открываем тему через topic_read, потом углубляем retrieval"]
     assert read["recent_episodes"][0]["artifact_id"] == "episode-memory"
     assert related["topics"][0]["thread_id"] == "thr-ui"
+
+
+def test_topic_tool_service_rebuilds_missing_summary_from_recent_turns(tmp_path) -> None:
+    _, artifact_store, _ = _build_stores(tmp_path)
+    store = TopicStore(artifact_store)
+    thread = TopicThread.create(
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        topic_key="memory",
+        title="Memory",
+        tags=["memory"],
+        metadata={
+            "recent_turn_texts": ["Discuss memory retrieval and hidden topics"],
+            "summary_build_version": 0,
+        },
+    )
+    store.create_thread(thread)
+
+    details = TopicToolService(store).read_topic(thread.thread_id, workspace_id="global", limit=5)
+    refreshed = store.get_thread(thread.thread_id)
+
+    assert details is not None
+    assert str(details["summary"] or "").strip().startswith("Focus:")
+    assert refreshed is not None
+    assert str(refreshed.summary or "").strip().startswith("Focus:")
+
+
+def test_inspector_service_list_topics_refreshes_missing_summary(tmp_path) -> None:
+    _, artifact_store, _ = _build_stores(tmp_path)
+    store = TopicStore(artifact_store)
+    thread = TopicThread.create(
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        topic_key="memory",
+        title="Memory",
+        tags=["memory"],
+        metadata={
+            "recent_turn_texts": ["Need to continue the memory design discussion"],
+            "summary_build_version": 0,
+        },
+    )
+    store.create_thread(thread)
+
+    memory_core = SimpleNamespace(service=SimpleNamespace(artifact_store=artifact_store))
+    topics = MemoryInspectorService(memory_core).list_topics(visible_chat_id="chat-1", limit=20)
+
+    assert topics
+    assert str(topics[0]["summary"] or "").strip().startswith("Focus:")
 
 
 def test_topic_summary_builder_persists_summary_and_links(tmp_path) -> None:

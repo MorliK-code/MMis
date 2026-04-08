@@ -6,6 +6,7 @@ from typing import Any
 from llm.provider_base import ToolSpec
 from memory_core.topic.topic_models import TopicThread
 from memory_core.topic.topic_store import TopicStore
+from memory_core.topic.topic_summary import TopicSummaryBuilder
 
 
 def topic_read_tool_spec() -> ToolSpec:
@@ -115,6 +116,7 @@ class TopicToolService:
             status=None if str(status or "").strip().lower() == "all" else status,
             limit=max(int(limit or 8) * 4, 24),
         )
+        threads = [self._ensure_thread_summary(thread, workspace_id=workspace_id) for thread in threads]
         if not clean_query:
             ranked = [(thread, 0.0) for thread in threads]
         else:
@@ -144,6 +146,7 @@ class TopicToolService:
         thread = self.topic_store.get_thread(thread_id)
         if thread is None:
             return None
+        thread = self._ensure_thread_summary(thread, workspace_id=workspace_id)
 
         artifacts = self.topic_store.list_thread_artifacts(
             thread.thread_id,
@@ -221,6 +224,19 @@ class TopicToolService:
             "recent_artifacts": recent_artifacts[: max(1, int(limit or 20))],
             "related_topics": related_topics,
         }
+
+    def _ensure_thread_summary(self, thread: TopicThread, *, workspace_id: str = "") -> TopicThread:
+        if not TopicSummaryBuilder.needs_refresh(thread):
+            return thread
+        try:
+            TopicSummaryBuilder(self.topic_store).rebuild_thread(
+                thread.thread_id,
+                workspace_id=str(workspace_id or thread.workspace_id or "").strip(),
+            )
+        except Exception:
+            return thread
+        refreshed = self.topic_store.get_thread(thread.thread_id)
+        return refreshed or thread
 
     def related_topics(
         self,

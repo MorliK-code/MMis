@@ -10,22 +10,58 @@ from memory_core.topic.topic_store import TopicStore
 
 
 class TopicRouter:
+    _SOFT_SWITCH_MARKERS = (
+        "\u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u043e",
+        "\u0430 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u043e",
+        "\u0434\u0430\u0432\u0430\u0439 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u043e",
+        "\u043f\u0435\u0440\u0435\u0439\u0434\u0435\u043c \u043a",
+        "\u043f\u0435\u0440\u0435\u0439\u0434\u0451\u043c \u043a",
+        "\u0441\u043c\u0435\u043d\u0438\u043c \u0442\u0435\u043c\u0443",
+        "\u0434\u0440\u0443\u0433\u043e\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+        "\u043e\u0442\u0434\u0435\u043b\u044c\u043d\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+        "another topic",
+        "new topic",
+        "separate question",
+        "switch topic",
+    )
+    _CONTINUATION_PREFIXES = (
+        "\u0430 ",
+        "\u0438 ",
+        "\u043d\u043e ",
+        "\u043d\u0443 ",
+        "\u0434\u0430\u0432\u0430\u0439 ",
+        "\u0434\u0430\u0432\u0430\u0439 \u0435\u0449\u0435",
+        "\u043f\u043e\u0434\u0440\u043e\u0431\u043d\u0435\u0435",
+        "\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0430\u0439",
+        "\u043f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u043c",
+        "\u0430 \u0435\u0441\u043b\u0438",
+        "\u0430 \u043a\u0430\u043a",
+        "\u0430 \u0447\u0442\u043e",
+        "\u0447\u0442\u043e \u0435\u0441\u043b\u0438",
+        "and ",
+        "also ",
+        "then ",
+        "continue",
+        "go on",
+        "what about",
+    )
+    _RECENT_THREAD_TTL_SEC = 45 * 60
     _NEW_TOPIC_MARKERS = (
-        "другая тема",
-        "новый вопрос",
-        "еще вопрос",
-        "ещё вопрос",
-        "отдельно",
-        "кстати",
+        "\u0434\u0440\u0443\u0433\u0430\u044f \u0442\u0435\u043c\u0430",
+        "\u043d\u043e\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
+        "\u0435\u0449\u0435 \u0432\u043e\u043f\u0440\u043e\u0441",
+        "\u0435\u0449\u0451 \u0432\u043e\u043f\u0440\u043e\u0441",
+        "\u043e\u0442\u0434\u0435\u043b\u044c\u043d\u043e",
+        "\u043a\u0441\u0442\u0430\u0442\u0438",
     )
     _RETURN_MARKERS = (
-        "вернемся к",
-        "вернёмся к",
-        "по поводу",
-        "насчет",
-        "насчёт",
-        "что там с",
-        "обратно к",
+        "\u0432\u0435\u0440\u043d\u0435\u043c\u0441\u044f \u043a",
+        "\u0432\u0435\u0440\u043d\u0451\u043c\u0441\u044f \u043a",
+        "\u043f\u043e \u043f\u043e\u0432\u043e\u0434\u0443",
+        "\u043d\u0430\u0441\u0447\u0435\u0442",
+        "\u043d\u0430\u0441\u0447\u0451\u0442",
+        "\u0447\u0442\u043e \u0442\u0430\u043c \u0441",
+        "\u043e\u0431\u0440\u0430\u0442\u043d\u043e \u043a",
     )
 
     def __init__(
@@ -65,7 +101,7 @@ class TopicRouter:
         hints = self._safe_hints(clean_text)
         hinted_key = self._derive_topic_key(clean_text, hints)
         explicit_return = self._extract_explicit_target(clean_text, self._RETURN_MARKERS)
-        explicit_new = self._contains_marker(clean_text, self._NEW_TOPIC_MARKERS)
+        explicit_new = self._contains_marker(clean_text, self._NEW_TOPIC_MARKERS + self._SOFT_SWITCH_MARKERS)
         current_thread = next((item for item in threads if item.thread_id == current_thread_id), None)
 
         if not threads:
@@ -75,6 +111,7 @@ class TopicRouter:
                 session_id=session_id,
                 topic_key=hinted_key,
                 title=self._derive_title(clean_text, hints),
+                seed_text=clean_text,
                 tags=hints,
                 reason="bootstrap",
                 score=1.0,
@@ -90,16 +127,23 @@ class TopicRouter:
         )
         best_thread = ranked[0][0] if ranked else None
         best_score = ranked[0][1] if ranked else 0.0
+        current_score = next(
+            (score for thread, score in ranked if current_thread is not None and thread.thread_id == current_thread.thread_id),
+            0.0,
+        )
         related_ids = [thread.thread_id for thread, score in ranked[1:3] if score >= 0.45]
+        looks_like_continuation = self._looks_like_continuation(clean_text)
+        recent_current = self._is_recent_thread(current_thread)
 
         if explicit_return:
             matched = self._match_explicit_target(explicit_return, threads)
             if matched is not None:
                 self.topic_store.touch_thread(
                     matched.thread_id,
+                    summary=self._route_summary_for_existing_thread(matched, clean_text),
                     tags=hints,
                     related_thread_ids=related_ids,
-                    metadata={"last_route_reason": "explicit_return"},
+                    metadata=self._route_metadata_for_existing_thread(matched, clean_text, "explicit_return", max(best_score, 0.86)),
                 )
                 return TopicRouteDecision(
                     thread_id=matched.thread_id,
@@ -118,6 +162,7 @@ class TopicRouter:
                 session_id=session_id,
                 topic_key=hinted_key,
                 title=self._derive_title(clean_text, hints),
+                seed_text=clean_text,
                 tags=hints,
                 related_thread_ids=related_ids,
                 reason="explicit_new_topic",
@@ -127,8 +172,9 @@ class TopicRouter:
         if self._is_short_followup(clean_text) and current_thread is not None:
             self.topic_store.touch_thread(
                 current_thread.thread_id,
+                summary=self._route_summary_for_existing_thread(current_thread, clean_text),
                 tags=hints,
-                metadata={"last_route_reason": "short_followup"},
+                metadata=self._route_metadata_for_existing_thread(current_thread, clean_text, "short_followup", max(best_score, 0.74)),
             )
             return TopicRouteDecision(
                 thread_id=current_thread.thread_id,
@@ -139,12 +185,39 @@ class TopicRouter:
                 related_thread_ids=related_ids,
             )
 
-        if best_thread is not None and best_score >= 0.72:
+        if (
+            current_thread is not None
+            and best_thread is not None
+            and best_thread.thread_id != current_thread.thread_id
+            and best_score >= 0.82
+            and current_score <= 0.25
+            and not looks_like_continuation
+        ):
             self.topic_store.touch_thread(
                 best_thread.thread_id,
+                summary=self._route_summary_for_existing_thread(best_thread, clean_text),
                 tags=hints,
                 related_thread_ids=related_ids,
-                metadata={"last_route_reason": "semantic_match", "last_route_score": best_score},
+                metadata=self._route_metadata_for_existing_thread(best_thread, clean_text, "semantic_switch_existing", best_score),
+            )
+            return TopicRouteDecision(
+                thread_id=best_thread.thread_id,
+                topic_key=best_thread.topic_key,
+                title=best_thread.title,
+                reason="semantic_switch_existing",
+                score=best_score,
+                related_thread_ids=related_ids,
+            )
+
+        if best_thread is not None and best_score >= 0.72 and (
+            current_thread is None or best_thread.thread_id == current_thread.thread_id
+        ):
+            self.topic_store.touch_thread(
+                best_thread.thread_id,
+                summary=self._route_summary_for_existing_thread(best_thread, clean_text),
+                tags=hints,
+                related_thread_ids=related_ids,
+                metadata=self._route_metadata_for_existing_thread(best_thread, clean_text, "semantic_match", best_score),
             )
             return TopicRouteDecision(
                 thread_id=best_thread.thread_id,
@@ -156,16 +229,13 @@ class TopicRouter:
             )
 
         if current_thread is not None:
-            current_score = next(
-                (score for thread, score in ranked if thread.thread_id == current_thread.thread_id),
-                0.0,
-            )
             if current_score >= 0.5:
                 self.topic_store.touch_thread(
                     current_thread.thread_id,
+                    summary=self._route_summary_for_existing_thread(current_thread, clean_text),
                     tags=hints,
                     related_thread_ids=related_ids,
-                    metadata={"last_route_reason": "prefer_current_topic", "last_route_score": current_score},
+                    metadata=self._route_metadata_for_existing_thread(current_thread, clean_text, "prefer_current_topic", current_score),
                 )
                 return TopicRouteDecision(
                     thread_id=current_thread.thread_id,
@@ -175,6 +245,30 @@ class TopicRouter:
                     score=current_score,
                     related_thread_ids=related_ids,
                 )
+            if current_score >= 0.28 or looks_like_continuation or recent_current:
+                reason = "continue_current_topic"
+                score = current_score
+                if current_score >= 0.28 and not looks_like_continuation and not recent_current:
+                    reason = "prefer_current_topic"
+                elif looks_like_continuation:
+                    score = max(score, 0.68)
+                elif recent_current:
+                    score = max(score, 0.62)
+                self.topic_store.touch_thread(
+                    current_thread.thread_id,
+                    summary=self._route_summary_for_existing_thread(current_thread, clean_text),
+                    tags=hints,
+                    related_thread_ids=related_ids,
+                    metadata=self._route_metadata_for_existing_thread(current_thread, clean_text, reason, score),
+                )
+                return TopicRouteDecision(
+                    thread_id=current_thread.thread_id,
+                    topic_key=current_thread.topic_key,
+                    title=current_thread.title,
+                    reason=reason,
+                    score=score,
+                    related_thread_ids=related_ids,
+                )
 
         return self._create_thread_decision(
             visible_chat_id=visible_chat_id,
@@ -182,6 +276,7 @@ class TopicRouter:
             session_id=session_id,
             topic_key=hinted_key,
             title=self._derive_title(clean_text, hints),
+            seed_text=clean_text,
             tags=hints,
             related_thread_ids=related_ids,
             reason="new_topic_low_match",
@@ -196,11 +291,14 @@ class TopicRouter:
         session_id: str,
         topic_key: str,
         title: str,
+        seed_text: str,
         tags: list[str],
         related_thread_ids: list[str] | None = None,
         reason: str,
         score: float,
     ) -> TopicRouteDecision:
+        now = time.time()
+        fast_summary = self._build_fast_summary(seed_text, fallback_title=title or topic_key)
         thread = TopicThread.create(
             visible_chat_id=visible_chat_id,
             workspace_id=workspace_id,
@@ -213,8 +311,14 @@ class TopicRouter:
                 "created_by": "topic_router",
                 "last_route_reason": reason,
                 "last_route_score": float(score),
+                "last_user_text": str(seed_text or "").strip(),
+                "recent_turn_texts": self._merge_recent_turn_texts([], seed_text),
+                "summary_updated_at": now,
+                "summary_build_version": 0,
+                "summary_source": "topic_router_fastpath",
             },
         )
+        thread.summary = fast_summary
         self.topic_store.create_thread(thread)
         return TopicRouteDecision(
             thread_id=thread.thread_id,
@@ -349,10 +453,80 @@ class TopicRouter:
         return bool(words)
 
     @staticmethod
+    def _looks_like_continuation(text: str) -> bool:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return False
+        if any(lowered.startswith(marker) for marker in TopicRouter._CONTINUATION_PREFIXES):
+            return True
+        words = [word for word in lowered.split() if word]
+        if len(words) <= 8 and lowered.endswith("?"):
+            return True
+        if len(words) <= 4:
+            return True
+        return False
+
+    @staticmethod
+    def _is_recent_thread(thread: TopicThread | None) -> bool:
+        if thread is None:
+            return False
+        updated_at = float(thread.updated_at or 0.0)
+        if updated_at <= 0:
+            return False
+        return (time.time() - updated_at) <= float(TopicRouter._RECENT_THREAD_TTL_SEC)
+
+    @staticmethod
+    def _build_fast_summary(text: str, *, fallback_title: str = "") -> str:
+        clean = " ".join(str(text or "").strip().split())
+        if clean:
+            return ("Focus: " + clean[:220]).strip()[:480]
+        return str(fallback_title or "").strip()[:480]
+
+    @staticmethod
+    def _merge_recent_turn_texts(existing: list[str] | None, text: str) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in list(existing or []) + [text]:
+            clean = " ".join(str(item or "").strip().split())
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            result.append(clean[:180])
+        return result[-4:]
+
+    def _route_summary_for_existing_thread(self, thread: TopicThread, text: str) -> str | None:
+        metadata = dict(thread.metadata or {})
+        build_version = int(metadata.get("summary_build_version") or 0)
+        if build_version >= 1 and str(thread.summary or "").strip():
+            return None
+        return self._build_fast_summary(text, fallback_title=thread.title or thread.topic_key)
+
+    def _route_metadata_for_existing_thread(
+        self,
+        thread: TopicThread,
+        text: str,
+        reason: str,
+        score: float,
+    ) -> dict[str, Any]:
+        metadata = dict(thread.metadata or {})
+        payload = {
+            "last_route_reason": reason,
+            "last_route_score": float(score),
+            "last_user_text": str(text or "").strip(),
+            "recent_turn_texts": self._merge_recent_turn_texts(metadata.get("recent_turn_texts"), text),
+        }
+        build_version = int(metadata.get("summary_build_version") or 0)
+        if build_version < 1 or not str(thread.summary or "").strip():
+            payload["summary_updated_at"] = time.time()
+            payload["summary_build_version"] = 0
+            payload["summary_source"] = "topic_router_fastpath"
+        return payload
+
+    @staticmethod
     def _tokenize(text: str) -> set[str]:
         return {
             token
-            for token in re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9_]{3,}", str(text or "").lower())
+            for token in re.findall(r"[A-Za-z\u0400-\u04FF0-9_]{3,}", str(text or "").lower())
             if len(token) >= 3
         }
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from memory_core.topic import TopicStore
+from memory_core.topic import TopicStore, TopicSummaryBuilder
 
 
 @dataclass(slots=True)
@@ -489,7 +489,7 @@ class MemoryInspectorService:
             status=status,
             limit=limit,
         )
-        return [self._serialize_topic(thread) for thread in threads]
+        return [self._serialize_topic(self._ensure_topic_summary(thread)) for thread in threads]
 
     def get_topic_details(self, thread_id: str) -> dict[str, Any] | None:
         if not self._topic_store:
@@ -498,6 +498,7 @@ class MemoryInspectorService:
         thread = self._topic_store.get_thread(thread_id)
         if thread is None:
             return None
+        thread = self._ensure_topic_summary(thread)
 
         recent_artifacts = self._topic_store.list_thread_artifacts(
             thread.thread_id,
@@ -552,6 +553,21 @@ class MemoryInspectorService:
             "related_topics": related_topics,
             "recent_artifacts": recent_artifacts[:50],
         }
+
+    def _ensure_topic_summary(self, thread):
+        if thread is None or not self._topic_store:
+            return thread
+        if not TopicSummaryBuilder.needs_refresh(thread):
+            return thread
+        try:
+            TopicSummaryBuilder(self._topic_store).rebuild_thread(
+                thread.thread_id,
+                workspace_id=str(thread.workspace_id or "").strip(),
+            )
+        except Exception:
+            return thread
+        refreshed = self._topic_store.get_thread(thread.thread_id)
+        return refreshed or thread
 
     def _serialize_topic(
         self,

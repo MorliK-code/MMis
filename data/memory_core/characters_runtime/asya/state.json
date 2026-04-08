@@ -1,6 +1,6 @@
 {
-  "mood": "soft_supportive",
-  "last_update_ts": "2026-04-04T16:33:32.354+03:00",
+  "mood": "teasing",
+  "last_update_ts": "2026-04-08T15:08:54.393+03:00",
   "active_traits": [
     "directness",
     "emoji_rate",
@@ -23,12 +23,12 @@
   "last_signals": {
     "lang": "ru",
     "intent": "chat",
-    "emotion": "tired",
-    "emotion_intensity": 0.45,
+    "emotion": "neutral",
+    "emotion_intensity": 0.35,
     "emotion_arousal": 0.2,
     "mode": "chatting",
     "topics": [
-      "topic_тебя_дела"
+      "topic_можешь_рассказать"
     ],
     "tags": [
       "lang_ru"
@@ -37,10 +37,6 @@
   },
   "applied_rules": [
     {
-      "rule": "rule_2",
-      "action_count": 7
-    },
-    {
       "rule": "rule_5",
       "action_count": 7
     }
@@ -48,23 +44,23 @@
   "emotional_state_before": {
     "schema_version": 1,
     "mood": "neutral",
-    "valence": 0.09304660518679962,
-    "arousal": 0.09265951654555192,
-    "intensity": 0.1344282388847813,
-    "trigger": "happy",
-    "last_update_ts": "2026-04-04T16:32:58.821+03:00",
+    "valence": 0.016476391811374745,
+    "arousal": 0.07365619017624876,
+    "intensity": 0.115876813226249,
+    "trigger": "tired",
+    "last_update_ts": "2026-04-08T15:07:57.532+03:00",
     "cooldown_until_ts": ""
   },
   "emotional_state_after": {
     "schema_version": 1,
-    "mood": "soft_supportive",
-    "valence": 0.026902272080342543,
-    "arousal": 0.10706247310206535,
-    "intensity": 0.23825134829168826,
-    "trigger": "tired",
-    "last_update_ts": "2026-04-04T16:33:32.333+03:00",
+    "mood": "teasing",
+    "valence": 0.014088973524587267,
+    "arousal": 0.06546647825904989,
+    "intensity": 0.0880541901843391,
+    "trigger": "",
+    "last_update_ts": "2026-04-08T15:08:54.391+03:00",
     "cooldown_until_ts": ""
   },
   "persona_feedback_applied": [],
-  "emotion": "tired"
+  "emotion": "neutral"
 }

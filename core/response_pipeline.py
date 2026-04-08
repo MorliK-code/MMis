@@ -542,6 +542,28 @@ class TopicRoutingStage(PipelineStage):
         state_tags = _as_dict(ctx.state.get("context_tags"))
         state_tags["topic"] = decision.topic_key
         ctx.state["context_tags"] = state_tags
+        if bool(ctx.meta.get("track_state", True)) and not bool(ctx.meta.get("non_persistent_turn", False)):
+            ctx.memory_ops.append(
+                {
+                    "op": "state_patch",
+                    "value": {
+                        "topic_thread_id": decision.thread_id,
+                        "topic_key": decision.topic_key,
+                        "topic_thread_title": decision.title,
+                        "active_topic_thread_id": decision.thread_id,
+                        "active_topic_key": decision.topic_key,
+                        "active_topic_title": decision.title,
+                        "topic_route_reason": decision.reason,
+                        "topic_route_score": float(decision.score),
+                        "related_topic_thread_ids": list(decision.related_thread_ids or []),
+                        "topic_candidates": list(decision.related_thread_ids or []),
+                        "topic_last_route_reason": decision.reason,
+                        "topic_last_route_score": float(decision.score),
+                        "topic_stack": list(ctx.state.get("topic_stack") or []),
+                        "context_tags": dict(state_tags),
+                    },
+                }
+            )
 
         ctx.logs.append(
             f"stage=topic_routing thread={decision.thread_id} "
