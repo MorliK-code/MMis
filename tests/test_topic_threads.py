@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -21,7 +22,7 @@ from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.storage.event_store import EventStore
 from memory_core.storage.job_queue_store import JobQueueStore
 from memory_core.storage.sqlite_db import Database
-from memory_core.topic import TopicRouteDecision, TopicRouter, TopicStore, TopicSummaryBuilder, TopicThread, TopicToolService
+from memory_core.topic import TopicMaintenanceService, TopicRouteDecision, TopicRouter, TopicStore, TopicSummaryBuilder, TopicThread, TopicToolService
 from memory_core.worker.background_worker import BackgroundWorker
 from prompt_engine.prompt_engine import PromptEngine
 
@@ -482,6 +483,7 @@ def test_topic_tool_service_rebuilds_missing_summary_from_recent_turns(tmp_path)
         metadata={
             "recent_turn_texts": ["Discuss memory retrieval and hidden topics"],
             "summary_build_version": 0,
+            "summary_stale": True,
         },
     )
     store.create_thread(thread)
@@ -493,6 +495,9 @@ def test_topic_tool_service_rebuilds_missing_summary_from_recent_turns(tmp_path)
     assert str(details["summary"] or "").strip().startswith("Focus:")
     assert refreshed is not None
     assert str(refreshed.summary or "").strip().startswith("Focus:")
+    assert refreshed.metadata["summary_stale"] is False
+    assert refreshed.metadata["summary_source"] == "lazy_rebuild"
+    assert refreshed.metadata["summary_build_version"] >= 2
 
 
 def test_inspector_service_list_topics_refreshes_missing_summary(tmp_path) -> None:
@@ -517,6 +522,89 @@ def test_inspector_service_list_topics_refreshes_missing_summary(tmp_path) -> No
 
     assert topics
     assert str(topics[0]["summary"] or "").strip().startswith("Focus:")
+
+
+def test_topic_maintenance_service_moves_idle_topic_to_sleeping(tmp_path) -> None:
+    _, artifact_store, _ = _build_stores(tmp_path)
+    store = TopicStore(artifact_store)
+    old_ts = time.time() - float(TopicMaintenanceService.SLEEP_AFTER_SEC + 60.0)
+    thread = TopicThread.create(
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        topic_key="memory",
+        title="Memory topic",
+        tags=["memory"],
+        metadata={
+            "summary_build_version": 2,
+            "summary_updated_at": old_ts,
+            "summary_source": "llm",
+            "summary_stale": False,
+            "last_meaningful_activity_at": old_ts,
+        },
+    )
+    thread.summary = "Focus: memory retrieval design"
+    thread.created_at = old_ts
+    thread.updated_at = old_ts
+    store.create_thread(thread)
+
+    result = TopicMaintenanceService(store).maintain_thread(
+        thread.thread_id,
+        workspace_id="global",
+        allow_summary_rebuild=False,
+        trigger="scope_maintenance",
+    )
+    refreshed = store.get_thread(thread.thread_id)
+
+    assert result is not None
+    assert result.new_status == "sleeping"
+    assert refreshed is not None
+    assert refreshed.status == "sleeping"
+    assert refreshed.metadata["topic_status_reason"] == "inactive_sleep"
+
+
+def test_topic_maintenance_service_hides_trivial_smalltalk_topics(tmp_path) -> None:
+    _, artifact_store, _ = _build_stores(tmp_path)
+    store = TopicStore(artifact_store)
+    old_ts = time.time() - float(TopicMaintenanceService.TRIVIAL_DELETE_AFTER_SEC + 60.0)
+    thread = TopicThread.create(
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        topic_key="general",
+        title="hello",
+        metadata={
+            "last_user_text": "hello",
+            "recent_turn_texts": ["hello"],
+            "summary_build_version": 0,
+            "summary_stale": True,
+            "last_meaningful_activity_at": old_ts,
+        },
+    )
+    thread.summary = "Focus: hello"
+    thread.created_at = old_ts
+    thread.updated_at = old_ts
+    store.create_thread(thread)
+
+    result = TopicMaintenanceService(store).maintain_thread(
+        thread.thread_id,
+        workspace_id="global",
+        allow_summary_rebuild=False,
+        trigger="scope_maintenance",
+    )
+    refreshed = store.get_thread(thread.thread_id)
+    visible_threads = store.list_threads(
+        visible_chat_id="chat-1",
+        workspace_id="global",
+        session_id="chat-1",
+        limit=20,
+    )
+
+    assert result is not None
+    assert result.new_status == "deleted"
+    assert refreshed is not None
+    assert refreshed.status == "deleted"
+    assert not visible_threads
 
 
 def test_topic_summary_builder_persists_summary_and_links(tmp_path) -> None:
@@ -677,6 +765,8 @@ def test_background_worker_refreshes_topic_summary_after_job(tmp_path) -> None:
     assert updated_thread is not None
     assert "Summary builder запускаем после governor" in list(updated_thread.metadata.get("current_decisions") or [])
     assert "Как ограничить шум между related topics?" in list(updated_thread.metadata.get("open_questions") or [])
+    assert updated_thread.metadata["summary_stale"] is False
+    assert updated_thread.metadata["summary_source"] == "background_rebuild"
     assert task_links
 
 

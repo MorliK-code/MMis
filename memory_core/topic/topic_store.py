@@ -14,10 +14,12 @@ class TopicStore:
         self.artifact_store = artifact_store
 
     def create_thread(self, thread: TopicThread) -> TopicThread:
+        self._normalize_thread(thread)
         self.artifact_store.create(thread.to_artifact())
         return thread
 
     def upsert_thread(self, thread: TopicThread) -> TopicThread:
+        self._normalize_thread(thread)
         artifact = thread.to_artifact()
         existing = self.artifact_store.get_by_id(thread.thread_id)
         if existing is None:
@@ -39,6 +41,7 @@ class TopicStore:
         workspace_id: str = "",
         session_id: str = "",
         status: str | None = None,
+        include_hidden: bool = False,
         limit: int = 100,
     ) -> list[TopicThread]:
         artifacts = self.artifact_store.list_artifacts(
@@ -58,6 +61,8 @@ class TopicStore:
             if want_session and thread.session_id != want_session:
                 continue
             if want_status and str(thread.status or "").strip().lower() != want_status:
+                continue
+            if not include_hidden and str(thread.status or "").strip().lower() in {"deleted", "merged"}:
                 continue
             result.append(thread)
         result.sort(key=lambda item: float(item.updated_at or 0.0), reverse=True)
@@ -95,6 +100,7 @@ class TopicStore:
             thread.metadata = merged
         if status:
             thread.status = str(status).strip() or thread.status
+        self._normalize_thread(thread)
         thread.updated_at = time.time()
         self.upsert_thread(thread)
         return thread
@@ -261,6 +267,13 @@ class TopicStore:
             tuple([*params, max(1, int(limit or 200))]),
         )
         return [_row_to_link(row) for row in rows]
+
+    @staticmethod
+    def _normalize_thread(thread: TopicThread) -> None:
+        metadata = dict(thread.metadata or {})
+        metadata["topic_status"] = str(thread.status or "active").strip() or "active"
+        metadata.setdefault("last_meaningful_activity_at", float(thread.updated_at or thread.created_at or time.time()))
+        thread.metadata = metadata
 
 
 def _merge_unique(existing: list[str] | None, extra: list[str] | None) -> list[str]:

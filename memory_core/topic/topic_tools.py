@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from llm.provider_base import ToolSpec
+from memory_core.topic.topic_maintenance import TopicMaintenanceService
 from memory_core.topic.topic_models import TopicThread
 from memory_core.topic.topic_store import TopicStore
 from memory_core.topic.topic_summary import TopicSummaryBuilder
@@ -52,7 +53,7 @@ def topic_search_tool_spec() -> ToolSpec:
                 },
                 "status": {
                     "type": "string",
-                    "enum": ["active", "sleeping", "archived", "all"],
+                    "enum": ["active", "sleeping", "archived", "merged", "deleted", "all"],
                     "description": "Optional status filter.",
                 },
             },
@@ -109,14 +110,21 @@ class TopicToolService:
         limit: int = 8,
     ) -> dict[str, Any]:
         clean_query = str(query or "").strip()
+        self._maintain_scope(
+            visible_chat_id=visible_chat_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            limit=max(int(limit or 8) * 4, 24),
+        )
         threads = self.topic_store.list_threads(
             visible_chat_id=str(visible_chat_id or "").strip(),
             workspace_id=str(workspace_id or "").strip(),
             session_id=str(session_id or "").strip(),
             status=None if str(status or "").strip().lower() == "all" else status,
+            include_hidden=str(status or "").strip().lower() in {"all", "merged", "deleted"},
             limit=max(int(limit or 8) * 4, 24),
         )
-        threads = [self._ensure_thread_summary(thread, workspace_id=workspace_id) for thread in threads]
+        threads = [self._ensure_thread_fresh(thread, workspace_id=workspace_id, refresh_summary=True) for thread in threads]
         if not clean_query:
             ranked = [(thread, 0.0) for thread in threads]
         else:
@@ -146,7 +154,7 @@ class TopicToolService:
         thread = self.topic_store.get_thread(thread_id)
         if thread is None:
             return None
-        thread = self._ensure_thread_summary(thread, workspace_id=workspace_id)
+        thread = self._ensure_thread_fresh(thread, workspace_id=workspace_id, refresh_summary=True)
 
         artifacts = self.topic_store.list_thread_artifacts(
             thread.thread_id,
@@ -225,18 +233,54 @@ class TopicToolService:
             "related_topics": related_topics,
         }
 
-    def _ensure_thread_summary(self, thread: TopicThread, *, workspace_id: str = "") -> TopicThread:
-        if not TopicSummaryBuilder.needs_refresh(thread):
-            return thread
+    def _ensure_thread_fresh(
+        self,
+        thread: TopicThread,
+        *,
+        workspace_id: str = "",
+        refresh_summary: bool = True,
+    ) -> TopicThread:
         try:
-            TopicSummaryBuilder(self.topic_store).rebuild_thread(
+            TopicMaintenanceService(self.topic_store).maintain_thread(
                 thread.thread_id,
                 workspace_id=str(workspace_id or thread.workspace_id or "").strip(),
+                allow_summary_rebuild=refresh_summary,
+                trigger="read_topic_tools",
             )
         except Exception:
-            return thread
+            if not refresh_summary or not TopicSummaryBuilder.needs_refresh(thread):
+                return thread
+            try:
+                TopicSummaryBuilder(self.topic_store).rebuild_thread(
+                    thread.thread_id,
+                    workspace_id=str(workspace_id or thread.workspace_id or "").strip(),
+                    source="lazy_rebuild",
+                    refresh_reason="read_topic_tools",
+                )
+            except Exception:
+                return thread
+            refreshed = self.topic_store.get_thread(thread.thread_id)
+            return refreshed or thread
         refreshed = self.topic_store.get_thread(thread.thread_id)
         return refreshed or thread
+
+    def _maintain_scope(
+        self,
+        *,
+        visible_chat_id: str = "",
+        workspace_id: str = "",
+        session_id: str = "",
+        limit: int = 24,
+    ) -> None:
+        try:
+            TopicMaintenanceService(self.topic_store).maintain_scope(
+                visible_chat_id=str(visible_chat_id or "").strip(),
+                workspace_id=str(workspace_id or "").strip(),
+                session_id=str(session_id or "").strip(),
+                limit=max(1, int(limit or 24)),
+            )
+        except Exception:
+            return
 
     def related_topics(
         self,

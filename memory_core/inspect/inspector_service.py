@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from memory_core.topic import TopicStore, TopicSummaryBuilder
+from memory_core.topic import TopicMaintenanceService, TopicStore, TopicSummaryBuilder
 
 
 @dataclass(slots=True)
@@ -484,12 +484,14 @@ class MemoryInspectorService:
         if not self._topic_store:
             return []
 
+        self._maintain_topics(visible_chat_id=visible_chat_id, limit=limit)
         threads = self._topic_store.list_threads(
             visible_chat_id=str(visible_chat_id or "").strip(),
             status=status,
+            include_hidden=str(status or "").strip().lower() in {"all", "merged", "deleted"},
             limit=limit,
         )
-        return [self._serialize_topic(self._ensure_topic_summary(thread)) for thread in threads]
+        return [self._serialize_topic(self._ensure_topic_fresh(thread)) for thread in threads]
 
     def get_topic_details(self, thread_id: str) -> dict[str, Any] | None:
         if not self._topic_store:
@@ -498,7 +500,7 @@ class MemoryInspectorService:
         thread = self._topic_store.get_thread(thread_id)
         if thread is None:
             return None
-        thread = self._ensure_topic_summary(thread)
+        thread = self._ensure_topic_fresh(thread)
 
         recent_artifacts = self._topic_store.list_thread_artifacts(
             thread.thread_id,
@@ -554,20 +556,41 @@ class MemoryInspectorService:
             "recent_artifacts": recent_artifacts[:50],
         }
 
-    def _ensure_topic_summary(self, thread):
+    def _ensure_topic_fresh(self, thread):
         if thread is None or not self._topic_store:
             return thread
-        if not TopicSummaryBuilder.needs_refresh(thread):
-            return thread
         try:
-            TopicSummaryBuilder(self._topic_store).rebuild_thread(
+            TopicMaintenanceService(self._topic_store).maintain_thread(
                 thread.thread_id,
                 workspace_id=str(thread.workspace_id or "").strip(),
+                allow_summary_rebuild=True,
+                trigger="read_inspector",
             )
         except Exception:
-            return thread
+            if not TopicSummaryBuilder.needs_refresh(thread):
+                return thread
+            try:
+                TopicSummaryBuilder(self._topic_store).rebuild_thread(
+                    thread.thread_id,
+                    workspace_id=str(thread.workspace_id or "").strip(),
+                    source="lazy_rebuild",
+                    refresh_reason="read_inspector",
+                )
+            except Exception:
+                return thread
         refreshed = self._topic_store.get_thread(thread.thread_id)
         return refreshed or thread
+
+    def _maintain_topics(self, *, visible_chat_id: str = "", limit: int = 200) -> None:
+        if not self._topic_store:
+            return
+        try:
+            TopicMaintenanceService(self._topic_store).maintain_scope(
+                visible_chat_id=str(visible_chat_id or "").strip(),
+                limit=max(1, int(limit or 200)),
+            )
+        except Exception:
+            return
 
     def _serialize_topic(
         self,

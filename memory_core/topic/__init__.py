@@ -2,6 +2,7 @@ from memory_core.topic.topic_models import TopicRouteDecision, TopicThread
 from memory_core.topic.topic_linker import RelatedTopicLink, TopicRelationshipLinker
 from memory_core.topic.topic_router import TopicRouter
 from memory_core.topic.topic_store import TopicStore
+from memory_core.topic.topic_maintenance import TopicMaintenanceResult, TopicMaintenanceService
 from memory_core.topic.topic_summary import TopicSummaryBuilder, TopicSummarySnapshot
 from memory_core.topic.topic_tools import (
     TopicToolService,
@@ -18,6 +19,8 @@ __all__ = [
     "TopicRelationshipLinker",
     "TopicRouter",
     "TopicStore",
+    "TopicMaintenanceResult",
+    "TopicMaintenanceService",
     "TopicSummaryBuilder",
     "TopicSummarySnapshot",
     "TopicToolService",

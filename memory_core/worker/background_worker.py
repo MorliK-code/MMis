@@ -31,7 +31,7 @@ from memory_core.storage.event_store import EventStore
 from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.schemas import MemoryEnvelope
 from memory_core.inspect.trace_store import MemoryTraceStore
-from memory_core.topic import TopicStore, TopicSummaryBuilder
+from memory_core.topic import TopicMaintenanceService, TopicStore
 from utils.logger import get_logger
 
 
@@ -514,6 +514,7 @@ class BackgroundWorker:
         # governor_result.artifacts может быть list[dict] или list[MemoryArtifact]
         self._raise_if_memory_llm_preempted(since_epoch=interrupt_epoch, stage="before_topic_summary_refresh")
         self._refresh_topic_thread(envelope)
+        self._maintain_topic_threads(envelope)
 
         artifacts_list = governor_result.artifacts if hasattr(governor_result, 'artifacts') else []
         indexed_ids = []
@@ -631,10 +632,31 @@ class BackgroundWorker:
         if not topic_thread_id or self.artifact_store is None:
             return
         try:
-            builder = TopicSummaryBuilder(TopicStore(self.artifact_store))
-            builder.rebuild_thread(topic_thread_id, workspace_id=envelope.workspace_id)
+            TopicMaintenanceService(TopicStore(self.artifact_store)).maintain_thread(
+                topic_thread_id,
+                workspace_id=envelope.workspace_id,
+                allow_summary_rebuild=True,
+                trigger="background_worker",
+            )
         except Exception as exc:
             LOGGER.debug(f"Failed to refresh topic thread {topic_thread_id}: {exc}")
+
+    def _maintain_topic_threads(self, envelope: MemoryEnvelope) -> None:
+        if self.artifact_store is None:
+            return
+        metadata = dict(envelope.metadata or {})
+        visible_chat_id = str(metadata.get("visible_chat_id") or metadata.get("conversation_id") or "").strip()
+        topic_thread_id = str(metadata.get("topic_thread_id") or "").strip()
+        try:
+            TopicMaintenanceService(TopicStore(self.artifact_store)).maintain_scope(
+                visible_chat_id=visible_chat_id,
+                workspace_id=envelope.workspace_id,
+                session_id=envelope.session_id,
+                active_thread_id=topic_thread_id,
+                limit=32,
+            )
+        except Exception as exc:
+            LOGGER.debug(f"Failed to maintain topic scope for {visible_chat_id or envelope.session_id}: {exc}")
 
     def _run_loop(self) -> None:
         """Основной цикл воркера."""

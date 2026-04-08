@@ -144,6 +144,7 @@ class TopicRouter:
                     tags=hints,
                     related_thread_ids=related_ids,
                     metadata=self._route_metadata_for_existing_thread(matched, clean_text, "explicit_return", max(best_score, 0.86)),
+                    status="active",
                 )
                 return TopicRouteDecision(
                     thread_id=matched.thread_id,
@@ -175,6 +176,7 @@ class TopicRouter:
                 summary=self._route_summary_for_existing_thread(current_thread, clean_text),
                 tags=hints,
                 metadata=self._route_metadata_for_existing_thread(current_thread, clean_text, "short_followup", max(best_score, 0.74)),
+                status="active",
             )
             return TopicRouteDecision(
                 thread_id=current_thread.thread_id,
@@ -199,6 +201,7 @@ class TopicRouter:
                 tags=hints,
                 related_thread_ids=related_ids,
                 metadata=self._route_metadata_for_existing_thread(best_thread, clean_text, "semantic_switch_existing", best_score),
+                status="active",
             )
             return TopicRouteDecision(
                 thread_id=best_thread.thread_id,
@@ -218,6 +221,7 @@ class TopicRouter:
                 tags=hints,
                 related_thread_ids=related_ids,
                 metadata=self._route_metadata_for_existing_thread(best_thread, clean_text, "semantic_match", best_score),
+                status="active",
             )
             return TopicRouteDecision(
                 thread_id=best_thread.thread_id,
@@ -236,6 +240,7 @@ class TopicRouter:
                     tags=hints,
                     related_thread_ids=related_ids,
                     metadata=self._route_metadata_for_existing_thread(current_thread, clean_text, "prefer_current_topic", current_score),
+                    status="active",
                 )
                 return TopicRouteDecision(
                     thread_id=current_thread.thread_id,
@@ -260,6 +265,7 @@ class TopicRouter:
                     tags=hints,
                     related_thread_ids=related_ids,
                     metadata=self._route_metadata_for_existing_thread(current_thread, clean_text, reason, score),
+                    status="active",
                 )
                 return TopicRouteDecision(
                     thread_id=current_thread.thread_id,
@@ -316,6 +322,11 @@ class TopicRouter:
                 "summary_updated_at": now,
                 "summary_build_version": 0,
                 "summary_source": "topic_router_fastpath",
+                "summary_stale": True,
+                "summary_refresh_reason": reason,
+                "summary_input_updated_at": now,
+                "topic_status": "active",
+                "last_meaningful_activity_at": now,
             },
         )
         thread.summary = fast_summary
@@ -509,15 +520,21 @@ class TopicRouter:
         score: float,
     ) -> dict[str, Any]:
         metadata = dict(thread.metadata or {})
+        now = time.time()
         payload = {
             "last_route_reason": reason,
             "last_route_score": float(score),
             "last_user_text": str(text or "").strip(),
             "recent_turn_texts": self._merge_recent_turn_texts(metadata.get("recent_turn_texts"), text),
+            "summary_stale": True,
+            "summary_refresh_reason": reason,
+            "summary_input_updated_at": now,
+            "topic_status": "active",
+            "last_meaningful_activity_at": now,
         }
         build_version = int(metadata.get("summary_build_version") or 0)
         if build_version < 1 or not str(thread.summary or "").strip():
-            payload["summary_updated_at"] = time.time()
+            payload["summary_updated_at"] = now
             payload["summary_build_version"] = 0
             payload["summary_source"] = "topic_router_fastpath"
         return payload

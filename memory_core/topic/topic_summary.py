@@ -36,6 +36,9 @@ class TopicSummarySnapshot:
 
 
 class TopicSummaryBuilder:
+    SUMMARY_BUILD_VERSION = 2
+    SUMMARY_MAX_AGE_SEC = 6 * 60 * 60
+
     def __init__(
         self,
         topic_store: TopicStore,
@@ -50,6 +53,8 @@ class TopicSummaryBuilder:
         thread_id: str,
         *,
         workspace_id: str = "",
+        source: str = "llm",
+        refresh_reason: str = "rebuild",
     ) -> TopicSummarySnapshot | None:
         thread = self.topic_store.get_thread(thread_id)
         if thread is None:
@@ -78,6 +83,7 @@ class TopicSummaryBuilder:
             limit=6,
         )
         related_thread_ids = [row.thread_id for row in related_topics]
+        artifact_activity_at = max((float(row.get("updated_at") or 0.0) for row in artifacts), default=0.0)
         summary = self._build_summary(
             thread=thread,
             linked_tasks=linked_tasks,
@@ -95,6 +101,11 @@ class TopicSummaryBuilder:
         self.relationship_linker.sync_related_topic_links(thread.thread_id, related_topics)
 
         now = time.time()
+        summary_input_updated_at = max(
+            float(thread_meta.get("summary_input_updated_at") or 0.0),
+            float(thread_meta.get("last_meaningful_activity_at") or 0.0),
+            float(artifact_activity_at or 0.0),
+        )
         metadata = {
             "artifact_count": len(artifacts),
             "episode_count": int(episode_count),
@@ -103,7 +114,12 @@ class TopicSummaryBuilder:
             "linked_tasks": [dict(row) for row in linked_tasks[:10]],
             "recent_episodes": [dict(row) for row in recent_episodes[:8]],
             "summary_updated_at": now,
-            "summary_build_version": 1,
+            "summary_source": str(source or "").strip() or "llm",
+            "summary_build_version": self.SUMMARY_BUILD_VERSION,
+            "summary_stale": False,
+            "summary_refresh_reason": str(refresh_reason or "").strip() or "rebuild",
+            "summary_input_updated_at": summary_input_updated_at,
+            "last_artifact_activity_at": float(artifact_activity_at or 0.0),
         }
         self.topic_store.touch_thread(
             thread.thread_id,
@@ -132,14 +148,22 @@ class TopicSummaryBuilder:
         metadata = dict(thread.metadata or {})
         summary_updated_at = float(metadata.get("summary_updated_at") or 0.0)
         summary_build_version = int(metadata.get("summary_build_version") or 0)
-        updated_at = float(thread.updated_at or 0.0)
+        summary_input_updated_at = max(
+            float(metadata.get("summary_input_updated_at") or 0.0),
+            float(metadata.get("last_meaningful_activity_at") or 0.0),
+            float(metadata.get("last_artifact_activity_at") or 0.0),
+        )
         if not summary:
             return True
-        if summary_build_version < 1:
+        if bool(metadata.get("summary_stale")):
+            return True
+        if summary_build_version < TopicSummaryBuilder.SUMMARY_BUILD_VERSION:
             return True
         if summary_updated_at <= 0:
             return True
-        return updated_at > (summary_updated_at + 1e-6)
+        if summary_input_updated_at > (summary_updated_at + 1e-6):
+            return True
+        return (time.time() - summary_updated_at) >= float(TopicSummaryBuilder.SUMMARY_MAX_AGE_SEC)
 
     def _sync_artifact_links(
         self,
