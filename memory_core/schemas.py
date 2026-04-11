@@ -176,6 +176,11 @@ class MemoryQueryResult:
     dropped: list[dict[str, Any]] = field(default_factory=list)
     recent_user_state: dict[str, Any] = field(default_factory=dict)
     response_bias: dict[str, Any] = field(default_factory=dict)
+    dialog_episode_hits: list[dict[str, Any]] = field(default_factory=list)
+    task_continuity: dict[str, Any] = field(default_factory=dict)
+    open_questions: list[str] = field(default_factory=list)
+    current_decisions: list[str] = field(default_factory=list)
+    runtime_session: dict[str, Any] = field(default_factory=dict)
     debug: dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> dict[str, Any]:
@@ -189,6 +194,11 @@ class MemoryQueryResult:
             "dropped": self.dropped,
             "recent_user_state": self.recent_user_state,
             "response_bias": self.response_bias,
+            "dialog_episode_hits": self.dialog_episode_hits,
+            "task_continuity": self.task_continuity,
+            "open_questions": self.open_questions,
+            "current_decisions": self.current_decisions,
+            "runtime_session": self.runtime_session,
             "debug": self.debug,
         }
 

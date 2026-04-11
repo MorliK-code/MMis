@@ -90,6 +90,11 @@ def create_memory_inspector_router(memory_core: Any) -> APIRouter:
         """Детали одной скрытой темы."""
         return service.get_topic_details(thread_id)
 
+    @router.get("/api/memory-core/runtime-sessions")
+    def runtime_sessions(limit: int = Query(default=100, ge=1, le=1000)) -> list[dict[str, Any]]:
+        """РЎРїРёСЃРѕРє runtime session snapshots."""
+        return service.list_runtime_sessions(limit=limit)
+
     @router.get("/api/memory-core/checks")
     def checks() -> list[dict[str, Any]]:
         """Встроенные проверки."""

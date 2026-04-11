@@ -88,6 +88,37 @@ class _FakeTraceStore:
         return []
 
 
+class _FakeRuntimeSessionStore:
+    def list_sessions(self, limit=100):
+        rows = [
+            {
+                "session_id": "conv-1",
+                "workspace_id": "global",
+                "namespace": "default",
+                "last_turn_ts": 100.0,
+                "current_episode_id": "ep-1",
+                "active_topic": {"thread_id": "topic-1", "title": "Memory runtime"},
+                "active_task": {"task_id": "task-1", "status": "active"},
+                "open_questions": ["how to keep continuity sync?"],
+                "recent_decisions": ["store runtime before queue"],
+                "recent_user_state": {},
+            },
+            {
+                "session_id": "conv-2",
+                "workspace_id": "global",
+                "namespace": "default",
+                "last_turn_ts": 50.0,
+                "current_episode_id": "",
+                "active_topic": {},
+                "active_task": {},
+                "open_questions": [],
+                "recent_decisions": [],
+                "recent_user_state": {"low_bandwidth": True},
+            },
+        ]
+        return rows[:limit]
+
+
 class InspectorServiceTests(unittest.TestCase):
     def test_overview_exposes_worker_retry_counters_separately_from_done_jobs(self) -> None:
         memory_core = SimpleNamespace(
@@ -131,6 +162,23 @@ class InspectorServiceTests(unittest.TestCase):
         self.assertEqual(by_id["job-restarted"]["inferred_interruptions"], 0)
         self.assertTrue(by_id["job-restarted"]["trace_has_job_done"])
         self.assertEqual(by_id["job-restarted"]["completion_label"], "confirmed_done_after_restart")
+
+    def test_runtime_session_overview_and_listing_are_exposed(self) -> None:
+        memory_core = SimpleNamespace(
+            service=SimpleNamespace(
+                runtime_session_store=_FakeRuntimeSessionStore(),
+            )
+        )
+
+        service = MemoryInspectorService(memory_core)
+        overview = service.get_overview()
+        sessions = service.list_runtime_sessions(limit=10)
+
+        self.assertEqual(overview["runtime_sessions_total"], 2)
+        self.assertEqual(overview["runtime_sessions_active"], 2)
+        self.assertEqual(sessions[0]["session_id"], "conv-1")
+        self.assertEqual(sessions[0]["current_episode_id"], "ep-1")
+        self.assertEqual(sessions[0]["active_topic"]["thread_id"], "topic-1")
 
 
 if __name__ == "__main__":

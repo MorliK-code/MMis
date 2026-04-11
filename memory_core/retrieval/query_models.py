@@ -54,6 +54,11 @@ class ContextPack:
     dropped_memories: list[dict[str, Any]] = field(default_factory=list)
     recent_user_state: dict[str, Any] = field(default_factory=dict)
     response_bias: dict[str, Any] = field(default_factory=dict)
+    dialog_episode_hits: list[dict[str, Any]] = field(default_factory=list)
+    task_continuity: dict[str, Any] = field(default_factory=dict)
+    open_questions: list[str] = field(default_factory=list)
+    current_decisions: list[str] = field(default_factory=list)
+    runtime_session: dict[str, Any] = field(default_factory=dict)
     debug: dict[str, Any] = field(default_factory=dict)
     
     def to_context_blocks(self) -> list[str]:

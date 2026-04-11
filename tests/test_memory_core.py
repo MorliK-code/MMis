@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 # Импорты memory_core
+from core.brain import Brain
 from memory_core.schemas import MemoryEnvelope, MemoryArtifact, MemoryQuery
 from memory_core.bootstrap.service_factory import build_memory_service, MemoryServiceConfig
 from memory_core.storage.sqlite_db import Database
@@ -37,12 +38,12 @@ def memory_service(test_db_path):
     config = MemoryServiceConfig(
         db_path=test_db_path,
         vector_path=str(Path(test_db_path).parent / "vector"),
+        enable_background_worker=False,
     )
     service = build_memory_service(config)
     yield service
-    # Закрываем соединения
     try:
-        service.event_store.db.close()
+        service.close()
     except Exception:
         pass
 
@@ -231,6 +232,76 @@ class TestMemoryService:
         
         assert result is not None
         assert hasattr(result, "context_blocks")
+
+    def test_ingest_event_updates_runtime_session_snapshot(self, memory_service):
+        envelope = MemoryEnvelope(
+            text="Вернёмся к переносу системы на SSD",
+            source_kind="user",
+            session_id="conv-runtime-sync",
+            workspace_id="global",
+            metadata={
+                "topic_thread_id": "topic-ssd",
+                "topic_title": "SSD migration",
+            },
+        )
+
+        result = memory_service.ingest_event(envelope)
+        snapshot = memory_service.get_runtime_session(
+            namespace="default",
+            workspace_id="global",
+            session_id="conv-runtime-sync",
+        )
+
+        assert str(snapshot["last_user_turn"]["text"]).startswith("Вернёмся к переносу")
+        assert snapshot["active_topic"]["thread_id"] == "topic-ssd"
+        assert str(snapshot["current_episode_id"]).strip()
+        assert result["runtime_session"]["current_episode_id"] == snapshot["current_episode_id"]
+
+    def test_query_returns_runtime_task_continuity_before_worker(self, memory_service):
+        memory_service.ingest_event(
+            MemoryEnvelope(
+                text="Продолжаем план по SSD",
+                source_kind="user",
+                session_id="conv-runtime-task",
+                workspace_id="global",
+                metadata={
+                    "topic_thread_id": "topic-ssd",
+                    "topic_title": "SSD migration",
+                },
+            )
+        )
+        memory_service.update_task_continuity(
+            namespace="default",
+            workspace_id="global",
+            session_id="conv-runtime-task",
+            active_task={
+                "task_id": "task:ssd-migration",
+                "topic": "SSD migration",
+                "status": "waiting_user",
+                "current_goal": "Перенести систему на SSD без потери данных.",
+                "decisions": ["Сначала оставить систему на HDD, потом клонировать SSD."],
+                "open_questions": ["Как безопасно перенести систему позже?"],
+            },
+            source="test",
+            now_ts=123.0,
+        )
+
+        result = memory_service.query(
+            MemoryQuery(
+                text="что дальше по SSD?",
+                session_id="conv-runtime-task",
+                workspace_id="global",
+            )
+        )
+
+        assert result.task_continuity["active_task"]["task_id"] == "task:ssd-migration"
+        assert result.open_questions == ["Как безопасно перенести систему позже?"]
+        assert result.current_decisions == ["Сначала оставить систему на HDD, потом клонировать SSD."]
+        assert result.dialog_episode_hits[0]["source"] == "runtime_session"
+        assert any(
+            str(dict(hit.get("metadata") or {}).get("retrieval_source") or "") in {"active_task", "active_episode"}
+            for hit in list(result.hits or [])
+        )
     
     def test_get_stats(self, memory_service):
         """Получение статистики."""
@@ -239,6 +310,30 @@ class TestMemoryService:
         stats = memory_service.get_stats()
         assert "events_count" in stats
         assert stats["events_count"] >= 1
+
+
+class TestBrainMemoryIngestAccounting:
+    def test_capture_memory_ingest_accepts_dict_payload(self):
+        summary = Brain._empty_memory_write_summary()
+        brain = Brain.__new__(Brain)
+
+        Brain._capture_memory_ingest(
+            brain,
+            summary,
+            {
+                "stored_ids": ["a1"],
+                "promoted_ids": ["p1"],
+                "dropped_ids": ["d1"],
+                "extracted_facts": ["f1", "f2"],
+            },
+            bucket="user_turn",
+        )
+
+        assert summary["stored_records"] == 1
+        assert summary["blocked_writes"] == 1
+        assert summary["facts_extracted"] == 2
+        assert summary["promotions"] == 1
+        assert summary["user_turns_written"] == 1
 
 
 

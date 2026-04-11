@@ -12,6 +12,7 @@ from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.storage.workspace_store import WorkspaceStore
 from memory_core.storage.state_store import StateStore
 from memory_core.storage.job_queue_store import JobQueueStore
+from memory_core.runtime_session_store import RuntimeSessionStore
 from memory_core.indexing.embeddings import EmbeddingProvider
 from memory_core.indexing.vector_index import VectorIndex
 from memory_core.retrieval.retrieval_service import RetrievalService
@@ -65,6 +66,7 @@ def build_memory_service(config: MemoryServiceConfig | None = None) -> MemorySer
     artifact_store = ArtifactStore(db)
     workspace_store = WorkspaceStore(db)
     state_store = StateStore(db)
+    runtime_session_store = RuntimeSessionStore(state_store)
     job_queue = JobQueueStore(db)
 
     # Создаём embedding provider
@@ -77,10 +79,12 @@ def build_memory_service(config: MemoryServiceConfig | None = None) -> MemorySer
     )
 
     # Создаём retrieval service
+    from config.settings import load_config
     from memory_core.config_manager import get_memory_core_config
     from memory_core.inspect.trace_store import MemoryTraceStore
     
     memory_cfg = get_memory_core_config()
+    app_cfg = load_config()
     
     # Создаём trace store
     trace_store = MemoryTraceStore()
@@ -89,6 +93,10 @@ def build_memory_service(config: MemoryServiceConfig | None = None) -> MemorySer
         db=db,
         vector_index=vector_index,
         retrieval_config=memory_cfg.retrieval,
+        runtime_session_store=runtime_session_store,
+        include_pending_facts_in_retrieval=bool(
+            getattr(getattr(app_cfg, "memory", None), "include_pending_facts_in_retrieval", False)
+        ),
     )
 
     # Создаём главный сервис
@@ -97,6 +105,7 @@ def build_memory_service(config: MemoryServiceConfig | None = None) -> MemorySer
         artifact_store=artifact_store,
         workspace_store=workspace_store,
         state_store=state_store,
+        runtime_session_store=runtime_session_store,
         retrieval_service=retrieval_service,
         vector_index=vector_index,
         embedding_provider=embedding_provider,

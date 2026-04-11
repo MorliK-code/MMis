@@ -2562,5 +2562,1760 @@
         "lang_ru"
       ]
     }
+  },
+  {
+    "ts": "2026-04-11T21:59:53",
+    "model": "gpt-oss:20b",
+    "message_id": 344,
+    "role": "user",
+    "text": "как дела?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T18:59:53.630906+00:00",
+        "source": "text",
+        "chars": 9,
+        "words": 2,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T21:59:54",
+    "model": "gpt-oss:20b",
+    "message_id": 345,
+    "role": "assistant",
+    "text": "I got stuck during generation. Please try again.",
+    "meta": {
+      "lang": "en",
+      "lang_conf": 0.95,
+      "intent": {
+        "label": "task",
+        "conf": 0.6666666666666667,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "frustrated",
+        "intensity": 0.45,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.45,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_frustrated",
+        "intent_task",
+        "is_task",
+        "needs_steps",
+        "tone_soft",
+        "lang_en"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T18:59:53.711611+00:00",
+        "source": "text",
+        "chars": 48,
+        "words": 8,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "en",
+      "lang_conf": 0.95,
+      "intent": "task",
+      "intent_conf": 0.6666666666666667,
+      "emotion": "frustrated",
+      "emotion_intensity": 0.45,
+      "tags": [
+        "emotion_frustrated",
+        "intent_task",
+        "is_task",
+        "needs_steps",
+        "tone_soft",
+        "lang_en"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:46:36",
+    "model": "gpt-oss:20b",
+    "message_id": 346,
+    "role": "user",
+    "text": "как твои дела?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:46:35.330777+00:00",
+        "source": "text",
+        "chars": 14,
+        "words": 3,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:46:36",
+    "model": "gpt-oss:20b",
+    "message_id": 347,
+    "role": "assistant",
+    "text": "Нормально, спасибо! А как у тебя дела?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "happy",
+        "intensity": 0.39999999999999997,
+        "arousal": 0.28,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.39999999999999997,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_happy",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:46:35.488356+00:00",
+        "source": "text",
+        "chars": 38,
+        "words": 7,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "happy",
+      "emotion_intensity": 0.39999999999999997,
+      "tags": [
+        "emotion_happy",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:47:44",
+    "model": "gpt-oss:20b",
+    "message_id": 348,
+    "role": "user",
+    "text": "тоже хорошо, спасибо что спросила. я вот с сегодняшнего дня живу со своим начальником в разных комнатах. ему как раз надо была хата, а я у меня была свободно)",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6666666666666667,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "happy",
+        "intensity": 0.5,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.24999999999999997,
+          "frustrated": 0.05,
+          "happy": 0.5,
+          "anxious": 0.05,
+          "angry": 0.010000000000000002,
+          "sad": 0.0,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_happy",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:47:44.470836+00:00",
+        "source": "text",
+        "chars": 158,
+        "words": 29,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6666666666666667,
+      "emotion": "happy",
+      "emotion_intensity": 0.5,
+      "tags": [
+        "emotion_happy",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:47:44",
+    "model": "gpt-oss:20b",
+    "message_id": 349,
+    "role": "assistant",
+    "text": "Ну и как тебе такой «молодец»? Жить с начальником в разных комнатах – это как новая версия «собака и кошка», только с более строгим режимом «первый этаж» и «второй этаж». Как тебе такое разделение пространства? 🚪🏠",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7283950617283951,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:47:44.556607+00:00",
+        "source": "text",
+        "chars": 213,
+        "words": 36,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": true,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7283950617283951,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:48:31",
+    "model": "gpt-oss:20b",
+    "message_id": 350,
+    "role": "user",
+    "text": "та не, нормально. он добрый, я с ним на ты, он мне как друг)",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6666666666666667,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.24999999999999997,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.24999999999999997,
+          "frustrated": 0.05,
+          "happy": 0.15000000000000002,
+          "anxious": 0.05,
+          "angry": 0.010000000000000002,
+          "sad": 0.0,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:48:31.372382+00:00",
+        "source": "text",
+        "chars": 60,
+        "words": 14,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6666666666666667,
+      "emotion": "neutral",
+      "emotion_intensity": 0.24999999999999997,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:48:31",
+    "model": "gpt-oss:20b",
+    "message_id": 351,
+    "role": "assistant",
+    "text": "Понятно, значит, у тебя есть своё пространство, но и дружба. Как у него обстоят дела в его комнате?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:48:31.496050+00:00",
+        "source": "text",
+        "chars": 99,
+        "words": 18,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:49:06",
+    "model": "gpt-oss:20b",
+    "message_id": 352,
+    "role": "user",
+    "text": "та вроде нормально, пока не жалуется",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:49:04.875664+00:00",
+        "source": "text",
+        "chars": 36,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:49:06",
+    "model": "gpt-oss:20b",
+    "message_id": 353,
+    "role": "assistant",
+    "text": "Поняла, что пока всё идёт гладко, но если начнётся жаловаться — лучше сразу понять, что именно его беспокоит. Какой у него типичный «сигнал‐комплимент»? Или это просто недопонимание? Если уточнишь, смогу подсказать, как снизить напряжённость.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6555555555555556,
+        "alt_labels": [
+          "clarification",
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:49:05.046208+00:00",
+        "source": "text",
+        "chars": 242,
+        "words": 34,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6555555555555556,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:50:42",
+    "model": "gpt-oss:20b",
+    "message_id": 354,
+    "role": "user",
+    "text": "хех, это просто",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:50:41.574490+00:00",
+        "source": "text",
+        "chars": 15,
+        "words": 3,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:50:42",
+    "model": "gpt-oss:20b",
+    "message_id": 355,
+    "role": "assistant",
+    "text": "Похоже, всё в порядке. А как прошёл твой день?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:50:41.701152+00:00",
+        "source": "text",
+        "chars": 46,
+        "words": 9,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:51:19",
+    "model": "gpt-oss:20b",
+    "message_id": 356,
+    "role": "user",
+    "text": "та дома просидел, убирался перед его приходом + свой сервер чинил",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:51:19.507119+00:00",
+        "source": "text",
+        "chars": 65,
+        "words": 11,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:51:19",
+    "model": "gpt-oss:20b",
+    "message_id": 357,
+    "role": "assistant",
+    "text": "Кто это такой, и что случилось с сервером? Что тебе нужно с этим сделать?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:51:19.587902+00:00",
+        "source": "text",
+        "chars": 73,
+        "words": 14,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:51:56",
+    "model": "gpt-oss:20b",
+    "message_id": 358,
+    "role": "user",
+    "text": "та там умер ssd, вот менял его",
+    "meta": {
+      "lang": "mixed",
+      "lang_conf": 0.582608695652174,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_mixed"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:51:55.979628+00:00",
+        "source": "text",
+        "chars": 30,
+        "words": 7,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "mixed",
+      "lang_conf": 0.582608695652174,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_mixed"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:51:56",
+    "model": "gpt-oss:20b",
+    "message_id": 359,
+    "role": "assistant",
+    "text": "Похоже, SSD решил «вырубиться» в самый неподходящий момент.\nКакая модель у тебя теперь? Если это новый NVMe‐SSD, то первым делом проверь, что он виден в BIOS/UEFI и в ОС (например, `sudo lshw -class disk` на Linux или `diskpart` в Windows).\nЕсли всё распознано, то:\n1. **Проверь SMART** – `smartctl -a /dev/nvme0n1` (Linux) или в Windows через CrystalDiskInfo.\n2. **Сформатируй и создай разделы** – в Windows через `diskmgmt.msc`, в Linux через `fdisk`/`gdisk`.\n3. **Скопируй данные** – если старый SSD был жив, сделай резервную копию и перенеси файлы на новый.\n4. **Переустанови ОС** – если это системный диск, лучше установить свежую копию, чтобы избежать ошибок старой установки.\nА какой SSD ты выбрал? Есть ли какие‐то особенности, которые нужно учесть?",
+    "meta": {
+      "lang": "mixed",
+      "lang_conf": 0.6133865248226951,
+      "intent": {
+        "label": "task",
+        "conf": 0.8,
+        "alt_labels": [
+          "task",
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 1.0,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.22999999999999998,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "has_code",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "topic_linux",
+        "topic_windows",
+        "intent_task",
+        "lang_mixed"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "links": [],
+        "os": [
+          "Windows",
+          "Linux"
+        ]
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": true,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:51:56.044455+00:00",
+        "source": "text",
+        "chars": 757,
+        "words": 117,
+        "has_code": true,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": [
+          "linux",
+          "windows"
+        ]
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "mixed",
+      "lang_conf": 0.6133865248226951,
+      "intent": "task",
+      "intent_conf": 0.8,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "has_code",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "topic_linux",
+        "topic_windows",
+        "intent_task",
+        "lang_mixed"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:52:32",
+    "model": "gpt-oss:20b",
+    "message_id": 360,
+    "role": "user",
+    "text": "та не, решил на hdd пока поставить систему, пока не куплю новый ssd",
+    "meta": {
+      "lang": "mixed",
+      "lang_conf": 0.5783018867924529,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5238095238095237,
+        "alt_labels": [
+          "question"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_mixed"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:52:31.642384+00:00",
+        "source": "text",
+        "chars": 67,
+        "words": 13,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "mixed",
+      "lang_conf": 0.5783018867924529,
+      "intent": "chat",
+      "intent_conf": 0.5238095238095237,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_mixed"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T22:52:32",
+    "model": "gpt-oss:20b",
+    "message_id": 361,
+    "role": "assistant",
+    "text": "Понял, пока ждёшь новый SSD, ставить систему на HDD — это разумный компромисс. Если понадобится перенести данные на SSD позже, можно просто клонировать диск или переустановить ОС. Как у тебя получается с производительностью?",
+    "meta": {
+      "lang": "mixed",
+      "lang_conf": 0.5621621621621622,
+      "intent": {
+        "label": "question",
+        "conf": 0.8053097345132744,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.6499999999999999,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.22999999999999998,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_mixed"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": true,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T19:52:31.757511+00:00",
+        "source": "text",
+        "chars": 224,
+        "words": 33,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "mixed",
+      "lang_conf": 0.5621621621621622,
+      "intent": "question",
+      "intent_conf": 0.8053097345132744,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_mixed"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T23:59:45",
+    "model": "gpt-oss:20b",
+    "message_id": 362,
+    "role": "user",
+    "text": "да, hdd конечно это страх, но терпимо в условиях, когда sdd вообще нет",
+    "meta": {
+      "lang": "mixed",
+      "lang_conf": 0.5772727272727273,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5238095238095237,
+        "alt_labels": [
+          "question"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_mixed"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T20:59:44.468657+00:00",
+        "source": "text",
+        "chars": 70,
+        "words": 13,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "mixed",
+      "lang_conf": 0.5772727272727273,
+      "intent": "chat",
+      "intent_conf": 0.5238095238095237,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_mixed"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-11T23:59:45",
+    "model": "gpt-oss:20b",
+    "message_id": 363,
+    "role": "assistant",
+    "text": "Понял, Паша. HDD в таком случае – «плохая, но нужная» опция. Чтобы не превратилось в катастрофу:\n1. **Бэкапы** – регулярные снимки важной части диска (особенно системных разделов). Сохраняй их на внешнем накопителе или в облаке.\n2. **SMART‐мониторинг** – включи и проверяй состояние диска каждые пару дней. Если появятся «плохие» атрибуты, сразу сделай резервное копирование.\n3. **Форматирование** – используй файловую систему с поддержкой журналирования (NTFS, ext4). Это снизит риск потери данных при отключении питания.\n4. **Частый дефрагмент** – если это HDD, дефрагментируй регулярно, чтобы ускорить доступ к файлам.\n5. **План «выключения»** – если SSD скоро придёт, сразу подготовь план клонирования: можно использовать Clonezilla, Acronis, dd, или даже встроенные инструменты Windows/macOS.\n6. **Разделы** – раздели диск так, чтобы ОС и данные были в отдельных разделах. Это упростит резервирование и восстановление.\nЕсли SSD всё же не появится в ближайшее время, просто держи эти практики, и риск останется «только» в пределах «плохой, но нужной» зоны. Если появятся конкретные вопросы по настройке или инструментам – дай знать!",
+    "meta": {
+      "lang": "mixed",
+      "lang_conf": 0.5655542986425339,
+      "intent": {
+        "label": "planning",
+        "conf": 0.576923076923077,
+        "alt_labels": [
+          "task",
+          "chat",
+          "question"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.24999999999999997,
+        "arousal": 1.0,
+        "scores": {
+          "neutral": 0.24999999999999997,
+          "frustrated": 0.05,
+          "happy": 0.15000000000000002,
+          "anxious": 0.05,
+          "angry": 0.18999999999999997,
+          "sad": 0.0,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_planning",
+        "tone_neutral",
+        "topic_windows",
+        "lang_mixed"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "links": [],
+        "os": [
+          "Windows",
+          "macOS"
+        ]
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": true,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-11T20:59:44.619944+00:00",
+        "source": "text",
+        "chars": 1136,
+        "words": 162,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": [
+          "windows"
+        ]
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "mixed",
+      "lang_conf": 0.5655542986425339,
+      "intent": "planning",
+      "intent_conf": 0.576923076923077,
+      "emotion": "neutral",
+      "emotion_intensity": 0.24999999999999997,
+      "tags": [
+        "emotion_neutral",
+        "intent_planning",
+        "tone_neutral",
+        "topic_windows",
+        "lang_mixed"
+      ]
+    }
   }
 ]

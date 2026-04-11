@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import memory_core.adapter as adapter_module
+import memory_core.facade as facade_module
 import llm.ollama_provider as ollama_provider_module
 from llm.ollama_provider import OllamaProvider, _memory_llm_interrupt
 from llm.priority_manager import LLMPriorityManager
@@ -22,6 +23,7 @@ from memory_core.processors.memory_llm_processor import MemoryLLMProcessor
 from memory_core.storage.job_queue_store import IngestJob, JobQueueStore
 from memory_core.schemas import MemoryEnvelope
 from memory_core.storage.sqlite_db import Database
+import memory_core.worker.background_worker as background_worker_module
 from memory_core.worker.background_worker import BackgroundWorker, WorkerConfig
 
 
@@ -564,7 +566,7 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertTrue(service.worker.is_running())
         self.assertEqual(service.worker.wake_calls, 0)
 
-    def test_memory_service_does_not_start_worker_while_main_lock_is_held(self) -> None:
+    def test_memory_service_does_not_start_worker_while_main_lock_is_held_in_strict_mode(self) -> None:
         service = MemoryService.__new__(MemoryService)
         service.event_store = SimpleNamespace(append=lambda envelope: None)
         service.analyzer = SimpleNamespace(analyze=lambda envelope: {"should_process": True})
@@ -576,13 +578,44 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
 
         acquired = _memory_llm_lock.acquire(timeout=0.1)
         try:
-            result = service.ingest_event(MemoryEnvelope(text="remember this under lock"))
+            with mock.patch.object(
+                facade_module,
+                "get_memory_core_config",
+                return_value=SimpleNamespace(memory_llm_scheduler_mode="strict"),
+            ):
+                result = service.ingest_event(MemoryEnvelope(text="remember this under lock"))
         finally:
             if acquired and _memory_llm_lock.locked():
                 _memory_llm_lock.release()
 
         self.assertTrue(result["queued"])
         self.assertEqual(service.worker.start_calls, 0)
+
+    def test_memory_service_starts_worker_while_main_lock_is_held_in_cooperative_mode(self) -> None:
+        service = MemoryService.__new__(MemoryService)
+        service.event_store = SimpleNamespace(append=lambda envelope: None)
+        service.analyzer = SimpleNamespace(analyze=lambda envelope: {"should_process": True})
+        service.job_queue = SimpleNamespace(
+            TYPE_MEMORY_LLM_PROCESS="memory",
+            enqueue=lambda **kwargs: "job-1",
+        )
+        service.worker = _FakeWorker(running=False)
+
+        acquired = _memory_llm_lock.acquire(timeout=0.1)
+        try:
+            with mock.patch.object(
+                facade_module,
+                "get_memory_core_config",
+                return_value=SimpleNamespace(memory_llm_scheduler_mode="cooperative"),
+            ):
+                result = service.ingest_event(MemoryEnvelope(text="remember this under lock cooperatively"))
+        finally:
+            if acquired and _memory_llm_lock.locked():
+                _memory_llm_lock.release()
+
+        self.assertTrue(result["queued"])
+        self.assertEqual(service.worker.start_calls, 1)
+        self.assertEqual(service.worker.wake_calls, 0)
 
     def test_memory_service_wakes_running_worker_when_job_arrives(self) -> None:
         service = MemoryService.__new__(MemoryService)
@@ -628,6 +661,30 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         adapter.pause_worker()
 
         self.assertIsNone(adapter._auto_resume_timer)
+
+    def test_adapter_uses_soft_interrupt_without_worker_pause_in_cooperative_mode(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._enable_pause = True
+        adapter._scheduler_mode = "cooperative"
+        adapter._main_llm_request_count = 0
+        adapter._main_llm_request_lock = threading.Lock()
+        wake_calls: list[str] = []
+        worker = SimpleNamespace(
+            wake=lambda: wake_calls.append("wake"),
+            pause=lambda: wake_calls.append("pause"),
+            resume=lambda: wake_calls.append("resume"),
+        )
+        adapter.service = SimpleNamespace(worker=worker)
+
+        adapter.begin_main_llm_request()
+        self.assertTrue(_memory_llm_interrupt.is_set())
+        self.assertEqual(adapter._main_llm_request_count, 1)
+        self.assertEqual(wake_calls, [])
+
+        adapter.end_main_llm_request()
+        self.assertFalse(_memory_llm_interrupt.is_set())
+        self.assertEqual(adapter._main_llm_request_count, 0)
+        self.assertEqual(wake_calls, ["wake"])
 
     def test_adapter_close_shuts_down_memory_provider_even_if_worker_is_already_stopped(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
@@ -781,6 +838,50 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(unload_calls, [])
         self.assertEqual(worker.start_calls, 1)
         self.assertEqual(worker.wake_calls, 1)
+
+    def test_worker_processes_jobs_even_when_main_lock_is_held_in_cooperative_mode(self) -> None:
+        job = IngestJob(
+            job_id="job-coop-lock",
+            event_id="event-coop-lock",
+            job_type="memory_llm_process",
+            status="queued",
+            payload_json="{}",
+        )
+        event = SimpleNamespace(
+            event_id="event-coop-lock",
+            source_kind="user",
+            payload_type="message",
+            text="continue pipeline under cooperative scheduler",
+            metadata={},
+            namespace="default",
+            workspace_id="global",
+            session_id="default",
+            ts=0.0,
+        )
+        queue = _ImmediateRequeueQueue(job)
+        worker = BackgroundWorker(
+            job_queue=queue,
+            event_store=_EventStoreForInterrupt(event),
+            memory_llm_processor=SimpleNamespace(process=lambda envelope: SimpleNamespace(should_process=False, proposals=[])),
+            governor=lambda proposals, envelope: SimpleNamespace(decisions=[], artifacts=[]),
+            config=WorkerConfig(),
+        )
+        worker._raise_if_memory_llm_preempted = lambda **kwargs: None
+
+        acquired = _memory_llm_lock.acquire(timeout=0.1)
+        try:
+            with mock.patch.object(
+                background_worker_module,
+                "get_memory_core_config",
+                return_value=SimpleNamespace(memory_llm_scheduler_mode="cooperative"),
+            ):
+                handled = worker.process_one_job()
+        finally:
+            if acquired and _memory_llm_lock.locked():
+                _memory_llm_lock.release()
+
+        self.assertTrue(handled)
+        self.assertEqual(queue.complete_calls, ["job-coop-lock"])
 
     def test_priority_manager_memory_turn_is_immediate_without_main(self) -> None:
         manager = LLMPriorityManager(enabled=True, wait_timeout=0.1)
@@ -944,6 +1045,200 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(sum(1 for chunk in chunks if chunk.done), 1)
         self.assertTrue(chunks[-1].done)
         self.assertEqual(priority_mgr.calls, [("wait", LLMPriorityManager.PRIORITY_MAIN), ("release", LLMPriorityManager.PRIORITY_MAIN)])
+
+    def test_ollama_generate_auto_continues_when_done_reason_is_length(self) -> None:
+        provider = OllamaProvider(default_model="main-model", timeout_sec=1.0)
+        payloads = iter(
+            [
+                {
+                    "message": {
+                        "content": "Можно просто клонировать диск или",
+                    },
+                    "done": True,
+                    "done_reason": "length",
+                    "model": "main-model",
+                    "prompt_eval_count": 11,
+                    "eval_count": 17,
+                },
+                {
+                    "message": {
+                        "content": "использовать утилиту миграции. Так ответ будет завершён.",
+                    },
+                    "done": True,
+                    "done_reason": "stop",
+                    "model": "main-model",
+                    "prompt_eval_count": 5,
+                    "eval_count": 9,
+                },
+            ]
+        )
+        seen_requests: list[LLMRequest] = []
+
+        def _chat_with_retry(*, req, model, stream):
+            seen_requests.append(req)
+            self.assertEqual(model, "main-model")
+            self.assertFalse(stream)
+            return next(payloads)
+
+        provider._chat_with_retry = _chat_with_retry
+        priority_mgr = _FakePriorityManager()
+
+        with mock.patch.object(ollama_provider_module, "get_priority_manager", return_value=priority_mgr):
+            response = provider.generate(
+                LLMRequest(
+                    model="main-model",
+                    messages=[Message(role="user", content="как перенести систему на ssd?")],
+                    metadata={"source": "api"},
+                )
+            )
+
+        self.assertEqual(
+            response.text,
+            "Можно просто клонировать диск или использовать утилиту миграции. Так ответ будет завершён.",
+        )
+        self.assertEqual(response.usage.prompt_tokens, 16)
+        self.assertEqual(response.usage.completion_tokens, 26)
+        self.assertEqual(response.usage.total_tokens, 42)
+        self.assertEqual(len(seen_requests), 2)
+        self.assertTrue(bool(dict(seen_requests[1].metadata or {}).get("disable_auto_continue")))
+        self.assertEqual(seen_requests[1].messages[-2].role, "assistant")
+        self.assertIn("Continue exactly where your previous answer stopped", seen_requests[1].messages[-1].content)
+
+    def test_ollama_stream_auto_continues_when_tail_ends_with_trailing_word(self) -> None:
+        provider = OllamaProvider(default_model="main-model", timeout_sec=1.0)
+        seen_requests: list[tuple[bool, LLMRequest]] = []
+
+        def _chat_with_retry(*, req, model, stream):
+            seen_requests.append((bool(stream), req))
+            self.assertEqual(model, "main-model")
+            if stream:
+                return iter(
+                    [
+                        {
+                            "message": {
+                                "content": "Можно просто клонировать диск или",
+                            },
+                            "done": True,
+                            "done_reason": "stop",
+                            "model": "main-model",
+                            "prompt_eval_count": 7,
+                            "eval_count": 13,
+                        }
+                    ]
+                )
+            return {
+                "message": {
+                    "content": "использовать утилиту миграции. Так мысль закончится нормально.",
+                },
+                "done": True,
+                "done_reason": "stop",
+                "model": "main-model",
+                "prompt_eval_count": 3,
+                "eval_count": 6,
+            }
+
+        provider._chat_with_retry = _chat_with_retry
+        priority_mgr = _FakePriorityManager()
+
+        with mock.patch.object(ollama_provider_module, "get_priority_manager", return_value=priority_mgr):
+            chunks = list(
+                provider.stream(
+                    LLMRequest(
+                        model="main-model",
+                        messages=[Message(role="user", content="что делать после покупки ssd?")],
+                        metadata={"source": "api"},
+                    )
+                )
+            )
+
+        self.assertEqual(
+            "".join(chunk.text_delta for chunk in chunks),
+            "Можно просто клонировать диск или использовать утилиту миграции. Так мысль закончится нормально.",
+        )
+        self.assertEqual(sum(1 for chunk in chunks if chunk.done), 1)
+        self.assertFalse(chunks[0].done)
+        self.assertTrue(chunks[-1].done)
+        self.assertEqual(chunks[-1].usage.total_tokens, 29)
+        self.assertEqual(len(seen_requests), 2)
+        self.assertEqual([flag for flag, _ in seen_requests], [True, False])
+        self.assertTrue(bool(dict(seen_requests[1][1].metadata or {}).get("disable_auto_continue")))
+
+    def test_ollama_stream_auto_continues_after_retry_without_thinking(self) -> None:
+        provider = OllamaProvider(default_model="main-model", timeout_sec=1.0)
+        calls: list[tuple[bool, bool]] = []
+        streams = iter(
+            [
+                [
+                    {
+                        "message": {
+                            "thinking": "Long ",
+                        },
+                        "done": False,
+                        "model": "main-model",
+                    },
+                    {
+                        "message": {
+                            "thinking": "Long chain of thought",
+                        },
+                        "done": True,
+                        "done_reason": "stop",
+                        "model": "main-model",
+                        "prompt_eval_count": 4,
+                        "eval_count": 8,
+                    },
+                ],
+                [
+                    {
+                        "message": {
+                            "content": "Можно просто клонировать диск или",
+                        },
+                        "done": True,
+                        "done_reason": "length",
+                        "model": "main-model",
+                        "prompt_eval_count": 6,
+                        "eval_count": 12,
+                    }
+                ],
+            ]
+        )
+
+        def _chat_with_retry(*, req, model, stream):
+            calls.append((bool(stream), bool(dict(req.metadata or {}).get("think"))))
+            self.assertEqual(model, "main-model")
+            if stream:
+                return iter(next(streams))
+            return {
+                "message": {
+                    "content": "использовать утилиту миграции и потом проверить загрузчик.",
+                },
+                "done": True,
+                "done_reason": "stop",
+                "model": "main-model",
+                "prompt_eval_count": 2,
+                "eval_count": 5,
+            }
+
+        provider._chat_with_retry = _chat_with_retry
+        priority_mgr = _FakePriorityManager()
+
+        with mock.patch.object(ollama_provider_module, "get_priority_manager", return_value=priority_mgr):
+            chunks = list(
+                provider.stream(
+                    LLMRequest(
+                        model="main-model",
+                        messages=[Message(role="user", content="как безопасно перенести систему?")],
+                        metadata={"source": "api", "think": True},
+                    )
+                )
+            )
+
+        self.assertEqual("".join(chunk.thinking_delta for chunk in chunks), "Long chain of thought")
+        self.assertEqual(
+            "".join(chunk.text_delta for chunk in chunks),
+            "Можно просто клонировать диск или использовать утилиту миграции и потом проверить загрузчик.",
+        )
+        self.assertEqual(sum(1 for chunk in chunks if chunk.done), 1)
+        self.assertEqual(calls, [(True, True), (True, False), (False, False)])
 
     def test_ollama_build_options_preserves_unbounded_num_predict_sentinel(self) -> None:
         options = OllamaProvider._build_options(

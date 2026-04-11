@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from dataclasses import replace
@@ -258,6 +259,220 @@ def _wrap_thinking(text: str, thinking: str, *, trim: bool = True) -> str:
     return f"<think>{think}</think>\n{visible}"
 
 
+_AUTO_CONTINUE_MAX_PASSES = 3
+_AUTO_CONTINUE_OVERLAP_LIMIT = 240
+_AUTO_CONTINUE_TRAILING_WORDS = {
+    "and",
+    "but",
+    "or",
+    "so",
+    "because",
+    "then",
+    "if",
+    "when",
+    "while",
+    "with",
+    "without",
+    "for",
+    "to",
+    "from",
+    "as",
+    "than",
+    "that",
+    "which",
+    "и",
+    "или",
+    "но",
+    "а",
+    "что",
+    "чтобы",
+    "если",
+    "когда",
+    "пока",
+    "потому",
+    "потому что",
+    "так что",
+    "с",
+    "со",
+    "без",
+    "для",
+    "до",
+    "после",
+    "при",
+    "по",
+    "из",
+    "от",
+    "над",
+    "под",
+    "между",
+    "через",
+    "либо",
+}
+_AUTO_CONTINUE_TERMINAL_CHARS = set(".!?…)]}\"'»”’`")
+_AUTO_CONTINUE_INCOMPLETE_CHARS = set(",;:([{/-")
+_AUTO_CONTINUE_WORD_RE = re.compile(r"([A-Za-zА-Яа-яЁё0-9_+-]+)$")
+_AUTO_CONTINUE_INSERT_SPACE_BLOCKERS = set(",.;:!?)]}%")
+_AUTO_CONTINUE_PREFIX_SPACE_BLOCKERS = set("([{-/\\")
+_AUTO_CONTINUE_PROMPT = (
+    "Continue exactly where your previous answer stopped. "
+    "Do not restart, do not repeat earlier text, do not add meta commentary. "
+    "Return only the missing continuation in the same language and make sure the answer ends cleanly and completely."
+)
+
+
+def _done_reason_requests_continuation(done_reason: str) -> bool:
+    low = str(done_reason or "").strip().lower()
+    if not low:
+        return False
+    return any(marker in low for marker in ("length", "token", "limit", "max_tokens", "max tokens"))
+
+
+def _has_unclosed_delimiters(text: str) -> bool:
+    stack: list[str] = []
+    openers = {"(": ")", "[": "]", "{": "}"}
+    closers = {")": "(", "]": "[", "}": "{"}
+    for ch in str(text or ""):
+        if ch in openers:
+            stack.append(ch)
+            continue
+        if ch in closers:
+            if stack and stack[-1] == closers[ch]:
+                stack.pop()
+            else:
+                return False
+    return bool(stack)
+
+
+def _last_word(text: str) -> str:
+    match = _AUTO_CONTINUE_WORD_RE.search(str(text or "").rstrip())
+    if not match:
+        return ""
+    return str(match.group(1) or "").strip().lower()
+
+
+def _auto_continue_reason(
+    *,
+    req: LLMRequest,
+    text: str,
+    tool_calls: list[ToolCall],
+    done_reason: str = "",
+) -> str:
+    if not str(text or "").strip():
+        return ""
+    if list(tool_calls or []):
+        return ""
+    if req.json_mode or bool(req.response_format):
+        return ""
+    if list(req.tools or []):
+        return ""
+    if bool(dict(req.metadata or {}).get("disable_auto_continue", False)):
+        return ""
+
+    if _done_reason_requests_continuation(done_reason):
+        return f"done_reason:{str(done_reason or '').strip() or 'length'}"
+
+    tail = str(text or "").rstrip()
+    if not tail:
+        return ""
+    if tail.endswith("```"):
+        return ""
+    if _has_unclosed_delimiters(tail):
+        return "unclosed_delimiter"
+
+    last_char = tail[-1]
+    if last_char in _AUTO_CONTINUE_INCOMPLETE_CHARS:
+        return f"trailing_char:{last_char}"
+    if last_char in _AUTO_CONTINUE_TERMINAL_CHARS:
+        return ""
+
+    trailing_word = _last_word(tail)
+    if trailing_word in _AUTO_CONTINUE_TRAILING_WORDS:
+        return f"trailing_word:{trailing_word}"
+
+    if len(tail) >= 120 and (last_char.isalnum() or last_char in {"%", '"', "'"}):
+        return "missing_terminal_punctuation"
+    return ""
+
+
+def _continuation_max_tokens(req: LLMRequest) -> int:
+    raw = req.max_tokens
+    try:
+        tokens = int(raw) if raw is not None else 0
+    except Exception:
+        tokens = 0
+    if tokens <= 0:
+        return 512
+    return max(128, min(tokens, 768))
+
+
+def _build_continuation_request(req: LLMRequest, accumulated_text: str, pass_index: int) -> LLMRequest:
+    meta = dict(req.metadata or {})
+    meta["think"] = False
+    meta["disable_auto_continue"] = True
+    meta["auto_continue_pass"] = int(pass_index)
+    messages = list(req.messages or [])
+    messages.append(Message(role="assistant", content=str(accumulated_text or "")))
+    messages.append(Message(role="user", content=_AUTO_CONTINUE_PROMPT))
+    return replace(
+        req,
+        messages=messages,
+        max_tokens=_continuation_max_tokens(req),
+        tools=[],
+        json_mode=False,
+        response_format=None,
+        metadata=meta,
+    )
+
+
+def _prepare_continuation_delta(existing_text: str, continuation_text: str) -> str:
+    existing = str(existing_text or "")
+    continuation = str(continuation_text or "")
+    if not continuation.strip():
+        return ""
+
+    max_overlap = min(len(existing), len(continuation), _AUTO_CONTINUE_OVERLAP_LIMIT)
+    existing_low = existing.lower()
+    continuation_low = continuation.lower()
+    overlap = 0
+    for size in range(max_overlap, 0, -1):
+        if existing_low[-size:] == continuation_low[:size]:
+            overlap = size
+            break
+    if overlap < 2:
+        overlap = 0
+
+    addition = continuation[overlap:]
+    if not addition:
+        return ""
+    if not existing:
+        return addition
+    if existing[-1].isspace() or addition[0].isspace():
+        return addition
+    if existing[-1] in _AUTO_CONTINUE_PREFIX_SPACE_BLOCKERS:
+        return addition
+    if addition[0] in _AUTO_CONTINUE_INSERT_SPACE_BLOCKERS:
+        return addition
+    return f" {addition}"
+
+
+def _merge_usage(base: Usage, extra: Usage) -> Usage:
+    return Usage(
+        prompt_tokens=int(base.prompt_tokens or 0) + int(extra.prompt_tokens or 0),
+        completion_tokens=int(base.completion_tokens or 0) + int(extra.completion_tokens or 0),
+        total_tokens=int(base.total_tokens or 0) + int(extra.total_tokens or 0),
+    )
+
+
+def _merge_timings(base: Timings, extra: Timings) -> Timings:
+    return Timings(
+        latency_ms=float(base.latency_ms or 0.0) + float(extra.latency_ms or 0.0),
+        total_duration_ms=float(base.total_duration_ms or 0.0) + float(extra.total_duration_ms or 0.0),
+        load_duration_ms=float(base.load_duration_ms or 0.0) + float(extra.load_duration_ms or 0.0),
+        prompt_eval_duration_ms=float(base.prompt_eval_duration_ms or 0.0) + float(extra.prompt_eval_duration_ms or 0.0),
+        eval_duration_ms=float(base.eval_duration_ms or 0.0) + float(extra.eval_duration_ms or 0.0),
+    )
+
+
 def _request_with_thinking_disabled(req: LLMRequest) -> LLMRequest:
     metadata = dict(req.metadata or {})
     metadata["think"] = False
@@ -376,6 +591,143 @@ class OllamaProvider(LLMProviderBase):
         if target:
             self._current_model = target
 
+    def _collect_auto_continuation(
+        self,
+        *,
+        req: LLMRequest,
+        model: str,
+        text: str,
+        tool_calls: list[ToolCall],
+        done_reason: str,
+        usage: Usage,
+        timings: Timings,
+    ) -> tuple[str, Usage, Timings, dict[str, Any] | None, list[str], str]:
+        current_text = str(text or "")
+        total_usage = usage
+        total_timings = timings
+        last_payload: dict[str, Any] | None = None
+        additions: list[str] = []
+        current_done_reason = str(done_reason or "")
+
+        for pass_index in range(1, _AUTO_CONTINUE_MAX_PASSES + 1):
+            reason = _auto_continue_reason(
+                req=req,
+                text=current_text,
+                tool_calls=tool_calls,
+                done_reason=current_done_reason,
+            )
+            if not reason:
+                break
+
+            LOGGER.warning(
+                "ollama auto-continuation triggered model=%s pass=%s reason=%s",
+                model,
+                pass_index,
+                reason,
+            )
+            cont_req = _build_continuation_request(req, current_text, pass_index)
+            payload = self._chat_with_retry(req=cont_req, model=model, stream=False)
+            msg = dict(payload.get("message") or {})
+            cont_text = str(msg.get("content") or "")
+            cont_tool_calls = _parse_tool_calls_from_message(msg, text_fallback=cont_text)
+            if cont_tool_calls:
+                LOGGER.warning(
+                    "ollama auto-continuation returned tool calls; keeping original response model=%s pass=%s",
+                    model,
+                    pass_index,
+                )
+                break
+
+            addition = _prepare_continuation_delta(current_text, cont_text)
+            if not str(addition or "").strip():
+                LOGGER.warning(
+                    "ollama auto-continuation returned no usable delta model=%s pass=%s",
+                    model,
+                    pass_index,
+                )
+                break
+
+            current_text = f"{current_text}{addition}"
+            additions.append(addition)
+            last_payload = payload
+            current_done_reason = str(payload.get("done_reason") or "")
+            total_usage = _merge_usage(total_usage, self._extract_usage(payload))
+            total_timings = _merge_timings(total_timings, self._extract_timings(payload))
+
+        return current_text, total_usage, total_timings, last_payload, additions, current_done_reason
+
+    def _build_auto_continuation_stream_chunks(
+        self,
+        *,
+        req: LLMRequest,
+        model: str,
+        text: str,
+        tool_calls: list[ToolCall],
+        done_reason: str,
+        usage: Usage,
+        timings: Timings,
+        verbose: bool,
+    ) -> list[LLMChunk]:
+        _, total_usage, total_timings, continuation_payload, additions, final_done_reason = self._collect_auto_continuation(
+            req=req,
+            model=model,
+            text=text,
+            tool_calls=tool_calls,
+            done_reason=done_reason,
+            usage=usage,
+            timings=timings,
+        )
+        final_model = str((continuation_payload or {}).get("model") or model)
+        final_raw = continuation_payload if (self.debug_raw or verbose) else None
+
+        if not additions:
+            return [
+                LLMChunk(
+                    text_delta="",
+                    thinking_delta="",
+                    tool_calls_delta=[],
+                    usage=total_usage,
+                    timings=total_timings,
+                    model=final_model,
+                    done=True,
+                    raw=final_raw,
+                )
+            ]
+
+        chunks: list[LLMChunk] = []
+        for addition in additions[:-1]:
+            chunks.append(
+                LLMChunk(
+                    text_delta=addition,
+                    thinking_delta="",
+                    tool_calls_delta=[],
+                    usage=Usage(),
+                    timings=Timings(),
+                    model=final_model,
+                    done=False,
+                    raw=None,
+                )
+            )
+        chunks.append(
+            LLMChunk(
+                text_delta=additions[-1],
+                thinking_delta="",
+                tool_calls_delta=[],
+                usage=total_usage,
+                timings=total_timings,
+                model=final_model,
+                done=True,
+                raw=final_raw,
+            )
+        )
+        LOGGER.warning(
+            "ollama auto-continuation stream complete model=%s passes=%s final_done_reason=%s",
+            final_model,
+            len(additions),
+            final_done_reason,
+        )
+        return chunks
+
     def generate(self, req: LLMRequest) -> LLMResponse:
         model = str(req.model or self.default_model or "").strip()
         if not model:
@@ -435,6 +787,19 @@ class OllamaProvider(LLMProviderBase):
                     )
             usage = self._extract_usage(payload)
             timings = self._extract_timings(payload)
+            done_reason = str(payload.get("done_reason") or "")
+            text, usage, timings, continuation_payload, additions, done_reason = self._collect_auto_continuation(
+                req=req,
+                model=model,
+                text=text,
+                tool_calls=tool_calls,
+                done_reason=done_reason,
+                usage=usage,
+                timings=timings,
+            )
+            if continuation_payload is not None:
+                payload = continuation_payload
+                msg = dict(payload.get("message") or {})
             log_json(
                 LOGGER,
                 "llm_generate_done",
@@ -447,6 +812,8 @@ class OllamaProvider(LLMProviderBase):
                 tool_calls=len(tool_calls),
                 text_chars=len(text),
                 thinking_chars=len(thinking),
+                auto_continuation_passes=len(additions),
+                done_reason=done_reason,
             )
 
             return LLMResponse(
@@ -501,6 +868,7 @@ class OllamaProvider(LLMProviderBase):
                     thinking_delta, prev_thinking_full = _stitch_thinking_delta(prev_thinking_full, thinking_full)
                     tool_calls_delta = _parse_tool_calls_from_message(msg, text_fallback=text_delta)
                     done = bool(chunk.get("done", False))
+                    done_reason = str(chunk.get("done_reason") or "")
                     chunk_count += 1
                     chars += len(text_delta)
 
@@ -512,6 +880,7 @@ class OllamaProvider(LLMProviderBase):
                             model=str(chunk.get("model") or model),
                             chunks=chunk_count,
                             text_chars=chars,
+                            done_reason=done_reason,
                         )
                     usage = self._extract_usage(chunk) if done else Usage()
                     timings = self._extract_timings(chunk) if done else Timings()
@@ -553,6 +922,8 @@ class OllamaProvider(LLMProviderBase):
                             stream=True,
                         )
                         try:
+                            retry_streamed_text_parts: list[str] = []
+                            retry_streamed_tool_calls: list[ToolCall] = []
                             for retry_raw_chunk in retry_stream:
                                 retry_chunk = _as_dict(retry_raw_chunk)
                                 retry_msg = dict(retry_chunk.get("message") or {})
@@ -562,6 +933,7 @@ class OllamaProvider(LLMProviderBase):
                                     text_fallback=retry_text_delta,
                                 )
                                 retry_done = bool(retry_chunk.get("done", False))
+                                retry_done_reason = str(retry_chunk.get("done_reason") or "")
                                 chunk_count += 1
                                 chars += len(retry_text_delta)
                                 if retry_done:
@@ -572,17 +944,55 @@ class OllamaProvider(LLMProviderBase):
                                         model=str(retry_chunk.get("model") or model),
                                         chunks=chunk_count,
                                         text_chars=chars,
+                                        done_reason=retry_done_reason,
                                     )
-                                yield LLMChunk(
+                                retry_usage = self._extract_usage(retry_chunk) if retry_done else Usage()
+                                retry_timings = self._extract_timings(retry_chunk) if retry_done else Timings()
+                                retry_chunk_obj = LLMChunk(
                                     text_delta=retry_text_delta,
                                     thinking_delta="",
                                     tool_calls_delta=retry_tool_calls_delta,
-                                    usage=(self._extract_usage(retry_chunk) if retry_done else Usage()),
-                                    timings=(self._extract_timings(retry_chunk) if retry_done else Timings()),
+                                    usage=retry_usage,
+                                    timings=retry_timings,
                                     model=str(retry_chunk.get("model") or model),
                                     done=retry_done,
                                     raw=(retry_chunk if (self.debug_raw or (verbose and retry_done)) else None),
                                 )
+                                if retry_text_delta:
+                                    retry_streamed_text_parts.append(retry_text_delta)
+                                if retry_tool_calls_delta:
+                                    retry_streamed_tool_calls.extend(list(retry_tool_calls_delta))
+                                if retry_done:
+                                    combined_text = "".join(streamed_text_parts) + "".join(retry_streamed_text_parts)
+                                    combined_tool_calls = list(streamed_tool_calls) + list(retry_streamed_tool_calls)
+                                    continuation_reason = _auto_continue_reason(
+                                        req=req,
+                                        text=combined_text,
+                                        tool_calls=combined_tool_calls,
+                                        done_reason=retry_done_reason,
+                                    )
+                                    if continuation_reason:
+                                        if retry_text_delta or retry_tool_calls_delta:
+                                            yield replace(
+                                                retry_chunk_obj,
+                                                usage=Usage(),
+                                                timings=Timings(),
+                                                done=False,
+                                                raw=None,
+                                            )
+                                        for continuation_chunk in self._build_auto_continuation_stream_chunks(
+                                            req=req,
+                                            model=model,
+                                            text=combined_text,
+                                            tool_calls=combined_tool_calls,
+                                            done_reason=retry_done_reason,
+                                            usage=_merge_usage(usage, retry_usage),
+                                            timings=_merge_timings(timings, retry_timings),
+                                            verbose=verbose,
+                                        ):
+                                            yield continuation_chunk
+                                        break
+                                yield retry_chunk_obj
                         finally:
                             close_retry_stream = getattr(retry_stream, "close", None)
                             if callable(close_retry_stream):
@@ -591,6 +1001,34 @@ class OllamaProvider(LLMProviderBase):
                                 except Exception:
                                     pass
                         continue
+                    if done:
+                        continuation_reason = _auto_continue_reason(
+                            req=req,
+                            text="".join(streamed_text_parts),
+                            tool_calls=streamed_tool_calls,
+                            done_reason=done_reason,
+                        )
+                        if continuation_reason:
+                            if text_delta or thinking_delta or tool_calls_delta:
+                                yield replace(
+                                    chunk_obj,
+                                    usage=Usage(),
+                                    timings=Timings(),
+                                    done=False,
+                                    raw=None,
+                                )
+                            for continuation_chunk in self._build_auto_continuation_stream_chunks(
+                                req=req,
+                                model=model,
+                                text="".join(streamed_text_parts),
+                                tool_calls=streamed_tool_calls,
+                                done_reason=done_reason,
+                                usage=usage,
+                                timings=timings,
+                                verbose=verbose,
+                            ):
+                                yield continuation_chunk
+                            continue
                     yield chunk_obj
             finally:
                 close_stream = getattr(stream, "close", None)

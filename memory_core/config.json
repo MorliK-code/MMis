@@ -8,6 +8,7 @@
   "enable_background_worker": true,
   "worker_poll_interval": 2.0,
   
+  "memory_llm_scheduler_mode": "cooperative",
   "enable_worker_pause_during_api_request": true,
   "worker_pause_timeout": 0.0,
   
@@ -20,7 +21,7 @@
     "memory_llm_process": {
       "name": "memory_llm_process",
       "provider": "ollama",
-      "model": "gpt-oss:20b",
+      "model": "qwen3.5:9b",
       "temperature": 0.1,
       "max_tokens": 1024,
       "timeout": 60.0,

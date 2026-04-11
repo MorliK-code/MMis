@@ -941,10 +941,16 @@ class Brain:
 
     def _capture_memory_ingest(self, summary: dict[str, Any], ingest_result, *, bucket: str) -> None:
         summary["attempted_writes"] = int(summary.get("attempted_writes") or 0) + 1
-        stored_ids = list(getattr(ingest_result, "stored_ids", []) or [])
-        promoted_ids = list(getattr(ingest_result, "promoted_ids", []) or [])
-        dropped_ids = list(getattr(ingest_result, "dropped_ids", []) or [])
-        extracted_facts = list(getattr(ingest_result, "extracted_facts", []) or [])
+        if isinstance(ingest_result, dict):
+            stored_ids = list(ingest_result.get("stored_ids", []) or [])
+            promoted_ids = list(ingest_result.get("promoted_ids", []) or [])
+            dropped_ids = list(ingest_result.get("dropped_ids", []) or [])
+            extracted_facts = list(ingest_result.get("extracted_facts", []) or [])
+        else:
+            stored_ids = list(getattr(ingest_result, "stored_ids", []) or [])
+            promoted_ids = list(getattr(ingest_result, "promoted_ids", []) or [])
+            dropped_ids = list(getattr(ingest_result, "dropped_ids", []) or [])
+            extracted_facts = list(getattr(ingest_result, "extracted_facts", []) or [])
         summary["stored_records"] = int(summary.get("stored_records") or 0) + len(stored_ids)
         summary["blocked_writes"] = int(summary.get("blocked_writes") or 0) + len(dropped_ids)
         summary["facts_extracted"] = int(summary.get("facts_extracted") or 0) + len(extracted_facts)

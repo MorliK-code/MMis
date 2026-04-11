@@ -23,6 +23,16 @@ class MemoryInspectorRouterTests(unittest.TestCase):
         self.assertIn('data-tab="topics"', response.text)
         self.assertIn("/api/memory-core/topics", response.text)
 
+    def test_runtime_sessions_endpoint_is_available(self) -> None:
+        app = FastAPI()
+        app.include_router(create_memory_inspector_router(memory_core=object()))
+
+        client = TestClient(app)
+        response = client.get("/api/memory-core/runtime-sessions")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

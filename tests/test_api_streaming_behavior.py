@@ -5,7 +5,7 @@ import sys
 import unittest
 from importlib import import_module
 from types import SimpleNamespace
-from unittest.mock import PropertyMock, patch
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -115,8 +115,9 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
         with TestClient(api_app.app) as client:
             with patch.object(api_app._runtime.brain, "handle_message", return_value=_reply(text="Я затупила. Повтори, пожалуйста, еще раз.", status="error")):
                 with patch.object(api_app, "_append_metadata_row") as append_row:
-                    with patch.object(type(api_app.memory_core_adapter), "worker_pause_enabled", new_callable=PropertyMock, return_value=False):
-                        resp = client.post("/chat", json={"text": "hello", "store_turn": True})
+                    with patch.object(api_app.memory_core_adapter, "begin_main_llm_request"):
+                        with patch.object(api_app.memory_core_adapter, "end_main_llm_request"):
+                            resp = client.post("/chat", json={"text": "hello", "store_turn": True})
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(append_row.call_args_list), 1)

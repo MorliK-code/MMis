@@ -9,7 +9,7 @@ from typing import Any
 from memory_core.bootstrap.service_factory import build_memory_service, MemoryServiceConfig
 from memory_core.schemas import MemoryEnvelope, MemoryQuery
 from memory_core.facade import MemoryService
-from memory_core.config_manager import get_memory_core_config
+from memory_core.config_manager import get_memory_core_config, normalize_memory_llm_scheduler_mode
 from utils.logger import get_logger
 import threading
 
@@ -33,6 +33,22 @@ def _mark_memory_llm_interrupt() -> int:
 def _get_memory_llm_interrupt_epoch() -> int:
     with _memory_llm_interrupt_epoch_lock:
         return int(_memory_llm_interrupt_epoch)
+
+
+def _set_memory_llm_interrupt_flag(active: bool) -> None:
+    try:
+        from llm.ollama_provider import _memory_llm_interrupt
+    except Exception:
+        return
+    try:
+        if active:
+            _memory_llm_interrupt.set()
+            LOGGER.debug("MemoryCoreAdapter: Memory LLM interrupt flag set")
+        else:
+            _memory_llm_interrupt.clear()
+            LOGGER.debug("MemoryCoreAdapter: Memory LLM interrupt flag cleared")
+    except Exception as exc:
+        LOGGER.debug(f"Failed to update Memory LLM interrupt flag: {exc}")
 
 
 class MemoryCoreAdapter:
@@ -97,12 +113,23 @@ class MemoryCoreAdapter:
         # Настройки паузы worker из конфига
         self._enable_pause = bool(config_file.enable_worker_pause_during_api_request)
         self._pause_timeout = float(config_file.worker_pause_timeout or 0.0)
+        self._scheduler_mode = normalize_memory_llm_scheduler_mode(
+            getattr(config_file, "memory_llm_scheduler_mode", "cooperative")
+        )
+        self._main_llm_request_count = 0
+        self._main_llm_request_lock = threading.Lock()
         
         # Таймер для автоматического возобновления Memory LLM
         self._auto_resume_timer: threading.Timer | None = None
         self._auto_resume_delay = float(config_file.worker_pause_timeout or 0.0)
         self._resume_epoch = 0
         self._resume_epoch_lock = threading.Lock()
+
+        LOGGER.info(
+            "MemoryCoreAdapter: scheduler_mode=%s worker_pause_enabled=%s",
+            self._scheduler_mode,
+            bool(self._enable_pause),
+        )
 
     def ingest_event(
         self,
@@ -182,6 +209,11 @@ class MemoryCoreAdapter:
             "dropped": list(result.dropped or []),
             "recent_user_state": dict(result.recent_user_state or {}),
             "response_bias": dict(result.response_bias or {}),
+            "dialog_episode_hits": list(result.dialog_episode_hits or []),
+            "task_continuity": dict(result.task_continuity or {}),
+            "open_questions": list(result.open_questions or []),
+            "current_decisions": list(result.current_decisions or []),
+            "runtime_session": dict(result.runtime_session or {}),
             "debug": dict(result.debug or {}),
         }
 
@@ -259,6 +291,10 @@ class MemoryCoreAdapter:
             "dropped": list(result.get("dropped") or []),
             "recent_user_state": dict(result.get("recent_user_state") or {}),
             "response_bias": dict(result.get("response_bias") or {}),
+            "dialog_episode_hits": list(result.get("dialog_episode_hits") or []),
+            "task_continuity": dict(result.get("task_continuity") or {}),
+            "open_questions": list(result.get("open_questions") or []),
+            "current_decisions": list(result.get("current_decisions") or []),
             "debug": dict(result.get("debug") or {}),
             "recall_mode": "memory_core_query",
             "citations": result.get("citations", []),
@@ -276,6 +312,38 @@ class MemoryCoreAdapter:
     def set_current_session(self, session_id: str) -> None:
         """Устанавливает текущую сессию."""
         self._current_session = session_id
+
+    def get_runtime_session(
+        self,
+        *,
+        session_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.service.get_runtime_session(
+            namespace=self.config.default_namespace,
+            workspace_id=workspace_id or self._current_workspace,
+            session_id=session_id or self._current_session,
+        )
+
+    def update_task_continuity(
+        self,
+        *,
+        namespace: str,
+        active_task: dict[str, Any] | None,
+        previous_active_task: dict[str, Any] | None = None,
+        source: str = "",
+        now_ts: float | None = None,
+    ) -> dict[str, Any]:
+        session_id = str(namespace or self._current_session or "default").strip() or "default"
+        return self.service.update_task_continuity(
+            namespace=self.config.default_namespace,
+            workspace_id=self._current_workspace,
+            session_id=session_id,
+            active_task=active_task,
+            previous_active_task=previous_active_task,
+            source=source,
+            now_ts=now_ts,
+        )
 
     def get_stats(self) -> dict[str, Any]:
         """Получает статистику памяти."""
@@ -535,6 +603,9 @@ class MemoryCoreAdapter:
         """Закрывает background worker, Memory LLM provider и базу данных."""
         self._cancel_auto_resume_timer()
         self._bump_resume_epoch()
+        if hasattr(self, "_main_llm_request_lock"):
+            with self._main_llm_request_lock:
+                self._main_llm_request_count = 0
 
         worker = self._get_worker()
         if worker is not None:
@@ -626,6 +697,9 @@ class MemoryCoreAdapter:
         if not self._resume_epoch_matches(epoch):
             return
         self._release_memory_llm_lock()
+        self._wake_worker()
+
+    def _wake_worker(self) -> None:
         worker = self._get_worker()
         if worker is None:
             return
@@ -662,6 +736,58 @@ class MemoryCoreAdapter:
         LOGGER.info("MemoryCoreAdapter: Memory LLM prewarm scheduled")
         return True
 
+    def _get_scheduler_mode(self) -> str:
+        return normalize_memory_llm_scheduler_mode(getattr(self, "_scheduler_mode", "strict"))
+
+    def _uses_strict_worker_pause(self) -> bool:
+        return bool(getattr(self, "_enable_pause", False)) and self._get_scheduler_mode() == "strict"
+
+    def begin_main_llm_request(self) -> None:
+        """Marks the beginning of a main LLM request according to the active scheduler mode."""
+        if self._uses_strict_worker_pause():
+            self._pause_worker_strict()
+            return
+        self._begin_cooperative_main_turn()
+
+    def end_main_llm_request(self) -> None:
+        """Marks the completion of a main LLM request according to the active scheduler mode."""
+        if self._uses_strict_worker_pause():
+            self._resume_worker_strict()
+            return
+        self._end_cooperative_main_turn()
+
+    def _begin_cooperative_main_turn(self) -> None:
+        if not hasattr(self, "_main_llm_request_lock"):
+            self._main_llm_request_lock = threading.Lock()
+        if not hasattr(self, "_main_llm_request_count"):
+            self._main_llm_request_count = 0
+        with self._main_llm_request_lock:
+            self._main_llm_request_count += 1
+            active_requests = int(self._main_llm_request_count)
+        interrupt_epoch = _mark_memory_llm_interrupt()
+        _set_memory_llm_interrupt_flag(True)
+        LOGGER.info(
+            "MemoryCoreAdapter: Main LLM took priority in cooperative mode (active=%s, interrupt_epoch=%s)",
+            active_requests,
+            interrupt_epoch,
+        )
+
+    def _end_cooperative_main_turn(self) -> None:
+        if not hasattr(self, "_main_llm_request_lock"):
+            self._main_llm_request_lock = threading.Lock()
+        if not hasattr(self, "_main_llm_request_count"):
+            self._main_llm_request_count = 0
+        with self._main_llm_request_lock:
+            self._main_llm_request_count = max(0, int(self._main_llm_request_count) - 1)
+            active_requests = int(self._main_llm_request_count)
+        if active_requests == 0:
+            _set_memory_llm_interrupt_flag(False)
+            self._wake_worker()
+        LOGGER.info(
+            "MemoryCoreAdapter: Main LLM released priority in cooperative mode (active=%s)",
+            active_requests,
+        )
+
     def pause_worker(self) -> None:
         """
         Ставит background worker на паузу и освобождает VRAM.
@@ -669,6 +795,12 @@ class MemoryCoreAdapter:
         Полезно для приостановки обработки памяти во время ответа пользователю.
         Работает только если enable_worker_pause_during_api_request=True в конфиге.
         """
+        if not self._uses_strict_worker_pause():
+            self._begin_cooperative_main_turn()
+            return
+        self._pause_worker_strict()
+
+    def _pause_worker_strict(self) -> None:
         if not self._enable_pause:
             return  # Пауза отключена в конфиге
         
@@ -709,6 +841,12 @@ class MemoryCoreAdapter:
         
         Возобновляет обработку задач памяти.
         """
+        if not self._uses_strict_worker_pause():
+            self._end_cooperative_main_turn()
+            return
+        self._resume_worker_strict()
+
+    def _resume_worker_strict(self) -> None:
         if not self._enable_pause:
             return  # Пауза отключена в конфиге
         
@@ -760,12 +898,7 @@ class MemoryCoreAdapter:
         try:
             # СНАЧАЛА устанавливаем флаг прерывания — это немедленно!
             _mark_memory_llm_interrupt()
-            try:
-                from llm.ollama_provider import _memory_llm_interrupt
-                _memory_llm_interrupt.set()
-                LOGGER.debug("MemoryCoreAdapter: Memory LLM interrupt flag set (IMMEDIATE)")
-            except Exception:
-                pass
+            _set_memory_llm_interrupt_flag(True)
             
             # ЗАТЕМ захватываем lock — это предотвратит новые задачи
             acquired = _memory_llm_lock.acquire(timeout=0.1)
@@ -783,12 +916,7 @@ class MemoryCoreAdapter:
                 LOGGER.debug("MemoryCoreAdapter: Memory LLM lock released")
             
             # ЗАТЕМ сбрасываем флаг прерывания
-            try:
-                from llm.ollama_provider import _memory_llm_interrupt
-                _memory_llm_interrupt.clear()
-                LOGGER.debug("MemoryCoreAdapter: Memory LLM interrupt flag cleared")
-            except Exception:
-                pass
+            _set_memory_llm_interrupt_flag(False)
         except Exception as exc:
             LOGGER.debug(f"Failed to release Memory LLM lock: {exc}")
 
@@ -852,12 +980,17 @@ class MemoryCoreAdapter:
     @property
     def worker_pause_enabled(self) -> bool:
         """Проверяет, включена ли пауза worker."""
-        return self._enable_pause
-    
+        return self._uses_strict_worker_pause()
+
     @property
     def worker_pause_timeout(self) -> float:
         """Получает таймаут паузы worker (сек)."""
         return self._pause_timeout
+
+    @property
+    def memory_llm_scheduler_mode(self) -> str:
+        """Returns the active memory LLM scheduler mode."""
+        return self._get_scheduler_mode()
 
 
 # Глобальный экземпляр для использования в main.py

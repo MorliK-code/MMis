@@ -29,6 +29,7 @@ from typing import Any, Callable
 from memory_core.storage.job_queue_store import JobQueueStore, IngestJob
 from memory_core.storage.event_store import EventStore
 from memory_core.storage.artifact_store import ArtifactStore
+from memory_core.config_manager import get_memory_core_config, normalize_memory_llm_scheduler_mode
 from memory_core.schemas import MemoryEnvelope
 from memory_core.inspect.trace_store import MemoryTraceStore
 from memory_core.topic import TopicMaintenanceService, TopicStore
@@ -204,6 +205,20 @@ class BackgroundWorker:
         # Сначала ставим на паузу, чтобы остановить новые задачи
         self._pause_event.set()
 
+        # Прерываем текущий memory LLM вызов, чтобы shutdown не ждал hard-timeout.
+        try:
+            from memory_core.adapter import _mark_memory_llm_interrupt
+
+            _mark_memory_llm_interrupt()
+        except Exception:
+            pass
+        try:
+            from llm.ollama_provider import _memory_llm_interrupt
+
+            _memory_llm_interrupt.set()
+        except Exception:
+            pass
+
         # Сигнал остановки
         self._stop_event.set()
 
@@ -222,6 +237,12 @@ class BackgroundWorker:
         
         # Критически важно: останавливаем Memory LLM provider для освобождения VRAM
         self._shutdown_memory_llm_provider()
+        try:
+            from llm.ollama_provider import _memory_llm_interrupt
+
+            _memory_llm_interrupt.clear()
+        except Exception:
+            pass
         
         LOGGER.info(f"Worker {self.config.worker_id} stopped")
 
@@ -407,6 +428,14 @@ class BackgroundWorker:
 
     def _is_memory_llm_locked(self) -> bool:
         """Проверяет, заблокирован ли Memory LLM основной моделью."""
+        try:
+            scheduler_mode = normalize_memory_llm_scheduler_mode(
+                getattr(get_memory_core_config(), "memory_llm_scheduler_mode", "cooperative")
+            )
+            if scheduler_mode != "strict":
+                return False
+        except Exception:
+            pass
         try:
             from memory_core.adapter import _memory_llm_lock
             if _memory_llm_lock is not None:

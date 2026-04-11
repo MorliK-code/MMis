@@ -3,8 +3,10 @@ Retrieval Service - сервис поиска и извлечения памят
 """
 
 import time
+from typing import Any
 from memory_core.storage.sqlite_db import Database
 from memory_core.storage.artifact_store import ArtifactStore
+from memory_core.runtime_session_store import RuntimeSessionSnapshot, RuntimeSessionStore
 from memory_core.schemas import MemoryQuery, MemoryArtifact
 from memory_core.retrieval.query_models import RetrievalFilters, ContextPack, Citation
 from memory_core.retrieval.context_builder import ContextBuilder
@@ -13,6 +15,7 @@ from memory_core.retrieval.filters import apply_filters, filter_by_text_similari
 from memory_core.indexing.vector_index import VectorIndex
 from memory_core.config_manager import RetrievalConfig
 from memory_core.errors import RetrievalError
+from memory_core.topic import TopicStore, TopicToolService
 
 
 class RetrievalService:
@@ -31,6 +34,8 @@ class RetrievalService:
         db: Database,
         vector_index: VectorIndex | None = None,
         retrieval_config: RetrievalConfig | None = None,
+        runtime_session_store: RuntimeSessionStore | None = None,
+        include_pending_facts_in_retrieval: bool = False,
     ):
         """
         Инициализирует Retrieval Service.
@@ -46,6 +51,10 @@ class RetrievalService:
         self.reranker = Reranker()
         self.vector_index = vector_index
         self.retrieval_config = retrieval_config or RetrievalConfig()
+        self.runtime_session_store = runtime_session_store
+        self.include_pending_facts_in_retrieval = bool(include_pending_facts_in_retrieval)
+        self.topic_store = TopicStore(self.artifact_store)
+        self.topic_tools = TopicToolService(self.topic_store)
     
     def query(self, query: MemoryQuery) -> tuple[ContextPack, list[Citation]]:
         """
@@ -58,13 +67,20 @@ class RetrievalService:
             Кортеж (ContextPack, список Citation).
         """
         # 4 стадии retrieval
+        runtime_session = self._get_runtime_session(query)
+        topic_details = self._get_topic_details(query, runtime_session)
+        runtime_artifacts = self._collect_runtime_artifacts(
+            query,
+            runtime_session=runtime_session,
+            topic_details=topic_details,
+        )
         mandatory = self._collect_mandatory_artifacts(query)
         continuity = self._collect_continuity_artifacts(query)
         semantic = self._collect_semantic_artifacts(query)
         lexical = self._collect_lexical_artifacts(query)
 
         # Объединяем
-        merged = self._merge_artifact_lists(mandatory, continuity, semantic, lexical)
+        merged = self._merge_artifact_lists(runtime_artifacts, mandatory, continuity, semantic, lexical)
         merged = self._apply_topic_boost(merged, query)
 
         # Применяем runtime rules
@@ -80,8 +96,190 @@ class RetrievalService:
 
         # Строим контекст
         context_pack, citations = self.context_builder.build(ranked, query)
+        context_pack.dialog_episode_hits = self._build_dialog_episode_hits(
+            runtime_session=runtime_session,
+            topic_details=topic_details,
+        )
+        context_pack.task_continuity = self._build_task_continuity(runtime_session=runtime_session)
+        context_pack.open_questions = self._build_open_questions(
+            runtime_session=runtime_session,
+            topic_details=topic_details,
+        )
+        context_pack.current_decisions = self._build_current_decisions(
+            runtime_session=runtime_session,
+            topic_details=topic_details,
+        )
+        context_pack.runtime_session = dict(runtime_session or {})
+        context_pack.debug = {
+            **dict(getattr(context_pack, "debug", {}) or {}),
+            "runtime_session_present": bool(runtime_session),
+            "runtime_session": dict(runtime_session or {}),
+            "runtime_sources": self._summarize_retrieval_sources(ranked),
+            "include_pending_facts_in_retrieval": bool(self.include_pending_facts_in_retrieval),
+        }
 
         return context_pack, citations
+
+    def _get_runtime_session(self, query: MemoryQuery) -> dict[str, Any]:
+        if self.runtime_session_store is None or not str(query.session_id or "").strip():
+            return {}
+        snapshot = self.runtime_session_store.get_session(
+            namespace=query.namespace,
+            workspace_id=query.workspace_id,
+            session_id=str(query.session_id or "").strip(),
+        )
+        row = snapshot.to_dict()
+        if not any(
+            row.get(key)
+            for key in (
+                "last_user_turn",
+                "last_assistant_turn",
+                "recent_turns",
+                "active_topic",
+                "active_task",
+                "open_questions",
+                "recent_decisions",
+                "recent_user_state",
+                "current_episode_id",
+            )
+        ):
+            return {}
+        return row
+
+    def _get_topic_details(self, query: MemoryQuery, runtime_session: dict[str, Any]) -> dict[str, Any]:
+        topic_thread_id = str(query.topic_thread_id or "").strip()
+        if not topic_thread_id:
+            topic_thread_id = str(dict(runtime_session.get("active_topic") or {}).get("thread_id") or "").strip()
+        if not topic_thread_id:
+            return {}
+        try:
+            return dict(
+                self.topic_tools.read_topic(
+                    topic_thread_id,
+                    workspace_id=query.workspace_id,
+                    limit=8,
+                )
+                or {}
+            )
+        except Exception:
+            return {}
+
+    def _collect_runtime_artifacts(
+        self,
+        query: MemoryQuery,
+        *,
+        runtime_session: dict[str, Any],
+        topic_details: dict[str, Any],
+    ) -> list[MemoryArtifact]:
+        if self.runtime_session_store is None or not runtime_session:
+            return []
+        snapshot = RuntimeSessionSnapshot.from_dict(runtime_session)
+        return self.runtime_session_store.to_retrieval_artifacts(
+            snapshot,
+            include_pending=bool(self.include_pending_facts_in_retrieval),
+            topic_details=topic_details,
+        )
+
+    def _build_task_continuity(self, *, runtime_session: dict[str, Any]) -> dict[str, Any]:
+        if self.runtime_session_store is None or not runtime_session:
+            return {}
+        snapshot = RuntimeSessionSnapshot.from_dict(runtime_session)
+        return self.runtime_session_store.build_task_continuity(snapshot=snapshot)
+
+    def _build_open_questions(
+        self,
+        *,
+        runtime_session: dict[str, Any],
+        topic_details: dict[str, Any],
+    ) -> list[str]:
+        return self._merge_strings(
+            runtime_session.get("open_questions"),
+            dict(topic_details or {}).get("open_questions"),
+            limit=10,
+        )
+
+    def _build_current_decisions(
+        self,
+        *,
+        runtime_session: dict[str, Any],
+        topic_details: dict[str, Any],
+    ) -> list[str]:
+        return self._merge_strings(
+            runtime_session.get("recent_decisions"),
+            dict(topic_details or {}).get("current_decisions"),
+            limit=10,
+        )
+
+    def _build_dialog_episode_hits(
+        self,
+        *,
+        runtime_session: dict[str, Any],
+        topic_details: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not runtime_session and not topic_details:
+            return []
+        active_topic = dict(runtime_session.get("active_topic") or {})
+        thread = dict(dict(topic_details or {}).get("thread") or {})
+        open_questions = self._build_open_questions(runtime_session=runtime_session, topic_details=topic_details)
+        current_decisions = self._build_current_decisions(runtime_session=runtime_session, topic_details=topic_details)
+        episode_id = str(
+            runtime_session.get("current_episode_id")
+            or active_topic.get("thread_id")
+            or thread.get("thread_id")
+            or ""
+        ).strip()
+        topic_title = str(
+            active_topic.get("title")
+            or thread.get("title")
+            or active_topic.get("topic_key")
+            or thread.get("topic_key")
+            or ""
+        ).strip()
+        summary = str(dict(topic_details or {}).get("summary") or thread.get("summary") or "").strip()
+        if not episode_id and not topic_title and not summary and not open_questions and not current_decisions:
+            return []
+        return [
+            {
+                "record_id": episode_id or topic_title or "runtime_episode",
+                "summary_short": summary or topic_title,
+                "summary_reasoning": str((current_decisions or [summary or topic_title or ""])[0] or "").strip(),
+                "decisions": current_decisions,
+                "episode": {
+                    "id": episode_id or topic_title or "runtime_episode",
+                    "topic": topic_title,
+                    "summary_short": summary or topic_title,
+                    "open_questions": open_questions,
+                    "decisions": current_decisions,
+                },
+                "source": "runtime_session",
+            }
+        ]
+
+    @staticmethod
+    def _merge_strings(*values: Any, limit: int = 10) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            for item in list(value or []):
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                key = text.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(text)
+                if len(result) >= max(1, int(limit or 10)):
+                    return result
+        return result
+
+    @staticmethod
+    def _summarize_retrieval_sources(artifacts: list[MemoryArtifact]) -> dict[str, int]:
+        summary: dict[str, int] = {}
+        for artifact in list(artifacts or []):
+            source = str(dict(artifact.metadata or {}).get("retrieval_source") or "unknown").strip() or "unknown"
+            summary[source] = int(summary.get(source, 0) or 0) + 1
+        return summary
     
     def _retrieve_artifacts(self, query: MemoryQuery) -> list[MemoryArtifact]:
         """
@@ -160,7 +358,7 @@ class RetrievalService:
             if a.artifact_type != "task_state" or a.metadata.get("task_status") == "open"
         ]
 
-        return result
+        return self._mark_retrieval_source(result, "mandatory")
 
     def _collect_continuity_artifacts(self, query: MemoryQuery) -> list[MemoryArtifact]:
         """
@@ -208,7 +406,7 @@ class RetrievalService:
         result.extend(sorted(same_topic, key=lambda a: a.updated_at, reverse=True))
         result.extend(sorted(related_topic, key=lambda a: a.updated_at, reverse=True))
         result.extend(sorted(session_fallback, key=lambda a: a.updated_at, reverse=True))
-        return result[:12]
+        return self._mark_retrieval_source(result[:12], "continuity")
 
     def _collect_semantic_artifacts(self, query: MemoryQuery) -> list[MemoryArtifact]:
         """
@@ -241,7 +439,7 @@ class RetrievalService:
             artifact.metadata["semantic_score"] = float(hit.get("score", 0.0))
             result.append(artifact)
 
-        return result
+        return self._mark_retrieval_source(result, "semantic")
 
     def _collect_lexical_artifacts(self, query: MemoryQuery) -> list[MemoryArtifact]:
         """
@@ -256,12 +454,12 @@ class RetrievalService:
         if not query.text:
             return []
 
-        return self.artifact_store.search_by_text(
+        return self._mark_retrieval_source(self.artifact_store.search_by_text(
             query=query.text,
             workspace_id=query.workspace_id,
             artifact_types=query.artifact_types if query.artifact_types else None,
             limit=max(query.top_k * 3, 12),
-        )
+        ), "lexical")
 
     def _apply_topic_boost(
         self,
@@ -300,6 +498,7 @@ class RetrievalService:
 
     def _merge_artifact_lists(
         self,
+        runtime_artifacts: list[MemoryArtifact],
         mandatory: list[MemoryArtifact],
         continuity: list[MemoryArtifact],
         semantic: list[MemoryArtifact],
@@ -320,12 +519,23 @@ class RetrievalService:
         result: list[MemoryArtifact] = []
         seen: set[str] = set()
 
-        for artifact in mandatory + continuity + semantic + lexical:
+        for artifact in runtime_artifacts + mandatory + continuity + semantic + lexical:
             if artifact.artifact_id not in seen:
                 seen.add(artifact.artifact_id)
                 result.append(artifact)
 
         return result
+
+    @staticmethod
+    def _mark_retrieval_source(
+        artifacts: list[MemoryArtifact],
+        source: str,
+    ) -> list[MemoryArtifact]:
+        for artifact in list(artifacts or []):
+            meta = dict(artifact.metadata or {})
+            meta.setdefault("retrieval_source", source)
+            artifact.metadata = meta
+        return artifacts
 
     def _apply_runtime_rules(
         self,

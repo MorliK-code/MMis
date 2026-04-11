@@ -31,6 +31,7 @@ class MemoryInspectorService:
     _worker: Any = None
     _vector_index: Any = None
     _trace_store: Any = None
+    _runtime_session_store: Any = None
     _topic_store: TopicStore | None = None
 
     def __init__(self, memory_core: Any):
@@ -43,6 +44,7 @@ class MemoryInspectorService:
         self._worker = None
         self._vector_index = None
         self._trace_store = None
+        self._runtime_session_store = None
         self._topic_store = None
 
         # Пытаемся получить доступ к внутренним компонентам memory_core
@@ -60,6 +62,8 @@ class MemoryInspectorService:
                 self._vector_index = service.vector_index
             if hasattr(service, "trace_store"):
                 self._trace_store = service.trace_store
+            if hasattr(service, "runtime_session_store"):
+                self._runtime_session_store = service.runtime_session_store
 
             # Хранилища
             if hasattr(service, "artifact_store"):
@@ -94,6 +98,8 @@ class MemoryInspectorService:
             "jobs_done_after_restart": 0,
             "jobs_restarted_total": 0,
             "jobs_inferred_interruptions_total": 0,
+            "runtime_sessions_total": 0,
+            "runtime_sessions_active": 0,
         }
 
         # Используем inspector если доступен
@@ -185,7 +191,45 @@ class MemoryInspectorService:
         else:
             overview["worker_enabled"] = False
 
+        if self._runtime_session_store:
+            try:
+                sessions = list(self._runtime_session_store.list_sessions(limit=100) or [])
+                overview["runtime_sessions_total"] = len(sessions)
+                overview["runtime_sessions_active"] = sum(
+                    1
+                    for row in sessions
+                    if dict(row or {}).get("last_turn_ts") or dict(row or {}).get("active_task")
+                )
+            except Exception:
+                pass
+
         return overview
+
+    def list_runtime_sessions(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not self._runtime_session_store:
+            return []
+        try:
+            sessions = list(self._runtime_session_store.list_sessions(limit=limit) or [])
+        except Exception:
+            return []
+        result: list[dict[str, Any]] = []
+        for row in sessions:
+            snapshot = dict(row or {})
+            result.append(
+                {
+                    "session_id": str(snapshot.get("session_id") or "").strip(),
+                    "workspace_id": str(snapshot.get("workspace_id") or "").strip(),
+                    "namespace": str(snapshot.get("namespace") or "").strip(),
+                    "last_turn_ts": snapshot.get("last_turn_ts"),
+                    "current_episode_id": str(snapshot.get("current_episode_id") or "").strip(),
+                    "active_topic": dict(snapshot.get("active_topic") or {}),
+                    "active_task": dict(snapshot.get("active_task") or {}),
+                    "open_questions": list(snapshot.get("open_questions") or []),
+                    "recent_decisions": list(snapshot.get("recent_decisions") or []),
+                    "recent_user_state": dict(snapshot.get("recent_user_state") or {}),
+                }
+            )
+        return result
 
     def _get_job_lifecycle(self, job_id: str, *, attempts: int = 0) -> dict[str, Any]:
         if not self._trace_store or not str(job_id or "").strip():

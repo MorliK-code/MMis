@@ -406,14 +406,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
         )
 
-        # Приостанавливаем worker на время обработки запроса для приоритета ответа
-        # Если пауза включена в конфиге memory_core
-        if memory_core_adapter.worker_pause_enabled:
-            LOGGER.info("Pausing memory_core worker for API request...")
-            memory_core_adapter.pause_worker()
-            LOGGER.info("Worker paused until the API response is finished")
-        else:
-            LOGGER.info("Worker pause is disabled in config")
+        memory_core_adapter.begin_main_llm_request()
 
         try:
             meta_map = _build_chat_meta(req=req, source="api")
@@ -422,10 +415,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                 meta=meta_map,
             )
         finally:
-            # Возобновляем worker сразу после формирования ответа.
-            if memory_core_adapter.worker_pause_enabled:
-                memory_core_adapter.resume_worker()
-                LOGGER.info("Worker resumed after API request")
+            memory_core_adapter.end_main_llm_request()
 
         answer_raw = str(result.text or "")
         answer, thinking = _split_visible_and_thinking(answer_raw)
@@ -553,11 +543,7 @@ def chat_stream(req: ChatRequest):
                     verbose=_runtime.verbose_enabled if req.verbose is None else bool(req.verbose),
                     json_mode=_runtime.json_mode_enabled if req.json_mode is None else bool(req.json_mode),
                 )
-                # Приостанавливаем worker на время обработки запроса для приоритета ответа
-                # Если пауза включена в конфиге memory_core
-                if memory_core_adapter.worker_pause_enabled:
-                    memory_core_adapter.pause_worker()
-                    LOGGER.info("Stream worker paused until the API response is finished")
+                memory_core_adapter.begin_main_llm_request()
 
                 try:
                     meta_map = _build_chat_meta(
@@ -574,10 +560,7 @@ def chat_stream(req: ChatRequest):
                     state["result"] = result
                     state["meta"] = meta_map
                 finally:
-                    # Возобновляем worker после формирования ответа
-                    if memory_core_adapter.worker_pause_enabled:
-                        memory_core_adapter.resume_worker()
-                        LOGGER.info("Stream worker resumed after API request")
+                    memory_core_adapter.end_main_llm_request()
             except Exception as exc:
                 state["error"] = str(exc)
             finally:

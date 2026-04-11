@@ -14,6 +14,14 @@ from typing import Any
 from config.settings import BASE_DIR
 
 
+def normalize_memory_llm_scheduler_mode(value: Any) -> str:
+    """Normalizes the scheduler mode for memory LLM orchestration."""
+    normalized = str(value or "").strip().lower()
+    if normalized == "strict":
+        return "strict"
+    return "cooperative"
+
+
 @dataclass(slots=True)
 class MemoryLLMConfig:
     """Конфигурация Memory LLM."""
@@ -73,6 +81,7 @@ class MemoryCoreConfig:
     # Настройки паузы worker во время обработки запросов API
     enable_worker_pause_during_api_request: bool = True
     worker_pause_timeout: float = 0.0  # 0 = без ограничения, >0 = макс. время паузы в секундах
+    memory_llm_scheduler_mode: str = "cooperative"
     
     # Таймаут завершения worker при простое
     worker_shutdown_idle_timeout: float = 300.0  # 5 минут по умолчанию
@@ -131,6 +140,9 @@ class MemoryCoreConfig:
         config.worker_poll_interval = float(data.get("worker_poll_interval", 2.0))
         config.enable_worker_pause_during_api_request = bool(data.get("enable_worker_pause_during_api_request", True))
         config.worker_pause_timeout = float(data.get("worker_pause_timeout", 0.0))
+        config.memory_llm_scheduler_mode = normalize_memory_llm_scheduler_mode(
+            data.get("memory_llm_scheduler_mode", "cooperative")
+        )
         config.worker_shutdown_idle_timeout = float(data.get("worker_shutdown_idle_timeout", 300.0))
         
         # Task model profiles (основной источник настроек LLM)
@@ -206,6 +218,7 @@ class MemoryCoreConfig:
             "worker_poll_interval": self.worker_poll_interval,
             "enable_worker_pause_during_api_request": self.enable_worker_pause_during_api_request,
             "worker_pause_timeout": self.worker_pause_timeout,
+            "memory_llm_scheduler_mode": normalize_memory_llm_scheduler_mode(self.memory_llm_scheduler_mode),
             "worker_shutdown_idle_timeout": self.worker_shutdown_idle_timeout,
             "llm": {
                 "provider": self.llm.provider,

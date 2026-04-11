@@ -23,6 +23,7 @@ from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.storage.workspace_store import WorkspaceStore
 from memory_core.storage.state_store import StateStore
 from memory_core.storage.job_queue_store import JobQueueStore
+from memory_core.runtime_session_store import RuntimeSessionStore
 from memory_core.retrieval.retrieval_service import RetrievalService
 from memory_core.retrieval.query_models import ContextPack, Citation
 from memory_core.indexing.embeddings import EmbeddingProvider
@@ -38,6 +39,7 @@ from memory_core.processors.memory_llm_processor import MemoryLLMProcessor
 from memory_core.governor.governor import Governor
 from memory_core.inspect.inspector import MemoryInspector
 from memory_core.errors import MemoryError, IngestError
+from memory_core.config_manager import get_memory_core_config, normalize_memory_llm_scheduler_mode
 
 
 class MemoryService:
@@ -57,6 +59,7 @@ class MemoryService:
         artifact_store: ArtifactStore,
         workspace_store: WorkspaceStore,
         state_store: StateStore,
+        runtime_session_store: RuntimeSessionStore,
         retrieval_service: RetrievalService,
         vector_index: VectorIndex,
         embedding_provider: EmbeddingProvider,
@@ -81,6 +84,7 @@ class MemoryService:
         self.artifact_store = artifact_store
         self.workspace_store = workspace_store
         self.state_store = state_store
+        self.runtime_session_store = runtime_session_store
         self.retrieval_service = retrieval_service
         self.vector_index = vector_index
         self.embedding_provider = embedding_provider
@@ -122,6 +126,7 @@ class MemoryService:
         try:
             # Шаг 1: Записываем raw event (канон)
             self.event_store.append(envelope)
+            runtime_snapshot = self._sync_runtime_session(envelope)
 
             # Шаг 2: Анализируем событие (быстрый фильтр)
             analysis = self.analyzer.analyze(envelope)
@@ -133,6 +138,11 @@ class MemoryService:
                     "reason": "skipped_by_analyzer",
                     "queued": False,
                     "artifacts_created": 0,
+                    "stored_ids": [],
+                    "promoted_ids": [],
+                    "dropped_ids": [],
+                    "extracted_facts": [],
+                    "runtime_session": runtime_snapshot,
                 }
 
             # Шаг 3: Создаём job в очереди (enqueue-only!)
@@ -151,6 +161,9 @@ class MemoryService:
             worker = getattr(self, "worker", None)
             if worker is not None and hasattr(worker, "is_running") and hasattr(worker, "start"):
                 try:
+                    scheduler_mode = normalize_memory_llm_scheduler_mode(
+                        getattr(get_memory_core_config(), "memory_llm_scheduler_mode", "cooperative")
+                    )
                     is_memory_locked = False
                     try:
                         from memory_core.adapter import _memory_llm_lock
@@ -158,7 +171,7 @@ class MemoryService:
                     except Exception:
                         is_memory_locked = False
 
-                    if not worker.is_running() and not is_memory_locked:
+                    if not worker.is_running() and (scheduler_mode == "cooperative" or not is_memory_locked):
                         worker.start()
                     elif worker.is_running():
                         wake = getattr(worker, "wake", None)
@@ -173,6 +186,11 @@ class MemoryService:
                 "processed": True,
                 "queued": True,
                 "job_id": job_id,
+                "stored_ids": [],
+                "promoted_ids": [],
+                "dropped_ids": [],
+                "extracted_facts": [],
+                "runtime_session": runtime_snapshot,
                 "artifacts_created": 0,  # Будут созданы worker-ом в фоне
             }
 
@@ -233,6 +251,11 @@ class MemoryService:
             dropped=[dict(x) for x in list(getattr(context_pack, "dropped_memories", []) or []) if isinstance(x, dict)],
             recent_user_state=dict(getattr(context_pack, "recent_user_state", {}) or {}),
             response_bias=dict(getattr(context_pack, "response_bias", {}) or {}),
+            dialog_episode_hits=[dict(x) for x in list(getattr(context_pack, "dialog_episode_hits", []) or []) if isinstance(x, dict)],
+            task_continuity=dict(getattr(context_pack, "task_continuity", {}) or {}),
+            open_questions=[str(x).strip() for x in list(getattr(context_pack, "open_questions", []) or []) if str(x).strip()],
+            current_decisions=[str(x).strip() for x in list(getattr(context_pack, "current_decisions", []) or []) if str(x).strip()],
+            runtime_session=dict(getattr(context_pack, "runtime_session", {}) or {}),
             debug=dict(getattr(context_pack, "debug", {}) or {}),
         )
     
@@ -337,8 +360,48 @@ class MemoryService:
             return {
                 "stats": self.inspector.get_stats(),
             }
+
+        elif request.kind == "runtime_sessions":
+            return {
+                "items": self.runtime_session_store.list_sessions(limit=request.limit),
+            }
         
         return {"error": f"Unknown inspect kind: {request.kind}"}
+
+    def get_runtime_session(
+        self,
+        *,
+        namespace: str = "default",
+        workspace_id: str = "global",
+        session_id: str = "default",
+    ) -> dict[str, Any]:
+        snapshot = self.runtime_session_store.get_session(
+            namespace=namespace,
+            workspace_id=workspace_id,
+            session_id=session_id,
+        )
+        return snapshot.to_dict()
+
+    def update_task_continuity(
+        self,
+        *,
+        namespace: str = "default",
+        workspace_id: str = "global",
+        session_id: str = "default",
+        active_task: dict[str, Any] | None,
+        previous_active_task: dict[str, Any] | None = None,
+        source: str = "",
+        now_ts: float | None = None,
+    ) -> dict[str, Any]:
+        return self.runtime_session_store.update_task_continuity(
+            namespace=namespace,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            active_task=active_task,
+            previous_active_task=previous_active_task,
+            source=source,
+            now_ts=now_ts,
+        )
     
     def _run_processors(
         self,
@@ -404,6 +467,34 @@ class MemoryService:
                 },
             )
 
+    def _sync_runtime_session(self, envelope: MemoryEnvelope) -> dict[str, Any]:
+        runtime_session_store = getattr(self, "runtime_session_store", None)
+        if runtime_session_store is None:
+            return {}
+
+        episode_id = ""
+        try:
+            from memory_core.planner.episode_planner import EpisodePlanner
+
+            planner = EpisodePlanner(
+                artifact_store=getattr(self, "artifact_store", None),
+                event_store=getattr(self, "event_store", None),
+            )
+            episode = planner.get_or_create_episode(
+                session_id=envelope.session_id,
+                workspace_id=envelope.workspace_id,
+                topic_thread_id=str(dict(envelope.metadata or {}).get("topic_thread_id") or "").strip() or None,
+                envelope=envelope,
+            )
+            episode_id = str(getattr(episode, "episode_id", "") or "").strip()
+        except Exception:
+            episode_id = ""
+        snapshot = runtime_session_store.update_from_event(
+            envelope,
+            current_episode_id=episode_id,
+        )
+        return snapshot.to_dict()
+
     def get_current_workspace(self) -> str:
         """Получает текущий workspace."""
         return self.state_store.get_current_workspace(self.config.default_workspace)
@@ -415,3 +506,24 @@ class MemoryService:
     def get_stats(self) -> dict[str, Any]:
         """Получает статистику памяти."""
         return self.inspector.get_stats()
+
+    def close(self) -> None:
+        """Stops the background worker and closes the shared database if present."""
+        worker = getattr(self, "worker", None)
+        if worker is not None:
+            stop = getattr(worker, "stop", None)
+            is_running = getattr(worker, "is_running", None)
+            if callable(stop):
+                try:
+                    if not callable(is_running) or is_running():
+                        stop(timeout_sec=3.0)
+                except Exception:
+                    pass
+
+        db = getattr(getattr(self, "event_store", None), "db", None)
+        close_db = getattr(db, "close", None)
+        if callable(close_db):
+            try:
+                close_db()
+            except Exception:
+                pass
