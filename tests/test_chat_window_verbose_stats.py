@@ -1,7 +1,26 @@
 from __future__ import annotations
 
 from llm.tokenizer import estimate_tokens
+import ui.chat_shell as proto
+import ui.chat_window as chat_window_module
 from ui.chat_window import ChatWindow
+from ui.workers import ReplyResult
+
+
+class _FakeBubble:
+    def __init__(self) -> None:
+        self.text_updates: list[str] = []
+        self.thinking_updates: list[tuple[str, str | None]] = []
+        self.perf_updates: list[list[str]] = []
+
+    def update_text(self, text: str) -> None:
+        self.text_updates.append(text)
+
+    def update_thinking(self, text: str, ms: str | None = None) -> None:
+        self.thinking_updates.append((text, ms))
+
+    def set_perf(self, perf: list[str]) -> None:
+        self.perf_updates.append(list(perf))
 
 
 def test_complete_verbose_stats_fills_missing_verbose_fields() -> None:
@@ -113,6 +132,62 @@ def test_resolve_thinking_text_ignores_final_thinking_without_stream_generation(
     assert ChatWindow._resolve_thinking_text("hidden reasoning", "", False) == ""
     assert ChatWindow._resolve_thinking_text("hidden reasoning", "streamed reasoning", False) == "streamed reasoning"
     assert ChatWindow._resolve_thinking_text("hidden reasoning", "", True) == "hidden reasoning"
+
+
+def test_live_thinking_timer_starts_from_first_visible_thinking_chunk(monkeypatch) -> None:
+    window = ChatWindow.__new__(ChatWindow)
+    bubble = _FakeBubble()
+    window._pending = proto.PendingAssistant(bubble=bubble, started_at=100.0)
+    window._schedule_scroll_bottom = lambda **_kwargs: None
+
+    ticks = iter([130.0, 132.5])
+    monkeypatch.setattr(chat_window_module.time, "perf_counter", lambda: next(ticks))
+
+    window._on_thinking_chunk("thinking")
+    window._on_thinking_chunk(" live")
+
+    assert window._pending.first_thinking_at == 130.0
+    assert bubble.thinking_updates == [
+        ("thinking", "0.0 s"),
+        ("thinking live", "2.5 s"),
+    ]
+
+
+def test_finished_thinking_ms_uses_first_thinking_to_first_answer(monkeypatch) -> None:
+    window = ChatWindow.__new__(ChatWindow)
+    bubble = _FakeBubble()
+    window._pending = proto.PendingAssistant(
+        bubble=bubble,
+        started_at=100.0,
+        thinking_text="thinking",
+        answer_text="answer",
+        first_thinking_at=130.0,
+        first_answer_at=150.0,
+    )
+    window._pending_user_text = "hello"
+    window._verbose_enabled = False
+    window._active_model = ""
+    window._available_models = []
+    window._inspector_panel = None
+    window.api = None
+    finalized: dict[str, object] = {}
+    window._finalize_pending = lambda **kwargs: finalized.update(kwargs)
+    window._populate_models = lambda *_args, **_kwargs: None
+    window._apply_context_chips = lambda: None
+
+    monkeypatch.setattr(chat_window_module.time, "perf_counter", lambda: 170.0)
+
+    window._on_reply_finished(
+        ReplyResult(
+            text="answer",
+            thinking="thinking",
+            thinking_generated=True,
+            stats={},
+            model="",
+        )
+    )
+
+    assert finalized["thinking_ms"] == "20.0 s"
 
 
 def test_upgrade_legacy_verbose_stat_line_without_thinking_keeps_timer_hidden() -> None:

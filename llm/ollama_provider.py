@@ -306,35 +306,25 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
-def _stitch_thinking_delta(prev_full: str, current_full: str) -> tuple[str, str]:
-    """
-    Вычисляет дельту thinking между предыдущим полным значением и текущим.
-    
-    Ollama в stream режиме возвращает полное накопленное значение thinking в каждом чанке,
-    а не только дельту. Поэтому нужно вычислять дельту самостоятельно.
-    
-    Args:
-        prev_full: Предыдущее полное значение thinking
-        current_full: Текущее полное значение thinking
-    
-    Returns:
-        Tuple[str, str]: (дельта для отправки в UI, новое полное значение)
-    """
-    current = str(current_full or "")
+def _stitch_thinking_delta(prev_full: str, current_piece: str) -> tuple[str, str]:
+    """Return a thinking delta while supporting cumulative and raw-delta streams."""
     prev = str(prev_full or "")
+    current = str(current_piece or "")
     
     if not current:
         # Пустой thinking в чанке — это нормально (только текст ответа)
         return "", prev
     
-    if current.startswith(prev):
-        # Нормальный случай: новое значение содержит старое как префикс
-        delta = current[len(prev):]
-        return delta, current
-    
-    # Edge case: если текущее не начинается с предыдущего (маловероятно)
-    # Отправляем всё текущее значение
-    return current, current
+    # cumulative mode
+    if prev and current.startswith(prev):
+        return current[len(prev):], current
+
+    # first chunk
+    if not prev:
+        return current, current
+
+    # delta mode
+    return current, prev + current
 
 
 class OllamaProvider(LLMProviderBase):

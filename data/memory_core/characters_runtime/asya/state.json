@@ -1,9 +1,8 @@
 {
-  "mood": "neutral",
-  "last_update_ts": "2026-04-08T15:59:21.177+03:00",
+  "mood": "teasing",
+  "last_update_ts": "2026-04-18T23:44:07.545+03:00",
   "active_traits": [
     "directness",
-    "emoji_rate",
     "empathy",
     "energy",
     "humor",
@@ -22,13 +21,13 @@
   },
   "last_signals": {
     "lang": "ru",
-    "intent": "question",
+    "intent": "chat",
     "emotion": "neutral",
     "emotion_intensity": 0.35,
     "emotion_arousal": 0.2,
     "mode": "chatting",
     "topics": [
-      "topic_тебя_зовут"
+      "topic_этот_который_проверяю"
     ],
     "tags": [
       "lang_ru"
@@ -37,28 +36,28 @@
   },
   "applied_rules": [
     {
-      "rule": "rule_6",
-      "action_count": 2
+      "rule": "rule_5",
+      "action_count": 7
     }
   ],
   "emotional_state_before": {
     "schema_version": 1,
-    "mood": "neutral",
-    "valence": 0.010375032207797983,
-    "arousal": 0.05213894708601578,
-    "intensity": 0.044997875361429455,
-    "trigger": "neutral",
-    "last_update_ts": "2026-04-08T15:58:54.671+03:00",
+    "mood": "teasing",
+    "valence": 0.015555335918444792,
+    "arousal": 0.03243574126835256,
+    "intensity": 0.0,
+    "trigger": "",
+    "last_update_ts": "2026-04-18T23:31:46.745+03:00",
     "cooldown_until_ts": ""
   },
   "emotional_state_after": {
     "schema_version": 1,
-    "mood": "neutral",
-    "valence": 0.008928173409144575,
-    "arousal": 0.04670311117132044,
-    "intensity": 0.028319297966206934,
+    "mood": "teasing",
+    "valence": 0.0134398102335363,
+    "arousal": 0.029448480455856615,
+    "intensity": 0.0,
     "trigger": "",
-    "last_update_ts": "2026-04-08T15:59:21.177+03:00",
+    "last_update_ts": "2026-04-18T23:44:07.544+03:00",
     "cooldown_until_ts": ""
   },
   "persona_feedback_applied": [],

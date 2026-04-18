@@ -30,6 +30,20 @@ class TestThinkingDeltaComputation(unittest.TestCase):
         self.assertEqual(delta, "thinking")
         self.assertEqual(new_full, current)
 
+    def test_delta_mode_appends_to_previous(self):
+        prev = "Hello"
+        current = " world"
+        delta, new_full = _stitch_thinking_delta(prev, current)
+        self.assertEqual(delta, " world")
+        self.assertEqual(new_full, "Hello world")
+
+    def test_cumulative_mode_extracts_suffix(self):
+        prev = "Hello"
+        current = "Hello world"
+        delta, new_full = _stitch_thinking_delta(prev, current)
+        self.assertEqual(delta, " world")
+        self.assertEqual(new_full, current)
+
     def test_multiline_accumulation(self):
         """Multiline thinking accumulation."""
         prev = "Let me think\n"
@@ -46,13 +60,12 @@ class TestThinkingDeltaComputation(unittest.TestCase):
         self.assertEqual(new_full, text)
 
     def test_edge_case_no_prefix(self):
-        """Edge case: current doesn't start with prev."""
+        """When current doesn't start with prev, treat it as a raw delta."""
         prev = "Old thinking"
         current = "Completely different"
         delta, new_full = _stitch_thinking_delta(prev, current)
-        # In this edge case, we return full current as delta
         self.assertEqual(delta, current)
-        self.assertEqual(new_full, current)
+        self.assertEqual(new_full, prev + current)
 
     def test_whitespace_handling(self):
         """Whitespace should be preserved."""

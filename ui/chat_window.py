@@ -961,13 +961,25 @@ class ChatWindow(proto.ExactChatWindow):
     def _on_thinking_chunk(self, piece: str) -> None:
         if not self._pending:
             return
+
+        piece_text = str(piece or "")
+        if not piece_text:
+            return
+
         now = time.perf_counter()
-        if self._pending.first_thinking_at is None:
-            self._pending.first_thinking_at = now
         self._pending.last_chunk_at = now
-        self._pending.thinking_text += piece or ""
-        elapsed_ms = int((time.perf_counter() - self._pending.started_at) * 1000)
-        self._pending.bubble.update_thinking(self._pending.thinking_text, self._format_duration_label(elapsed_ms))
+        self._pending.thinking_text += piece_text
+
+        if self._pending.first_thinking_at is None and piece_text.strip():
+            self._pending.first_thinking_at = now
+
+        started = self._pending.first_thinking_at or now
+        elapsed_ms = max(1, int((now - started) * 1000))
+
+        self._pending.bubble.update_thinking(
+            self._pending.thinking_text,
+            self._format_duration_label(elapsed_ms),
+        )
         self._schedule_scroll_bottom(follow_stream_only=True)
 
     @Slot(object)
@@ -998,17 +1010,19 @@ class ChatWindow(proto.ExactChatWindow):
         local_answer_ms = 0
         if self._pending is not None:
             fallback_elapsed_ms = max(1, int((finished_at - self._pending.started_at) * 1000))
-            if self._pending.first_answer_at is not None and thinking_generated:
-                local_thinking_ms = max(1, int((self._pending.first_answer_at - self._pending.started_at) * 1000))
+            if (
+                self._pending.first_answer_at is not None
+                and self._pending.first_thinking_at is not None
+                and thinking_generated
+            ):
+                local_thinking_ms = max(1, int((self._pending.first_answer_at - self._pending.first_thinking_at) * 1000))
                 local_answer_ms = max(1, int((finished_at - self._pending.first_answer_at) * 1000))
             elif self._pending.first_answer_at is not None:
                 local_answer_ms = max(1, int((finished_at - self._pending.first_answer_at) * 1000))
+            elif thinking_generated and self._pending.first_thinking_at is not None:
+                local_thinking_ms = max(1, int((finished_at - self._pending.first_thinking_at) * 1000))
             elif text:
                 local_answer_ms = fallback_elapsed_ms
-                if thinking_generated:
-                    local_thinking_ms = fallback_elapsed_ms
-            elif thinking_generated:
-                local_thinking_ms = fallback_elapsed_ms
         stats = self._complete_verbose_stats(
             stats,
             user_text=self._pending_user_text,

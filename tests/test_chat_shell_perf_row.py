@@ -6,7 +6,23 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from ui.chat_shell import MessageBubble
+from ui.chat_shell import ExactChatWindow, MessageBubble, PendingAssistant
+
+
+class _FakeBubble:
+    def __init__(self) -> None:
+        self.text_updates: list[str] = []
+        self.thinking_updates: list[tuple[str, str | None]] = []
+        self.perf_updates: list[list[str]] = []
+
+    def update_text(self, text: str) -> None:
+        self.text_updates.append(text)
+
+    def update_thinking(self, text: str, ms: str | None = None) -> None:
+        self.thinking_updates.append((text, ms))
+
+    def set_perf(self, perf: list[str]) -> None:
+        self.perf_updates.append(list(perf))
 
 
 def _app() -> QApplication:
@@ -132,3 +148,26 @@ def test_message_bubble_toggle_shows_inline_reasoning() -> None:
 
     assert bubble.thinking_label is not None
     assert bubble.thinking_label.isVisible()
+
+
+def test_exact_chat_window_final_thinking_ms_uses_visible_thinking_span() -> None:
+    window = ExactChatWindow.__new__(ExactChatWindow)
+    bubble = _FakeBubble()
+    window._pending = PendingAssistant(
+        bubble=bubble,
+        started_at=100.0,
+        thinking_text="thinking",
+        answer_text="answer",
+        first_thinking_at=130.0,
+        first_answer_at=150.0,
+    )
+    window._scroll_bottom = lambda: None
+
+    class _Result:
+        text = "answer"
+        thinking = "thinking"
+        stats = {"elapsed_ms": 70000}
+
+    window._on_reply_finished(_Result())
+
+    assert bubble.thinking_updates[-1] == ("thinking", "20000 ms")

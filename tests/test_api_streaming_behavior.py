@@ -85,11 +85,8 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
         self.assertTrue(bool(stats.get("streaming_live")))
         self.assertEqual(int(stats.get("streamed_answer_chars") or 0), len("Hello world"))
 
-    def test_chat_stream_splits_large_thinking_piece_into_multiple_live_events(self) -> None:
-        thinking = (
-            "Okay, let's think this through carefully. "
-            "The user wants the reasoning text to arrive in smaller live chunks."
-        )
+    def test_chat_stream_preserves_thinking_chunk_without_fake_split(self) -> None:
+        thinking = "The model is reasoning live."
 
         def fake_handle_message(_text: str, meta: dict | None = None):
             meta_map = dict(meta or {})
@@ -103,8 +100,7 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
                 events = self._collect_events(client, {"text": "hello", "store_turn": False})
 
         thinking_events = [str(row.get("data") or "") for row in events if str(row.get("event") or "") == "thinking"]
-        self.assertGreater(len(thinking_events), 1)
-        self.assertEqual("".join(thinking_events), thinking)
+        self.assertEqual(thinking_events, [thinking])
         payload = dict(events[-1].get("data") or {})
         stats = dict(payload.get("stats") or {})
         self.assertTrue(bool(stats.get("streaming_live")))

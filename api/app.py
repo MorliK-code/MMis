@@ -527,9 +527,7 @@ def chat_stream(req: ChatRequest):
         def _on_thinking(piece: str) -> None:
             chunk = str(piece or "")
             if chunk:
-                for subchunk in _split_stream_display_piece(chunk, max_chars=12):
-                    if subchunk:
-                        events.put(("thinking", subchunk), block=False)  # Не блокировать, если очередь полна
+                events.put(("thinking", chunk), block=False)
 
         def _on_debug_event(kind: str, payload: dict[str, Any]) -> None:
             """Эмитить memory-debug событие в stream."""

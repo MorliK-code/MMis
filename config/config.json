@@ -13,7 +13,7 @@
   },
   "startup": {
     "mode": "api",
-    "active_profile": "BALANCED",
+    "active_profile": "asya",
     "safety_mode": "allow_os_actions"
   },
   "api": {
@@ -22,7 +22,7 @@
   },
   "llm": {
     "provider": "ollama",
-    "model_name": "gpt-oss:20b",
+    "model_name": "gemma4:26b",
     "model_fallbacks": [],
     "thinking_enabled": false,
     "json_mode_enabled": false,

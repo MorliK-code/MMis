@@ -7,3 +7,4 @@ pytest==9.0.2
 uvicorn==0.34.0
 fastapi==0.135.3
 ollama
+unicorn

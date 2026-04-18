@@ -1854,8 +1854,21 @@ class ExactChatWindow(QMainWindow):
     def _on_thinking_chunk(self, piece: str) -> None:
         if not self._pending:
             return
-        self._pending.thinking_text += piece
-        elapsed_ms = int((time.perf_counter() - self._pending.started_at) * 1000)
+
+        piece_text = str(piece or "")
+        if not piece_text:
+            return
+
+        now = time.perf_counter()
+        self._pending.last_chunk_at = now
+        self._pending.thinking_text += piece_text
+
+        if self._pending.first_thinking_at is None and piece_text.strip():
+            self._pending.first_thinking_at = now
+
+        started = self._pending.first_thinking_at or now
+        elapsed_ms = max(1, int((now - started) * 1000))
+
         self._pending.bubble.update_thinking(self._pending.thinking_text, f"{elapsed_ms} ms")
         self._scroll_bottom()
 
@@ -1883,8 +1896,14 @@ class ExactChatWindow(QMainWindow):
             perf.append(f"prompt {prompt_t}")
         if gen_t not in (None, ""):
             perf.append(f"gen {gen_t}")
+        thinking_ms = ""
+        if str(thinking or "").strip():
+            if self._pending.first_answer_at is not None and self._pending.first_thinking_at is not None:
+                thinking_ms = f"{max(1, int((self._pending.first_answer_at - self._pending.first_thinking_at) * 1000))} ms"
+            elif self._pending.first_thinking_at is not None:
+                thinking_ms = f"{max(1, int((time.perf_counter() - self._pending.first_thinking_at) * 1000))} ms"
         self._pending.bubble.update_text(text)
-        self._pending.bubble.update_thinking(thinking, f"{elapsed} ms")
+        self._pending.bubble.update_thinking(thinking, thinking_ms)
         self._pending.bubble.set_perf(perf)
         self._pending = None
         self._scroll_bottom()
