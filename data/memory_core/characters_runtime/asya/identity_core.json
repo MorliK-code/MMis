@@ -1,14 +1,23 @@
 {
   "schema_version": 1,
   "addressing": {
-    "canonical_name": "Павел",
+    "canonical_name": "то",
     "allowed_forms": [
-      "Павел"
+      "на",
+      "игнорирует",
+      "то",
+      "меня"
     ],
-    "forbidden_forms": [],
+    "forbidden_forms": [
+      "ответил",
+      "сегд",
+      "офигивай",
+      "забывал",
+      "забыл"
+    ],
     "allow_diminutives": false,
     "use_name_by_default": false,
-    "updated_at": ""
+    "updated_at": "2026-04-19T18:17:54.333+03:00"
   },
   "interaction_style": {
     "prefers_directness": 0.82,
@@ -23,5 +32,5 @@
     "treat_short_replies_as_low_bandwidth": true
   },
   "assistant_trait_baseline": {},
-  "updated_at": "2026-04-19T16:30:54.656+03:00"
+  "updated_at": "2026-04-19T18:17:54.333+03:00"
 }
