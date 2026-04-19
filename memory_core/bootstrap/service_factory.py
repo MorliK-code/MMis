@@ -239,11 +239,14 @@ def _create_background_worker(
             created_at = artifact.get("created_at", time.time())
 
         if artifact_id and text:
+            from memory_core.memory_types import normalize_memory_type
+
             vector_index.add(
                 artifact_id=artifact_id,
                 text=text,
                 metadata={
                     "artifact_type": artifact_type,
+                    "memory_type": normalize_memory_type(artifact_type),
                     "workspace_id": workspace_id,
                     "created_at": created_at,
                 },

@@ -21,6 +21,7 @@ from typing import Any
 from memory_core.schemas import MemoryEnvelope, MemoryArtifact
 from memory_core.storage.artifact_store import ArtifactStore
 from memory_core.processors.memory_llm_processor import ArtifactProposal, MemoryLLMResult
+from memory_core.memory_types import enrich_metadata_with_memory_type
 from utils.logger import get_logger
 
 
@@ -601,7 +602,10 @@ class Governor:
         ]
         if related_topic_ids:
             metadata.setdefault("related_topic_thread_ids", related_topic_ids)
-        return metadata
+        return enrich_metadata_with_memory_type(
+            metadata,
+            artifact_type=proposal.artifact_type,
+        )
 
     def _is_topic_scoped_proposal(self, proposal: ArtifactProposal) -> bool:
         scope = str(proposal.scope or "").strip().lower()

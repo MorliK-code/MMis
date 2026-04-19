@@ -2,7 +2,7 @@
   "traits": {
     "sarcasm": {
       "type": "scalar",
-      "value": 0.3836,
+      "value": 0.4,
       "min": 0.0,
       "max": 0.4,
       "decay_per_day": 0.01,
@@ -14,8 +14,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:42:29.325+03:00",
-      "last_used_ts": "2026-04-19T17:42:29.325+03:00",
+      "updated_at": "2026-04-19T18:06:40.722+03:00",
+      "last_used_ts": "2026-04-19T18:06:40.722+03:00",
       "decay_ts": ""
     },
     "warmth": {
@@ -50,8 +50,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:42:29.325+03:00",
-      "last_used_ts": "2026-04-19T17:42:29.325+03:00",
+      "updated_at": "2026-04-19T18:06:40.722+03:00",
+      "last_used_ts": "2026-04-19T18:06:40.722+03:00",
       "decay_ts": ""
     },
     "verbosity": {
@@ -65,13 +65,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:43:29.294+03:00",
-      "last_used_ts": "2026-04-19T17:43:29.294+03:00",
+      "updated_at": "2026-04-19T18:06:41.920+03:00",
+      "last_used_ts": "2026-04-19T18:06:41.920+03:00",
       "decay_ts": ""
     },
     "directness": {
       "type": "scalar",
-      "value": 0.9750205582008885,
+      "value": 0.9990205582008881,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.0,
@@ -80,8 +80,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:43:29.294+03:00",
-      "last_used_ts": "2026-04-19T17:43:29.294+03:00",
+      "updated_at": "2026-04-19T18:06:41.920+03:00",
+      "last_used_ts": "2026-04-19T18:06:41.920+03:00",
       "decay_ts": ""
     },
     "humor": {
@@ -95,13 +95,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:42:29.325+03:00",
-      "last_used_ts": "2026-04-19T17:42:29.325+03:00",
+      "updated_at": "2026-04-19T18:06:40.721+03:00",
+      "last_used_ts": "2026-04-19T18:06:40.722+03:00",
       "decay_ts": ""
     },
     "energy": {
       "type": "scalar",
-      "value": 0.9305224253643518,
+      "value": 0.9425224253643516,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.0,
@@ -110,13 +110,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:42:29.325+03:00",
-      "last_used_ts": "2026-04-19T17:42:29.325+03:00",
+      "updated_at": "2026-04-19T18:06:40.722+03:00",
+      "last_used_ts": "2026-04-19T18:06:40.722+03:00",
       "decay_ts": ""
     },
     "emoji_rate": {
       "type": "scalar",
-      "value": 0.029315743586222534,
+      "value": 0.023315743586222536,
       "min": 0.0,
       "max": 0.3,
       "decay_per_day": 0.0,
@@ -125,8 +125,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:42:29.325+03:00",
-      "last_used_ts": "2026-04-19T17:42:29.325+03:00",
+      "updated_at": "2026-04-19T18:06:40.722+03:00",
+      "last_used_ts": "2026-04-19T18:06:40.722+03:00",
       "decay_ts": ""
     },
     "empathy": {
@@ -161,7 +161,7 @@
     },
     "teasing": {
       "type": "scalar",
-      "value": 0.3748,
+      "value": 0.38,
       "min": 0.0,
       "max": 0.38,
       "decay_per_day": 0.0,
@@ -170,8 +170,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-19T17:42:29.325+03:00",
-      "last_used_ts": "2026-04-19T17:42:29.325+03:00",
+      "updated_at": "2026-04-19T18:06:40.722+03:00",
+      "last_used_ts": "2026-04-19T18:06:40.722+03:00",
       "decay_ts": ""
     },
     "professionalism": {

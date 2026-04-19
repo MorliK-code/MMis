@@ -37,6 +37,7 @@ def memory_service(test_db_path):
     config = MemoryServiceConfig(
         db_path=test_db_path,
         vector_path=str(Path(test_db_path).parent / "vector"),
+        enable_background_worker=False,
     )
     service = build_memory_service(config)
     yield service

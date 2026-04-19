@@ -72,6 +72,11 @@ def create_memory_inspector_router(memory_core: Any) -> APIRouter:
         """Trace pipeline memory LLM."""
         return service.get_pipeline_trace(limit=limit)
 
+    @router.get("/api/memory-core/runtime")
+    def runtime(limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, Any]:
+        """Runtime session state and hidden episodes."""
+        return service.get_runtime(limit=limit)
+
     @router.get("/api/memory-core/topics")
     def topics(
         visible_chat_id: str = Query(default=""),

@@ -941,27 +941,54 @@ class Brain:
 
     def _capture_memory_ingest(self, summary: dict[str, Any], ingest_result, *, bucket: str) -> None:
         summary["attempted_writes"] = int(summary.get("attempted_writes") or 0) + 1
-        stored_ids = list(getattr(ingest_result, "stored_ids", []) or [])
-        promoted_ids = list(getattr(ingest_result, "promoted_ids", []) or [])
-        dropped_ids = list(getattr(ingest_result, "dropped_ids", []) or [])
-        extracted_facts = list(getattr(ingest_result, "extracted_facts", []) or [])
-        summary["stored_records"] = int(summary.get("stored_records") or 0) + len(stored_ids)
+        stored_ids = self._ingest_result_list(ingest_result, "stored_ids")
+        artifact_ids = self._ingest_result_list(ingest_result, "artifact_ids")
+        promoted_ids = self._ingest_result_list(ingest_result, "promoted_ids")
+        dropped_ids = self._ingest_result_list(ingest_result, "dropped_ids")
+        extracted_facts = self._ingest_result_list(ingest_result, "extracted_facts")
+        stored_count = len(stored_ids) or len(artifact_ids)
+        if not stored_count and self._ingest_result_bool(ingest_result, "queued"):
+            stored_count = 1
+        summary["stored_records"] = int(summary.get("stored_records") or 0) + stored_count
         summary["blocked_writes"] = int(summary.get("blocked_writes") or 0) + len(dropped_ids)
         summary["facts_extracted"] = int(summary.get("facts_extracted") or 0) + len(extracted_facts)
         summary["promotions"] = int(summary.get("promotions") or 0) + len(promoted_ids)
         key = str(bucket or "").strip().lower()
         if key == "user_turn":
-            if stored_ids:
+            if stored_count:
                 summary["user_turns_written"] = int(summary.get("user_turns_written") or 0) + 1
         elif key == "assistant_turn":
-            if stored_ids:
+            if stored_count:
                 summary["assistant_turns_written"] = int(summary.get("assistant_turns_written") or 0) + 1
         elif key == "conversation_summary":
-            if stored_ids:
+            if stored_count:
                 summary["conversation_summaries_written"] = int(summary.get("conversation_summaries_written") or 0) + 1
         elif key == "web_memory_write":
-            if stored_ids:
+            if stored_count:
                 summary["web_memory_items_written"] = int(summary.get("web_memory_items_written") or 0) + 1
+
+    @staticmethod
+    def _ingest_result_value(ingest_result, key: str, default=None):
+        if isinstance(ingest_result, dict):
+            return ingest_result.get(key, default)
+        return getattr(ingest_result, key, default)
+
+    @classmethod
+    def _ingest_result_list(cls, ingest_result, key: str) -> list[Any]:
+        value = cls._ingest_result_value(ingest_result, key, [])
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, tuple):
+            return list(value)
+        if isinstance(value, set):
+            return list(value)
+        return [value] if str(value or "").strip() else []
+
+    @classmethod
+    def _ingest_result_bool(cls, ingest_result, key: str) -> bool:
+        return bool(cls._ingest_result_value(ingest_result, key, False))
 
     def _update_debug_trace_after_persist(
         self,

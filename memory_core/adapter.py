@@ -172,6 +172,13 @@ class MemoryCoreAdapter:
         )
 
         result = self.service.query(query)
+        runtime_state: dict[str, Any] = {}
+        runtime_store = getattr(self.service, "runtime_session_store", None)
+        if runtime_store is not None and hasattr(runtime_store, "get_state"):
+            try:
+                runtime_state = dict(runtime_store.get_state(query.workspace_id, query.session_id) or {})
+            except Exception:
+                runtime_state = {}
 
         return {
             "context_blocks": result.context_blocks,
@@ -183,6 +190,21 @@ class MemoryCoreAdapter:
             "recent_user_state": dict(result.recent_user_state or {}),
             "response_bias": dict(result.response_bias or {}),
             "debug": dict(result.debug or {}),
+            "open_questions": [
+                str(dict(item).get("text") or "").strip()
+                for item in list(runtime_state.get("open_questions") or [])
+                if isinstance(item, dict) and str(dict(item).get("text") or "").strip()
+            ],
+            "current_decisions": [
+                str(dict(item).get("text") or "").strip()
+                for item in list(runtime_state.get("recent_decisions") or [])
+                if isinstance(item, dict) and str(dict(item).get("text") or "").strip()
+            ],
+            "task_continuity": {
+                "active_task": dict(runtime_state.get("active_task") or {}),
+                "current_episode_id": str(runtime_state.get("current_episode_id") or ""),
+                "active_topic": str(runtime_state.get("active_topic") or ""),
+            },
         }
 
     def get_context(
@@ -262,6 +284,9 @@ class MemoryCoreAdapter:
             "debug": dict(result.get("debug") or {}),
             "recall_mode": "memory_core_query",
             "citations": result.get("citations", []),
+            "open_questions": list(result.get("open_questions") or []),
+            "current_decisions": list(result.get("current_decisions") or []),
+            "task_continuity": dict(result.get("task_continuity") or {}),
         }
 
     def set_current_workspace(self, workspace_id: str) -> None:
@@ -281,7 +306,12 @@ class MemoryCoreAdapter:
         """Получает статистику памяти."""
         return self.service.get_stats()
 
-    def inspect(self, kind: str = "events", limit: int = 50) -> dict[str, Any]:
+    def inspect(
+        self,
+        kind: str = "events",
+        limit: int = 50,
+        workspace_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Инспектирует память.
 
@@ -294,7 +324,11 @@ class MemoryCoreAdapter:
         """
         from memory_core.schemas import MemoryInspectRequest
 
-        request = MemoryInspectRequest(kind=kind, limit=limit)
+        request = MemoryInspectRequest(
+            kind=kind,
+            limit=limit,
+            workspace_id=workspace_id or getattr(self, "_current_workspace", "global"),
+        )
         return self.service.inspect(request)
 
     def debug_snapshot(self, limit: int = 50) -> dict[str, Any]:
@@ -310,6 +344,8 @@ class MemoryCoreAdapter:
         return {
             "events": self.inspect(kind="events", limit=limit),
             "artifacts": self.inspect(kind="artifacts", limit=limit),
+            "runtime": self.inspect(kind="runtime", limit=limit),
+            "episodes": self.inspect(kind="episodes", limit=limit),
             "stats": self.inspect(kind="stats"),
         }
 

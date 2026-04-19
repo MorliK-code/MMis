@@ -3,7 +3,10 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from memory_core.episode_manager import EpisodeManager
 from memory_core.inspect.inspector_service import MemoryInspectorService
+from memory_core.runtime_session_store import RuntimeSessionStore
+from memory_core.schemas import MemoryEnvelope
 
 
 class _FakeJobQueue:
@@ -131,6 +134,32 @@ class InspectorServiceTests(unittest.TestCase):
         self.assertEqual(by_id["job-restarted"]["inferred_interruptions"], 0)
         self.assertTrue(by_id["job-restarted"]["trace_has_job_done"])
         self.assertEqual(by_id["job-restarted"]["completion_label"], "confirmed_done_after_restart")
+
+    def test_runtime_snapshot_exposes_sessions_and_hidden_episodes(self) -> None:
+        runtime_store = RuntimeSessionStore()
+        episode_manager = EpisodeManager()
+        envelope = MemoryEnvelope(
+            text="Runtime state should be visible immediately",
+            workspace_id="asya",
+            session_id="chat-runtime",
+        )
+        episode = episode_manager.update_from_event(envelope)
+        runtime_store.update_from_event(envelope, current_episode_id=episode["episode_id"])
+        memory_core = SimpleNamespace(
+            service=SimpleNamespace(
+                runtime_session_store=runtime_store,
+                episode_manager=episode_manager,
+            )
+        )
+
+        service = MemoryInspectorService(memory_core)
+        overview = service.get_overview()
+        runtime = service.get_runtime(limit=10)
+
+        self.assertEqual(overview["runtime_sessions_count"], 1)
+        self.assertEqual(overview["runtime_episodes_count"], 1)
+        self.assertEqual(runtime["sessions"][0]["session_id"], "chat-runtime")
+        self.assertEqual(runtime["active_episode"]["episode_id"], episode["episode_id"])
 
 
 if __name__ == "__main__":

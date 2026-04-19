@@ -31,6 +31,8 @@ class MemoryInspectorService:
     _worker: Any = None
     _vector_index: Any = None
     _trace_store: Any = None
+    _runtime_session_store: Any = None
+    _episode_manager: Any = None
     _topic_store: TopicStore | None = None
 
     def __init__(self, memory_core: Any):
@@ -43,6 +45,8 @@ class MemoryInspectorService:
         self._worker = None
         self._vector_index = None
         self._trace_store = None
+        self._runtime_session_store = None
+        self._episode_manager = None
         self._topic_store = None
 
         # Пытаемся получить доступ к внутренним компонентам memory_core
@@ -60,6 +64,10 @@ class MemoryInspectorService:
                 self._vector_index = service.vector_index
             if hasattr(service, "trace_store"):
                 self._trace_store = service.trace_store
+            if hasattr(service, "runtime_session_store"):
+                self._runtime_session_store = service.runtime_session_store
+            if hasattr(service, "episode_manager"):
+                self._episode_manager = service.episode_manager
 
             # Хранилища
             if hasattr(service, "artifact_store"):
@@ -94,6 +102,8 @@ class MemoryInspectorService:
             "jobs_done_after_restart": 0,
             "jobs_restarted_total": 0,
             "jobs_inferred_interruptions_total": 0,
+            "runtime_sessions_count": 0,
+            "runtime_episodes_count": 0,
         }
 
         # Используем inspector если доступен
@@ -185,7 +195,40 @@ class MemoryInspectorService:
         else:
             overview["worker_enabled"] = False
 
+        if self._runtime_session_store:
+            try:
+                overview["runtime_sessions_count"] = len(self._runtime_session_store.list_states(limit=10000))
+            except Exception:
+                pass
+
+        if self._episode_manager:
+            try:
+                overview["runtime_episodes_count"] = len(self._episode_manager.list_episodes(limit=10000))
+            except Exception:
+                pass
+
         return overview
+
+    def get_runtime(self, *, limit: int = 100) -> dict[str, Any]:
+        states = []
+        episodes = []
+        if self._runtime_session_store:
+            try:
+                states = self._runtime_session_store.list_states(limit=limit)
+            except Exception:
+                states = []
+        if self._episode_manager:
+            try:
+                episodes = self._episode_manager.list_episodes(limit=limit)
+            except Exception:
+                episodes = []
+        active_episode = episodes[0] if episodes else {}
+        return {
+            "sources": ["runtime_session_store", "episode_manager"],
+            "sessions": states,
+            "episodes": episodes,
+            "active_episode": active_episode,
+        }
 
     def _get_job_lifecycle(self, job_id: str, *, attempts: int = 0) -> dict[str, Any]:
         if not self._trace_store or not str(job_id or "").strip():
@@ -739,6 +782,18 @@ class MemoryInspectorService:
         if self._worker:
             checks.append({
                 "name": "BackgroundWorker enabled",
+                "ok": True,
+            })
+
+        if self._runtime_session_store:
+            checks.append({
+                "name": "RuntimeSessionStore initialized",
+                "ok": True,
+            })
+
+        if self._episode_manager:
+            checks.append({
+                "name": "EpisodeManager initialized",
                 "ok": True,
             })
 

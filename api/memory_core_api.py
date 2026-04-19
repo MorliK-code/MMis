@@ -62,6 +62,8 @@ class MemoryInspectRequest(BaseModel):
 class MemoryInspectResponse(BaseModel):
     """Ответ инспекции."""
     items: list[dict[str, Any]] | None = None
+    episodes: list[dict[str, Any]] | None = None
+    sources: list[str] | None = None
     workspaces: list[dict[str, Any]] | None = None
     profile_facts: list[dict[str, Any]] | None = None
     stats: dict[str, Any] | None = None
@@ -196,6 +198,7 @@ def create_memory_core_router(adapter: MemoryCoreAdapter | None = None) -> Any:
             result = adapter.inspect(
                 kind=request.kind,
                 limit=request.limit,
+                workspace_id=request.workspace_id,
             )
             
             response = MemoryInspectResponse()
@@ -210,6 +213,8 @@ def create_memory_core_router(adapter: MemoryCoreAdapter | None = None) -> Any:
                 response.trace = result
             else:
                 response.items = result.get("items", [])
+                response.episodes = result.get("episodes")
+                response.sources = result.get("sources")
             
             return response
         except Exception as e:

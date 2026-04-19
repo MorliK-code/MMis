@@ -28,6 +28,7 @@ from memory_core.retrieval.prompt_adapter import (
     resolve_artifact_prompt_view,
     resolve_artifact_sensitivity,
 )
+from memory_core.memory_types import enrich_metadata_with_memory_type
 from llm.task_router import TaskModelRouter
 from llm.task_router import TaskModelValidationError
 from utils.logger import get_logger
@@ -664,6 +665,7 @@ class MemoryLLMProcessor:
             meta["prompt_view"] = prompt_view
         meta["exposure_mode"] = exposure_mode
         meta.setdefault("sensitivity", sensitivity)
+        meta = enrich_metadata_with_memory_type(meta, artifact_type=artifact_type)
         return meta
 
     @staticmethod

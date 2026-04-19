@@ -2,7 +2,7 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "conv-brain-stats",
-    "turn_id": 226,
+    "turn_id": 229,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -35,28 +35,15 @@
         "ts": "2026-04-19T16:41:14.595+03:00"
       },
       {
-        "type": "TURN_FINISHED",
-        "turn_id": 225,
-        "assistant_chars": 2,
-        "ts": "2026-04-19T17:42:28.375+03:00"
+        "type": "CHARACTER_PERSONA_UPDATED",
+        "character_id": "asya",
+        "ts": "2026-04-19T17:49:04.346+03:00"
       },
       {
-        "type": "TURN_STARTED",
-        "turn_id": 226,
-        "signals": {
-          "emotion_intensity": 0.0,
-          "emotion_arousal": 0.0,
-          "active_mode": "chatting",
-          "has_code": false,
-          "has_traceback": false
-        },
-        "ts": "2026-04-19T17:43:29.170+03:00",
-        "state_diff": {
-          "turn_id": {
-            "old": 225,
-            "new": 226
-          }
-        }
+        "type": "TURN_FINISHED",
+        "turn_id": 229,
+        "assistant_chars": 247,
+        "ts": "2026-04-19T17:50:17.266+03:00"
       }
     ],
     "context_stack": []
@@ -97,37 +84,33 @@
       },
       "local_context": {
         "last_topic_weights": {
-          "topic_дела": 0.022609915991452092,
-          "topic_дела_тебя": 0.01726930761128025,
-          "topic_давай": 0.011316922141109067,
-          "topic_привет": 0.21291013728972386,
-          "topic_целом_спасибо_хорошо": 0.011154782591749644,
-          "topic_тебя_дела": 0.011866789991223026,
-          "topic_тоже_хорошо_очень": 0.012624244671513858,
-          "topic_работе_работаю_какой": 0.014287284598816046,
-          "topic_можешь_рассказать": 0.015199238934910689,
-          "topic_умничка_туда_кстати": 0.016169403122245414,
-          "topic_люблю_новых_наконец": 0.017201492683239804,
-          "topic_тебя_зовут": 0.037766971260168855,
-          "topic_пупс_расскажешь_нового": 0.020710118041329724,
-          "topic_окей_слов_историю": 0.19299025960434385,
-          "topic_побидить_помогу_никак": 0.14793398063148247,
-          "topic_получилось_проверяем_этот": 0.05573614362511511,
-          "topic_этот_который_проверяю": 0.12237224833943333,
-          "topic_проверка_снова": 0.06710476438880969,
-          "topic_этот_висит_снова": 0.14733277830951877,
-          "topic_снова_проверка": 0.6861268818769855,
-          "topic_тебя_давай_снесу": 0.25712759999999996,
-          "topic_тебе_общаемся_сейчас": 0.291
+          "topic_дела": 0.44119266839601357,
+          "topic_дела_тебя": 0.013482993957427136,
+          "topic_привет": 0.16622936826240906,
+          "topic_работе_работаю_какой": 0.011154782591749644,
+          "topic_можешь_рассказать": 0.011866789991223026,
+          "topic_умничка_туда_кстати": 0.012624244671513858,
+          "topic_люблю_новых_наконец": 0.013430047522887083,
+          "topic_тебя_зовут": 0.029486523533726713,
+          "topic_пупс_расскажешь_нового": 0.016169403122245414,
+          "topic_окей_слов_историю": 0.15067694447622143,
+          "topic_побидить_помогу_никак": 0.11549930152669007,
+          "topic_получилось_проверяем_этот": 0.043515936169719244,
+          "topic_этот_который_проверяю": 0.09554200562387427,
+          "topic_проверка_снова": 0.0523919750076082,
+          "topic_этот_висит_снова": 0.11502991343906732,
+          "topic_снова_проверка": 0.5356928494534992,
+          "topic_тебя_давай_снесу": 0.20075210628729592,
+          "topic_тебе_общаемся_сейчас": 0.3517855473599999
         },
-        "last_seen_ts": "2026-04-19T16:51:13.478+03:00",
-        "last_update_turn_id": 223,
-        "last_update_conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d"
+        "last_seen_ts": "2026-04-19T17:49:04.346+03:00",
+        "last_update_turn_id": 229,
+        "last_update_conversation_id": "conv-brain-stats"
       }
     }
   },
   "conversation_id": "conv-brain-stats",
-  "turn_id": 226,
+  "turn_id": 229,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -161,28 +144,15 @@
       "ts": "2026-04-19T16:41:14.595+03:00"
     },
     {
-      "type": "TURN_FINISHED",
-      "turn_id": 225,
-      "assistant_chars": 2,
-      "ts": "2026-04-19T17:42:28.375+03:00"
+      "type": "CHARACTER_PERSONA_UPDATED",
+      "character_id": "asya",
+      "ts": "2026-04-19T17:49:04.346+03:00"
     },
     {
-      "type": "TURN_STARTED",
-      "turn_id": 226,
-      "signals": {
-        "emotion_intensity": 0.0,
-        "emotion_arousal": 0.0,
-        "active_mode": "chatting",
-        "has_code": false,
-        "has_traceback": false
-      },
-      "ts": "2026-04-19T17:43:29.170+03:00",
-      "state_diff": {
-        "turn_id": {
-          "old": 225,
-          "new": 226
-        }
-      }
+      "type": "TURN_FINISHED",
+      "turn_id": 229,
+      "assistant_chars": 247,
+      "ts": "2026-04-19T17:50:17.266+03:00"
     }
   ],
   "context_tags": {
@@ -191,27 +161,27 @@
     "last_intent": "question",
     "mood": "happy",
     "last_mood": "happy",
-    "topic": "тебе_общаемся_сейчас",
+    "topic": "дела",
     "user_greeting": "false",
     "new_session": "false",
     "greeted_today": "true",
     "allow_greeting": "false",
-    "smalltalk_allowed": "false",
+    "smalltalk_allowed": "true",
     "should_ask_back": "false",
     "local_date": "2026-04-19",
     "local_region": "RTZ 2 (зима)",
     "greeting_allowed": "false",
-    "dialog_sarcasm_level": "0.080",
-    "dialog_warmth_level": "0.670",
-    "dialog_strictness_level": "0.800",
-    "dialog_verbosity_level": "0.260",
+    "dialog_sarcasm_level": "0.240",
+    "dialog_warmth_level": "0.500",
+    "dialog_strictness_level": "0.760",
+    "dialog_verbosity_level": "0.410",
     "is_technical": "false",
     "allowed_term": "",
     "use_term_now": "false",
-    "now_iso": "2026-04-19T13:51:13.340786+00:00",
+    "now_iso": "2026-04-19T14:49:04.204868+00:00",
     "timezone": "Europe/Kiev",
-    "previous_user_at": "2026-04-19T16:49:38.339+03:00",
-    "minutes_since_previous": "2",
+    "previous_user_at": "2026-04-19T17:47:42.109+03:00",
+    "minutes_since_previous": "1",
     "same_calendar_day": "true",
     "conversation_state": "continuing_smalltalk"
   },
@@ -221,14 +191,14 @@
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "как дела?",
-    "last_user_hash": "a728b24ddfa27567dc1ab13a6fc60d87c2e432d5",
-    "last_user_ts": "2026-04-19T17:43:29.170+03:00",
-    "prev_user_ts": "2026-04-19T17:42:28.300+03:00",
-    "last_assistant_message": "ok",
-    "last_assistant_ts": "2026-04-19T17:42:28.331+03:00",
-    "last_action": "user_message",
-    "last_action_ts": "2026-04-19T17:43:29.170+03:00",
+    "last_user_message": "от некоторых это ты обо мне?)",
+    "last_user_hash": "92597b4dfa3099f6716b7b1ea3a735d6f01bb6ce",
+    "last_user_ts": "2026-04-19T17:49:04.171+03:00",
+    "prev_user_ts": "2026-04-19T17:47:42.109+03:00",
+    "last_assistant_message": "Ну, если ты про то, что кто-то может считать тебя странным или слишком увлеченным UI, то я не буду брать на себя всю вину. Но вообще, я тебя такой не считаю.\nА вот про «не с удавом» — это ты загнул, конечно. С удавом как-то совсем уж экстремально.",
+    "last_assistant_ts": "2026-04-19T17:50:17.243+03:00",
+    "last_action": "assistant_message",
+    "last_action_ts": "2026-04-19T17:50:17.266+03:00",
     "repeat_count": 0,
     "session_id": "conv-brain-stats",
     "prev_session_id": "conv-brain-stats",
@@ -247,34 +217,6 @@
   },
   "dialog_summary": "Earlier context: User said: привет. как тебя зовут? меня паша. я люблю мороженое, пиццу, суши, работают системным администратором, а ты? Assistant replied: Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты сис",
   "history": [
-    {
-      "role": "user",
-      "content": "расскажи очень короткую историю на 150 токенов"
-    },
-    {
-      "role": "assistant",
-      "content": "В лесу, где деревья шепчут секреты, жил кот по кличке Мурзик. Однажды он нашёл карту с надписью «Золото на Западе». Собрав вещи, он отправился в путь, но в итоге вернулся домой с котом-путеводителем и мешком грибов. Вечером все смеялись, а Мурзик утверждал, что Запад — это просто соседский сад."
-    },
-    {
-      "role": "user",
-      "content": "давай ещё"
-    },
-    {
-      "role": "assistant",
-      "content": "В лесу, где деревья шептали секреты, она нашла ключ. Ветер унес его, но не унес тень. В кустах — письмо от прошлого. А в руках — сияние, что не было 2 минут назад. 🌲🗝️"
-    },
-    {
-      "role": "user",
-      "content": "прикольно, а ещё"
-    },
-    {
-      "role": "assistant",
-      "content": "В парке лаял пёс, а рядом крадётся белка.\n— Ты мой мячик украл! — громко крикнул он.\n— А ты мой орешек не делишь! — ответила она, убегая.\nПёс плюнул и пошёл за мячиком, а белка устроила пир на орешках.\nВсё закончилось тем, что оба сдохли от голода. 🐾🌰"
-    },
-    {
-      "role": "user",
-      "content": "давай ещё"
-    },
     {
       "role": "assistant",
       "content": "В лесу, где деревья шепчут секреты, заяц увидел следы огромного зверя. Он убежал, но не до конца — ветер принёс запах меда и дождя. Ты угадал, что это был медведь? 🌲"
@@ -726,6 +668,34 @@
     {
       "role": "user",
       "content": "как дела?"
+    },
+    {
+      "role": "assistant",
+      "content": "Да всё нормально, потихоньку. Ты чего, решил этот вопрос в бесконечном цикле запустить:) Как сам?"
+    },
+    {
+      "role": "user",
+      "content": "та я так, проверяю снова. не в бесконечном цикле, ещё не отпуел, не боись)"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, раз не в бесконечном цикле, значит, уже прогресс. А то я уже начала думать, что у тебя там какой-то критический баг в логике зациклился.\nПроверяй, конечно, только не перегревай систему. Что там вообще за тесты такие? Опять что-то в инфраструктуре ковыряешь?"
+    },
+    {
+      "role": "user",
+      "content": "та больше по ui играюсь, главное что не с удавном играюсь))"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, UI — это хотя бы предсказуемо. Кнопки не кусаются и не пытаются тебя задушить, в отличие от некоторых. Главное, чтобы в итоге всё работало и не развалилось при первом же клике.\nА что именно сейчас крутишь? Стили, верстку или вообще логику взаимодействия переделываешь?"
+    },
+    {
+      "role": "user",
+      "content": "от некоторых это ты обо мне?)"
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, если ты про то, что кто-то может считать тебя странным или слишком увлеченным UI, то я не буду брать на себя всю вину. Но вообще, я тебя такой не считаю.\nА вот про «не с удавом» — это ты загнул, конечно. С удавом как-то совсем уж экстремально."
     }
   ],
   "character_locked": false,
@@ -743,5 +713,89 @@
   "personality_locked": false,
   "personality_last_switch_ts": "",
   "personality_cooldown_sec": 90.0,
-  "verbose_enabled": true
+  "verbose_enabled": true,
+  "topic_thread_id": "thr_5e6ec1bd3c4d",
+  "topic_key": "дела",
+  "topic_thread_title": "как дела?",
+  "active_topic_thread_id": "thr_5e6ec1bd3c4d",
+  "active_topic_key": "дела",
+  "active_topic_title": "как дела?",
+  "topic_route_reason": "short_followup",
+  "topic_route_score": 0.74,
+  "related_topic_thread_ids": [],
+  "topic_candidates": [],
+  "topic_last_route_reason": "short_followup",
+  "topic_last_route_score": 0.74,
+  "topic_stack": [
+    {
+      "thread_id": "thr_5e6ec1bd3c4d",
+      "title": "как дела?",
+      "topic_key": "дела",
+      "updated_at": "2026-04-19T17:49:04.359+03:00"
+    }
+  ],
+  "web_active_task": {
+    "task_id": "task_1cc85758e5ae",
+    "query": "как дела",
+    "base_query": "как дела",
+    "latest_query": "как дела от некоторых это ты обо мне",
+    "resolved_intent": "generic",
+    "resolved_concepts": [
+      "general_question"
+    ],
+    "resolved_location": "",
+    "turn_id": 229,
+    "turn_timestamp": "2026-04-19T14:49:04.390856+00:00",
+    "continuation_ref": "task_1cc85758e5ae",
+    "context_confidence": 0.7363
+  },
+  "continuity_turns": [
+    {
+      "task_id": "task_1cc85758e5ae",
+      "query": "как дела",
+      "base_query": "как дела",
+      "latest_query": "как дела",
+      "resolved_intent": "generic",
+      "resolved_concepts": [],
+      "resolved_location": "",
+      "turn_id": 226,
+      "turn_timestamp": "2026-04-19T14:43:29.404652+00:00"
+    },
+    {
+      "task_id": "task_1cc85758e5ae",
+      "query": "как дела",
+      "base_query": "как дела",
+      "latest_query": "что не с удавном играюсь))",
+      "resolved_intent": "generic",
+      "resolved_concepts": [
+        "general_question"
+      ],
+      "resolved_location": "",
+      "turn_id": 228,
+      "turn_timestamp": "2026-04-19T14:47:42.407504+00:00",
+      "continuation_ref": "task_1cc85758e5ae",
+      "context_confidence": 0.9578
+    },
+    {
+      "task_id": "task_1cc85758e5ae",
+      "query": "как дела",
+      "base_query": "как дела",
+      "latest_query": "как дела от некоторых это ты обо мне",
+      "resolved_intent": "generic",
+      "resolved_concepts": [
+        "general_question"
+      ],
+      "resolved_location": "",
+      "turn_id": 229,
+      "turn_timestamp": "2026-04-19T14:49:04.390856+00:00",
+      "continuation_ref": "task_1cc85758e5ae",
+      "context_confidence": 0.7363
+    }
+  ],
+  "recent_topics": [
+    "дела"
+  ],
+  "current_decisions": [
+    "Ну, раз не в бесконечном цикле, значит, уже прогресс"
+  ]
 }

@@ -38,6 +38,13 @@ from memory_core.processors.memory_llm_processor import MemoryLLMProcessor
 from memory_core.governor.governor import Governor
 from memory_core.inspect.inspector import MemoryInspector
 from memory_core.errors import MemoryError, IngestError
+from memory_core.episode_manager import EpisodeManager
+from memory_core.memory_types import (
+    classify_event_memory_type,
+    enrich_metadata_with_memory_type,
+    normalize_memory_type,
+)
+from memory_core.runtime_session_store import RuntimeSessionStore
 
 
 class MemoryService:
@@ -103,6 +110,11 @@ class MemoryService:
 
         # Inspector
         self.inspector = MemoryInspector(event_store.db)
+
+        # Fast runtime memory. This is updated synchronously in ingest_event()
+        # and merged into query() before the background worker finishes.
+        self.runtime_session_store = RuntimeSessionStore()
+        self.episode_manager = EpisodeManager()
     
     def ingest_event(self, envelope: MemoryEnvelope) -> dict[str, Any]:
         """
@@ -121,6 +133,12 @@ class MemoryService:
         """
         try:
             # Шаг 1: Записываем raw event (канон)
+            runtime_update = self._update_runtime_layer(envelope)
+            memory_type = classify_event_memory_type(
+                envelope.source_kind,
+                envelope.payload_type,
+                envelope.metadata,
+            )
             self.event_store.append(envelope)
 
             # Шаг 2: Анализируем событие (быстрый фильтр)
@@ -133,9 +151,24 @@ class MemoryService:
                     "reason": "skipped_by_analyzer",
                     "queued": False,
                     "artifacts_created": 0,
+                    "artifact_ids": [],
+                    "memory_type": memory_type,
+                    **runtime_update,
                 }
 
             # Шаг 3: Создаём job в очереди (enqueue-only!)
+            if self.job_queue is None:
+                return {
+                    "event_id": envelope.event_id,
+                    "processed": True,
+                    "queued": False,
+                    "job_id": None,
+                    "artifacts_created": 0,
+                    "artifact_ids": [],
+                    "memory_type": memory_type,
+                    **runtime_update,
+                }
+
             job_id = self.job_queue.enqueue(
                 event_id=envelope.event_id,
                 job_type=self.job_queue.TYPE_MEMORY_LLM_PROCESS,
@@ -173,6 +206,9 @@ class MemoryService:
                 "processed": True,
                 "queued": True,
                 "job_id": job_id,
+                "artifact_ids": [],
+                "memory_type": memory_type,
+                **runtime_update,
                 "artifacts_created": 0,  # Будут созданы worker-ом в фоне
             }
 
@@ -191,10 +227,15 @@ class MemoryService:
         """
         # Выполняем retrieval
         context_pack, citations = self.retrieval_service.query(query)
+        self._merge_runtime_layers(context_pack, query)
         
         # Формируем результат
         hits = []
-        selected_rows = [dict(x) for x in list(getattr(context_pack, "selected_memories", []) or []) if isinstance(x, dict)]
+        selected_rows = [
+            self._enrich_selected_row(dict(x))
+            for x in list(getattr(context_pack, "selected_memories", []) or [])
+            if isinstance(x, dict)
+        ]
         if selected_rows:
             for row in selected_rows:
                 hits.append({
@@ -212,14 +253,18 @@ class MemoryService:
                 })
         else:
             for citation in citations:
+                metadata = enrich_metadata_with_memory_type(
+                    citation.metadata,
+                    artifact_type=citation.artifact_type,
+                )
                 hits.append({
                     "artifact_id": citation.artifact_id,
                     "artifact_type": citation.artifact_type,
                     "text": citation.text,
                     "score": 1.0,  # Score можно добавить из retrieval
-                    "metadata": citation.metadata,
-                    "prompt_view": dict(citation.metadata or {}).get("prompt_view", ""),
-                    "exposure_mode": dict(citation.metadata or {}).get("exposure_mode", ""),
+                    "metadata": metadata,
+                    "prompt_view": metadata.get("prompt_view", ""),
+                    "exposure_mode": metadata.get("exposure_mode", ""),
                 })
 
         context_blocks = context_pack.to_context_blocks()
@@ -227,7 +272,7 @@ class MemoryService:
         return MemoryQueryResult(
             hits=hits,
             context_blocks=context_blocks,
-            citations=[c.to_dict() for c in citations],
+            citations=[self._enrich_citation_dict(c) for c in citations],
             blocks=dict(getattr(context_pack, "blocks", {}) or {}),
             selected=selected_rows,
             dropped=[dict(x) for x in list(getattr(context_pack, "dropped_memories", []) or []) if isinstance(x, dict)],
@@ -235,6 +280,175 @@ class MemoryService:
             response_bias=dict(getattr(context_pack, "response_bias", {}) or {}),
             debug=dict(getattr(context_pack, "debug", {}) or {}),
         )
+
+    def _update_runtime_layer(self, envelope: MemoryEnvelope) -> dict[str, Any]:
+        runtime_update: dict[str, Any] = {"runtime_updated": False}
+        try:
+            episode_manager = getattr(self, "episode_manager", None)
+            episode_result: dict[str, Any] = {}
+            if episode_manager is not None and hasattr(episode_manager, "update_from_event"):
+                episode_result = dict(episode_manager.update_from_event(envelope) or {})
+
+            runtime_store = getattr(self, "runtime_session_store", None)
+            if runtime_store is not None and hasattr(runtime_store, "update_from_event"):
+                runtime_update = dict(
+                    runtime_store.update_from_event(
+                        envelope,
+                        current_episode_id=str(episode_result.get("episode_id") or ""),
+                    )
+                    or {}
+                )
+
+            if episode_result:
+                runtime_update["episode_updated"] = bool(episode_result.get("episode_updated", True))
+                runtime_update["current_episode_id"] = str(episode_result.get("episode_id") or "")
+        except Exception as exc:
+            runtime_update = {"runtime_updated": False, "runtime_error": str(exc)}
+        return runtime_update
+
+    def _merge_runtime_layers(self, context_pack: ContextPack, query: MemoryQuery) -> None:
+        if context_pack is None:
+            return
+
+        layers: list[dict[str, Any]] = []
+        runtime_store = getattr(self, "runtime_session_store", None)
+        if runtime_store is not None and hasattr(runtime_store, "build_query_layer"):
+            try:
+                layers.append(dict(runtime_store.build_query_layer(query.workspace_id, query.session_id) or {}))
+            except Exception as exc:
+                layers.append({"debug": {"source": "runtime_session_store", "error": str(exc)}})
+
+        episode_manager = getattr(self, "episode_manager", None)
+        if episode_manager is not None and hasattr(episode_manager, "build_query_layer"):
+            try:
+                layers.append(dict(episode_manager.build_query_layer(query.workspace_id, query.session_id) or {}))
+            except Exception as exc:
+                layers.append({"debug": {"source": "episode_manager", "error": str(exc)}})
+
+        if not layers:
+            return
+
+        existing_selected = [
+            self._enrich_selected_row(dict(x))
+            for x in list(getattr(context_pack, "selected_memories", []) or [])
+            if isinstance(x, dict)
+        ]
+        runtime_selected: list[dict[str, Any]] = []
+        debug_sources: dict[str, Any] = {}
+        active_episode: dict[str, Any] = {}
+        recent_user_state: dict[str, Any] = dict(getattr(context_pack, "recent_user_state", {}) or {})
+
+        for layer in layers:
+            blocks = dict(layer.get("blocks") or {})
+            for key, value in blocks.items():
+                self._merge_context_block(context_pack, key, str(value or "").strip())
+
+            for row in list(layer.get("selected") or []):
+                if isinstance(row, dict):
+                    runtime_selected.append(self._enrich_selected_row(dict(row)))
+
+            state = dict(layer.get("recent_user_state") or {})
+            if state:
+                recent_user_state.update(state)
+
+            debug = dict(layer.get("debug") or {})
+            source = str(debug.get("source") or "runtime").strip() or "runtime"
+            debug_sources[source] = debug
+            if isinstance(debug.get("active_episode"), dict):
+                active_episode = dict(debug.get("active_episode") or {})
+
+        context_pack.selected_memories = runtime_selected + existing_selected
+        context_pack.recent_user_state = recent_user_state
+
+        debug = dict(getattr(context_pack, "debug", {}) or {})
+        debug.setdefault("sources", {})
+        debug_sources_existing = dict(debug.get("sources") or {})
+        debug_sources_existing.update(debug_sources)
+        debug["sources"] = debug_sources_existing
+        debug["selected_by_source"] = {
+            "runtime": len(runtime_selected),
+            "long_term": len(existing_selected),
+        }
+        debug["include_pending_facts_in_retrieval"] = self._include_pending_facts_in_retrieval()
+        if active_episode:
+            debug["active_episode"] = active_episode
+        context_pack.debug = debug
+
+    def _merge_context_block(self, context_pack: ContextPack, key: str, value: str) -> None:
+        if not value:
+            return
+        blocks = dict(getattr(context_pack, "blocks", {}) or {})
+        existing = str(blocks.get(key) or "").strip()
+        if existing and value not in existing:
+            blocks[key] = f"{value}\n{existing}"
+        elif not existing:
+            blocks[key] = value
+        context_pack.blocks = blocks
+
+        items = self._block_to_items(value)
+        if not items:
+            return
+        if key == "continuity_hints":
+            context_pack.continuity_hints = self._merge_unique(items, list(context_pack.continuity_hints or []))
+
+    def _enrich_selected_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        artifact_type = str(row.get("artifact_type") or "").strip() or "fact"
+        metadata = enrich_metadata_with_memory_type(
+            dict(row.get("metadata") or {}),
+            artifact_type=artifact_type,
+        )
+        row["metadata"] = metadata
+        row.setdefault("summary", "")
+        row.setdefault("prompt_view", metadata.get("prompt_view") or row.get("text") or row.get("summary") or "")
+        row.setdefault("exposure_mode", metadata.get("exposure_mode") or "prompt_safe")
+        row.setdefault("sensitivity", metadata.get("sensitivity") or "low")
+        row.setdefault("confidence", metadata.get("confidence") or 0.5)
+        row.setdefault("score", metadata.get("score") or 1.0)
+        return row
+
+    def _enrich_citation_dict(self, citation: Citation) -> dict[str, Any]:
+        row = citation.to_dict()
+        row["metadata"] = enrich_metadata_with_memory_type(
+            dict(row.get("metadata") or {}),
+            artifact_type=row.get("artifact_type"),
+        )
+        return row
+
+    def _include_pending_facts_in_retrieval(self) -> bool:
+        try:
+            from config.settings import load_config
+
+            cfg = load_config()
+            memory_cfg = getattr(cfg, "memory", None)
+            if isinstance(memory_cfg, dict):
+                return bool(memory_cfg.get("include_pending_facts_in_retrieval", False))
+            return bool(getattr(memory_cfg, "include_pending_facts_in_retrieval", False))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _block_to_items(value: str) -> list[str]:
+        items: list[str] = []
+        for line in str(value or "").splitlines():
+            text = line.strip()
+            if text.startswith("- "):
+                text = text[2:].strip()
+            if text:
+                items.append(text)
+        return items
+
+    @staticmethod
+    def _merge_unique(first: list[str], second: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in [*first, *second]:
+            text = str(value or "").strip()
+            marker = text.lower()
+            if not text or marker in seen:
+                continue
+            seen.add(marker)
+            out.append(text)
+        return out
     
     def ingest_document(
         self,
@@ -334,9 +548,45 @@ class MemoryService:
             }
         
         elif request.kind == "stats":
+            stats = dict(self.inspector.get_stats() or {})
+            runtime_store = getattr(self, "runtime_session_store", None)
+            episode_manager = getattr(self, "episode_manager", None)
+            if runtime_store is not None and hasattr(runtime_store, "list_states"):
+                stats["runtime_sessions_count"] = len(runtime_store.list_states(limit=10000))
+            if episode_manager is not None and hasattr(episode_manager, "list_episodes"):
+                stats["runtime_episodes_count"] = len(episode_manager.list_episodes(limit=10000))
+            return {"stats": stats}
+
+        elif request.kind == "runtime":
+            runtime_store = getattr(self, "runtime_session_store", None)
+            episode_manager = getattr(self, "episode_manager", None)
+            states = []
+            episodes = []
+            if runtime_store is not None and hasattr(runtime_store, "list_states"):
+                states = runtime_store.list_states(
+                    workspace_id=request.workspace_id,
+                    limit=request.limit,
+                )
+            if episode_manager is not None and hasattr(episode_manager, "list_episodes"):
+                episodes = episode_manager.list_episodes(
+                    workspace_id=request.workspace_id,
+                    limit=request.limit,
+                )
             return {
-                "stats": self.inspector.get_stats(),
+                "items": states,
+                "episodes": episodes,
+                "sources": ["runtime_session_store", "episode_manager"],
             }
+
+        elif request.kind == "episodes":
+            episode_manager = getattr(self, "episode_manager", None)
+            episodes = []
+            if episode_manager is not None and hasattr(episode_manager, "list_episodes"):
+                episodes = episode_manager.list_episodes(
+                    workspace_id=request.workspace_id,
+                    limit=request.limit,
+                )
+            return {"items": episodes}
         
         return {"error": f"Unknown inspect kind: {request.kind}"}
     
@@ -380,6 +630,7 @@ class MemoryService:
                 text=artifact.text,
                 metadata={
                     "artifact_type": artifact.artifact_type,
+                    "memory_type": normalize_memory_type(artifact.artifact_type),
                     "workspace_id": artifact.workspace_id,
                     "created_at": artifact.created_at,
                 },
@@ -399,6 +650,7 @@ class MemoryService:
                 text=text,
                 metadata={
                     "artifact_type": artifact_type,
+                    "memory_type": normalize_memory_type(artifact_type),
                     "workspace_id": workspace_id,
                     "created_at": created_at,
                 },

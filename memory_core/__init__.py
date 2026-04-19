@@ -15,6 +15,8 @@ from memory_core.schemas import (
     MemoryTrace,
 )
 from memory_core.facade import MemoryService
+from memory_core.episode_manager import EpisodeManager, RuntimeEpisode
+from memory_core.runtime_session_store import RuntimeSessionStore, RuntimeSessionState, RuntimeTurn
 from memory_core.errors import MemoryError, EventStoreError, ArtifactStoreError, RetrievalError
 from memory_core.constants import DEFAULT_NAMESPACE, DEFAULT_WORKSPACE, DEFAULT_TOP_K
 from memory_core.adapter import MemoryCoreAdapter, init_memory_core, get_memory_core_adapter
@@ -121,6 +123,11 @@ __all__ = [
     "MemoryTrace",
     # Facade
     "MemoryService",
+    "EpisodeManager",
+    "RuntimeEpisode",
+    "RuntimeSessionStore",
+    "RuntimeSessionState",
+    "RuntimeTurn",
     # Adapter
     "MemoryCoreAdapter",
     "init_memory_core",
