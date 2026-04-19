@@ -929,38 +929,6 @@ def _split_chunks(text: str, chunk_size: int = 64) -> list[str]:
     return [src[i : i + chunk_size] for i in range(0, len(src), max(1, int(chunk_size)))]
 
 
-def _split_stream_display_piece(text: str, *, max_chars: int = 12) -> list[str]:
-    src = str(text or "")
-    if not src:
-        return []
-    tokens = re.findall(r"\S+\s*|\s+", src, flags=re.UNICODE)
-    if not tokens:
-        return [src]
-
-    out: list[str] = []
-    carry = ""
-    limit = max(1, int(max_chars))
-
-    def _flush_carry() -> None:
-        nonlocal carry
-        if carry:
-            out.append(carry)
-            carry = ""
-
-    for token in tokens:
-        if len(token) > limit:
-            _flush_carry()
-            for start in range(0, len(token), limit):
-                out.append(token[start : start + limit])
-            continue
-        if carry and (len(carry) + len(token)) > limit:
-            _flush_carry()
-        carry += token
-
-    _flush_carry()
-    return out or [src]
-
-
 _THINK_RE = re.compile(r"<think>(.*?)</think>", flags=re.IGNORECASE | re.DOTALL)
 _THINKING_RE = re.compile(r"<thinking>(.*?)</thinking>", flags=re.IGNORECASE | re.DOTALL)
 _REASONING_RE = re.compile(r"<reasoning>(.*?)</reasoning>", flags=re.IGNORECASE | re.DOTALL)

@@ -134,6 +134,14 @@ def test_resolve_thinking_text_ignores_final_thinking_without_stream_generation(
     assert ChatWindow._resolve_thinking_text("hidden reasoning", "", True) == "hidden reasoning"
 
 
+def test_resolve_thinking_text_backfills_final_suffix_like_console() -> None:
+    assert ChatWindow._resolve_thinking_text("streamed reasoning tail", "streamed reasoning", True) == "streamed reasoning tail"
+
+
+def test_resolve_thinking_text_keeps_streamed_when_final_is_subset_like_console() -> None:
+    assert ChatWindow._resolve_thinking_text("last-pass", "first-pass last-pass", True) == "first-pass last-pass"
+
+
 def test_live_thinking_timer_starts_from_first_visible_thinking_chunk(monkeypatch) -> None:
     window = ChatWindow.__new__(ChatWindow)
     bubble = _FakeBubble()

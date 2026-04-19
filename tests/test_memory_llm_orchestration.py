@@ -893,7 +893,7 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
                     },
                     {
                         "message": {
-                            "thinking": "Long chain of thought",
+                            "thinking": "chain of thought",
                         },
                         "done": True,
                         "model": "main-model",

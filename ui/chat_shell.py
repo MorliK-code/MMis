@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QFontMetricsF, QPen
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QFontMetricsF, QPen, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -271,6 +271,148 @@ class CrispLabel(QLabel):
         painter.setPen(self._text_color)
         painter.setFont(self.font())
         painter.drawText(self._content_rect(), self._text_flags(), text)
+
+
+class StreamingTextBox(QFrame):
+    def __init__(self, text: str = "", color: str = THINKING, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._text_color = str(color or THINKING)
+        self._background_color = _to_qcolor("transparent")
+        self._border_color = _to_qcolor("transparent")
+        self._border_style = Qt.PenStyle.SolidLine
+        self._radius = 0
+        self._padding = (0, 0, 0, 0)
+        self._preferred_text_width = 320
+        self._editor = QPlainTextEdit(self)
+        self._editor.setReadOnly(True)
+        self._editor.setFrameShape(QFrame.Shape.NoFrame)
+        self._editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._editor.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._editor.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._editor.document().setDocumentMargin(0)
+        self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._editor.setStyleSheet(
+            "QPlainTextEdit {"
+            "background:transparent;"
+            "border:none;"
+            f"color:{self._text_color};"
+            "selection-background-color:rgba(184,168,239,.25);"
+            "}"
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setText(text)
+
+    def setFont(self, font: QFont) -> None:  # noqa: N802
+        super().setFont(font)
+        self._editor.setFont(font)
+        self._refresh_height()
+
+    def text(self) -> str:
+        return self._editor.toPlainText()
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        value = str(text or "")
+        if self._editor.toPlainText() == value:
+            return
+        self._editor.setPlainText(value)
+        self._editor.moveCursor(QTextCursor.MoveOperation.End)
+        self._refresh_height()
+
+    def append_stream_text(self, text: str) -> None:
+        value = str(text or "")
+        if not value:
+            return
+        cursor = self._editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(value)
+        self._editor.setTextCursor(cursor)
+        self._refresh_height()
+
+    def setWordWrap(self, on: bool) -> None:  # noqa: N802
+        self._editor.setLineWrapMode(
+            QPlainTextEdit.LineWrapMode.WidgetWidth
+            if bool(on)
+            else QPlainTextEdit.LineWrapMode.NoWrap
+        )
+        self._refresh_height()
+
+    def setAlignment(self, _alignment) -> None:  # noqa: N802
+        return
+
+    def set_preferred_text_width(self, width: int | None) -> None:
+        value = max(24, int(width or 320))
+        if self._preferred_text_width == value:
+            return
+        self._preferred_text_width = value
+        self._refresh_height()
+
+    def set_box_style(
+        self,
+        *,
+        background: str = "transparent",
+        border: str = "transparent",
+        radius: int = 0,
+        padding: tuple[int, int, int, int] = (0, 0, 0, 0),
+        dashed: bool = False,
+    ) -> None:
+        self._background_color = _to_qcolor(background)
+        self._border_color = _to_qcolor(border)
+        self._border_style = Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine
+        self._radius = max(0, int(radius))
+        self._padding = tuple(int(value) for value in padding)
+        self._refresh_height()
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(self._preferred_text_width, max(1, self.height()))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def _refresh_height(self) -> None:
+        left, top, right, bottom = self._padding
+        width = max(24, int(self._preferred_text_width))
+        inner_width = max(24, width - left - right - 2)
+        self._editor.document().setTextWidth(inner_width)
+        fm = QFontMetricsF(self._editor.font())
+        text = self._editor.toPlainText() or " "
+        rect = fm.boundingRect(
+            QRect(0, 0, inner_width, 10_000_000),
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
+            text,
+        )
+        doc_height = max(int(rect.height()), int(fm.height()))
+        self.setFixedWidth(width)
+        self.setFixedHeight(max(1, doc_height + top + bottom + 8))
+        self._sync_editor_geometry()
+        self.updateGeometry()
+        self.update()
+
+    def _content_rect(self) -> QRect:
+        left, top, right, bottom = self._padding
+        return self.rect().adjusted(left, top, -right, -bottom)
+
+    def _sync_editor_geometry(self) -> None:
+        self._editor.setGeometry(self._content_rect())
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_editor_geometry()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        frame_rect = self.rect().adjusted(0, 0, -1, -1)
+        painter.setBrush(self._background_color)
+        if self._border_color.alpha() > 0:
+            pen = QPen(self._border_color)
+            pen.setStyle(self._border_style)
+            painter.setPen(pen)
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(frame_rect, self._radius, self._radius)
 
 
 class PaintedButton(QPushButton):
@@ -1324,17 +1466,21 @@ class MessageBubble(QFrame):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
         bubble = QFrame()
+        self._message_panel = bubble
         bubble.setObjectName("message_bubble_panel")
         bubble.setStyleSheet(
             f"QFrame#message_bubble_panel {{ background:{ASSISTANT_BG if role == 'assistant' else USER_BG}; border:1px solid {LINE}; border-radius:14px; }}"
         )
         bubble.setMaximumWidth(760)
-        bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Minimum)
         bubble_lay = QVBoxLayout(bubble)
+        self._message_layout = bubble_lay
         bubble_lay.setContentsMargins(13, 11, 13, 11)
         bubble_lay.setSpacing(4)
+        self._body_text_width = 620
         self._show_thinking_header = bool(show_thinking_header)
         self._thinking_text = str(thinking or "")
+        self._thinking_label_text = ""
         self.thinking_head = None
         self.thinking_toggle = None
         self.thinking_label = None
@@ -1355,11 +1501,11 @@ class MessageBubble(QFrame):
                 self.thinking_ms_chip = TinyStatChip(thinking_ms, active=True)
                 thinking_head_lay.addWidget(self.thinking_ms_chip, 0, Qt.AlignmentFlag.AlignLeft)
             bubble_lay.addWidget(thinking_head, 0, Qt.AlignmentFlag.AlignLeft)
-            self.thinking_label = CrispLabel(self._thinking_text, color=THINKING)
+            self.thinking_label = StreamingTextBox("", color=THINKING)
             self.thinking_label.setFont(_ui_font(pixel_size=12))
             self.thinking_label.setWordWrap(True)
             self.thinking_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            self.thinking_label.set_preferred_text_width(560)
+            self.thinking_label.set_preferred_text_width(self._body_text_width)
             self.thinking_label.setVisible(False)
             self.thinking_label.set_box_style(
                 background="rgba(184,168,239,.02)",
@@ -1377,8 +1523,9 @@ class MessageBubble(QFrame):
         self.text_label.setFont(_ui_font(pixel_size=14))
         self.text_label.setWordWrap(True)
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.text_label.set_preferred_text_width(620)
+        self.text_label.set_preferred_text_width(self._body_text_width)
         bubble_lay.addWidget(self.text_label)
+        self._sync_body_widths()
         outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight if role == 'user' else Qt.AlignmentFlag.AlignLeft)
         self.perf_wrap = FlowWrap(self)
         self.perf_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
@@ -1399,14 +1546,94 @@ class MessageBubble(QFrame):
     def _sync_thinking_header_visibility(self) -> None:
         if self.thinking_head is None:
             return
-        thinking_text = str(self._thinking_text or "").strip()
-        has_thinking_text = bool(thinking_text)
+        has_thinking_text = bool(self._thinking_text)
         should_show_header = has_thinking_text
         self.thinking_head.setVisible(should_show_header)
         if not has_thinking_text and self.thinking_label is not None:
             self.thinking_label.setVisible(False)
         if not should_show_header and self.thinking_toggle is not None and self.thinking_toggle.isChecked():
             self.thinking_toggle.setChecked(False)
+
+    def _sync_thinking_label_text(self) -> bool:
+        if self.thinking_label is None:
+            return False
+        if self._thinking_label_text == self._thinking_text:
+            return False
+        self._thinking_label_text = self._thinking_text
+        self.thinking_label.setText(self._thinking_text)
+        return True
+
+    def _append_thinking_label_text(self) -> bool:
+        if self.thinking_label is None:
+            return False
+        if self._thinking_label_text == self._thinking_text:
+            return False
+        if self._thinking_text.startswith(self._thinking_label_text):
+            delta = self._thinking_text[len(self._thinking_label_text):]
+            self._thinking_label_text = self._thinking_text
+            append = getattr(self.thinking_label, "append_stream_text", None)
+            if callable(append):
+                append(delta)
+                return True
+        return self._sync_thinking_label_text()
+
+    def _sync_body_widths(self) -> bool:
+        panel = getattr(self, "_message_panel", None)
+        panel_layout = getattr(self, "_message_layout", None)
+        target = int(getattr(self, "_body_text_width", 620) or 620)
+        if panel is not None and panel_layout is not None:
+            margins = panel_layout.contentsMargins()
+            content_rect = panel.contentsRect()
+            if panel.width() > 0:
+                target = max(
+                    target,
+                    int(content_rect.width()) - margins.left() - margins.right(),
+                )
+            max_panel_width = int(panel.maximumWidth() or 0)
+            if 0 < max_panel_width < 16_777_215:
+                target = min(target, max(24, max_panel_width - margins.left() - margins.right()))
+        target = max(24, target)
+        changed = False
+        if getattr(self.text_label, "_preferred_text_width", None) != target:
+            self.text_label.set_preferred_text_width(target)
+            changed = True
+        if self.thinking_label is not None and getattr(self.thinking_label, "_preferred_text_width", None) != target:
+            self.thinking_label.set_preferred_text_width(target)
+            changed = True
+        return changed
+
+    def _reflow_message_body(self) -> None:
+        panel = getattr(self, "_message_panel", None)
+        panel_layout = getattr(self, "_message_layout", None)
+        self._sync_body_widths()
+        if panel is not None:
+            if panel_layout is not None:
+                panel_layout.invalidate()
+                needed = max(panel_layout.sizeHint().height(), panel_layout.minimumSize().height())
+                if needed > 0:
+                    panel.setMinimumHeight(needed)
+                    panel.resize(panel.width(), needed)
+                panel_layout.activate()
+            panel.updateGeometry()
+        host_layout = self.layout()
+        if host_layout is not None:
+            host_layout.invalidate()
+            host_layout.activate()
+        self.updateGeometry()
+        self.adjustSize()
+        parent = self.parentWidget()
+        while parent is not None:
+            parent_layout = parent.layout()
+            if parent_layout is not None:
+                parent_layout.invalidate()
+                parent_layout.activate()
+            parent.updateGeometry()
+            if isinstance(parent, QScrollArea):
+                break
+            parent = parent.parentWidget()
+
+    def _reflow_after_thinking_body_change(self) -> None:
+        self._reflow_message_body()
 
     def _find_scroll_area(self) -> QScrollArea | None:
         parent = self.parentWidget()
@@ -1429,22 +1656,27 @@ class MessageBubble(QFrame):
     def _on_thinking_toggled(self, checked: bool) -> None:
         previous_height = int(self.sizeHint().height() or self.height())
         if checked:
-            if not str(self._thinking_text or "").strip():
+            if not self._thinking_text:
                 if self.thinking_toggle is not None:
                     self.thinking_toggle.setChecked(False)
                 return
+            self._sync_thinking_label_text()
             if self.thinking_label is not None:
                 self.thinking_label.setVisible(True)
         elif self.thinking_label is not None:
             self.thinking_label.setVisible(False)
-        self.updateGeometry()
-        self.adjustSize()
+        self._reflow_message_body()
         QTimer.singleShot(0, lambda prev=previous_height: self._adjust_scroll_after_thinking_toggle(prev))
 
     def update_thinking(self, text: str, ms: str | None = None) -> None:
         self._thinking_text = str(text or "")
-        if self.thinking_label is not None:
-            self.thinking_label.setText(self._thinking_text)
+        body_changed = False
+        if (
+            self.thinking_label is not None
+            and self.thinking_toggle is not None
+            and self.thinking_toggle.isChecked()
+        ):
+            body_changed = self._append_thinking_label_text()
         if self.thinking_ms_chip is not None and ms is not None:
             self.thinking_ms_chip.setText(ms)
         elif ms is not None and self.thinking_toggle is not None and self.thinking_ms_chip is None:
@@ -1454,10 +1686,17 @@ class MessageBubble(QFrame):
                 head.layout().insertWidget(1, self.thinking_ms_chip, 0, Qt.AlignmentFlag.AlignLeft)
         self._sync_thinking_header_visibility()
         if self.thinking_toggle is not None and self.thinking_toggle.isChecked() and self.thinking_label is not None:
-            self.thinking_label.setVisible(bool(self._thinking_text.strip()))
+            was_visible = self.thinking_label.isVisible()
+            self.thinking_label.setVisible(bool(self._thinking_text))
+            if body_changed or was_visible != self.thinking_label.isVisible():
+                self._reflow_message_body()
 
     def update_text(self, text: str) -> None:
-        self.text_label.setText(text)
+        value = str(text or "")
+        if self.text_label.text() == value:
+            return
+        self.text_label.setText(value)
+        self._reflow_message_body()
 
     def set_perf(self, perf: list[str]) -> None:
         layout = self.perf_wrap.layout()
@@ -1486,6 +1725,20 @@ class PendingAssistant:
     first_thinking_at: float | None = None
     first_answer_at: float | None = None
     last_chunk_at: float | None = None
+
+
+def _merge_streamed_and_final_text(streamed: str, final: str) -> str:
+    streamed_text = str(streamed or "")
+    final_text = str(final or "")
+    if not final_text.strip():
+        return streamed_text.strip()
+    if not streamed_text.strip():
+        return final_text.strip()
+    if final_text.startswith(streamed_text):
+        return final_text.strip()
+    if final_text in streamed_text:
+        return streamed_text.strip()
+    return streamed_text.strip()
 
 
 class ExactChatWindow(QMainWindow):
@@ -1846,7 +2099,11 @@ class ExactChatWindow(QMainWindow):
     def _on_answer_chunk(self, piece: str) -> None:
         if not self._pending:
             return
-        self._pending.answer_text += piece
+        now = time.perf_counter()
+        if self._pending.first_answer_at is None:
+            self._pending.first_answer_at = now
+        self._pending.last_chunk_at = now
+        self._pending.answer_text += piece or ""
         self._pending.bubble.update_text(self._pending.answer_text)
         self._scroll_bottom()
 
@@ -1876,10 +2133,14 @@ class ExactChatWindow(QMainWindow):
     def _on_reply_finished(self, result) -> None:
         if not self._pending:
             return
+        finished_at = time.perf_counter()
         text = getattr(result, "text", "") or self._pending.answer_text
-        thinking = getattr(result, "thinking", "") or self._pending.thinking_text
+        thinking = _merge_streamed_and_final_text(
+            self._pending.thinking_text,
+            getattr(result, "thinking", ""),
+        )
         stats = getattr(result, "stats", {}) or {}
-        elapsed = int(float(stats.get("elapsed_ms") or stats.get("total_ms") or max(1, (time.perf_counter() - self._pending.started_at) * 1000)))
+        elapsed = int(float(stats.get("elapsed_ms") or stats.get("total_ms") or max(1, (finished_at - self._pending.started_at) * 1000)))
         write_ms = int(float(stats.get("decode_ms") or stats.get("eval_ms") or 0))
         tok_s = stats.get("tokens_per_second") or stats.get("tok_s") or stats.get("tps")
         prompt_t = stats.get("prompt_tokens") or stats.get("prompt_eval_count")
@@ -1900,8 +2161,6 @@ class ExactChatWindow(QMainWindow):
         if str(thinking or "").strip():
             if self._pending.first_answer_at is not None and self._pending.first_thinking_at is not None:
                 thinking_ms = f"{max(1, int((self._pending.first_answer_at - self._pending.first_thinking_at) * 1000))} ms"
-            elif self._pending.first_thinking_at is not None:
-                thinking_ms = f"{max(1, int((time.perf_counter() - self._pending.first_thinking_at) * 1000))} ms"
         self._pending.bubble.update_text(text)
         self._pending.bubble.update_thinking(thinking, thinking_ms)
         self._pending.bubble.set_perf(perf)

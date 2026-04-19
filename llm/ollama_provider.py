@@ -306,27 +306,6 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
-def _stitch_thinking_delta(prev_full: str, current_piece: str) -> tuple[str, str]:
-    """Return a thinking delta while supporting cumulative and raw-delta streams."""
-    prev = str(prev_full or "")
-    current = str(current_piece or "")
-    
-    if not current:
-        # Пустой thinking в чанке — это нормально (только текст ответа)
-        return "", prev
-    
-    # cumulative mode
-    if prev and current.startswith(prev):
-        return current[len(prev):], current
-
-    # first chunk
-    if not prev:
-        return current, current
-
-    # delta mode
-    return current, prev + current
-
-
 class OllamaProvider(LLMProviderBase):
     # Reasoning модели требуют больше времени
     REASONING_MODEL_PATTERNS = ["deepseek-r1", "deepseek-reasoner", "o1", "o3", "thinking"]
@@ -479,7 +458,7 @@ class OllamaProvider(LLMProviderBase):
             stream = self._chat_with_retry(req=req, model=model, stream=True)
             chunk_count = 0
             chars = 0
-            prev_thinking_full = ""
+            streamed_thinking_parts: list[str] = []
             streamed_text_parts: list[str] = []
             streamed_tool_calls: list[ToolCall] = []
             try:
@@ -487,8 +466,7 @@ class OllamaProvider(LLMProviderBase):
                     chunk = _as_dict(raw_chunk)
                     msg = dict(chunk.get("message") or {})
                     text_delta = str(msg.get("content") or "")
-                    thinking_full = _extract_thinking(msg, chunk)
-                    thinking_delta, prev_thinking_full = _stitch_thinking_delta(prev_thinking_full, thinking_full)
+                    thinking_delta = _extract_thinking(msg, chunk)
                     tool_calls_delta = _parse_tool_calls_from_message(msg, text_fallback=text_delta)
                     done = bool(chunk.get("done", False))
                     chunk_count += 1
@@ -517,12 +495,14 @@ class OllamaProvider(LLMProviderBase):
                     )
                     if text_delta:
                         streamed_text_parts.append(text_delta)
+                    if thinking_delta:
+                        streamed_thinking_parts.append(thinking_delta)
                     if tool_calls_delta:
                         streamed_tool_calls.extend(list(tool_calls_delta))
                     if done and _should_retry_without_thinking(
                         req=req,
                         text="".join(streamed_text_parts),
-                        thinking=prev_thinking_full,
+                        thinking="".join(streamed_thinking_parts),
                         tool_calls=streamed_tool_calls,
                     ):
                         if text_delta or thinking_delta or tool_calls_delta:
@@ -805,9 +785,9 @@ class OllamaProvider(LLMProviderBase):
         payload = self._client.chat(**stream_payload)
 
         content_parts: list[str] = []
+        thinking_parts: list[str] = []
         tool_calls: list[Any] = []
         last_chunk: dict[str, Any] = {}
-        prev_thinking_full = ""
 
         for chunk in payload:
             if _memory_llm_interrupt.is_set():
@@ -823,8 +803,9 @@ class OllamaProvider(LLMProviderBase):
             if text_delta:
                 content_parts.append(text_delta)
 
-            thinking_full = _extract_thinking(message, data)
-            _thinking_delta, prev_thinking_full = _stitch_thinking_delta(prev_thinking_full, thinking_full)
+            thinking_delta = _extract_thinking(message, data)
+            if thinking_delta:
+                thinking_parts.append(thinking_delta)
 
             chunk_tool_calls = list(message.get("tool_calls") or [])
             if chunk_tool_calls:
@@ -833,8 +814,8 @@ class OllamaProvider(LLMProviderBase):
         payload_dict = dict(last_chunk or {})
         message_dict = dict(payload_dict.get("message") or {})
         message_dict["content"] = "".join(content_parts)
-        if prev_thinking_full:
-            message_dict["thinking"] = prev_thinking_full
+        if thinking_parts:
+            message_dict["thinking"] = "".join(thinking_parts)
         if tool_calls:
             message_dict["tool_calls"] = tool_calls
         payload_dict["message"] = message_dict

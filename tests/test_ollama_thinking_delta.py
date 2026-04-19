@@ -1,80 +1,60 @@
-"""Test thinking delta computation in Ollama provider."""
+from __future__ import annotations
 
-import unittest
-
-from llm.ollama_provider import _stitch_thinking_delta
-
-
-class TestThinkingDeltaComputation(unittest.TestCase):
-    """Tests for _stitch_thinking_delta function."""
-
-    def test_empty_current_returns_empty_delta(self):
-        """When current is empty, should return empty delta (no new thinking)."""
-        prev = "previous thinking"
-        delta, new_full = _stitch_thinking_delta(prev, "")
-        self.assertEqual(delta, "")
-        self.assertEqual(new_full, prev)  # Keep prev when current is empty
-
-    def test_empty_prev_returns_full_as_delta(self):
-        """When prev is empty, should return full current as delta."""
-        current = "This is thinking text"
-        delta, new_full = _stitch_thinking_delta("", current)
-        self.assertEqual(delta, current)
-        self.assertEqual(new_full, current)
-
-    def test_normal_prefix_case(self):
-        """Normal case: current starts with prev."""
-        prev = "This is "
-        current = "This is thinking"
-        delta, new_full = _stitch_thinking_delta(prev, current)
-        self.assertEqual(delta, "thinking")
-        self.assertEqual(new_full, current)
-
-    def test_delta_mode_appends_to_previous(self):
-        prev = "Hello"
-        current = " world"
-        delta, new_full = _stitch_thinking_delta(prev, current)
-        self.assertEqual(delta, " world")
-        self.assertEqual(new_full, "Hello world")
-
-    def test_cumulative_mode_extracts_suffix(self):
-        prev = "Hello"
-        current = "Hello world"
-        delta, new_full = _stitch_thinking_delta(prev, current)
-        self.assertEqual(delta, " world")
-        self.assertEqual(new_full, current)
-
-    def test_multiline_accumulation(self):
-        """Multiline thinking accumulation."""
-        prev = "Let me think\n"
-        current = "Let me think\nStep 1: "
-        delta, new_full = _stitch_thinking_delta(prev, current)
-        self.assertEqual(delta, "Step 1: ")
-        self.assertEqual(new_full, current)
-
-    def test_no_duplicate_when_same(self):
-        """When prev == current, delta should be empty."""
-        text = "Same thinking"
-        delta, new_full = _stitch_thinking_delta(text, text)
-        self.assertEqual(delta, "")
-        self.assertEqual(new_full, text)
-
-    def test_edge_case_no_prefix(self):
-        """When current doesn't start with prev, treat it as a raw delta."""
-        prev = "Old thinking"
-        current = "Completely different"
-        delta, new_full = _stitch_thinking_delta(prev, current)
-        self.assertEqual(delta, current)
-        self.assertEqual(new_full, prev + current)
-
-    def test_whitespace_handling(self):
-        """Whitespace should be preserved."""
-        prev = "Think "
-        current = "Think  about  it"  # Double spaces
-        delta, new_full = _stitch_thinking_delta(prev, current)
-        self.assertEqual(delta, " about  it")
-        self.assertEqual(new_full, current)
+from llm import ollama_provider as ollama_provider_module
+from llm.ollama_provider import OllamaProvider
+from llm.provider_base import LLMRequest, Message
 
 
-if __name__ == "__main__":
-    unittest.main()
+class _PriorityManager:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def wait_for_turn(self, priority: int, timeout: float | None = None) -> bool:
+        self.calls.append(("wait", priority))
+        return True
+
+    def release(self, priority: int) -> None:
+        self.calls.append(("release", priority))
+
+
+def test_ollama_stream_uses_thinking_field_as_raw_delta(monkeypatch) -> None:
+    provider = OllamaProvider(default_model="main-model", timeout_sec=1.0)
+
+    def _chat_with_retry(*, req, model, stream):
+        assert stream is True
+        return iter(
+            [
+                {
+                    "message": {"thinking": "Long "},
+                    "done": False,
+                    "model": model,
+                },
+                {
+                    "message": {"thinking": "chain", "content": "Answer"},
+                    "done": True,
+                    "model": model,
+                },
+            ]
+        )
+
+    provider._chat_with_retry = _chat_with_retry
+    priority = _PriorityManager()
+    monkeypatch.setattr(ollama_provider_module, "get_priority_manager", lambda: priority)
+
+    chunks = list(
+        provider.stream(
+            LLMRequest(
+                model="main-model",
+                messages=[Message(role="user", content="hello")],
+                metadata={"source": "api", "think": True},
+            )
+        )
+    )
+
+    assert [chunk.thinking_delta for chunk in chunks] == ["Long ", "chain"]
+    assert "".join(chunk.thinking_delta for chunk in chunks) == "Long chain"
+    assert "".join(chunk.text_delta for chunk in chunks) == "Answer"
+    assert priority.calls == [
+        ("wait", ollama_provider_module.LLMPriorityManager.PRIORITY_MAIN),
+        ("release", ollama_provider_module.LLMPriorityManager.PRIORITY_MAIN),
+    ]

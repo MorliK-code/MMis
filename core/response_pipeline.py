@@ -5935,29 +5935,69 @@ class ResponsePipeline:
 class _ThinkStreamParser:
     """Split model stream into visible answer and hidden thinking blocks."""
 
+    _ANSWER_MARKERS = (
+        "final:",
+        "final answer:",
+        "answer:",
+        "assistant:",
+        "response:",
+        "my response:",
+    )
+    _INTERNAL_MARKERS = (
+        "analysis:",
+        "reasoning:",
+        "thought:",
+        "plan:",
+        "one last thing:",
+        "wait,",
+        "okay. ready.",
+        "this is fine.",
+        "user:",
+        "me:",
+    )
+
     def __init__(self):
         self._in_think = False
         self._open_tags = tuple(str(tag).lower() for tag in ("<think>", "<thinking>", "<reasoning>"))
         self._close_tags = tuple(str(tag).lower() for tag in ("</think>", "</thinking>", "</reasoning>"))
         self._pending_tag = ""
+        self._plain_probe = ""
+        self._plain_route: str | None = None
+        self._plain_force_thinking = False
+        self._plain_answer_started = False
+        self._plain_skip_answer_marker_gap = False
 
     def feed(self, chunk: str) -> tuple[str, str]:
-        visible_parts: list[str] = []
+        raw_visible_parts: list[str] = []
         thinking_parts: list[str] = []
         for ch in str(chunk or ""):
             visible, thinking = self._feed_char(ch)
             if visible:
+                raw_visible_parts.append(visible)
+            if thinking:
+                thinking_parts.append(thinking)
+        raw_visible = "".join(raw_visible_parts)
+        visible, loose_thinking = self._feed_plain_visible(raw_visible)
+        if loose_thinking:
+            thinking_parts.append(loose_thinking)
+        return visible, "".join(thinking_parts)
+
+    def flush(self) -> tuple[str, str]:
+        visible_parts: list[str] = []
+        thinking_parts: list[str] = []
+        if self._pending_tag:
+            visible, thinking = self._emit_literal(self._pending_tag)
+            self._pending_tag = ""
+            if visible:
                 visible_parts.append(visible)
             if thinking:
                 thinking_parts.append(thinking)
+        visible, thinking = self._flush_plain_visible()
+        if visible:
+            visible_parts.append(visible)
+        if thinking:
+            thinking_parts.append(thinking)
         return "".join(visible_parts), "".join(thinking_parts)
-
-    def flush(self) -> tuple[str, str]:
-        if not self._pending_tag:
-            return "", ""
-        out = self._emit_literal(self._pending_tag)
-        self._pending_tag = ""
-        return out
 
     def _feed_char(self, ch: str) -> tuple[str, str]:
         if self._pending_tag:
@@ -5989,6 +6029,117 @@ class _ThinkStreamParser:
             return "", ""
         if self._in_think:
             return "", text
+        return text, ""
+
+    @staticmethod
+    def _plain_marker_match(text: str, markers: tuple[str, ...]) -> str:
+        low = text.lower()
+        for marker in markers:
+            if low.startswith(marker):
+                return marker
+        return ""
+
+    @classmethod
+    def _plain_marker_possible(cls, text: str) -> bool:
+        if not text:
+            return True
+        low = text.lower()
+        markers = cls._ANSWER_MARKERS + cls._INTERNAL_MARKERS
+        return any(marker.startswith(low) for marker in markers)
+
+    def _feed_plain_visible(self, text: str) -> tuple[str, str]:
+        visible_parts: list[str] = []
+        thinking_parts: list[str] = []
+        for ch in str(text or ""):
+            visible, thinking = self._feed_plain_char(ch)
+            if visible:
+                visible_parts.append(visible)
+            if thinking:
+                thinking_parts.append(thinking)
+        return "".join(visible_parts), "".join(thinking_parts)
+
+    def _flush_plain_visible(self) -> tuple[str, str]:
+        if not self._plain_probe:
+            return "", ""
+        text = self._plain_probe
+        self._plain_probe = ""
+        if self._plain_force_thinking:
+            return "", text
+        if text.strip():
+            self._plain_answer_started = True
+        return text, ""
+
+    def _feed_plain_char(self, ch: str) -> tuple[str, str]:
+        if self._plain_route is not None:
+            return self._emit_plain_routed_char(ch)
+
+        self._plain_probe += ch
+        probe = self._plain_probe
+        stripped = probe.lstrip(" \t")
+        leading = len(probe) - len(stripped)
+
+        answer_marker = self._plain_marker_match(stripped, self._ANSWER_MARKERS)
+        if answer_marker:
+            if self._plain_force_thinking and self._plain_answer_started:
+                return self._start_plain_route("thinking")
+            self._plain_answer_started = True
+            self._plain_force_thinking = False
+            remainder = stripped[len(answer_marker):]
+            self._plain_probe = ""
+            self._plain_route = "visible"
+            self._plain_skip_answer_marker_gap = True
+            if leading:
+                remainder = probe[:leading] + remainder
+            remainder = remainder.lstrip(" \t\r")
+            if remainder.startswith("\n"):
+                remainder = remainder[1:]
+                if not remainder:
+                    self._plain_route = None
+            self._plain_skip_answer_marker_gap = not bool(remainder)
+            if not remainder:
+                return "", ""
+            return self._emit_plain_text_with_route(remainder, "visible")
+
+        internal_marker = self._plain_marker_match(stripped, self._INTERNAL_MARKERS)
+        if internal_marker:
+            self._plain_force_thinking = True
+            return self._start_plain_route("thinking")
+
+        if "\n" in probe:
+            return self._start_plain_route("thinking" if self._plain_force_thinking else "visible")
+
+        if stripped and not self._plain_marker_possible(stripped):
+            return self._start_plain_route("thinking" if self._plain_force_thinking else "visible")
+
+        return "", ""
+
+    def _start_plain_route(self, route: str) -> tuple[str, str]:
+        text = self._plain_probe
+        self._plain_probe = ""
+        self._plain_route = None if text.endswith("\n") else route
+        return self._emit_plain_text_with_route(text, route)
+
+    def _emit_plain_routed_char(self, ch: str) -> tuple[str, str]:
+        route = str(self._plain_route or "visible")
+        if route == "visible" and self._plain_skip_answer_marker_gap:
+            if ch in " \t\r":
+                return "", ""
+            self._plain_skip_answer_marker_gap = False
+            if ch == "\n":
+                self._plain_route = None
+                return "", ""
+        visible, thinking = self._emit_plain_text_with_route(ch, route)
+        if ch == "\n":
+            self._plain_route = None
+        return visible, thinking
+
+    def _emit_plain_text_with_route(self, text: str, route: str) -> tuple[str, str]:
+        if not text:
+            return "", ""
+        if route == "thinking":
+            return "", text
+        if text.strip():
+            self._plain_answer_started = True
         return text, ""
 
 

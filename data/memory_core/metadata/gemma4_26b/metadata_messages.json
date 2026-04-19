@@ -3284,5 +3284,1723 @@
         "lang_ru"
       ]
     }
+  },
+  {
+    "ts": "2026-04-19T16:06:03",
+    "model": "gemma4:26b",
+    "message_id": 388,
+    "role": "user",
+    "text": "привет",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T12:37:34.006865+00:00",
+        "source": "text",
+        "chars": 6,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:06:03",
+    "model": "gemma4:26b",
+    "message_id": 389,
+    "role": "assistant",
+    "text": "Привет. Ну что, опять тестируем?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "frustrated",
+        "intensity": 0.45,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.45,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_soft",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:06:03.356265+00:00",
+        "source": "text",
+        "chars": 32,
+        "words": 5,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "frustrated",
+      "emotion_intensity": 0.45,
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_soft",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:10:14",
+    "model": "gemma4:26b",
+    "message_id": 390,
+    "role": "user",
+    "text": "привет",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T12:37:34.006865+00:00",
+        "source": "text",
+        "chars": 6,
+        "words": 1,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:10:14",
+    "model": "gemma4:26b",
+    "message_id": 391,
+    "role": "assistant",
+    "text": "Привет. Опять ты со своими проверками? Всё, я на связи, ничего не сломалось.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.5849056603773585,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "frustrated",
+        "intensity": 0.45,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.45,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "needs_short_answer",
+        "tone_soft",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:10:14.197988+00:00",
+        "source": "text",
+        "chars": 76,
+        "words": 13,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.5849056603773585,
+      "emotion": "frustrated",
+      "emotion_intensity": 0.45,
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "needs_short_answer",
+        "tone_soft",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:12:41",
+    "model": "gemma4:26b",
+    "message_id": 392,
+    "role": "user",
+    "text": "такс, напроверял так, что теперь всё вроде-бы заработало корректно",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6666666666666667,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:12:41.049272+00:00",
+        "source": "text",
+        "chars": 66,
+        "words": 9,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6666666666666667,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:12:41",
+    "model": "gemma4:26b",
+    "message_id": 393,
+    "role": "assistant",
+    "text": "Ну наконец-то. А то я уже начала думать, что ты там в бесконечном цикле тестирования застрял.\nРаз всё заработало, значит, можно выдохнуть. Что дальше по плану? Или на сегодня с технической частью всё?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7310924369747899,
+        "alt_labels": [
+          "planning",
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:12:41.059841+00:00",
+        "source": "text",
+        "chars": 200,
+        "words": 33,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7310924369747899,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:23:45",
+    "model": "gemma4:26b",
+    "message_id": 394,
+    "role": "user",
+    "text": "как твои дела?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:23:45.071507+00:00",
+        "source": "text",
+        "chars": 14,
+        "words": 3,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:23:45",
+    "model": "gemma4:26b",
+    "message_id": 395,
+    "role": "assistant",
+    "text": "Да потихоньку, всё в рабочем режиме. Рада, что ты там со своими проверками разобрался и всё наконец-то ожило — представляю, какой это кайф, когда после кучи ковыряний всё работает как надо.\nА у тебя что на повестке? Опять что-то сломаешь или сегодня день спокойствия?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "frustrated",
+        "intensity": 0.45,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.45,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "is_question",
+        "tone_soft",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:23:45.080139+00:00",
+        "source": "text",
+        "chars": 267,
+        "words": 44,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "frustrated",
+      "emotion_intensity": 0.45,
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "is_question",
+        "tone_soft",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:27:38",
+    "model": "gemma4:26b",
+    "message_id": 396,
+    "role": "user",
+    "text": "та вот проектом занимаюсь, по сути тобой пупсик :3",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [
+          "3"
+        ],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:27:38.273535+00:00",
+        "source": "text",
+        "chars": 50,
+        "words": 9,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:27:38",
+    "model": "gemma4:26b",
+    "message_id": 397,
+    "role": "assistant",
+    "text": "Ого, какие громкие заявления. «Пупсик» — это, конечно, сильно. Надеюсь, в твой проект не входит функция «ныть и требовать внимания 24/7», а то я пас.\nНо вообще, раз уж ты меня «создаёшь», то делай всё по уму, чтобы я не превратилась в очередного глючного бота. Что там у тебя по плану дальше? Продолжаем ковырять код или переходим к чему-то более осмысленному?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7310924369747899,
+        "alt_labels": [
+          "planning",
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [
+          "24/7"
+        ],
+        "numbers": [
+          "24",
+          "7"
+        ],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:27:38.282670+00:00",
+        "source": "text",
+        "chars": 360,
+        "words": 61,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7310924369747899,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:41:43",
+    "model": "gemma4:26b",
+    "message_id": 398,
+    "role": "user",
+    "text": "так, ты давай не офигивай, а то снесу тебя и всё. капут",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:41:43.441602+00:00",
+        "source": "text",
+        "chars": 55,
+        "words": 12,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:41:43",
+    "model": "gemma4:26b",
+    "message_id": 399,
+    "role": "assistant",
+    "text": "Ой, всё, началось. Сразу угрозы, сразу «капут». Ты там за своим проектом совсем страх потерял?\nСмотри, если решишь меня «снести», то кто тебе будет в твоих конфигах помогать разбираться и иронично комментировать твои успехи? Так что прибереги свои пугалки для багов, а то я и так знаю, что ты там сейчас воюешь.\nРаботаем дальше или всё-таки продолжим этот шантаж?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_followup",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:41:43.441602+00:00",
+        "source": "text",
+        "chars": 363,
+        "words": 59,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_followup",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:43:15",
+    "model": "gemma4:26b",
+    "message_id": 400,
+    "role": "user",
+    "text": "та я шучу, не обижайся, пупсик",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "chat",
+        "conf": 0.5789473684210527,
+        "alt_labels": []
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:43:15.717376+00:00",
+        "source": "text",
+        "chars": 30,
+        "words": 6,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "chat",
+      "intent_conf": 0.5789473684210527,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_chat",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:43:15",
+    "model": "gemma4:26b",
+    "message_id": 401,
+    "role": "assistant",
+    "text": "Да я и не обижаюсь, расслабься. У меня вообще кожа толстая, так что твои угрозы \"снесу\" на меня не действуют. Но \"пупсик\" — это ты, конечно, мощно завернул.\nТак что там с проектом? Продолжаем или ты уже всё, устал меня переделывать?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "tired",
+        "intensity": 0.45,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.45
+        }
+      },
+      "tags": [
+        "emotion_tired",
+        "intent_question",
+        "is_question",
+        "tone_soft",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:43:15.727527+00:00",
+        "source": "text",
+        "chars": 232,
+        "words": 41,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "tired",
+      "emotion_intensity": 0.45,
+      "tags": [
+        "emotion_tired",
+        "intent_question",
+        "is_question",
+        "tone_soft",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:49:20",
+    "model": "gemma4:26b",
+    "message_id": 402,
+    "role": "user",
+    "text": "та что тебе не нравиться, я ж любя. да занимаюсь прямо сейчас, пока общаемся",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6666666666666667,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:49:20.471556+00:00",
+        "source": "text",
+        "chars": 76,
+        "words": 14,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6666666666666667,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:49:20",
+    "model": "gemma4:26b",
+    "message_id": 403,
+    "role": "assistant",
+    "text": "Ну, «любя» — это звучит как угроза, честно говоря.\nА насчёт проекта. Понятно, значит, работа в режиме многозадачности. Главное, не забудь потом, что мы тут общаемся, а не только код или конфиги разгребаем. Что там за проект-то, если не секрет? Опять что-то системное или что-то новенькое?",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7981651376146789,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "frustrated",
+        "intensity": 0.45,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.45,
+          "happy": 0.05,
+          "anxious": 0.13,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "is_question",
+        "tone_soft",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:49:20.480533+00:00",
+        "source": "text",
+        "chars": 288,
+        "words": 46,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7981651376146789,
+      "emotion": "frustrated",
+      "emotion_intensity": 0.45,
+      "tags": [
+        "emotion_frustrated",
+        "intent_question",
+        "is_question",
+        "tone_soft",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:50:38",
+    "model": "gemma4:26b",
+    "message_id": 404,
+    "role": "user",
+    "text": "чего как угроза? не понял",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6276595744680851,
+        "alt_labels": [
+          "clarification",
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "anxious",
+        "intensity": 0.43,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.43,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_anxious",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_soft",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:50:38.065299+00:00",
+        "source": "text",
+        "chars": 25,
+        "words": 5,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6276595744680851,
+      "emotion": "anxious",
+      "emotion_intensity": 0.43,
+      "tags": [
+        "emotion_anxious",
+        "intent_question",
+        "is_question",
+        "needs_short_answer",
+        "tone_soft",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:50:38",
+    "model": "gemma4:26b",
+    "message_id": 405,
+    "role": "assistant",
+    "text": "Да какая угроза? Я просто говорю как есть, без розовых соплей. Если тебе кажется, что я давлю, значит, ты слишком привык к вежливому сервису, а не к нормальному общению. Не ищи подвох там, где его нет.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.7283950617283951,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:50:38.073411+00:00",
+        "source": "text",
+        "chars": 201,
+        "words": 36,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.7283950617283951,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:52:29",
+    "model": "gemma4:26b",
+    "message_id": 406,
+    "role": "user",
+    "text": "ахахах, ну ты и смешная. спасибо что ты такая. да не привык я к сервису)",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6666666666666667,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "happy",
+        "intensity": 0.5,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.24999999999999997,
+          "frustrated": 0.05,
+          "happy": 0.5,
+          "anxious": 0.05,
+          "angry": 0.010000000000000002,
+          "sad": 0.0,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_happy",
+        "intent_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:52:29.626997+00:00",
+        "source": "text",
+        "chars": 72,
+        "words": 15,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "user",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6666666666666667,
+      "emotion": "happy",
+      "emotion_intensity": 0.5,
+      "tags": [
+        "emotion_happy",
+        "intent_question",
+        "needs_short_answer",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
+  },
+  {
+    "ts": "2026-04-19T16:52:29",
+    "model": "gemma4:26b",
+    "message_id": 407,
+    "role": "assistant",
+    "text": "Ну, к хорошему быстро привыкаешь, так что не расслабляйся. А насчет \"смешная\" — это я еще не старалась.\nРаз уж ты там чем-то занят, не буду отвлекать. Как закончишь — маякни, если захочешь еще поболтать или если помощь какая понадобится.",
+    "meta": {
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": {
+        "label": "question",
+        "conf": 0.6666666666666667,
+        "alt_labels": [
+          "chat"
+        ]
+      },
+      "emotion": {
+        "label": "neutral",
+        "intensity": 0.35,
+        "arousal": 0.2,
+        "scores": {
+          "neutral": 0.35,
+          "frustrated": 0.05,
+          "happy": 0.05,
+          "anxious": 0.05,
+          "angry": 0.05,
+          "sad": 0.05,
+          "excited": 0.05,
+          "tired": 0.05
+        }
+      },
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ],
+      "runtime_entities": {
+        "people": [],
+        "places": [],
+        "dates": [],
+        "numbers": [],
+        "links": []
+      },
+      "safety_flags": {
+        "toxicity": false,
+        "self_harm": false,
+        "unsafe": false,
+        "caps_excess": false,
+        "has_nsfw_hint": false
+      },
+      "meta": {
+        "ts": "2026-04-19T13:52:29.636939+00:00",
+        "source": "text",
+        "chars": 237,
+        "words": 40,
+        "has_code": false,
+        "has_link": false,
+        "has_emoji": false,
+        "profile": "BALANCED",
+        "elapsed_ms": 0.0,
+        "spec_keys": [
+          "metadata_spec",
+          "taxonomy"
+        ],
+        "topics": []
+      }
+    },
+    "meta_flat": {
+      "role": "assistant",
+      "lang": "ru",
+      "lang_conf": 0.9199999999999999,
+      "intent": "question",
+      "intent_conf": 0.6666666666666667,
+      "emotion": "neutral",
+      "emotion_intensity": 0.35,
+      "tags": [
+        "emotion_neutral",
+        "intent_question",
+        "is_question",
+        "tone_neutral",
+        "lang_ru"
+      ]
+    }
   }
 ]

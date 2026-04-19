@@ -253,6 +253,52 @@ def test_think_stream_parser_does_not_hold_recent_thinking_while_close_tag_is_in
     assert thinking == ""
 
 
+def test_think_stream_parser_routes_plain_reasoning_transcript_to_thinking() -> None:
+    from core.response_pipeline import _ThinkStreamParser
+
+    parser = _ThinkStreamParser()
+
+    visible, thinking = parser.feed("Plan:\n1. Check the prompt.\n")
+    assert visible == ""
+    assert thinking == "Plan:\n1. Check the prompt.\n"
+
+    visible, thinking = parser.feed("Wait, I'll check one more thing.\nUser: \"test\"\nMe: internal draft\n")
+    assert visible == ""
+    assert "Wait, I'll check" in thinking
+    assert 'User: "test"' in thinking
+    assert "Me: internal draft" in thinking
+
+    visible, thinking = parser.feed("My response: Привет, всё на месте.")
+    assert visible == "Привет, всё на месте."
+    assert thinking == ""
+
+
+def test_think_stream_parser_hides_internal_lines_after_final_answer_started() -> None:
+    from core.response_pipeline import _ThinkStreamParser
+
+    parser = _ThinkStreamParser()
+
+    visible, thinking = parser.feed("Final:\n\"Готово, всё работает.\"\n")
+    assert visible == "\"Готово, всё работает.\"\n"
+    assert thinking == ""
+
+    visible, thinking = parser.feed("One last thing: check the wording.\nUser: \"x\"\nMy response: duplicate draft")
+    assert visible == ""
+    assert "One last thing" in thinking
+    assert 'User: "x"' in thinking
+    assert "My response: duplicate draft" in thinking
+
+
+def test_think_stream_parser_keeps_normal_answer_streaming() -> None:
+    from core.response_pipeline import _ThinkStreamParser
+
+    parser = _ThinkStreamParser()
+
+    visible, thinking = parser.feed("Fine, wait for me here.")
+    assert visible == "Fine, wait for me here."
+    assert thinking == ""
+
+
 def test_agent_loop_streaming_no_probe_delay_with_tools():
     """
     Проверить:
