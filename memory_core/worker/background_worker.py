@@ -60,6 +60,8 @@ class WorkerStats:
     jobs_succeeded: int = 0
     jobs_failed: int = 0
     jobs_retried: int = 0
+    interrupt_count: int = 0
+    requeue_count: int = 0
     last_job_at: float | None = None
     last_error: str | None = None
     started_at: float = field(default_factory=time.time)
@@ -71,6 +73,8 @@ class WorkerStats:
             "jobs_succeeded": self.jobs_succeeded,
             "jobs_failed": self.jobs_failed,
             "jobs_retried": self.jobs_retried,
+            "interrupt_count": self.interrupt_count,
+            "requeue_count": self.requeue_count,
             "last_job_at": self.last_job_at,
             "last_error": self.last_error,
             "uptime_sec": time.time() - self.started_at,
@@ -131,6 +135,7 @@ class BackgroundWorker:
         self._wake_event = threading.Event()
         self._running = False
         self._memory_llm_provider_unloaded = False
+        self._scheduler_mode = self._resolve_scheduler_mode()
 
     def _memory_llm_control_method(self, method_name: str):
         processor = getattr(self, "memory_llm_processor", None)
@@ -140,6 +145,21 @@ class BackgroundWorker:
         if callable(method):
             return method
         return None
+
+    @staticmethod
+    def _resolve_scheduler_mode() -> str:
+        try:
+            from memory_core.config_manager import get_memory_core_config
+
+            mode = str(get_memory_core_config().memory_llm_scheduler_mode or "strict").strip().lower()
+            if mode in {"strict", "cooperative"}:
+                return mode
+        except Exception:
+            pass
+        return "strict"
+
+    def _is_strict_scheduler_mode(self) -> bool:
+        return self._scheduler_mode == "strict"
 
     def _get_memory_llm_interrupt_epoch(self) -> int:
         try:
@@ -316,10 +336,14 @@ class BackgroundWorker:
             "worker_id": self.config.worker_id,
             "running": self._running,
             "paused": self.is_paused(),
+            "memory_llm_provider_unloaded": bool(self._memory_llm_provider_unloaded),
+            "memory_llm_locked": self._is_memory_llm_locked(),
             "config": {
                 "poll_interval_sec": self.config.poll_interval_sec,
                 "max_jobs_per_cycle": self.config.max_jobs_per_cycle,
                 "job_types": self.config.job_types,
+                "enabled": bool(self.config.enabled),
+                "scheduler_mode": self._scheduler_mode,
             },
             "stats": self.stats.to_dict(),
         }
@@ -343,9 +367,13 @@ class BackgroundWorker:
 
         # Проверяем глобальную блокировку Memory LLM
         # Если lock установлен — основная модель отвечает, не обрабатываем
-        if self._is_memory_llm_locked():
+        if self._is_strict_scheduler_mode() and self._is_memory_llm_locked():
             print(f"[WORKER] {self.config.worker_id}: Memory LLM locked", flush=True)
             sys.stdout.flush()
+            LOGGER.debug(
+                "Worker %s: strict scheduler blocked dequeue by memory lock",
+                self.config.worker_id,
+            )
             return False
 
         # Получаем задачу из очереди
@@ -381,11 +409,19 @@ class BackgroundWorker:
             # Прервано основной моделью — возвращаем задачу в очередь
             print(f"[WORKER] {self.config.worker_id}: Job interrupted, requeuing", flush=True)
             sys.stdout.flush()
+            LOGGER.info(
+                "Worker %s: job %s interrupted by main priority, requeue immediately",
+                self.config.worker_id,
+                job.job_id,
+            )
             requeue_now = getattr(self.job_queue, "requeue_immediately", None)
+            self.stats.interrupt_count += 1
             if callable(requeue_now):
-                requeue_now(job.job_id, "")
+                if requeue_now(job.job_id, ""):
+                    self.stats.requeue_count += 1
             else:
                 self.job_queue.fail(job.job_id, "", retry=True)
+                self.stats.requeue_count += 1
             self.stats.jobs_retried += 1
             return True
         except Exception as e:

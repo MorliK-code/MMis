@@ -184,6 +184,12 @@ class MemoryService:
             worker = getattr(self, "worker", None)
             if worker is not None and hasattr(worker, "is_running") and hasattr(worker, "start"):
                 try:
+                    scheduler_mode = "strict"
+                    try:
+                        from memory_core.config_manager import get_memory_core_config
+                        scheduler_mode = str(get_memory_core_config().memory_llm_scheduler_mode or "strict").strip().lower()
+                    except Exception:
+                        scheduler_mode = "strict"
                     is_memory_locked = False
                     try:
                         from memory_core.adapter import _memory_llm_lock
@@ -191,7 +197,26 @@ class MemoryService:
                     except Exception:
                         is_memory_locked = False
 
-                    if not worker.is_running() and not is_memory_locked:
+                    can_start_worker = (scheduler_mode != "strict") or (not is_memory_locked)
+                    if scheduler_mode == "strict" and is_memory_locked:
+                        try:
+                            from utils.logger import get_logger
+
+                            get_logger(__name__).info(
+                                "MemoryService: strict scheduler keeps worker stopped while main lock is held"
+                            )
+                        except Exception:
+                            pass
+                    if not worker.is_running() and can_start_worker:
+                        if scheduler_mode == "cooperative" and is_memory_locked:
+                            try:
+                                from utils.logger import get_logger
+
+                                get_logger(__name__).info(
+                                    "MemoryService: cooperative scheduler starts worker under main lock"
+                                )
+                            except Exception:
+                                pass
                         worker.start()
                     elif worker.is_running():
                         wake = getattr(worker, "wake", None)
@@ -310,6 +335,7 @@ class MemoryService:
         if context_pack is None:
             return
 
+        include_runtime = self._include_pending_facts_in_retrieval()
         layers: list[dict[str, Any]] = []
         runtime_store = getattr(self, "runtime_session_store", None)
         if runtime_store is not None and hasattr(runtime_store, "build_query_layer"):
@@ -334,31 +360,43 @@ class MemoryService:
             if isinstance(x, dict)
         ]
         runtime_selected: list[dict[str, Any]] = []
+        runtime_selected_dropped: list[dict[str, Any]] = []
         debug_sources: dict[str, Any] = {}
         active_episode: dict[str, Any] = {}
         recent_user_state: dict[str, Any] = dict(getattr(context_pack, "recent_user_state", {}) or {})
 
         for layer in layers:
+            layer_debug = dict(layer.get("debug") or {})
+            layer_source = str(layer_debug.get("source") or "runtime").strip() or "runtime"
+            is_runtime_layer = layer_source == "runtime_session_store"
             blocks = dict(layer.get("blocks") or {})
-            for key, value in blocks.items():
-                self._merge_context_block(context_pack, key, str(value or "").strip())
+            if (not is_runtime_layer) or include_runtime:
+                for key, value in blocks.items():
+                    self._merge_context_block(context_pack, key, str(value or "").strip())
 
             for row in list(layer.get("selected") or []):
                 if isinstance(row, dict):
-                    runtime_selected.append(self._enrich_selected_row(dict(row)))
+                    enriched = self._enrich_selected_row(dict(row))
+                    if is_runtime_layer and not include_runtime:
+                        runtime_selected_dropped.append(enriched)
+                    elif is_runtime_layer and not self._runtime_row_matches_query(enriched, query):
+                        runtime_selected_dropped.append(enriched)
+                    else:
+                        runtime_selected.append(enriched)
 
             state = dict(layer.get("recent_user_state") or {})
-            if state:
+            if state and ((not is_runtime_layer) or include_runtime):
                 recent_user_state.update(state)
 
-            debug = dict(layer.get("debug") or {})
-            source = str(debug.get("source") or "runtime").strip() or "runtime"
+            debug = layer_debug
+            source = layer_source
             debug_sources[source] = debug
             if isinstance(debug.get("active_episode"), dict):
                 active_episode = dict(debug.get("active_episode") or {})
 
-        context_pack.selected_memories = runtime_selected + existing_selected
-        context_pack.recent_user_state = recent_user_state
+        if include_runtime:
+            context_pack.selected_memories = runtime_selected + existing_selected
+            context_pack.recent_user_state = recent_user_state
 
         debug = dict(getattr(context_pack, "debug", {}) or {})
         debug.setdefault("sources", {})
@@ -369,10 +407,40 @@ class MemoryService:
             "runtime": len(runtime_selected),
             "long_term": len(existing_selected),
         }
-        debug["include_pending_facts_in_retrieval"] = self._include_pending_facts_in_retrieval()
+        debug["dropped_runtime_rows"] = [dict(row) for row in runtime_selected_dropped]
+        debug["include_pending_facts_in_retrieval"] = include_runtime
         if active_episode:
             debug["active_episode"] = active_episode
         context_pack.debug = debug
+
+    def _runtime_row_matches_query(self, row: dict[str, Any], query: MemoryQuery) -> bool:
+        metadata = dict(row.get("metadata") or {})
+        row_session = str(metadata.get("session_id") or "").strip()
+        query_session = str(query.session_id or "").strip()
+        if row_session and query_session and row_session == query_session:
+            return True
+
+        row_episode = str(metadata.get("current_episode_id") or "").strip()
+        query_episode = str(query.topic_thread_id or "").strip()
+        if row_episode and query_episode and row_episode == query_episode:
+            return True
+
+        row_text = " ".join(
+            [
+                str(row.get("text") or ""),
+                str(row.get("summary") or ""),
+                str(metadata.get("active_topic") or ""),
+            ]
+        ).lower()
+        query_text = str(query.text or "").lower()
+        if not row_text or not query_text:
+            return False
+
+        query_tokens = {token for token in query_text.split() if len(token) >= 4}
+        if not query_tokens:
+            return False
+        overlap = sum(1 for token in query_tokens if token in row_text)
+        return overlap >= 1
 
     def _merge_context_block(self, context_pack: ContextPack, key: str, value: str) -> None:
         if not value:
@@ -551,10 +619,21 @@ class MemoryService:
             stats = dict(self.inspector.get_stats() or {})
             runtime_store = getattr(self, "runtime_session_store", None)
             episode_manager = getattr(self, "episode_manager", None)
+            worker = getattr(self, "worker", None)
             if runtime_store is not None and hasattr(runtime_store, "list_states"):
                 stats["runtime_sessions_count"] = len(runtime_store.list_states(limit=10000))
             if episode_manager is not None and hasattr(episode_manager, "list_episodes"):
                 stats["runtime_episodes_count"] = len(episode_manager.list_episodes(limit=10000))
+            if worker is not None and hasattr(worker, "get_stats"):
+                try:
+                    worker_stats = dict(worker.get_stats() or {})
+                    worker_config = dict(worker_stats.get("config") or {})
+                    worker_inner_stats = dict(worker_stats.get("stats") or {})
+                    stats["scheduler_mode"] = str(worker_config.get("scheduler_mode") or "")
+                    stats["interrupt_count"] = int(worker_inner_stats.get("interrupt_count") or 0)
+                    stats["requeue_count"] = int(worker_inner_stats.get("requeue_count") or 0)
+                except Exception:
+                    pass
             return {"stats": stats}
 
         elif request.kind == "runtime":

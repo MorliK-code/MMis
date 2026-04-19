@@ -26,7 +26,7 @@ from PySide6.QtCore import QTimer, Qt, QUrl, Slot
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QVBoxLayout, QWidget
 
-from config.settings import load_config
+from config.settings import DATA_DIR, load_config
 from llm.tokenizer import estimate_tokens
 import ui.chat_shell as proto
 from ui.api_client import ApiClient, ApiClientError
@@ -158,6 +158,8 @@ class ChatWindow(proto.ExactChatWindow):
         self._load_ui_state()
         super().__init__()
         self.setWindowTitle("MMis - Chat")
+        if hasattr(self, "_metrics_timer"):
+            self._metrics_timer.timeout.connect(self._refresh_persona_label)
         if self.api is None:
             self.api = ApiClient()
         self._audio_output = QAudioOutput(self)
@@ -169,6 +171,7 @@ class ChatWindow(proto.ExactChatWindow):
 
     def _build_ui(self):
         super()._build_ui()
+        self._refresh_persona_label()
         self.input.setPlaceholderText("Напиши сообщение")
         self.search_btn.setText("Очистить")
         self.clear_btn.setText("Инспектор")
@@ -183,6 +186,97 @@ class ChatWindow(proto.ExactChatWindow):
         self.send_btn.setToolTip("Отправить сообщение")
         self._rebuild_mode_row()
         self._wire_rail_buttons()
+
+    @staticmethod
+    def _safe_character_id(value) -> str:
+        raw = str(value or "").strip().lower()
+        out = "".join(ch for ch in raw if ch.isalnum() or ch in {"_", "-"})
+        return out or ""
+
+    @staticmethod
+    def _read_json_payload(path: Path) -> dict:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @classmethod
+    def _payload_character_id(cls, payload: dict) -> str:
+        for key in ("active_character_id", "character_id", "id"):
+            cid = cls._safe_character_id(payload.get(key))
+            if cid:
+                return cid
+        return ""
+
+    @staticmethod
+    def _fallback_character_name(character_id: str) -> str:
+        cleaned = str(character_id or "").strip().replace("_", " ").replace("-", " ")
+        parts = [part for part in cleaned.split(" ") if part]
+        if not parts:
+            return ""
+        return " ".join(part[:1].upper() + part[1:] for part in parts)
+
+    @staticmethod
+    def _payload_character_name(payload: dict) -> str:
+        for key in ("name", "display_name", "title"):
+            name = str(payload.get(key) or "").strip()
+            if name:
+                return name
+        return ""
+
+    def _resolve_active_character_id(self) -> str:
+        state = self._read_json_payload(MemoryStorageDir / "brain_state.json")
+        cid = self._payload_character_id(state)
+        if cid:
+            return cid
+        global_state = state.get("global")
+        if isinstance(global_state, dict):
+            cid = self._payload_character_id(global_state)
+            if cid:
+                return cid
+
+        manifest = self._read_json_payload(MemoryStorageDir / "characters_runtime" / "manifest.json")
+        cid = self._payload_character_id(manifest)
+        if cid:
+            return cid
+        for row in list(manifest.get("characters") or []):
+            if not isinstance(row, dict) or row.get("enabled") is False:
+                continue
+            cid = self._payload_character_id(row)
+            if cid:
+                return cid
+        return "asya"
+
+    def _resolve_persona_display_name(self) -> str:
+        character_id = self._resolve_active_character_id()
+        manifest = self._read_json_payload(MemoryStorageDir / "characters_runtime" / "manifest.json")
+        character_paths = [
+            MemoryStorageDir / "characters_runtime" / character_id / "character.json",
+            DATA_DIR / "specs" / "characters" / character_id / "character.json",
+        ]
+        for path in character_paths:
+            name = self._payload_character_name(self._read_json_payload(path))
+            if name:
+                return name
+        for row in list(manifest.get("characters") or []):
+            if not isinstance(row, dict):
+                continue
+            if self._safe_character_id(row.get("id")) != character_id:
+                continue
+            name = self._payload_character_name(row)
+            if name:
+                return name
+        return self._fallback_character_name(character_id)
+
+    def _refresh_persona_label(self) -> None:
+        label = getattr(self, "persona_label", None)
+        if label is None:
+            return
+        name = self._resolve_persona_display_name()
+        if name and label.text() != name:
+            label.setText(name)
+            label.adjustSize()
 
     def _build_models_popup(self, anchor: QWidget) -> proto.PopupFrame:
         return super()._build_models_popup(anchor)
@@ -257,6 +351,14 @@ class ChatWindow(proto.ExactChatWindow):
             if taken is not None and widget is not None:
                 widget.deleteLater()
 
+    def _insert_message_bubble(self, bubble: QWidget) -> None:
+        insert_index = self.messages_layout.count()
+        if insert_index > 0:
+            tail_item = self.messages_layout.itemAt(insert_index - 1)
+            if tail_item is not None and tail_item.spacerItem() is not None:
+                insert_index -= 1
+        self.messages_layout.insertWidget(insert_index, bubble)
+
     def _clear_messages(self) -> None:
         if self._worker and self._worker.isRunning():
             QMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
@@ -307,7 +409,7 @@ class ChatWindow(proto.ExactChatWindow):
                 perf_items,
                 show_thinking_header=bool(str(thinking or "").strip()),
             )
-            self.messages_layout.addWidget(bubble)
+            self._insert_message_bubble(bubble)
             if role == "user" and str(text or "").strip():
                 last_user_text = str(text or "")
         if history_changed:
@@ -545,6 +647,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._verbose_chip.setVisible(bool(self._verbose_enabled))
         if self._json_chip is not None:
             self._json_chip.setVisible(bool(self._json_mode_enabled))
+        self._refresh_persona_label()
 
     @staticmethod
     def _apply_chip_style(chip, text: str, active: bool) -> None:
@@ -907,9 +1010,9 @@ class ChatWindow(proto.ExactChatWindow):
         self._pending_user_text = text
         self._update_active_chat_title(text)
         user_bubble = proto.MessageBubble("user", text, "", "", [])
-        self.messages_layout.addWidget(user_bubble)
+        self._insert_message_bubble(user_bubble)
         assistant_bubble = proto.MessageBubble("assistant", "", "", "", [])
-        self.messages_layout.addWidget(assistant_bubble)
+        self._insert_message_bubble(assistant_bubble)
         self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
         self._pending_history_index = len(self._history)
         self._history.append(("ai", "", "…", None, None))

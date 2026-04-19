@@ -18,7 +18,7 @@ from config.settings import BASE_DIR
 class MemoryLLMConfig:
     """Конфигурация Memory LLM."""
     provider: str = "ollama"
-    model: str = "qcwind/qwen3-8b-instruct-Q4-K-M"
+    model: str = "qwen3.5:9b"
     temperature: float = 0.1
     max_tokens: int = 1024
     timeout: float = 60.0
@@ -73,6 +73,7 @@ class MemoryCoreConfig:
     # Настройки паузы worker во время обработки запросов API
     enable_worker_pause_during_api_request: bool = True
     worker_pause_timeout: float = 0.0  # 0 = без ограничения, >0 = макс. время паузы в секундах
+    memory_llm_scheduler_mode: str = "strict"  # strict | cooperative
     
     # Таймаут завершения worker при простое
     worker_shutdown_idle_timeout: float = 300.0  # 5 минут по умолчанию
@@ -131,6 +132,8 @@ class MemoryCoreConfig:
         config.worker_poll_interval = float(data.get("worker_poll_interval", 2.0))
         config.enable_worker_pause_during_api_request = bool(data.get("enable_worker_pause_during_api_request", True))
         config.worker_pause_timeout = float(data.get("worker_pause_timeout", 0.0))
+        scheduler_mode = str(data.get("memory_llm_scheduler_mode", "strict")).strip().lower()
+        config.memory_llm_scheduler_mode = scheduler_mode if scheduler_mode in {"strict", "cooperative"} else "strict"
         config.worker_shutdown_idle_timeout = float(data.get("worker_shutdown_idle_timeout", 300.0))
         
         # Task model profiles (основной источник настроек LLM)
@@ -206,6 +209,7 @@ class MemoryCoreConfig:
             "worker_poll_interval": self.worker_poll_interval,
             "enable_worker_pause_during_api_request": self.enable_worker_pause_during_api_request,
             "worker_pause_timeout": self.worker_pause_timeout,
+            "memory_llm_scheduler_mode": self.memory_llm_scheduler_mode,
             "worker_shutdown_idle_timeout": self.worker_shutdown_idle_timeout,
             "llm": {
                 "provider": self.llm.provider,

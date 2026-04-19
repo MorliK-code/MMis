@@ -62,11 +62,14 @@ class _FakeWorker:
     def get_stats(self):
         return {
             "running": True,
+            "config": {"scheduler_mode": "cooperative"},
             "stats": {
                 "jobs_processed": 15,
                 "jobs_succeeded": 11,
                 "jobs_failed": 0,
                 "jobs_retried": 4,
+                "interrupt_count": 3,
+                "requeue_count": 3,
             },
         }
 
@@ -112,6 +115,9 @@ class InspectorServiceTests(unittest.TestCase):
         self.assertEqual(overview["worker_jobs_succeeded"], 11)
         self.assertEqual(overview["worker_jobs_retried"], 4)
         self.assertEqual(overview["worker_jobs_failed"], 0)
+        self.assertEqual(overview["worker_interrupt_count"], 3)
+        self.assertEqual(overview["worker_requeue_count"], 3)
+        self.assertEqual(overview["scheduler_mode"], "cooperative")
 
     def test_list_jobs_exposes_trace_confirmation_and_restart_counts(self) -> None:
         memory_core = SimpleNamespace(
@@ -160,6 +166,9 @@ class InspectorServiceTests(unittest.TestCase):
         self.assertEqual(overview["runtime_episodes_count"], 1)
         self.assertEqual(runtime["sessions"][0]["session_id"], "chat-runtime")
         self.assertEqual(runtime["active_episode"]["episode_id"], episode["episode_id"])
+        self.assertIn("scheduler_mode", runtime)
+        self.assertIn("interrupt_count", runtime)
+        self.assertIn("requeue_count", runtime)
 
 
 if __name__ == "__main__":

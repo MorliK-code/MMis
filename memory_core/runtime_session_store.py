@@ -75,10 +75,19 @@ class RuntimeSessionStore:
     immediately after ingest_event().
     """
 
-    def __init__(self, recent_turn_limit: int = 8, question_limit: int = 6, decision_limit: int = 6):
+    def __init__(
+        self,
+        recent_turn_limit: int = 8,
+        question_limit: int = 6,
+        decision_limit: int = 6,
+        session_ttl_sec: int = 4 * 3600,
+        recent_user_state_ttl_sec: int = 20 * 60,
+    ):
         self._recent_turn_limit = max(2, int(recent_turn_limit or 8))
         self._question_limit = max(1, int(question_limit or 6))
         self._decision_limit = max(1, int(decision_limit or 6))
+        self._session_ttl_sec = max(1, int(session_ttl_sec or 4 * 3600))
+        self._recent_user_state_ttl_sec = max(1, int(recent_user_state_ttl_sec or 20 * 60))
         self._states: dict[tuple[str, str], RuntimeSessionState] = {}
         self._lock = RLock()
 
@@ -97,6 +106,7 @@ class RuntimeSessionStore:
         ts = float(envelope.ts or time.time())
 
         with self._lock:
+            self.cleanup_expired(now=ts)
             state = self._get_or_create_locked(workspace, session)
             if current_episode_id:
                 state.current_episode_id = str(current_episode_id)
@@ -114,10 +124,12 @@ class RuntimeSessionStore:
 
                 if source == "user":
                     state.last_user_turn = dict(turn)
+                    self._clear_irrelevant_questions_on_topic_switch(state, text)
                     self._capture_open_question(state, text, envelope.event_id, ts)
                     self._capture_recent_user_state(state, text, meta, ts)
                 elif source == "assistant":
                     state.last_assistant_turn = dict(turn)
+                    self._close_answered_question(state, text)
 
                 self._capture_decision(state, text, envelope.event_id, ts)
 
@@ -126,7 +138,9 @@ class RuntimeSessionStore:
                 state.active_topic = topic
 
             task = self._extract_task(meta, text, source)
-            if task:
+            if task == {}:
+                state.active_task = None
+            elif task:
                 state.active_task = task
 
             state.updated_at = time.time()
@@ -144,6 +158,7 @@ class RuntimeSessionStore:
         workspace = _clean_id(workspace_id, "global")
         session = _clean_id(session_id, "default")
         with self._lock:
+            self.cleanup_expired()
             state = self._states.get((workspace, session))
             return state.to_dict() if state is not None else {}
 
@@ -151,6 +166,7 @@ class RuntimeSessionStore:
         workspace = _clean_id(workspace_id, "") if workspace_id else ""
         cap = max(1, int(limit or 50))
         with self._lock:
+            self.cleanup_expired()
             rows = []
             for state in self._states.values():
                 if workspace and state.workspace_id != workspace:
@@ -245,6 +261,7 @@ class RuntimeSessionStore:
             blocks["unresolved_items"] = "\n".join(f"- {line}" for line in unresolved_lines)
 
         recent_user_state = dict(state.get("recent_user_state") or {})
+        recent_user_state = self._live_recent_user_state(state, recent_user_state)
         if recent_user_state:
             selected.append(
                 self._selected_row(
@@ -333,6 +350,11 @@ class RuntimeSessionStore:
         return ""
 
     def _extract_task(self, metadata: dict[str, Any], text: str, source: str) -> dict[str, Any] | None:
+        low = text.lower()
+        close_markers = ("готово", "сделано", "закрыто", "не актуально", "done", "fixed")
+        if source in {"user", "assistant"} and any(marker in low for marker in close_markers):
+            return {}
+
         for key in ("active_task", "task", "task_state"):
             value = metadata.get(key)
             if isinstance(value, dict):
@@ -340,7 +362,6 @@ class RuntimeSessionStore:
             if str(value or "").strip():
                 return {"text": str(value).strip(), "source": "metadata"}
 
-        low = text.lower()
         task_markers = (
             "fix",
             "todo",
@@ -359,6 +380,10 @@ class RuntimeSessionStore:
 
     def _capture_open_question(self, state: RuntimeSessionState, text: str, event_id: str, ts: float) -> None:
         low = text.lower()
+        close_markers = ("решено", "понятно", "ответили", "спасибо, ясно")
+        if any(marker in low for marker in close_markers):
+            state.open_questions = []
+            return
         question_markers = ("?", "можешь", "как ", "почему", "что ", "why ", "how ", "can you")
         if not any(marker in low for marker in question_markers):
             return
@@ -372,6 +397,9 @@ class RuntimeSessionStore:
             return
         row = {"text": _truncate_text(text, 260), "event_id": event_id, "ts": ts}
         state.recent_decisions = _dedupe_by_text([row, *state.recent_decisions])[: self._decision_limit]
+        close_task_markers = ("готово", "сделано", "закрыто", "не актуально", "done", "fixed")
+        if any(marker in low for marker in close_task_markers):
+            state.active_task = None
 
     def _capture_recent_user_state(
         self,
@@ -382,7 +410,11 @@ class RuntimeSessionStore:
     ) -> None:
         user_state = metadata.get("user_state")
         if isinstance(user_state, dict):
-            state.recent_user_state = {**dict(user_state), "ts": ts}
+            state.recent_user_state = {
+                **dict(user_state),
+                "ts": ts,
+                "current_episode_id": state.current_episode_id,
+            }
             return
 
         low = text.lower()
@@ -394,7 +426,67 @@ class RuntimeSessionStore:
         elif any(token in low for token in ("рад", "ура", "класс", "great", "finally")):
             signal = "relieved"
         if signal:
-            state.recent_user_state = {"signal": signal, "text": _truncate_text(text, 220), "ts": ts}
+            state.recent_user_state = {
+                "signal": signal,
+                "text": _truncate_text(text, 220),
+                "ts": ts,
+                "current_episode_id": state.current_episode_id,
+            }
+
+    def _clear_irrelevant_questions_on_topic_switch(self, state: RuntimeSessionState, text: str) -> None:
+        if not state.open_questions:
+            return
+        low = str(text or "").lower()
+        switch_markers = (
+            "new topic",
+            "другая тема",
+            "теперь другой",
+            "switch topic",
+            "сменим тему",
+        )
+        if any(marker in low for marker in switch_markers):
+            state.open_questions = []
+
+    def _close_answered_question(self, state: RuntimeSessionState, assistant_text: str) -> None:
+        if not state.open_questions:
+            return
+        answer = str(assistant_text or "").strip().lower()
+        if not answer:
+            return
+        remained: list[dict[str, Any]] = []
+        for item in state.open_questions:
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            normalized = text.lower().rstrip("?")
+            probe = " ".join(normalized.split()[:5])
+            if probe and probe in answer:
+                continue
+            remained.append(dict(item))
+        state.open_questions = remained[: self._question_limit]
+
+    def cleanup_expired(self, *, now: float | None = None) -> int:
+        now_ts = float(now or time.time())
+        removed = 0
+        for key, state in list(self._states.items()):
+            if now_ts - float(state.updated_at or 0.0) > float(self._session_ttl_sec):
+                self._states.pop(key, None)
+                removed += 1
+        return removed
+
+    def _live_recent_user_state(self, state: dict[str, Any], recent_state: dict[str, Any]) -> dict[str, Any]:
+        if not recent_state:
+            return {}
+        now_ts = time.time()
+        state_ts = float(recent_state.get("ts") or 0.0)
+        if not state_ts or now_ts - state_ts > float(self._recent_user_state_ttl_sec):
+            return {}
+        state_episode = str(state.get("current_episode_id") or "").strip()
+        recent_episode = str(recent_state.get("current_episode_id") or "").strip()
+        follow_up = bool(recent_state.get("follow_up"))
+        if recent_episode and state_episode and recent_episode != state_episode and not follow_up:
+            return {}
+        return dict(recent_state)
 
 
 def _clean_id(value: Any, default: str) -> str:

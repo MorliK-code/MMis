@@ -93,9 +93,12 @@ class MemoryCoreAdapter:
         self._current_workspace = self.config.default_workspace
         self._current_session = "default"
         self._config_file = config_file
+        self._scheduler_mode = str(getattr(config_file, "memory_llm_scheduler_mode", "strict") or "strict").strip().lower()
+        if self._scheduler_mode not in {"strict", "cooperative"}:
+            self._scheduler_mode = "strict"
         
         # Настройки паузы worker из конфига
-        self._enable_pause = bool(config_file.enable_worker_pause_during_api_request)
+        self._enable_pause = bool(config_file.enable_worker_pause_during_api_request) and self.is_strict_scheduler_mode()
         self._pause_timeout = float(config_file.worker_pause_timeout or 0.0)
         
         # Таймер для автоматического возобновления Memory LLM
@@ -103,6 +106,21 @@ class MemoryCoreAdapter:
         self._auto_resume_delay = float(config_file.worker_pause_timeout or 0.0)
         self._resume_epoch = 0
         self._resume_epoch_lock = threading.Lock()
+        LOGGER.info(
+            "MemoryCoreAdapter scheduler mode: %s (worker pause enabled=%s)",
+            self._scheduler_mode,
+            self._enable_pause,
+        )
+
+    def scheduler_mode(self) -> str:
+        mode = str(getattr(self, "_scheduler_mode", "strict") or "strict").strip().lower()
+        return mode if mode in {"strict", "cooperative"} else "strict"
+
+    def is_strict_scheduler_mode(self) -> bool:
+        return self.scheduler_mode() == "strict"
+
+    def should_pause_worker_for_api_request(self) -> bool:
+        return self.worker_pause_enabled and self.is_strict_scheduler_mode()
 
     def ingest_event(
         self,
@@ -754,7 +772,7 @@ class MemoryCoreAdapter:
         pending_jobs = self._pending_memory_job_count()
         
         # Выгружаем основную модель только если действительно есть отложенные memory-задачи.
-        if pending_jobs > 0:
+        if pending_jobs > 0 and self.is_strict_scheduler_mode():
             self._unload_main_model_from_vram()
         
         worker = self._get_worker()

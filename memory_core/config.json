@@ -10,6 +10,7 @@
   
   "enable_worker_pause_during_api_request": true,
   "worker_pause_timeout": 0.0,
+  "memory_llm_scheduler_mode": "cooperative",
   
   "worker_shutdown_idle_timeout": 0.0,
   

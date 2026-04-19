@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "character_id": "asya",
-  "name": "Asya",
+  "name": "Ася",
   "default_mood": "neutral",
   "default_mode": "chatting",
   "llm_profile": "ASYA",

@@ -81,3 +81,31 @@ class ReplyWorker(QThread):
         except Exception as exc:
             msg = str(exc or "").strip()
             self.errored.emit(msg if msg else traceback.format_exc())
+
+
+class StatusPollWorker(QThread):
+    status_ready = Signal(object)
+
+    def __init__(self, api: ApiClient):
+        super().__init__()
+        self.api = api
+
+    def run(self):
+        payload = {
+            "api_ok": False,
+            "model": "",
+            "model_status": {},
+            "memory_status": {},
+            "error": "",
+        }
+        try:
+            health = self.api.health()
+            payload["api_ok"] = str(health.get("status") or "").strip().lower() == "ok"
+            payload["model"] = str(health.get("model") or self.api.get_runtime_model() or "")
+            payload["model_status"] = dict(health.get("model_status") or {})
+            payload["memory_status"] = dict(health.get("memory_status") or {})
+        except ApiClientError as exc:
+            payload["error"] = str(exc)
+        except Exception as exc:
+            payload["error"] = str(exc or "").strip() or traceback.format_exc()
+        self.status_ready.emit(payload)

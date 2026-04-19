@@ -9,8 +9,8 @@ from math import exp
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QFontMetricsF, QPen, QTextCursor
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPointF, Property, QPropertyAnimation, QRect, QRectF, QSize, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QFontMetricsF, QPen, QRadialGradient, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QScrollArea,
+    QScrollBar,
     QSizePolicy,
     QSpacerItem,
     QToolButton,
@@ -50,12 +51,13 @@ except Exception:  # pragma: no cover
 
 try:
     from ui.api_client import ApiClient, ApiClientError
-    from ui.workers import ReplyWorker, ReplyResult
+    from ui.workers import ReplyWorker, ReplyResult, StatusPollWorker
 except Exception:  # pragma: no cover
     ApiClient = None
     ApiClientError = RuntimeError
     ReplyWorker = None
     ReplyResult = None
+    StatusPollWorker = None
 
 
 BG = "#0a0b0d"
@@ -71,6 +73,11 @@ ACCENT = "#8b5cf6"
 OK_BG = "rgba(34,197,94,0.10)"
 OK_LINE = "rgba(34,197,94,0.18)"
 OK_TEXT = "#86efac"
+BAD_BG = "rgba(239,68,68,0.12)"
+BAD_LINE = "rgba(239,68,68,0.24)"
+BAD_TEXT = "#fca5a5"
+BAD_DOT = "#ef4444"
+OK_DOT = "#22c55e"
 THINKING = "#b5a9d4"
 THINKING_TIME_TEXT = "#A294D2"
 THINKING_TIME_BG = "#1A1D25"
@@ -560,13 +567,35 @@ class BrandBadge(QWidget):
     def __init__(self, text: str = "MMis", parent: QWidget | None = None):
         super().__init__(parent)
         self._text = str(text or "")
-        self._font = _topbar_font(pixel_size=13, weight=QFont.Weight.DemiBold)
-        self.setFixedHeight(20)
+        self._font = QFont("Cascadia Code")
+        self._font.setPixelSize(14)
+        self._font.setWeight(QFont.Weight.DemiBold)
+        self._font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.NoSubpixelAntialias)
+        self._font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        self._dot_opacity = 0.42
+        self.setFixedHeight(24)
+        self._dot_animation = QPropertyAnimation(self, b"dotOpacity", self)
+        self._dot_animation.setDuration(3200)
+        self._dot_animation.setStartValue(0.42)
+        self._dot_animation.setKeyValueAt(0.5, 1.0)
+        self._dot_animation.setEndValue(0.42)
+        self._dot_animation.setEasingCurve(QEasingCurve.Type.InOutSine)
+        self._dot_animation.setLoopCount(-1)
+        self._dot_animation.start()
+
+    def get_dot_opacity(self) -> float:
+        return float(self._dot_opacity)
+
+    def set_dot_opacity(self, value: float) -> None:
+        self._dot_opacity = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    dotOpacity = Property(float, get_dot_opacity, set_dot_opacity)
 
     def sizeHint(self) -> QSize:
         fm = QFontMetricsF(self._font)
-        width = int(10 + 8 + fm.horizontalAdvance(self._text) + 2)
-        return QSize(width, 20)
+        width = int(24 + 5 + fm.horizontalAdvance(self._text) + 2)
+        return QSize(width, 24)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -575,12 +604,31 @@ class BrandBadge(QWidget):
 
         center_y = self.height() / 2.0
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(_to_qcolor(ACCENT))
-        painter.drawEllipse(QRect(int(0), int(center_y - 3), 6, 6))
+        dot_center_x = 9.5
+        dot_radius = 3.0
+        glow_radius = 9.5
+        glow_power = self._dot_opacity * self._dot_opacity
+        glow_center = QColor(_to_qcolor(ACCENT))
+        glow_center.setAlphaF(0.025 + (0.18 * glow_power))
+        glow_mid = QColor(_to_qcolor(ACCENT))
+        glow_mid.setAlphaF(0.006 + (0.055 * glow_power))
+        glow_edge = QColor(_to_qcolor(ACCENT))
+        glow_edge.setAlphaF(0.0)
+        glow = QRadialGradient(QPointF(dot_center_x, center_y), glow_radius)
+        glow.setColorAt(0.0, glow_center)
+        glow.setColorAt(0.64, glow_mid)
+        glow.setColorAt(1.0, glow_edge)
+        painter.setBrush(glow)
+        painter.drawEllipse(QRectF(dot_center_x - glow_radius, center_y - glow_radius, glow_radius * 2.0, glow_radius * 2.0))
+
+        dot_color = _to_qcolor(ACCENT)
+        dot_color.setAlphaF(self._dot_opacity)
+        painter.setBrush(dot_color)
+        painter.drawEllipse(QRectF(dot_center_x - dot_radius, center_y - dot_radius, dot_radius * 2.0, dot_radius * 2.0))
 
         painter.setFont(self._font)
-        painter.setPen(_to_qcolor("#ffffff"))
-        painter.drawText(QRect(12, 0, self.width() - 12, self.height()), int(Qt.AlignmentFlag.AlignVCenter), self._text)
+        painter.setPen(_to_qcolor("#d9d0ff"))
+        painter.drawText(QRect(24, 0, self.width() - 24, self.height()), int(Qt.AlignmentFlag.AlignVCenter), self._text)
 
 
 class FlowLayout(QLayout):
@@ -752,11 +800,22 @@ class Chip(CrispLabel):
 
 
 class StatusPill(QWidget):
-    def __init__(self, text: str):
+    def __init__(self, text: str, active: bool = False):
         super().__init__()
         self._text = str(text or "")
         self._font = _topbar_font(pixel_size=10)
+        self._active = bool(active)
         self.setFixedHeight(20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_status(self, active: bool, *, tooltip: str = "", text: str | None = None) -> None:
+        if text is not None:
+            self._text = str(text or "")
+        self._active = bool(active)
+        if tooltip:
+            self.setToolTip(tooltip)
+        self.updateGeometry()
+        self.update()
 
     def sizeHint(self) -> QSize:
         fm = QFontMetricsF(self._font)
@@ -767,18 +826,322 @@ class StatusPill(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = self.rect().adjusted(0, 0, -1, -1)
-        painter.setPen(_to_qcolor(STATUS_LINE))
-        painter.setBrush(_to_qcolor(STATUS_BG))
+        bg = STATUS_BG if self._active else BAD_BG
+        line = STATUS_LINE if self._active else BAD_LINE
+        dot = OK_DOT if self._active else BAD_DOT
+        text = OK_TEXT if self._active else BAD_TEXT
+        painter.setPen(_to_qcolor(line))
+        painter.setBrush(_to_qcolor(bg))
         painter.drawRoundedRect(rect, 6, 6)
 
         center_y = self.height() / 2.0
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(_to_qcolor("#22c55e"))
+        painter.setBrush(_to_qcolor(dot))
         painter.drawEllipse(QRect(8, int(center_y - 2), 5, 5))
 
-        painter.setPen(_to_qcolor(OK_TEXT))
+        painter.setPen(_to_qcolor(text))
         painter.setFont(self._font)
         painter.drawText(QRect(19, 0, self.width() - 27, self.height()), int(Qt.AlignmentFlag.AlignVCenter), self._text)
+
+
+class ChatScrollOverlay(QWidget):
+    def __init__(self, scroll_area: QScrollArea):
+        super().__init__(scroll_area.viewport())
+        self._scroll_area = scroll_area
+        self._bar = scroll_area.verticalScrollBar()
+        self._dragging = False
+        self._drag_offset = 0.0
+        self._last_handle_rect = QRectF()
+        self._trail: list[tuple[QRectF, float, int]] = []
+        self._trail_start_alpha = 0.42
+        self._last_scroll_direction = 0
+        self._trail_fade_delay = QTimer(self)
+        self._trail_fade_delay.setSingleShot(True)
+        self._trail_fade_delay.setInterval(35)
+        self._trail_fade_delay.timeout.connect(self._start_trail_fade)
+        self._trail_fade_timer = QTimer(self)
+        self._trail_fade_timer.setInterval(24)
+        self._trail_fade_timer.timeout.connect(self._fade_trail)
+        self.setFixedWidth(12)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        scroll_area.viewport().installEventFilter(self)
+        self._bar.valueChanged.connect(self._on_value_changed)
+        self._bar.rangeChanged.connect(self._on_range_changed)
+        QTimer.singleShot(0, self._sync_geometry)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self._scroll_area.viewport() and event.type() in {
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.LayoutRequest,
+        }:
+            self._sync_geometry()
+        return super().eventFilter(watched, event)
+
+    def _sync_geometry(self) -> None:
+        viewport = self._scroll_area.viewport()
+        self.setGeometry(max(0, viewport.width() - 14), 0, 12, viewport.height())
+        visible = self._bar.maximum() > self._bar.minimum()
+        self.setVisible(visible)
+        if visible:
+            self.raise_()
+        self.update()
+
+    def _track_rect(self) -> QRectF:
+        return QRectF(self.rect()).adjusted(2.0, 10.0, -2.0, -10.0)
+
+    def _handle_rect(self) -> QRectF:
+        track = self._track_rect()
+        if track.width() <= 0.0 or track.height() <= 0.0:
+            return QRectF()
+        minimum = int(self._bar.minimum())
+        maximum = int(self._bar.maximum())
+        if maximum <= minimum:
+            return QRectF()
+
+        page_step = max(1, int(self._bar.pageStep()))
+        visible_ratio = page_step / max(1, (maximum - minimum) + page_step)
+        natural_height = track.height() * visible_ratio
+        max_height = min(92.0, track.height() * 0.34)
+        handle_height = max(28.0, min(natural_height, max_height))
+        handle_height = min(handle_height, track.height())
+        travel = max(0.0, track.height() - handle_height)
+        value_ratio = (int(self._bar.value()) - minimum) / max(1, maximum - minimum)
+        top = track.top() + travel * value_ratio
+        return QRectF(track.left(), top, track.width(), handle_height)
+
+    def _set_value_from_y(self, y: float) -> None:
+        track = self._track_rect()
+        handle = self._handle_rect()
+        travel = max(1.0, track.height() - handle.height())
+        top = max(track.top(), min(float(y) - self._drag_offset, track.bottom() - handle.height()))
+        ratio = (top - track.top()) / travel
+        minimum = int(self._bar.minimum())
+        maximum = int(self._bar.maximum())
+        self._bar.setValue(round(minimum + (maximum - minimum) * ratio))
+
+    def _on_value_changed(self, _value: int) -> None:
+        current = self._handle_rect()
+        delta = current.top() - self._last_handle_rect.top()
+        if self._last_handle_rect.width() > 0.0 and abs(delta) > 1.0:
+            direction = 1 if delta > 0.0 else -1
+            if self._last_scroll_direction and self._last_scroll_direction != direction:
+                self._trail.clear()
+            self._last_scroll_direction = direction
+            self._trail.append((QRectF(self._last_handle_rect), self._trail_start_alpha, direction))
+            self._trail = self._trail[-8:]
+            self._trail_fade_timer.stop()
+            self._trail_fade_delay.start()
+        self._last_handle_rect = QRectF(current)
+        self.update()
+
+    def _on_range_changed(self, _minimum: int, _maximum: int) -> None:
+        self._trail.clear()
+        self._last_scroll_direction = 0
+        self._trail_fade_delay.stop()
+        self._trail_fade_timer.stop()
+        self._last_handle_rect = self._handle_rect()
+        self._sync_geometry()
+
+    def _start_trail_fade(self) -> None:
+        if self._trail:
+            self._trail_fade_timer.start()
+
+    def _fade_trail(self) -> None:
+        if not self._trail:
+            self._trail_fade_timer.stop()
+            return
+
+        handle = self._handle_rect()
+        if handle.width() <= 0.0 or handle.height() <= 0.0:
+            self._trail.clear()
+            self._trail_fade_timer.stop()
+            self.update()
+            return
+
+        handle_center = handle.center().y()
+        distances = [abs(rect.center().y() - handle_center) for rect, _alpha, _direction in self._trail]
+        max_distance = max(distances) if distances else 0.0
+        track_height = max(1.0, self._track_rect().height())
+        # The longer the trail, the stronger the overall geometric fade.
+        length_factor = 1.0 + min(1.6, max_distance / (track_height * 0.45))
+
+        faded_trail: list[tuple[QRectF, float, int]] = []
+        for (rect, alpha, direction), distance in zip(self._trail, distances):
+            distance_ratio = (distance / max_distance) if max_distance > 0.0 else 0.0
+            # Near the thumb: slower decay. Far from the thumb: faster decay.
+            geo_base = self._lerp(0.90, 0.56, distance_ratio)
+            next_alpha = float(alpha) * (geo_base**length_factor)
+            if next_alpha > 0.006:
+                faded_trail.append((rect, next_alpha, direction))
+
+        self._trail = faded_trail
+        if not self._trail:
+            self._trail_fade_timer.stop()
+        self.update()
+
+    @staticmethod
+    def _scroll_color(alpha: float) -> QColor:
+        color = QColor(165, 139, 255)
+        color.setAlphaF(max(0.0, min(1.0, float(alpha))))
+        return color
+
+    @staticmethod
+    def _lerp(start: float, end: float, amount: float) -> float:
+        t = max(0.0, min(1.0, float(amount)))
+        return float(start) + ((float(end) - float(start)) * t)
+
+    def _paint_trail_smear(self, painter: QPainter, track: QRectF, handle: QRectF) -> None:
+        if not self._trail:
+            return
+        direction = self._last_scroll_direction
+        relevant_trail = [
+            (rect, alpha, rect_direction)
+            for rect, alpha, rect_direction in self._trail
+            if alpha > 0.006
+            and rect.width() > 0.0
+            and rect.height() > 0.0
+            and (direction == 0 or rect_direction == direction)
+        ]
+        if not relevant_trail:
+            return
+        fade_progress = 1.0 - (relevant_trail[0][1] / max(0.001, self._trail_start_alpha))
+        if direction > 0:
+            relevant_trail = [
+                (rect, alpha, rect_direction)
+                for rect, alpha, rect_direction in relevant_trail
+                if rect.center().y() <= handle.center().y()
+            ]
+            if not relevant_trail:
+                return
+            far_rect = relevant_trail[0][0]
+            next_rect = relevant_trail[1][0] if len(relevant_trail) > 1 else handle
+            top = self._lerp(far_rect.top(), next_rect.top(), fade_progress)
+            bottom = handle.top() + min(5.0, handle.height() * 0.18)
+        elif direction < 0:
+            relevant_trail = [
+                (rect, alpha, rect_direction)
+                for rect, alpha, rect_direction in relevant_trail
+                if rect.center().y() >= handle.center().y()
+            ]
+            if not relevant_trail:
+                return
+            far_rect = relevant_trail[0][0]
+            next_rect = relevant_trail[1][0] if len(relevant_trail) > 1 else handle
+            top = handle.bottom() - min(5.0, handle.height() * 0.18)
+            bottom = self._lerp(far_rect.bottom(), next_rect.bottom(), fade_progress)
+        else:
+            rects = [rect for rect, _alpha, _rect_direction in relevant_trail]
+            top = min([rect.top() for rect in rects] + [handle.top()])
+            bottom = max([rect.bottom() for rect in rects] + [handle.bottom()])
+        if bottom <= top:
+            return
+        max_alpha = max(alpha for _rect, alpha, _rect_direction in relevant_trail)
+        bounds = QRectF(track)
+        if direction > 0:
+            # Keep a subtle overlap with the handle so the smear reads as continuous.
+            bounds.setBottom(min(track.bottom(), handle.top() + 8.0))
+        elif direction < 0:
+            # Keep a subtle overlap with the handle so the smear reads as continuous.
+            bounds.setTop(max(track.top(), handle.bottom() - 8.0))
+        smear = QRectF(
+            handle.left(),
+            top - 9.0,
+            handle.width(),
+            (bottom - top) + 18.0,
+        ).intersected(bounds)
+        if smear.width() <= 0.0 or smear.height() <= 0.0:
+            return
+
+        for rect, alpha_scale in (
+            (smear.adjusted(0.0, -3.0, 0.0, 3.0).intersected(bounds), 0.30),
+            (smear, 0.82),
+        ):
+            if rect.width() <= 0.0 or rect.height() <= 0.0:
+                continue
+            mid_alpha = max_alpha * alpha_scale
+            gradient = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
+            if direction < 0:
+                gradient.setColorAt(0.0, self._scroll_color(mid_alpha * 0.88))
+                gradient.setColorAt(0.18, self._scroll_color(mid_alpha))
+                gradient.setColorAt(0.72, self._scroll_color(mid_alpha * 0.20))
+                gradient.setColorAt(1.0, self._scroll_color(0.0))
+            else:
+                gradient.setColorAt(0.0, self._scroll_color(0.0))
+                gradient.setColorAt(0.24, self._scroll_color(mid_alpha * 0.20))
+                gradient.setColorAt(0.82, self._scroll_color(mid_alpha))
+                gradient.setColorAt(1.0, self._scroll_color(mid_alpha * 0.88))
+            painter.setBrush(gradient)
+            painter.drawRect(rect)
+
+    def paintEvent(self, _event) -> None:
+        track = self._track_rect()
+        handle = self._handle_rect()
+        if handle.width() <= 0.0 or handle.height() <= 0.0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        track_color = QColor(165, 139, 255)
+        track_color.setAlphaF(0.035)
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(track, track.width() / 2.0, track.width() / 2.0)
+
+        # Clip trail by the exact rounded thumb shape to avoid any visual gap.
+        painter.save()
+        full_path = QPainterPath()
+        full_path.addRect(QRectF(self.rect()))
+        handle_radius = min(handle.width(), handle.height()) / 2.0
+        handle_path = QPainterPath()
+        handle_path.addRoundedRect(handle, handle_radius, handle_radius)
+        painter.setClipPath(full_path.subtracted(handle_path))
+        self._paint_trail_smear(painter, track, handle)
+        painter.restore()
+
+        alpha = 0.76 if self._dragging else (0.66 if self.underMouse() else 0.56)
+        painter.setBrush(self._scroll_color(alpha))
+        painter.drawRoundedRect(handle, handle_radius, handle_radius)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        handle = self._handle_rect()
+        y = event.position().y()
+        self._dragging = True
+        self._drag_offset = y - handle.top() if handle.contains(event.position()) else handle.height() / 2.0
+        self._set_value_from_y(y)
+        event.accept()
+        self.update()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._dragging:
+            self._set_value_from_y(event.position().y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._dragging = False
+            event.accept()
+            self.update()
+            return
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        self.update()
 
 
 class ResourcePill(QWidget):
@@ -1764,6 +2127,7 @@ class ExactChatWindow(QMainWindow):
         self.api = ApiClient() if ApiClient else None
         self._thread: QThread | None = None
         self._worker: ReplyWorker | None = None
+        self._status_worker: QThread | None = None
         self._pending: PendingAssistant | None = None
         self._shutting_down = False
         self._gpu_ok = False
@@ -1782,6 +2146,9 @@ class ExactChatWindow(QMainWindow):
         if app is not None:
             app.aboutToQuit.connect(self._on_about_to_quit)
 
+    def _resolve_persona_display_name(self) -> str:
+        return ""
+
     def _build_ui(self):
         root = ChatBackdrop()
         root.setObjectName("chat_root")
@@ -1798,7 +2165,7 @@ class ExactChatWindow(QMainWindow):
         topbar.setStyleSheet(f"QFrame#chat_topbar {{ background:rgba(13,16,19,.74); border-bottom:1px solid {LINE}; }}")
         topbar.setFixedHeight(64)
         tb = QHBoxLayout(topbar)
-        tb.setContentsMargins(12, 6, 12, 6)
+        tb.setContentsMargins(6, 6, 12, 6)
         tb.setSpacing(10)
 
         left = QHBoxLayout()
@@ -1806,8 +2173,11 @@ class ExactChatWindow(QMainWindow):
         brand = BrandBadge("MMis")
         left.addWidget(brand)
         status_wrap = QHBoxLayout(); status_wrap.setSpacing(5)
+        self.status_pills: dict[str, StatusPill] = {}
         for name in ("api", "model", "memory"):
-            status_wrap.addWidget(StatusPill(name))
+            pill = StatusPill(name, active=False)
+            self.status_pills[name] = pill
+            status_wrap.addWidget(pill)
         sw = QWidget(); sw.setLayout(status_wrap)
         left.addWidget(sw)
         left_w = QWidget(); left_w.setLayout(left)
@@ -1863,7 +2233,7 @@ class ExactChatWindow(QMainWindow):
         head.setStyleSheet(f"QFrame#chat_head {{ background:rgba(11,13,16,.04); border-bottom:1px solid {LINE}; }}")
         head_lay = QHBoxLayout(head)
         head_lay.setContentsMargins(14, 8, 14, 8)
-        self.persona_label = CrispLabel("Ася")
+        self.persona_label = CrispLabel(self._resolve_persona_display_name())
         persona_font = QFont("Segoe Script")
         persona_font.setPixelSize(18)
         persona_font.setWeight(QFont.Weight.Black)
@@ -1895,8 +2265,19 @@ class ExactChatWindow(QMainWindow):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setStyleSheet("QScrollArea{background:transparent;border:none;} QScrollBar:vertical{width:10px;background:transparent;} QScrollBar::handle:vertical{background:rgba(255,255,255,.16);border-radius:5px;}")
+        self.scroll.setStyleSheet(
+            """
+            QScrollArea {
+                background: transparent;
+                border: none;
+            }
+            QScrollArea > QWidget {
+                background: transparent;
+            }
+            """
+        )
         self.messages_host = QWidget()
         self.messages_host.setObjectName("messages_host")
         self.messages_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1904,8 +2285,8 @@ class ExactChatWindow(QMainWindow):
         self.messages_layout = QVBoxLayout(self.messages_host)
         self.messages_layout.setContentsMargins(18, 12, 18, 12)
         self.messages_layout.setSpacing(10)
-        self.messages_layout.addStretch(1)
         self.scroll.setWidget(self.messages_host)
+        self.chat_scroll_overlay = ChatScrollOverlay(self.scroll)
         chat_lay.addWidget(self.scroll, 1)
 
         composer_wrap = QFrame()
@@ -2065,7 +2446,12 @@ class ExactChatWindow(QMainWindow):
 
     def _append_message(self, role: str, text: str, thinking: str = "", thinking_ms: str = "", perf: list[str] | None = None) -> MessageBubble:
         bubble = MessageBubble(role, text, thinking, thinking_ms, perf)
-        self.messages_layout.addWidget(bubble)
+        insert_index = self.messages_layout.count()
+        if insert_index > 0:
+            tail_item = self.messages_layout.itemAt(insert_index - 1)
+            if tail_item is not None and tail_item.spacerItem() is not None:
+                insert_index -= 1
+        self.messages_layout.insertWidget(insert_index, bubble)
         QTimer.singleShot(0, self._scroll_bottom)
         return bubble
 
@@ -2191,8 +2577,10 @@ class ExactChatWindow(QMainWindow):
     def _start_metrics_timer(self) -> None:
         self._metrics_timer = QTimer(self)
         self._metrics_timer.timeout.connect(self._refresh_metrics)
+        self._metrics_timer.timeout.connect(self._refresh_backend_status)
         self._metrics_timer.start(1500)
         self._refresh_metrics()
+        self._refresh_backend_status()
 
     def _on_about_to_quit(self) -> None:
         self._shutting_down = True
@@ -2202,6 +2590,90 @@ class ExactChatWindow(QMainWindow):
                 timer.stop()
             except Exception:
                 pass
+        worker = getattr(self, "_status_worker", None)
+        if worker is not None:
+            try:
+                worker.wait(3000)
+            except Exception:
+                pass
+
+    def _set_status_pill(self, name: str, active: bool, tooltip: str = "") -> None:
+        pill = getattr(self, "status_pills", {}).get(str(name or ""))
+        if pill is None:
+            return
+        pill.set_status(bool(active), tooltip=tooltip)
+
+    def _apply_backend_status(
+        self,
+        *,
+        api_ok: bool,
+        model_ok: bool = False,
+        memory_ok: bool = False,
+        model: str = "",
+        model_state: str = "",
+        memory_state: str = "",
+        error: str = "",
+    ) -> None:
+        model_text = str(model or "").strip() or "missing"
+        model_state_text = str(model_state or ("active" if model_ok else "off")).strip()
+        memory_text = str(memory_state or "").strip() or "off"
+        api_tip = "API: online" if api_ok else f"API: offline{': ' + error if error else ''}"
+        model_tip = f"Model: {model_state_text} ({model_text})"
+        memory_tip = f"Memory LLM: {memory_text}"
+        self._set_status_pill("api", api_ok, api_tip)
+        self._set_status_pill("model", bool(api_ok and model_ok), model_tip)
+        self._set_status_pill("memory", bool(api_ok and memory_ok), memory_tip)
+
+    def _refresh_backend_status(self) -> None:
+        if self._shutting_down:
+            return
+        if self.api is None or StatusPollWorker is None:
+            self._apply_backend_status(api_ok=False, error="ApiClient unavailable")
+            return
+        worker = getattr(self, "_status_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = StatusPollWorker(self.api)
+        self._status_worker = worker
+        worker.status_ready.connect(self._on_backend_status_result)
+        worker.finished.connect(lambda: self._finish_status_worker(worker))
+        worker.start()
+
+    def _finish_status_worker(self, worker: QThread) -> None:
+        if getattr(self, "_status_worker", None) is worker:
+            self._status_worker = None
+        try:
+            worker.deleteLater()
+        except Exception:
+            pass
+
+    @Slot(object)
+    def _on_backend_status_result(self, payload: object) -> None:
+        row = dict(payload or {}) if isinstance(payload, dict) else {}
+        api_ok = bool(row.get("api_ok"))
+        if not api_ok:
+            self._apply_backend_status(api_ok=False, error=str(row.get("error") or ""))
+            return
+        model = str(row.get("model") or "").strip()
+        memory_status = dict(row.get("memory_status") or {})
+        model_status = dict(row.get("model_status") or {})
+        model_state = str(model_status.get("state") or "")
+        memory_state = str(memory_status.get("state") or "off")
+        memory_ok = bool(memory_status.get("active"))
+        if "active" in model_status:
+            model_ok = bool(model_status.get("active"))
+        else:
+            model_ok = bool(model)
+        if not model and self.api is not None:
+            model = self.api.get_runtime_model()
+        self._apply_backend_status(
+            api_ok=True,
+            model_ok=model_ok,
+            memory_ok=memory_ok,
+            model=model,
+            model_state=model_state,
+            memory_state=memory_state,
+        )
 
     def _refresh_metrics(self) -> None:
         if self._shutting_down:

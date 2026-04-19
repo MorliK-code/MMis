@@ -257,9 +257,210 @@ def _resolved_profile_payload() -> tuple[Any, dict[str, Any]]:
     return profile, payload
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _build_memory_llm_status() -> dict[str, Any]:
+    status: dict[str, Any] = {
+        "enabled": False,
+        "running": False,
+        "paused": False,
+        "active": False,
+        "state": "disabled",
+        "scheduler_mode": "",
+        "provider_unloaded": True,
+        "jobs_queued": 0,
+        "jobs_processing": 0,
+        "jobs_retry_wait": 0,
+        "jobs_dead": 0,
+    }
+    try:
+        adapter = memory_core_adapter
+        if adapter is None:
+            adapter = getattr(getattr(_runtime, "brain", None), "memory_core", None)
+        service = getattr(adapter, "service", None)
+        worker = getattr(service, "worker", None)
+        if worker is None:
+            return status
+
+        worker_stats = dict(worker.get_stats() or {})
+        config = dict(worker_stats.get("config") or {})
+        job_queue = getattr(service, "job_queue", None) or getattr(worker, "job_queue", None)
+        job_stats: dict[str, Any] = {}
+        if job_queue is not None and hasattr(job_queue, "get_stats"):
+            try:
+                job_stats = dict(job_queue.get_stats() or {})
+            except Exception:
+                job_stats = {}
+
+        enabled = bool(config.get("enabled", True))
+        running = bool(worker_stats.get("running"))
+        paused = bool(worker_stats.get("paused"))
+        locked = bool(worker_stats.get("memory_llm_locked"))
+        provider_unloaded = bool(worker_stats.get("memory_llm_provider_unloaded", True))
+        queued = _as_int(job_stats.get("queued"), 0)
+        processing = _as_int(job_stats.get("processing"), 0)
+        retry_wait = _as_int(job_stats.get("retry_wait"), 0)
+        dead = _as_int(job_stats.get("dead"), 0)
+
+        if not enabled:
+            state = "disabled"
+        elif not running:
+            state = "stopped"
+        elif paused:
+            state = "paused"
+        elif locked:
+            state = "blocked"
+        elif processing > 0:
+            state = "processing"
+        elif provider_unloaded:
+            state = "idle"
+        else:
+            state = "ready"
+
+        status.update(
+            {
+                "enabled": enabled,
+                "running": running,
+                "paused": paused,
+                "active": state in {"processing", "ready"},
+                "state": state,
+                "scheduler_mode": str(config.get("scheduler_mode") or ""),
+                "provider_unloaded": provider_unloaded,
+                "locked": locked,
+                "jobs_queued": queued,
+                "jobs_processing": processing,
+                "jobs_retry_wait": retry_wait,
+                "jobs_dead": dead,
+            }
+        )
+    except Exception as exc:
+        status["state"] = "error"
+        status["error"] = str(exc)
+    return status
+
+
+def _object_to_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            row = model_dump()
+            if isinstance(row, dict):
+                return row
+        except Exception:
+            pass
+    dict_method = getattr(value, "dict", None)
+    if callable(dict_method):
+        try:
+            row = dict_method()
+            if isinstance(row, dict):
+                return row
+        except Exception:
+            pass
+    return {}
+
+
+def _model_row_name(row: Any) -> str:
+    if isinstance(row, dict):
+        return str(row.get("name") or row.get("model") or row.get("id") or "").strip()
+    return str(getattr(row, "name", "") or getattr(row, "model", "") or getattr(row, "id", "")).strip()
+
+
+def _model_name_matches(model: str, candidates: list[str]) -> bool:
+    target = str(model or "").strip().lower()
+    if not target:
+        return False
+    for candidate in candidates:
+        current = str(candidate or "").strip().lower()
+        if current == target:
+            return True
+        if current.split("@", 1)[0] == target:
+            return True
+    return False
+
+
+def _ollama_loaded_models(provider: Any) -> tuple[list[str], bool]:
+    client = getattr(provider, "_client", None)
+    ps = getattr(client, "ps", None)
+    if not callable(ps):
+        return [], False
+    try:
+        payload = _object_to_dict(ps())
+    except Exception:
+        return [], False
+    rows = list(payload.get("models") or [])
+    models = []
+    for row in rows:
+        name = _model_row_name(row)
+        if name:
+            models.append(name)
+    return models, True
+
+
+def _build_model_status() -> dict[str, Any]:
+    model_name = str(_runtime.model or "").strip()
+    provider = getattr(_runtime, "provider", None)
+    provider_name = str(getattr(_runtime, "provider_name", "") or "").strip().lower()
+    status: dict[str, Any] = {
+        "active": False,
+        "state": "missing" if not model_name else "offline",
+        "model": model_name,
+        "provider": provider_name,
+        "provider_ok": False,
+        "available": False,
+        "loaded": False,
+    }
+    if not model_name or provider is None:
+        return status
+
+    try:
+        health = provider.healthcheck()
+        status["provider_ok"] = bool(getattr(health, "ok", False))
+        status["detail"] = str(getattr(health, "detail", "") or "")
+    except Exception as exc:
+        status["detail"] = str(exc)
+        return status
+
+    if not bool(status["provider_ok"]):
+        status["state"] = "offline"
+        return status
+
+    available_models = _safe_list_models(provider)
+    available = (not available_models) or _model_name_matches(model_name, available_models)
+    status["available"] = bool(available)
+    if not available:
+        status["state"] = "missing"
+        return status
+
+    if provider_name == "ollama":
+        loaded_models, checked_loaded = _ollama_loaded_models(provider)
+        status["loaded_check"] = bool(checked_loaded)
+        if checked_loaded:
+            loaded = _model_name_matches(model_name, loaded_models)
+            status["loaded"] = bool(loaded)
+            status["active"] = bool(loaded)
+            status["state"] = "loaded" if loaded else "unloaded"
+            return status
+
+    status["active"] = True
+    status["loaded"] = True
+    status["state"] = "ready"
+    return status
+
+
 def _build_health_response() -> HealthResponse:
     active_profile, quality_profile = _resolve_effective_profiles()
     _profile, profile_payload = _resolved_profile_payload()
+    memory_status = _build_memory_llm_status()
+    model_status = _build_model_status()
     return HealthResponse(
         status="ok",
         model=_runtime.model,
@@ -270,6 +471,8 @@ def _build_health_response() -> HealthResponse:
         active_profile=str(active_profile or "BALANCED"),
         quality_profile=str(quality_profile or "BALANCED"),
         profile_parameters=profile_payload,
+        model_status=model_status,
+        memory_status=memory_status,
     )
 
 
@@ -353,11 +556,31 @@ def memory_inspector_debug(
             snapshot.setdefault("conversation_id", namespace)
         memory_store_debug = None
         memory_core = getattr(_runtime.brain, "memory_core", None)
+        scheduler_mode = ""
+        interrupt_count = 0
+        requeue_count = 0
         if include_store and memory_core is not None:
             try:
                 memory_store_debug = memory_core.debug_snapshot(limit=max(1, int(limit)))
             except Exception:
                 memory_store_debug = None
+        try:
+            adapter = memory_core if memory_core is not None else memory_core_adapter
+            if adapter is not None and hasattr(adapter, "scheduler_mode"):
+                scheduler_mode = str(adapter.scheduler_mode() or "")
+            worker = getattr(getattr(adapter, "service", None), "worker", None)
+            if worker is not None and hasattr(worker, "get_stats"):
+                worker_stats = dict(worker.get_stats() or {})
+                inner_stats = dict(worker_stats.get("stats") or {})
+                interrupt_count = int(inner_stats.get("interrupt_count") or 0)
+                requeue_count = int(inner_stats.get("requeue_count") or 0)
+        except Exception:
+            pass
+        if memory_store_debug is None:
+            memory_store_debug = {}
+        memory_store_debug["scheduler_mode"] = scheduler_mode
+        memory_store_debug["interrupt_count"] = interrupt_count
+        memory_store_debug["requeue_count"] = requeue_count
         return MemoryInspectorResponse(
             conversation_id=namespace,
             request_id=str(snapshot.get("request_id") or debug_trace.get("request_id") or ""),
@@ -408,12 +631,13 @@ def chat(req: ChatRequest) -> ChatResponse:
 
         # Приостанавливаем worker на время обработки запроса для приоритета ответа
         # Если пауза включена в конфиге memory_core
-        if memory_core_adapter.worker_pause_enabled:
-            LOGGER.info("Pausing memory_core worker for API request...")
+        scheduler_mode = memory_core_adapter.scheduler_mode()
+        if memory_core_adapter.should_pause_worker_for_api_request():
+            LOGGER.info("Scheduler mode '%s': pausing memory_core worker for API request", scheduler_mode)
             memory_core_adapter.pause_worker()
             LOGGER.info("Worker paused until the API response is finished")
         else:
-            LOGGER.info("Worker pause is disabled in config")
+            LOGGER.info("Scheduler mode '%s': cooperative arbitration, worker pause skipped", scheduler_mode)
 
         try:
             meta_map = _build_chat_meta(req=req, source="api")
@@ -423,7 +647,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             )
         finally:
             # Возобновляем worker сразу после формирования ответа.
-            if memory_core_adapter.worker_pause_enabled:
+            if memory_core_adapter.should_pause_worker_for_api_request():
                 memory_core_adapter.resume_worker()
                 LOGGER.info("Worker resumed after API request")
 
@@ -553,9 +777,13 @@ def chat_stream(req: ChatRequest):
                 )
                 # Приостанавливаем worker на время обработки запроса для приоритета ответа
                 # Если пауза включена в конфиге memory_core
-                if memory_core_adapter.worker_pause_enabled:
+                scheduler_mode = memory_core_adapter.scheduler_mode()
+                if memory_core_adapter.should_pause_worker_for_api_request():
+                    LOGGER.info("Scheduler mode '%s': pausing memory_core worker for stream request", scheduler_mode)
                     memory_core_adapter.pause_worker()
                     LOGGER.info("Stream worker paused until the API response is finished")
+                else:
+                    LOGGER.info("Scheduler mode '%s': cooperative arbitration for stream, pause skipped", scheduler_mode)
 
                 try:
                     meta_map = _build_chat_meta(
@@ -573,7 +801,7 @@ def chat_stream(req: ChatRequest):
                     state["meta"] = meta_map
                 finally:
                     # Возобновляем worker после формирования ответа
-                    if memory_core_adapter.worker_pause_enabled:
+                    if memory_core_adapter.should_pause_worker_for_api_request():
                         memory_core_adapter.resume_worker()
                         LOGGER.info("Stream worker resumed after API request")
             except Exception as exc:
@@ -849,10 +1077,14 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
     if cmd == "/health":
         active_profile, quality_profile = _resolve_effective_profiles()
         profile = get_profile(active_profile)
+        memory_status = _build_memory_llm_status()
+        model_status = _build_model_status()
         return {
             "answer": (
                 f"status: ok\n"
                 f"model: {_runtime.model}\n"
+                f"model_status: {model_status.get('state')}\n"
+                f"memory_llm: {memory_status.get('state')}\n"
                 f"thinking: {'on' if _runtime.thinking_enabled else 'off'}\n"
                 f"verbose: {'on' if _runtime.verbose_enabled else 'off'}\n"
                 f"web_mode: {_runtime.web_mode}\n"

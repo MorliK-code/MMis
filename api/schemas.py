@@ -40,6 +40,8 @@ class HealthResponse(BaseModel):
     active_profile: str
     quality_profile: str
     profile_parameters: dict
+    model_status: dict = Field(default_factory=dict)
+    memory_status: dict = Field(default_factory=dict)
 
 
 class ModelsResponse(BaseModel):

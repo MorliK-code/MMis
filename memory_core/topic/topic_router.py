@@ -45,7 +45,7 @@ class TopicRouter:
         "go on",
         "what about",
     )
-    _RECENT_THREAD_TTL_SEC = 45 * 60
+    _RECENT_THREAD_TTL_SEC = 30 * 60
     _NEW_TOPIC_MARKERS = (
         "\u0434\u0440\u0443\u0433\u0430\u044f \u0442\u0435\u043c\u0430",
         "\u043d\u043e\u0432\u044b\u0439 \u0432\u043e\u043f\u0440\u043e\u0441",
@@ -250,10 +250,10 @@ class TopicRouter:
                     score=current_score,
                     related_thread_ids=related_ids,
                 )
-            if current_score >= 0.28 or looks_like_continuation or recent_current:
+            if current_score >= 0.40 or looks_like_continuation or recent_current:
                 reason = "continue_current_topic"
                 score = current_score
-                if current_score >= 0.28 and not looks_like_continuation and not recent_current:
+                if current_score >= 0.40 and not looks_like_continuation and not recent_current:
                     reason = "prefer_current_topic"
                 elif looks_like_continuation:
                     score = max(score, 0.68)
@@ -456,7 +456,7 @@ class TopicRouter:
     @staticmethod
     def _is_short_followup(text: str) -> bool:
         words = [word for word in str(text or "").strip().split() if word]
-        if len(words) > 6:
+        if len(words) > 4:
             return False
         lowered = str(text or "").strip().lower()
         if any(marker in lowered for marker in TopicRouter._NEW_TOPIC_MARKERS):
@@ -471,9 +471,9 @@ class TopicRouter:
         if any(lowered.startswith(marker) for marker in TopicRouter._CONTINUATION_PREFIXES):
             return True
         words = [word for word in lowered.split() if word]
-        if len(words) <= 8 and lowered.endswith("?"):
+        if len(words) <= 6 and lowered.endswith("?"):
             return True
-        if len(words) <= 4:
+        if len(words) <= 3:
             return True
         return False
 

@@ -97,6 +97,9 @@ class MemoryInspectorService:
             "worker_jobs_succeeded": 0,
             "worker_jobs_failed": 0,
             "worker_jobs_retried": 0,
+            "worker_interrupt_count": 0,
+            "worker_requeue_count": 0,
+            "scheduler_mode": "",
             "jobs_done_confirmed": 0,
             "jobs_done_first_run": 0,
             "jobs_done_after_restart": 0,
@@ -181,15 +184,40 @@ class MemoryInspectorService:
                 worker_stats = self._worker.get_stats()
                 overview["worker_enabled"] = True
                 running = worker_stats.get("running", False)
-                overview["worker_health"] = 100 if running else 0
-                overview["memory_llm_status"] = "processing" if running else "idle"
+                stats_data = worker_stats.get("stats", {})
+                config_data = worker_stats.get("config", {})
+                enabled = bool(config_data.get("enabled", True))
+                paused = bool(worker_stats.get("paused", False))
+                locked = bool(worker_stats.get("memory_llm_locked", False))
+                provider_unloaded = bool(worker_stats.get("memory_llm_provider_unloaded", False))
+                jobs_processing = int(overview.get("jobs_processing", 0) or 0)
+                if not enabled:
+                    memory_llm_status = "disabled"
+                elif not running:
+                    memory_llm_status = "stopped"
+                elif paused:
+                    memory_llm_status = "paused"
+                elif locked:
+                    memory_llm_status = "blocked"
+                elif jobs_processing > 0:
+                    memory_llm_status = "processing"
+                elif provider_unloaded:
+                    memory_llm_status = "idle"
+                else:
+                    memory_llm_status = "ready"
+                overview["memory_llm_status"] = memory_llm_status
+                overview["worker_health"] = 100 if memory_llm_status in {"processing", "ready"} else (50 if running else 0)
+                overview["worker_paused"] = paused
+                overview["memory_llm_provider_unloaded"] = provider_unloaded
                 
                 # Детали воркера
-                stats_data = worker_stats.get("stats", {})
                 overview["worker_jobs_processed"] = stats_data.get("jobs_processed", 0)
                 overview["worker_jobs_succeeded"] = stats_data.get("jobs_succeeded", 0)
                 overview["worker_jobs_failed"] = stats_data.get("jobs_failed", 0)
                 overview["worker_jobs_retried"] = stats_data.get("jobs_retried", 0)
+                overview["worker_interrupt_count"] = stats_data.get("interrupt_count", 0)
+                overview["worker_requeue_count"] = stats_data.get("requeue_count", 0)
+                overview["scheduler_mode"] = str(config_data.get("scheduler_mode") or "")
             except Exception:
                 overview["worker_enabled"] = False
         else:
@@ -223,11 +251,15 @@ class MemoryInspectorService:
             except Exception:
                 episodes = []
         active_episode = episodes[0] if episodes else {}
+        overview = self.get_overview()
         return {
             "sources": ["runtime_session_store", "episode_manager"],
             "sessions": states,
             "episodes": episodes,
             "active_episode": active_episode,
+            "scheduler_mode": str(overview.get("scheduler_mode") or ""),
+            "interrupt_count": int(overview.get("worker_interrupt_count", 0) or 0),
+            "requeue_count": int(overview.get("worker_requeue_count", 0) or 0),
         }
 
     def _get_job_lifecycle(self, job_id: str, *, attempts: int = 0) -> dict[str, Any]:

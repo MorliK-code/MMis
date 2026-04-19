@@ -576,7 +576,11 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
 
         acquired = _memory_llm_lock.acquire(timeout=0.1)
         try:
-            result = service.ingest_event(MemoryEnvelope(text="remember this under lock"))
+            with mock.patch(
+                "memory_core.config_manager.get_memory_core_config",
+                return_value=SimpleNamespace(memory_llm_scheduler_mode="strict"),
+            ):
+                result = service.ingest_event(MemoryEnvelope(text="remember this under lock"))
         finally:
             if acquired and _memory_llm_lock.locked():
                 _memory_llm_lock.release()
@@ -600,6 +604,30 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(service.worker.start_calls, 0)
         self.assertEqual(service.worker.wake_calls, 1)
 
+    def test_memory_service_starts_worker_under_lock_in_cooperative_mode(self) -> None:
+        service = MemoryService.__new__(MemoryService)
+        service.event_store = SimpleNamespace(append=lambda envelope: None)
+        service.analyzer = SimpleNamespace(analyze=lambda envelope: {"should_process": True})
+        service.job_queue = SimpleNamespace(
+            TYPE_MEMORY_LLM_PROCESS="memory",
+            enqueue=lambda **kwargs: "job-1",
+        )
+        service.worker = _FakeWorker(running=False)
+
+        acquired = _memory_llm_lock.acquire(timeout=0.1)
+        try:
+            with mock.patch(
+                "memory_core.config_manager.get_memory_core_config",
+                return_value=SimpleNamespace(memory_llm_scheduler_mode="cooperative"),
+            ):
+                result = service.ingest_event(MemoryEnvelope(text="remember this under lock"))
+        finally:
+            if acquired and _memory_llm_lock.locked():
+                _memory_llm_lock.release()
+
+        self.assertTrue(result["queued"])
+        self.assertEqual(service.worker.start_calls, 1)
+
     def test_adapter_resume_starts_worker_if_it_was_stopped(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
         adapter._enable_pause = True
@@ -614,6 +642,22 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(adapter.service.worker.start_calls, 1)
         self.assertEqual(adapter.service.worker.resume_calls, 0)
         self.assertEqual(adapter.service.worker.wake_calls, 1)
+
+    def test_adapter_defaults_to_strict_scheduler_mode_when_uninitialized(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        self.assertEqual(adapter.scheduler_mode(), "strict")
+        self.assertTrue(adapter.is_strict_scheduler_mode())
+
+    def test_adapter_should_pause_worker_only_in_strict_mode(self) -> None:
+        strict_adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        strict_adapter._enable_pause = True
+        strict_adapter._scheduler_mode = "strict"
+        self.assertTrue(strict_adapter.should_pause_worker_for_api_request())
+
+        cooperative_adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        cooperative_adapter._enable_pause = True
+        cooperative_adapter._scheduler_mode = "cooperative"
+        self.assertFalse(cooperative_adapter.should_pause_worker_for_api_request())
 
     def test_pause_worker_does_not_schedule_auto_resume_timer(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
