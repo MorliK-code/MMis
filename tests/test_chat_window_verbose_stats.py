@@ -242,7 +242,7 @@ def test_should_follow_stream_scroll_only_when_chat_already_overflowed_and_is_ne
     assert ChatWindow._should_follow_stream_scroll(96, 120, margin_px=24)
 
 
-def test_display_stats_prefer_visible_answer_metrics_over_reasoning_included_backend_values() -> None:
+def test_display_stats_prefer_ollama_metrics_over_ui_estimates() -> None:
     answer_text = "Приятно, что всё хорошо. Суши вдруг вспомнил?"
     stats = ChatWindow._complete_verbose_stats(
         {
@@ -266,14 +266,15 @@ def test_display_stats_prefer_visible_answer_metrics_over_reasoning_included_bac
     assert ChatWindow._thinking_ms_label(stats) == "51.9 s"
     assert perf == [
         "106.2 s",
-        "write 4.3 s",
-        f"{float(stats['display_tok_s']):.1f} tok/s",
+        "write 88.5 s",
+        "5.7 tok/s",
         "prompt 2754",
-        f"gen {estimate_tokens(answer_text)}",
+        "gen 501",
     ]
+    assert int(stats["display_gen_tokens"]) == 501
 
 
-def test_display_total_prefers_real_wait_when_backend_total_is_smaller_than_thinking() -> None:
+def test_display_total_prefers_ollama_total_when_present() -> None:
     answer_text = "В парке лаял пёс, а рядом крадётся белка."
     stats = ChatWindow._complete_verbose_stats(
         {
@@ -295,17 +296,17 @@ def test_display_total_prefers_real_wait_when_backend_total_is_smaller_than_thin
     perf, _ = ChatWindow._perf_from_stats(stats, fallback_elapsed_ms=85100)
 
     assert ChatWindow._thinking_ms_label(stats) == "70.4 s"
-    assert int(float(stats.get("display_elapsed_ms") or 0) or 0) == 85100
+    assert int(float(stats.get("display_elapsed_ms") or 0) or 0) == 48900
     assert perf == [
-        "85.1 s",
+        "48.9 s",
         "write 14.7 s",
-        f"{float(stats['display_tok_s']):.1f} tok/s",
+        "12.4 tok/s",
         "prompt 2661",
-        f"gen {estimate_tokens(answer_text)}",
+        "gen 183",
     ]
 
 
-def test_display_total_uses_wall_clock_instead_of_summing_thinking_and_write() -> None:
+def test_display_total_uses_ollama_total_instead_of_local_wall_clock() -> None:
     stats = ChatWindow._complete_verbose_stats(
         {
             "total_duration_ms": 18000.0,
@@ -320,4 +321,4 @@ def test_display_total_uses_wall_clock_instead_of_summing_thinking_and_write() -
         verbose_enabled=True,
     )
 
-    assert int(float(stats.get("display_elapsed_ms") or 0) or 0) == 40000
+    assert int(float(stats.get("display_elapsed_ms") or 0) or 0) == 18000

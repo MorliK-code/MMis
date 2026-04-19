@@ -1155,7 +1155,15 @@ class ChatWindow(proto.ExactChatWindow):
             out.setdefault("answer_ms", int(elapsed))
             out.setdefault("total_duration_ms", int(elapsed))
 
-        prompt_eval_duration_ms = _float_value("prompt_eval_duration_ms", "thinking_ms")
+        backend_prompt_tokens = _int_value("prompt_eval_count", "prompt_tokens")
+        backend_gen_tokens = _int_value("eval_count", "gen_tokens")
+        backend_total_tokens = _int_value("total_tokens")
+        backend_prompt_eval_duration_ms = _float_value("prompt_eval_duration_ms")
+        backend_eval_duration_ms = _float_value("eval_duration_ms", "eval_ms", "decode_ms")
+        backend_total_duration_ms = _float_value("total_duration_ms", "total_ms", "answer_ms", "elapsed_ms")
+        backend_tok_s = _float_value("eval_tokens_per_sec", "tokens_per_second", "tok_s", "tps")
+
+        prompt_eval_duration_ms = backend_prompt_eval_duration_ms or _float_value("thinking_ms")
         if prompt_eval_duration_ms <= 0.0 and local_thinking_ms > 0:
             out["prompt_eval_duration_ms"] = int(local_thinking_ms)
             prompt_eval_duration_ms = float(local_thinking_ms)
@@ -1167,7 +1175,7 @@ class ChatWindow(proto.ExactChatWindow):
         if not verbose_enabled:
             return out
 
-        prompt_tokens = _int_value("prompt_tokens", "prompt_eval_count", "prompt_token_estimate")
+        prompt_tokens = backend_prompt_tokens
         if prompt_tokens <= 0:
             trace_prompt_pack = dict(trace.get("prompt_pack") or {})
             try:
@@ -1183,8 +1191,7 @@ class ChatWindow(proto.ExactChatWindow):
             out.setdefault("prompt_tokens", int(prompt_tokens))
             out["display_prompt_tokens"] = int(prompt_tokens)
 
-        raw_gen_tokens = _int_value("gen_tokens", "eval_count")
-        gen_tokens = raw_gen_tokens
+        gen_tokens = backend_gen_tokens
         visible_gen_tokens = 0
         if answer_text.strip():
             visible_gen_tokens = max(1, int(estimate_tokens(answer_text)))
@@ -1193,14 +1200,13 @@ class ChatWindow(proto.ExactChatWindow):
                 out["eval_count"] = gen_tokens
         if gen_tokens > 0:
             out.setdefault("gen_tokens", int(gen_tokens))
-        if visible_gen_tokens > 0:
-            out["display_gen_tokens"] = int(visible_gen_tokens)
+            out["display_gen_tokens"] = int(gen_tokens)
 
-        total_tokens = _int_value("total_tokens")
+        total_tokens = backend_total_tokens
         if total_tokens <= 0 and (prompt_tokens > 0 or gen_tokens > 0):
             out["total_tokens"] = int(prompt_tokens + gen_tokens)
 
-        decode_ms = _float_value("decode_ms", "eval_ms", "eval_duration_ms")
+        decode_ms = backend_eval_duration_ms
         if decode_ms <= 0.0 and local_answer_ms > 0:
             out["eval_duration_ms"] = int(local_answer_ms)
             decode_ms = float(local_answer_ms)
@@ -1217,25 +1223,23 @@ class ChatWindow(proto.ExactChatWindow):
                 decode_ms = float(derived_decode_ms)
         if decode_ms > 0.0:
             out.setdefault("decode_ms", round(float(decode_ms), 2))
-        display_write_ms = int(local_answer_ms or round(float(decode_ms or 0.0)) or 0)
+        display_write_ms = int(round(float(decode_ms or 0.0)) or 0)
         if display_write_ms > 0:
             out["display_write_ms"] = display_write_ms
 
-        tok_s = _float_value("tokens_per_second", "tok_s", "tps", "eval_tokens_per_sec")
+        tok_s = backend_tok_s
         if tok_s <= 0.0 and gen_tokens > 0 and decode_ms > 0.0:
             out["eval_tokens_per_sec"] = round(float(gen_tokens) / (decode_ms / 1000.0), 2)
+            tok_s = float(out["eval_tokens_per_sec"])
         elif tok_s > 0.0:
             out.setdefault("eval_tokens_per_sec", round(float(tok_s), 2))
-        display_tok_s = 0.0
-        display_gen = int(out.get("display_gen_tokens") or 0)
-        if display_gen > 0 and display_write_ms > 0:
-            display_tok_s = round(float(display_gen) / (display_write_ms / 1000.0), 2)
-        elif tok_s > 0.0:
-            display_tok_s = round(float(tok_s), 2)
+        display_tok_s = round(float(tok_s), 2) if tok_s > 0.0 else 0.0
         if display_tok_s > 0.0:
             out["display_tok_s"] = display_tok_s
 
-        display_elapsed_ms = int(fallback_elapsed_ms or 0)
+        display_elapsed_ms = int(round(float(backend_total_duration_ms or 0.0)) or 0)
+        if display_elapsed_ms <= 0 and fallback_elapsed_ms > 0:
+            display_elapsed_ms = int(fallback_elapsed_ms or 0)
         if display_elapsed_ms <= 0:
             display_elapsed_ms = int(elapsed or 0)
         if display_elapsed_ms <= 0:
@@ -1292,10 +1296,10 @@ class ChatWindow(proto.ExactChatWindow):
         )
         if tok_s in (None, "", 0, 0.0):
             tok_s = (
-            stats.get("tokens_per_second")
+            stats.get("eval_tokens_per_sec")
+            or stats.get("tokens_per_second")
             or stats.get("tok_s")
             or stats.get("tps")
-            or stats.get("eval_tokens_per_sec")
             )
         prompt_t = stats.get("display_prompt_tokens") or stats.get("prompt_tokens") or stats.get("prompt_eval_count")
         gen_t = stats.get("display_gen_tokens") or stats.get("gen_tokens") or stats.get("eval_count")

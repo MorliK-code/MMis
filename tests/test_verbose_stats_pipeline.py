@@ -145,10 +145,10 @@ class VerboseStatsPipelineTests(unittest.TestCase):
         self.assertEqual(float(out.stats.get("eval_tokens_per_sec") or 0.0), 125.0)
         self.assertTrue(bool(out.stats.get("verbose_enabled")))
 
-    def test_brain_harvests_response_stats_to_event_store(self) -> None:
+    def test_brain_keeps_response_stats_without_legacy_event_store(self) -> None:
         pipeline = _BrainPipeline()
         manager = _StatsRecorder()
-        brain = Brain(provider=object(), memory_manager=manager, response_pipeline=pipeline)
+        brain = Brain(provider=object(), memory_core=manager, response_pipeline=pipeline)
         result = brain.handle_message(
             "collect stats",
             meta={
@@ -159,13 +159,9 @@ class VerboseStatsPipelineTests(unittest.TestCase):
         )
 
         self.assertEqual(result.text, "ok")
-        self.assertEqual(len(manager.calls), 1)
-        payload = dict(manager.calls[0] or {})
-        self.assertEqual(str(payload.get("namespace") or ""), "conv-brain-stats")
-        self.assertEqual(str(payload.get("route") or ""), "chat")
-        self.assertTrue(bool(dict(payload.get("meta") or {}).get("verbose")))
-        self.assertEqual(float(dict(payload.get("stats") or {}).get("answer_ms") or 0.0), 55.0)
-        self.assertEqual(str(payload.get("model") or ""), "brain-model")
+        self.assertEqual(manager.calls, [])
+        self.assertEqual(float(result.stats.get("answer_ms") or 0.0), 55.0)
+        self.assertEqual(str(result.stats.get("served_model") or ""), "brain-model")
 
 
 if __name__ == "__main__":

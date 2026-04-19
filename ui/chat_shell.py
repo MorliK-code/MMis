@@ -1026,6 +1026,8 @@ class ChatBackdrop(QWidget):
 
 
 class ComposerEdit(QPlainTextEdit):
+    submitRequested = Signal()
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._display_font = _ui_font(pixel_size=14)
@@ -1037,6 +1039,17 @@ class ComposerEdit(QPlainTextEdit):
         self.textChanged.connect(self._refresh_overlay)
         self.cursorPositionChanged.connect(self._refresh_overlay)
         self.updateRequest.connect(lambda *_args: self._refresh_overlay())
+
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.insertPlainText("\n")
+            else:
+                self.submitRequested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _refresh_overlay(self) -> None:
         self.viewport().update()
@@ -1912,6 +1925,7 @@ class ExactChatWindow(QMainWindow):
         self.input.setPlaceholderText("Напиши сообщение")
         self.input.setFixedHeight(76)
         self.input.setFont(_ui_font(pixel_size=14))
+        self.input.submitRequested.connect(self._send_message)
         self.input.setStyleSheet(
             "QPlainTextEdit{background:transparent;border:none;color:transparent;padding:2px 0 0 5px;"
             "selection-background-color:rgba(139,92,246,.22);}"

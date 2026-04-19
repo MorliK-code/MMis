@@ -4,10 +4,11 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import QApplication
 
-from ui.chat_shell import ExactChatWindow, MessageBubble, PendingAssistant
+from ui.chat_shell import ComposerEdit, ExactChatWindow, MessageBubble, PendingAssistant
 
 
 class _FakeBubble:
@@ -31,6 +32,41 @@ def _app() -> QApplication:
     if app is None:
         app = QApplication([])
     return app
+
+
+def test_composer_enter_requests_submit_without_inserting_newline() -> None:
+    app = _app()
+    edit = ComposerEdit()
+    submitted: list[bool] = []
+    edit.submitRequested.connect(lambda: submitted.append(True))
+    edit.setPlainText("hello")
+    edit.show()
+    app.processEvents()
+
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+    edit.keyPressEvent(event)
+
+    assert submitted == [True]
+    assert edit.toPlainText() == "hello"
+    assert event.isAccepted()
+
+
+def test_composer_ctrl_enter_inserts_newline_without_submit() -> None:
+    app = _app()
+    edit = ComposerEdit()
+    submitted: list[bool] = []
+    edit.submitRequested.connect(lambda: submitted.append(True))
+    edit.setPlainText("hello")
+    edit.moveCursor(QTextCursor.MoveOperation.End)
+    edit.show()
+    app.processEvents()
+
+    event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)
+    edit.keyPressEvent(event)
+
+    assert submitted == []
+    assert edit.toPlainText() == "hello\n"
+    assert event.isAccepted()
 
 
 def test_message_bubble_perf_row_keeps_all_stats_visible() -> None:

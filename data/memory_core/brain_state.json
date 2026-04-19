@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "global": {
-    "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-    "turn_id": 223,
+    "conversation_id": "conv-brain-stats",
+    "turn_id": 226,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -35,15 +35,28 @@
         "ts": "2026-04-19T16:41:14.595+03:00"
       },
       {
-        "type": "CHARACTER_PERSONA_UPDATED",
-        "character_id": "asya",
-        "ts": "2026-04-19T16:51:13.478+03:00"
+        "type": "TURN_FINISHED",
+        "turn_id": 225,
+        "assistant_chars": 2,
+        "ts": "2026-04-19T17:42:28.375+03:00"
       },
       {
-        "type": "TURN_FINISHED",
-        "turn_id": 223,
-        "assistant_chars": 237,
-        "ts": "2026-04-19T16:52:29.621+03:00"
+        "type": "TURN_STARTED",
+        "turn_id": 226,
+        "signals": {
+          "emotion_intensity": 0.0,
+          "emotion_arousal": 0.0,
+          "active_mode": "chatting",
+          "has_code": false,
+          "has_traceback": false
+        },
+        "ts": "2026-04-19T17:43:29.170+03:00",
+        "state_diff": {
+          "turn_id": {
+            "old": 225,
+            "new": 226
+          }
+        }
       }
     ],
     "context_stack": []
@@ -113,8 +126,8 @@
       }
     }
   },
-  "conversation_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-  "turn_id": 223,
+  "conversation_id": "conv-brain-stats",
+  "turn_id": 226,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -148,15 +161,28 @@
       "ts": "2026-04-19T16:41:14.595+03:00"
     },
     {
-      "type": "CHARACTER_PERSONA_UPDATED",
-      "character_id": "asya",
-      "ts": "2026-04-19T16:51:13.478+03:00"
+      "type": "TURN_FINISHED",
+      "turn_id": 225,
+      "assistant_chars": 2,
+      "ts": "2026-04-19T17:42:28.375+03:00"
     },
     {
-      "type": "TURN_FINISHED",
-      "turn_id": 223,
-      "assistant_chars": 237,
-      "ts": "2026-04-19T16:52:29.621+03:00"
+      "type": "TURN_STARTED",
+      "turn_id": 226,
+      "signals": {
+        "emotion_intensity": 0.0,
+        "emotion_arousal": 0.0,
+        "active_mode": "chatting",
+        "has_code": false,
+        "has_traceback": false
+      },
+      "ts": "2026-04-19T17:43:29.170+03:00",
+      "state_diff": {
+        "turn_id": {
+          "old": 225,
+          "new": 226
+        }
+      }
     }
   ],
   "context_tags": {
@@ -195,17 +221,17 @@
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "ахахах, ну ты и смешная. спасибо что ты такая. да не привык я к сервису)",
-    "last_user_hash": "3de5430dfa9789169d127b39e63ca0721bf224f4",
-    "last_user_ts": "2026-04-19T16:51:13.311+03:00",
-    "prev_user_ts": "2026-04-19T16:49:38.339+03:00",
-    "last_assistant_message": "Ну, к хорошему быстро привыкаешь, так что не расслабляйся. А насчет \"смешная\" — это я еще не старалась.\nРаз уж ты там чем-то занят, не буду отвлекать. Как закончишь — маякни, если захочешь еще поболтать или если помощь какая понадобится.",
-    "last_assistant_ts": "2026-04-19T16:52:29.598+03:00",
-    "last_action": "assistant_message",
-    "last_action_ts": "2026-04-19T16:52:29.621+03:00",
+    "last_user_message": "как дела?",
+    "last_user_hash": "a728b24ddfa27567dc1ab13a6fc60d87c2e432d5",
+    "last_user_ts": "2026-04-19T17:43:29.170+03:00",
+    "prev_user_ts": "2026-04-19T17:42:28.300+03:00",
+    "last_assistant_message": "ok",
+    "last_assistant_ts": "2026-04-19T17:42:28.331+03:00",
+    "last_action": "user_message",
+    "last_action_ts": "2026-04-19T17:43:29.170+03:00",
     "repeat_count": 0,
-    "session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
-    "prev_session_id": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
+    "session_id": "conv-brain-stats",
+    "prev_session_id": "conv-brain-stats",
     "greeting_date_local": "2026-04-19",
     "greeting_ts": "2026-04-19T16:10:14.162+03:00"
   },
@@ -213,7 +239,7 @@
     "last_term_used_at": "",
     "term_used_turn_index": 0,
     "terms_used_count_session": 0,
-    "session_id_snapshot": "c26fdcd9-8797-4681-a86f-783fc2d9621d",
+    "session_id_snapshot": "conv-brain-stats",
     "banned_terms": [],
     "banned_terms_until": {},
     "last_disable_directive_ts": "",
@@ -221,26 +247,6 @@
   },
   "dialog_summary": "Earlier context: User said: привет. как тебя зовут? меня паша. я люблю мороженое, пиццу, суши, работают системным администратором, а ты? Assistant replied: Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты сис",
   "history": [
-    {
-      "role": "assistant",
-      "content": "Хорошо, давай попробуем. Расскажу про то, как я провела выходной. Вечером была с подругой, мы смотрели сериал, пили чай и обсуждали последние события. Всё было просто и уютно. А ты как провёл день?"
-    },
-    {
-      "role": "user",
-      "content": "как дела?"
-    },
-    {
-      "role": "assistant",
-      "content": "Хорошо, Паша! Просто живая подруга, которая не ест мороженое (я же не реальный человек 😏), но рада помочь с задачами или просто пообщаться. А как ты?"
-    },
-    {
-      "role": "user",
-      "content": "тоже хорошо, спасибо"
-    },
-    {
-      "role": "assistant",
-      "content": "Приятно, что всё хорошо. Суши вдруг вспомнил?"
-    },
     {
       "role": "user",
       "content": "расскажи очень короткую историю на 150 токенов"
@@ -700,6 +706,26 @@
     {
       "role": "assistant",
       "content": "Ну, к хорошему быстро привыкаешь, так что не расслабляйся. А насчет \"смешная\" — это я еще не старалась.\nРаз уж ты там чем-то занят, не буду отвлекать. Как закончишь — маякни, если захочешь еще поболтать или если помощь какая понадобится."
+    },
+    {
+      "role": "user",
+      "content": "collect stats"
+    },
+    {
+      "role": "assistant",
+      "content": "ok"
+    },
+    {
+      "role": "user",
+      "content": "collect stats"
+    },
+    {
+      "role": "assistant",
+      "content": "ok"
+    },
+    {
+      "role": "user",
+      "content": "как дела?"
     }
   ],
   "character_locked": false,
@@ -717,79 +743,5 @@
   "personality_locked": false,
   "personality_last_switch_ts": "",
   "personality_cooldown_sec": 90.0,
-  "verbose_enabled": true,
-  "topic_thread_id": "thr_febb3fbb8609",
-  "topic_key": "тебе_общаемся_сейчас",
-  "topic_thread_title": "та что тебе не нравиться, я",
-  "active_topic_thread_id": "thr_febb3fbb8609",
-  "active_topic_key": "тебе_общаемся_сейчас",
-  "active_topic_title": "та что тебе не нравиться, я",
-  "topic_route_reason": "continue_current_topic",
-  "topic_route_score": 0.62,
-  "related_topic_thread_ids": [],
-  "topic_candidates": [],
-  "topic_last_route_reason": "continue_current_topic",
-  "topic_last_route_score": 0.62,
-  "topic_stack": [
-    {
-      "thread_id": "thr_febb3fbb8609",
-      "title": "та что тебе не нравиться, я",
-      "topic_key": "тебе_общаемся_сейчас",
-      "updated_at": "2026-04-19T16:51:13.494+03:00"
-    }
-  ],
-  "current_decisions": [
-    "Если тебе кажется, что я давлю, значит, ты слишком привык к вежливому сервису, а не к нормальному общению"
-  ],
-  "recent_topics": [
-    "тебе_общаемся_сейчас"
-  ],
-  "web_active_task": {
-    "task_id": "task_57c740311f72",
-    "query": "как угроза? не понял",
-    "base_query": "как угроза? не понял",
-    "latest_query": "что ты такая. да не привык я к сервису)",
-    "resolved_intent": "generic",
-    "resolved_concepts": [
-      "weather_query"
-    ],
-    "resolved_location": "",
-    "turn_id": 223,
-    "turn_timestamp": "2026-04-19T13:51:13.534869+00:00",
-    "continuation_ref": "task_57c740311f72",
-    "context_confidence": 0.7342
-  },
-  "continuity_turns": [
-    {
-      "task_id": "task_57c740311f72",
-      "query": "как угроза? не понял",
-      "base_query": "как угроза? не понял",
-      "latest_query": "как угроза? не понял",
-      "resolved_intent": "generic",
-      "resolved_concepts": [
-        "weather_query"
-      ],
-      "resolved_location": "",
-      "turn_id": 222,
-      "turn_timestamp": "2026-04-19T13:49:38.550277+00:00"
-    },
-    {
-      "task_id": "task_57c740311f72",
-      "query": "как угроза? не понял",
-      "base_query": "как угроза? не понял",
-      "latest_query": "что ты такая. да не привык я к сервису)",
-      "resolved_intent": "generic",
-      "resolved_concepts": [
-        "weather_query"
-      ],
-      "resolved_location": "",
-      "turn_id": 223,
-      "turn_timestamp": "2026-04-19T13:51:13.534869+00:00",
-      "continuation_ref": "task_57c740311f72",
-      "context_confidence": 0.7342
-    }
-  ],
-  "open_questions": [
-    "чего как угроза?"
-  ]
+  "verbose_enabled": true
 }
