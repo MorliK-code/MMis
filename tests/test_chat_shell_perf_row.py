@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent, QTextCursor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from ui.chat_shell import ComposerEdit, ExactChatWindow, MessageBubble, PendingAssistant
 
@@ -90,6 +90,57 @@ def test_message_bubble_set_perf_recomputes_geometry() -> None:
 
     assert bubble.perf_wrap.layout().count() == 5
     assert bubble.perf_wrap.sizeHint().width() >= 300
+
+
+def test_short_messages_keep_content_height_when_chat_has_free_space() -> None:
+    app = _app()
+    window = ExactChatWindow()
+    window.resize(1120, 520)
+    window.show()
+    app.processEvents()
+    window._clear_messages()
+
+    bubbles = [
+        window._append_message("user", "short"),
+        window._append_message("assistant", "short answer"),
+        window._append_message("user", "another short"),
+    ]
+    app.processEvents()
+
+    for bubble in bubbles:
+        panel = bubble._message_panel
+        assert bubble.height() <= bubble.sizeHint().height() + 2
+        assert panel.height() <= panel.sizeHint().height() + 2
+
+    content_height = window.messages_layout.sizeHint().height()
+    assert abs(window.scroll.viewport().height() - content_height) <= 2
+    assert abs(window.messages_host.height() - content_height) <= 2
+    bottom_gap = window.messages_host.height() - bubbles[-1].geometry().bottom()
+    assert bottom_gap <= window.messages_layout.contentsMargins().bottom() + 2
+
+
+def test_message_bubbles_resist_extra_vertical_layout_space() -> None:
+    app = _app()
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(10)
+    bubbles = [
+        MessageBubble("user", "short question"),
+        MessageBubble("assistant", "short answer"),
+        MessageBubble("user", "another short question"),
+    ]
+    for bubble in bubbles:
+        layout.addWidget(bubble)
+
+    host.resize(900, 500)
+    host.show()
+    app.processEvents()
+
+    for bubble in bubbles:
+        panel = bubble._message_panel
+        assert bubble.height() <= bubble.sizeHint().height() + 2
+        assert panel.height() <= panel.sizeHint().height() + 2
 
 
 def test_message_bubble_perf_row_stays_on_one_line_when_width_exactly_fits() -> None:

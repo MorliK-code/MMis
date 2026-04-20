@@ -350,14 +350,16 @@ class ChatWindow(proto.ExactChatWindow):
             taken = self.messages_layout.takeAt(index)
             if taken is not None and widget is not None:
                 widget.deleteLater()
+        sync = getattr(self, "_sync_messages_view_height", None)
+        if callable(sync):
+            sync()
 
     def _insert_message_bubble(self, bubble: QWidget) -> None:
         insert_index = self.messages_layout.count()
-        if insert_index > 0:
-            tail_item = self.messages_layout.itemAt(insert_index - 1)
-            if tail_item is not None and tail_item.spacerItem() is not None:
-                insert_index -= 1
         self.messages_layout.insertWidget(insert_index, bubble)
+        sync = getattr(self, "_schedule_messages_view_height_sync", None)
+        if callable(sync):
+            sync()
 
     def _clear_messages(self) -> None:
         if self._worker and self._worker.isRunning():

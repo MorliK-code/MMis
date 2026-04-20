@@ -1837,6 +1837,7 @@ class MessageBubble(QFrame):
         super().__init__()
         self.setObjectName("message_bubble_host")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet("QFrame#message_bubble_host { background: transparent; border: none; }")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1848,7 +1849,7 @@ class MessageBubble(QFrame):
             f"QFrame#message_bubble_panel {{ background:{ASSISTANT_BG if role == 'assistant' else USER_BG}; border:1px solid {LINE}; border-radius:14px; }}"
         )
         bubble.setMaximumWidth(760)
-        bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Minimum)
+        bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         bubble_lay = QVBoxLayout(bubble)
         self._message_layout = bubble_lay
         bubble_lay.setContentsMargins(13, 11, 13, 11)
@@ -1896,6 +1897,7 @@ class MessageBubble(QFrame):
             self._sync_thinking_toggle_text(False)
             self._sync_thinking_header_visibility()
         self.text_label = CrispLabel(text, color=TEXT)
+        self.text_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.text_label.setFont(_ui_font(pixel_size=14))
         self.text_label.setWordWrap(True)
         self.text_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -2007,6 +2009,10 @@ class MessageBubble(QFrame):
             if isinstance(parent, QScrollArea):
                 break
             parent = parent.parentWidget()
+        window = self.window()
+        sync = getattr(window, "_schedule_messages_view_height_sync", None)
+        if callable(sync):
+            sync()
 
     def _reflow_after_thinking_body_change(self) -> None:
         self._reflow_message_body()
@@ -2129,6 +2135,7 @@ class ExactChatWindow(QMainWindow):
         self._worker: ReplyWorker | None = None
         self._status_worker: QThread | None = None
         self._pending: PendingAssistant | None = None
+        self._messages_view_height_sync_queued = False
         self._shutting_down = False
         self._gpu_ok = False
         if pynvml is not None:
@@ -2264,6 +2271,7 @@ class ExactChatWindow(QMainWindow):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -2287,7 +2295,7 @@ class ExactChatWindow(QMainWindow):
         self.messages_layout.setSpacing(10)
         self.scroll.setWidget(self.messages_host)
         self.chat_scroll_overlay = ChatScrollOverlay(self.scroll)
-        chat_lay.addWidget(self.scroll, 1)
+        chat_lay.addWidget(self.scroll)
 
         composer_wrap = QFrame()
         composer_wrap.setObjectName("composer_wrap")
@@ -2328,9 +2336,76 @@ class ExactChatWindow(QMainWindow):
         composer_lay.addLayout(actions)
         composer_wrap_lay.addWidget(composer)
         chat_lay.addWidget(composer_wrap)
+        chat_lay.addStretch(1)
 
         self.functions_popup = self._build_functions_popup(self.functions_btn)
         self.models_popup = self._build_models_popup(self.models_button)
+        composer_wrap.setFixedHeight(composer_wrap.sizeHint().height())
+
+    def _message_widget_count(self) -> int:
+        layout = getattr(self, "messages_layout", None)
+        if layout is None:
+            return 0
+        count = 0
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item is not None and item.widget() is not None:
+                count += 1
+        return count
+
+    def _available_messages_view_height(self) -> int:
+        scroll = getattr(self, "scroll", None)
+        if scroll is None:
+            return 0
+        parent = scroll.parentWidget()
+        if parent is None:
+            return int(scroll.height() or 0)
+        layout = parent.layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        available = int(parent.height() or 0)
+        if margins is not None:
+            available -= int(margins.top() + margins.bottom())
+        for name in ("chat_head", "chat_modes", "composer_wrap"):
+            widget = parent.findChild(QWidget, name)
+            if widget is not None and widget.isVisible():
+                available -= int(widget.height() or widget.sizeHint().height())
+        return max(0, available)
+
+    def _sync_messages_view_height(self) -> None:
+        self._messages_view_height_sync_queued = False
+        layout = getattr(self, "messages_layout", None)
+        scroll = getattr(self, "scroll", None)
+        if layout is None or scroll is None:
+            return
+        if self._message_widget_count() <= 0:
+            scroll.setVisible(False)
+            scroll.setFixedHeight(0)
+            return
+        scroll.setVisible(True)
+        layout.invalidate()
+        layout.activate()
+        content_height = max(int(layout.sizeHint().height()), int(layout.minimumSize().height()), 1)
+        available_height = self._available_messages_view_height()
+        target_height = content_height if available_height <= 0 else min(content_height, available_height)
+        target_height = max(1, int(target_height))
+        if int(scroll.minimumHeight()) != target_height or int(scroll.maximumHeight()) != target_height:
+            scroll.setFixedHeight(target_height)
+        self.messages_host.updateGeometry()
+        scroll.updateGeometry()
+        parent = scroll.parentWidget()
+        if parent is not None and parent.layout() is not None:
+            parent.layout().invalidate()
+            parent.layout().activate()
+
+    def _schedule_messages_view_height_sync(self) -> None:
+        if getattr(self, "_messages_view_height_sync_queued", False):
+            return
+        self._messages_view_height_sync_queued = True
+        QTimer.singleShot(0, self._sync_messages_view_height)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._schedule_messages_view_height_sync()
 
     def _build_models_popup(self, anchor: QWidget) -> PopupFrame:
         popup = PopupFrame(anchor, width=230, line_orientation="vertical")
@@ -2447,11 +2522,8 @@ class ExactChatWindow(QMainWindow):
     def _append_message(self, role: str, text: str, thinking: str = "", thinking_ms: str = "", perf: list[str] | None = None) -> MessageBubble:
         bubble = MessageBubble(role, text, thinking, thinking_ms, perf)
         insert_index = self.messages_layout.count()
-        if insert_index > 0:
-            tail_item = self.messages_layout.itemAt(insert_index - 1)
-            if tail_item is not None and tail_item.spacerItem() is not None:
-                insert_index -= 1
         self.messages_layout.insertWidget(insert_index, bubble)
+        self._schedule_messages_view_height_sync()
         QTimer.singleShot(0, self._scroll_bottom)
         return bubble
 
@@ -2464,6 +2536,7 @@ class ExactChatWindow(QMainWindow):
             taken = self.messages_layout.takeAt(index)
             if taken is not None and widget is not None:
                 widget.deleteLater()
+        self._sync_messages_view_height()
 
     def _scroll_bottom(self) -> None:
         bar = self.scroll.verticalScrollBar()
