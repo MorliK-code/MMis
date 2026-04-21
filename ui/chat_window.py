@@ -1035,19 +1035,22 @@ class ChatWindow(proto.ExactChatWindow):
         final_meta = dict(snapshot.get("final_answer_meta") or {})
         memory_context = dict(snapshot.get("memory_context") or {})
         candidates = [
+            snapshot.get("active_topic_title"),
             snapshot.get("topic_thread_title"),
             snapshot.get("topic_title"),
+            final_meta.get("active_topic_title"),
             final_meta.get("topic_thread_title"),
             final_meta.get("topic_title"),
+            memory_context.get("active_topic_title"),
             memory_context.get("topic_thread_title"),
             memory_context.get("topic_title"),
+            snapshot.get("topic_key"),
+            final_meta.get("topic_key"),
+            memory_context.get("topic_key"),
         ]
         for candidate in candidates:
             text = str(candidate or "").strip()
             if text:
-                return _trim_title(text, limit=40)
-        for role, text, _stat_line, _feedback, _thinking in reversed(self._history):
-            if role == "user" and str(text or "").strip():
                 return _trim_title(text, limit=40)
         return SINGLE_VISIBLE_CHAT_TITLE
 

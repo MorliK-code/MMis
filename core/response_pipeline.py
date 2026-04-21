@@ -5452,6 +5452,26 @@ class ResponsePipeline:
         trace = _ensure_debug_trace(ctx)
         memory_reasoning_snapshot = _as_dict(ctx.state.get("memory_reasoning_snapshot"))
         agent_loop_trace = _as_dict(ctx.state.get("agent_loop_trace"))
+        topic_title = str(
+            _pick(
+                ctx.state.get("active_topic_title"),
+                ctx.state.get("topic_thread_title"),
+                ctx.meta.get("topic_title"),
+                ctx.meta.get("topic_thread_title"),
+                ctx.tags.get("topic_title"),
+                "",
+            )
+        ).strip()
+        topic_key = str(_pick(ctx.state.get("active_topic_key"), ctx.state.get("topic_key"), ctx.meta.get("topic_key"), ctx.tags.get("topic"), "")).strip()
+        topic_thread_id = str(
+            _pick(
+                ctx.state.get("active_topic_thread_id"),
+                ctx.state.get("topic_thread_id"),
+                ctx.meta.get("topic_thread_id"),
+                ctx.tags.get("topic_thread_id"),
+                "",
+            )
+        ).strip()
         trace.final_answer_meta = {
             "route": str(ctx.route or ""),
             "request_id": str(request_id or ""),
@@ -5460,6 +5480,13 @@ class ResponsePipeline:
             "web_mode": str(web_mode or ""),
             "web_used": bool(web_used == "true"),
             "factual_response_mode": str(ctx.meta.get("factual_response_mode") or ""),
+            "topic_thread_id": topic_thread_id,
+            "topic_key": topic_key,
+            "topic_title": topic_title,
+            "topic_thread_title": topic_title,
+            "active_topic_title": topic_title,
+            "topic_route_reason": str(_pick(ctx.state.get("topic_route_reason"), ctx.meta.get("topic_route_reason"), "")),
+            "topic_route_score": _to_float(_pick_value(ctx.state.get("topic_route_score"), ctx.meta.get("topic_route_score"), 0.0), 0.0),
             "served_model": str(_as_dict(ctx.stats).get("served_model") or ""),
             "verbose_enabled": bool(_to_bool(_as_dict(ctx.stats).get("verbose_enabled"), default=False)),
             "output_len": int(output_len),
@@ -5477,6 +5504,13 @@ class ResponsePipeline:
         # Упрощённый memory_debug_snapshot
         memory_debug_snapshot = {
             "user_text": str(ctx.clean_user_msg or ctx.user_msg or ""),
+            "topic_thread_id": topic_thread_id,
+            "topic_key": topic_key,
+            "topic_title": topic_title,
+            "topic_thread_title": topic_title,
+            "active_topic_title": topic_title,
+            "topic_route_reason": str(_pick(ctx.state.get("topic_route_reason"), ctx.meta.get("topic_route_reason"), "")),
+            "topic_route_score": _to_float(_pick_value(ctx.state.get("topic_route_score"), ctx.meta.get("topic_route_score"), 0.0), 0.0),
             "memory_context": dict(ctx.memory_context or {}),
             "memory_native_state": dict(ctx.state.get("memory_native_state") or {}),
             "retrieved_count": len(list(ctx.retrieved_memories or [])),

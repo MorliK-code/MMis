@@ -3,6 +3,7 @@ from __future__ import annotations
 from llm.tokenizer import estimate_tokens
 import ui.chat_shell as proto
 import ui.chat_window as chat_window_module
+from ui.chat_sessions import SINGLE_VISIBLE_CHAT_TITLE
 from ui.chat_window import ChatWindow
 from ui.workers import ReplyResult
 
@@ -140,6 +141,29 @@ def test_resolve_thinking_text_backfills_final_suffix_like_console() -> None:
 
 def test_resolve_thinking_text_keeps_streamed_when_final_is_subset_like_console() -> None:
     assert ChatWindow._resolve_thinking_text("last-pass", "first-pass last-pass", True) == "first-pass last-pass"
+
+
+def test_resolve_active_topic_title_uses_topic_metadata_not_last_question() -> None:
+    window = ChatWindow.__new__(ChatWindow)
+    window._last_memory_debug_snapshot = {
+        "topic_thread_title": "Memory pipeline metadata",
+        "topic_key": "latest_user_question",
+    }
+    window._history = [
+        ("user", "а последний вопрос вообще другой?", "", None, ""),
+    ]
+
+    assert window._resolve_active_topic_title() == "Memory pipeline metadata"
+
+
+def test_resolve_active_topic_title_does_not_fallback_to_last_question() -> None:
+    window = ChatWindow.__new__(ChatWindow)
+    window._last_memory_debug_snapshot = {}
+    window._history = [
+        ("user", "это не тема, это последний вопрос", "", None, ""),
+    ]
+
+    assert window._resolve_active_topic_title() == SINGLE_VISIBLE_CHAT_TITLE
 
 
 def test_live_thinking_timer_starts_from_first_visible_thinking_chunk(monkeypatch) -> None:
