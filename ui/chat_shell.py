@@ -1405,13 +1405,12 @@ class ComposerEdit(QPlainTextEdit):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._display_font = _ui_font(pixel_size=14)
+        self._native_text_visible: bool | None = None
         self.setFont(self._display_font)
-        self.setStyleSheet(
-            "QPlainTextEdit{background:transparent;border:none;color:transparent;padding:2px 0 0 5px;"
-            "selection-background-color:rgba(139,92,246,.22);}"
-        )
+        self._apply_native_text_style(False)
         self.textChanged.connect(self._refresh_overlay)
         self.cursorPositionChanged.connect(self._refresh_overlay)
+        self.selectionChanged.connect(self._refresh_overlay)
         self.updateRequest.connect(lambda *_args: self._refresh_overlay())
 
     def keyPressEvent(self, event) -> None:
@@ -1426,18 +1425,51 @@ class ComposerEdit(QPlainTextEdit):
         super().keyPressEvent(event)
 
     def _refresh_overlay(self) -> None:
+        self._apply_native_text_style(self.textCursor().hasSelection())
         self.viewport().update()
 
+    def _apply_native_text_style(self, visible: bool) -> None:
+        native_visible = bool(visible)
+        if self._native_text_visible is native_visible:
+            return
+        self._native_text_visible = native_visible
+        text_color = TEXT if native_visible else "transparent"
+        self.setStyleSheet(
+            "QPlainTextEdit{"
+            "background:transparent;"
+            "border:none;"
+            f"color:{text_color};"
+            "padding:2px 0 0 5px;"
+            "selection-background-color:rgba(139,92,246,.22);"
+            f"selection-color:{TEXT};"
+            "}"
+        )
+
+    def _overlay_text_rect(self) -> QRect:
+        cursor = QTextCursor(self.document())
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        origin = self.cursorRect(cursor)
+        left = max(0, int(origin.left()))
+        top = max(-self.viewport().height(), int(origin.top()))
+        return QRect(
+            left,
+            top,
+            max(1, self.viewport().width() - left - 4),
+            max(1, self.viewport().height() - top - 2),
+        )
+
     def paintEvent(self, event) -> None:
+        has_selection = self.textCursor().hasSelection()
+        self._apply_native_text_style(has_selection)
         super().paintEvent(event)
+        if has_selection:
+            return
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.setFont(self._display_font)
-        rect = self.viewport().rect().adjusted(5, 2, -4, -2)
+        rect = self._overlay_text_rect()
         text = self.toPlainText()
-        content_offset = self.contentOffset()
-        rect.translate(int(content_offset.x()), int(content_offset.y()))
         if text:
             painter.setPen(_to_qcolor(TEXT))
             painter.drawText(rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap), text)
@@ -2326,10 +2358,6 @@ class ExactChatWindow(QMainWindow):
         self.input.setFixedHeight(76)
         self.input.setFont(_ui_font(pixel_size=14))
         self.input.submitRequested.connect(self._send_message)
-        self.input.setStyleSheet(
-            "QPlainTextEdit{background:transparent;border:none;color:transparent;padding:2px 0 0 5px;"
-            "selection-background-color:rgba(139,92,246,.22);}"
-        )
         composer_lay.addWidget(self.input)
         actions = QHBoxLayout(); actions.setSpacing(8)
         left_actions = QHBoxLayout(); left_actions.setSpacing(6)

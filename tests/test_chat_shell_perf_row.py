@@ -69,6 +69,20 @@ def test_composer_ctrl_enter_inserts_newline_without_submit() -> None:
     assert event.isAccepted()
 
 
+def test_composer_overlay_text_origin_matches_native_selection_origin() -> None:
+    app = _app()
+    edit = ComposerEdit()
+    edit.resize(400, 76)
+    edit.setPlainText("asdfasdfasdf")
+    edit.show()
+    app.processEvents()
+
+    cursor = QTextCursor(edit.document())
+    cursor.movePosition(QTextCursor.MoveOperation.Start)
+
+    assert edit._overlay_text_rect().topLeft() == edit.cursorRect(cursor).topLeft()
+
+
 def test_message_bubble_perf_row_keeps_all_stats_visible() -> None:
     app = _app()
     perf = ["23123 ms", "write 9437 ms", "7.2 tok/s", "prompt 2600", "gen 68"]
