@@ -145,7 +145,7 @@ class PreprocessStage(PipelineStage):
             "emotion_arousal": float(metadata.emotion.arousal),
             "metadata_tags": list(metadata.tags),
         }
-        for key in ("now_iso", "timezone", "previous_user_at", "minutes_since_previous", "same_calendar_day"):
+        for key in ("now_iso", "timezone", "now_human", "today_human", "time_human", "previous_user_at", "minutes_since_previous", "same_calendar_day"):
             value = ctx.meta.get(key)
             if value is None:
                 continue
@@ -207,12 +207,24 @@ class PreprocessStage(PipelineStage):
         state_tags["is_technical"] = ctx.tags["is_technical"]
         state_tags["allowed_term"] = ctx.tags["allowed_term"]
         state_tags["use_term_now"] = ctx.tags["use_term_now"]
-        for key in ("now_iso", "timezone", "previous_user_at", "minutes_since_previous", "same_calendar_day"):
+
+        for key in (
+            "now_iso",
+            "timezone",
+            "now_human",
+            "today_human",
+            "time_human",
+            "previous_user_at",
+            "minutes_since_previous",
+            "same_calendar_day",
+        ):
             value = str(ctx.tags.get(key) or "").strip()
             if value:
                 state_tags[key] = value
+
         if greeting_flags["conversation_state"]:
             state_tags["conversation_state"] = str(greeting_flags["conversation_state"])
+
         ctx.state["context_tags"] = state_tags
         ctx.state["dialog_mode"] = dict(dialog_mode)
         ctx.state["address_terms_policy"] = dict(address_terms_policy)
@@ -7065,6 +7077,9 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "active_mode",
         "mode_lock",
         "now_iso",
+        "now_human",
+        "today_human",
+        "time_human",
         "timezone",
         "previous_user_at",
         "minutes_since_previous",
@@ -7118,11 +7133,12 @@ def _inject_temporal_grounding(ctx: PipelineContext) -> None:
     timezone_name = str(
         _pick(
             meta.get("timezone"),
-            context_tags.get("timezone"),
             meta.get("user_timezone"),
-            "Europe/Kiev",
+            _local_timezone_name(),
+            context_tags.get("timezone"),
+            "local",
         )
-    ).strip() or "Europe/Kiev"
+    ).strip() or "local"
     tzinfo = _zoneinfo_or_utc(timezone_name)
     now_dt = dt.datetime.now(tzinfo)
 
@@ -7139,11 +7155,28 @@ def _inject_temporal_grounding(ctx: PipelineContext) -> None:
 
     meta["now_iso"] = now_dt.isoformat()
     meta["timezone"] = timezone_name
+    meta["now_human"] = now_dt.strftime("%d.%m.%Y %H:%M:%S")
+    meta["today_human"] = now_dt.strftime("%d.%m.%Y")
+    meta["time_human"] = now_dt.strftime("%H:%M:%S")
     meta["previous_user_at"] = previous_user_at
     meta["minutes_since_previous"] = (
         "" if minutes_since_previous is None else str(max(0, int(minutes_since_previous)))
     )
     meta["same_calendar_day"] = "true" if same_calendar_day else "false"
+
+    for key in (
+        "now_iso",
+        "now_human",
+        "today_human",
+        "time_human",
+        "timezone",
+        "previous_user_at",
+        "minutes_since_previous",
+        "same_calendar_day",
+    ):
+        context_tags[key] = str(meta.get(key) or "")
+    state["context_tags"] = context_tags
+    ctx.state = state
     ctx.meta = meta
 
 
@@ -7193,13 +7226,54 @@ def _relative_time_en(minutes: int) -> str:
 def _zoneinfo_or_utc(name: str) -> dt.tzinfo:
     token = str(name or "").strip()
     if not token:
-        return dt.timezone.utc
-    try:
-        from zoneinfo import ZoneInfo
+        return _local_tzinfo()
+    aliases = {
+        "Europe/Kiev": "Europe/Kyiv",
+    }
+    offset_match = re.match(r"^(?:UTC|GMT)?([+-])(\d{1,2})(?::?(\d{2}))?$", token, flags=re.IGNORECASE)
+    if offset_match:
+        sign = -1 if offset_match.group(1) == "-" else 1
+        hours = int(offset_match.group(2) or 0)
+        minutes = int(offset_match.group(3) or 0)
+        if 0 <= hours <= 23 and 0 <= minutes <= 59:
+            return dt.timezone(sign * dt.timedelta(hours=hours, minutes=minutes))
+    candidates = [token]
+    alias = aliases.get(token)
+    if alias and alias not in candidates:
+        candidates.append(alias)
+    for candidate in candidates:
+        try:
+            from zoneinfo import ZoneInfo
 
-        return ZoneInfo(token)
+            return ZoneInfo(candidate)
+        except Exception:
+            continue
+    return _local_tzinfo()
+
+
+def _local_tzinfo() -> dt.tzinfo:
+    try:
+        local = dt.datetime.now().astimezone().tzinfo
+        if local is not None:
+            return local
     except Exception:
-        return dt.timezone.utc
+        pass
+    return dt.timezone.utc
+
+
+def _local_timezone_name() -> str:
+    try:
+        now = dt.datetime.now().astimezone()
+        offset = now.utcoffset()
+        if offset is not None:
+            total_minutes = int(offset.total_seconds() // 60)
+            sign = "+" if total_minutes >= 0 else "-"
+            total_minutes = abs(total_minutes)
+            hours, minutes = divmod(total_minutes, 60)
+            return f"UTC{sign}{hours:02d}:{minutes:02d}"
+    except Exception:
+        pass
+    return "local"
 
 
 def _tool_call_to_dict(row: ToolCall) -> dict[str, Any]:

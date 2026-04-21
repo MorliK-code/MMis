@@ -388,9 +388,48 @@ class PromptEngine:
     def _build_metadata_block(*, state_map: dict[str, Any], blocks: dict[str, str]) -> str:
         tags_block = str(blocks.get("context_tags") or "").strip()
         context = _as_dict(state_map.get("context_tags"))
-        lines = []
+        lines: list[str] = []
+        seen_keys: set[str] = set()
+
+        def append_key(key: str, value: Any) -> None:
+            text = str(value or "").strip()
+            if not text:
+                return
+            normalized = str(key or "").strip().lower()
+            if not normalized or normalized in seen_keys:
+                return
+            seen_keys.add(normalized)
+            lines.append(f"- {key}: {text}")
+
+        def append_block(block: str) -> None:
+            for raw_line in str(block or "").splitlines():
+                line = str(raw_line or "").strip()
+                if not line or line == "- none":
+                    continue
+                match = re.match(r"^-\s*([A-Za-z0-9_.-]+)\s*:", line)
+                if match:
+                    normalized = match.group(1).strip().lower()
+                    if normalized in seen_keys:
+                        continue
+                    seen_keys.add(normalized)
+                lines.append(line)
+
+        for key in (
+            "now_human",
+            "time_human",
+            "today_human",
+            "timezone",
+            "now_iso",
+            "local_date",
+            "previous_user_at",
+            "minutes_since_previous",
+            "same_calendar_day",
+        ):
+            append_key(key, context.get(key))
+
         if tags_block:
-            lines.append(tags_block)
+            append_block(tags_block)
+
         for key in (
             "lang",
             "intent",
@@ -416,6 +455,9 @@ class PromptEngine:
             "use_term_now",
             "address_terms_policy",
             "now_iso",
+            "now_human",
+            "today_human",
+            "time_human",
             "timezone",
             "previous_user_at",
             "minutes_since_previous",
@@ -432,9 +474,7 @@ class PromptEngine:
             "web_response_style",
             "web_guardrail",
         ):
-            value = str(context.get(key) or "").strip()
-            if value:
-                lines.append(f"- {key}: {value}")
+            append_key(key, context.get(key))
         dialog_mode = {
             "greeting_allowed": str(context.get("greeting_allowed") or context.get("allow_greeting") or "").strip().lower(),
             "smalltalk_allowed": str(context.get("smalltalk_allowed") or "").strip().lower(),

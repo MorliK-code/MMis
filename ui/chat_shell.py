@@ -160,6 +160,14 @@ def _ui_font(*, pixel_size: int | None = None, weight: int = QFont.Weight.Medium
     font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
     return font
 
+def _button_font(*, pixel_size: int | None = None, weight: int = QFont.Weight.Medium) -> QFont:
+    font = QFont("Cascadia Code")
+    if pixel_size is not None:
+        font.setPixelSize(int(pixel_size))
+    font.setWeight(weight)
+    font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.NoSubpixelAntialias)
+    font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
+    return font
 
 def _topbar_font(*, pixel_size: int | None = None, weight: int = QFont.Weight.Medium) -> QFont:
     font = QFont("Segoe UI")
@@ -425,7 +433,10 @@ class StreamingTextBox(QFrame):
 class PaintedButton(QPushButton):
     def __init__(self, text: str = "", parent: QWidget | None = None):
         super().__init__(text, parent)
-        self._font = _ui_font(pixel_size=13)
+        # self._font = _ui_font(pixel_size=13)
+        self._font = QFont("Cascadia Code")
+        self._font.setPixelSize(13)
+        self._font.setWeight(QFont.Weight.Medium)
         self._padding = (10, 0, 10, 0)
         self._radius = 8
         self._draw_offset_y = 0
@@ -747,7 +758,7 @@ class HoverButton(PaintedButton):
     def __init__(self, text: str = "", accent: bool = False, parent: QWidget | None = None):
         super().__init__(text, parent)
         base_color = "rgba(196,181,253,0.78)" if accent else MUTED
-        self.set_button_font(_ui_font(pixel_size=13, weight=QFont.Weight.Medium))
+        self.set_button_font(_button_font(pixel_size=13, weight=QFont.Weight.DemiBold))
         self.set_button_padding(9, 0, 9, 0)
         self.set_button_radius(8)
         self.setFixedHeight(28)
@@ -765,7 +776,7 @@ class HoverButton(PaintedButton):
 class RailButton(PaintedButton):
     def __init__(self, text: str, active: bool = False):
         super().__init__(text)
-        self.set_button_font(_ui_font(pixel_size=16))
+        self.set_button_font(_button_font(pixel_size=16, weight=QFont.Weight.DemiBold))
         self.set_button_padding(0, 0, 0, 0)
         self.set_button_radius(10)
         self.setFixedSize(38, 38)
@@ -1258,7 +1269,7 @@ class InlineToggleButton(PaintedButton):
         super().__init__(text)
         self.setCheckable(True)
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self.set_button_font(_ui_font(pixel_size=9, weight=QFont.Weight.Medium))
+        self.set_button_font(_button_font(pixel_size=9, weight=QFont.Weight.Medium))
         self.set_button_padding(0, 0, 0, 0)
         self.set_button_radius(0)
         self.set_text_alignment(Qt.AlignmentFlag.AlignLeft)

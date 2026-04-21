@@ -3351,6 +3351,22 @@ class CharacterRuntime:
                 trait_tags.get("use_term_now"),
             ),
         }
+        for key in (
+            "now_human",
+            "time_human",
+            "today_human",
+            "timezone",
+            "now_iso",
+            "previous_user_at",
+            "minutes_since_previous",
+            "same_calendar_day",
+        ):
+            tags[key] = _pick(
+                state_tags.get(key),
+                state.get(key),
+                policy_tags.get(key),
+                trait_tags.get(key),
+            )
         return {k: v for k, v in tags.items() if v}
 
     def _build_system_role_block(self, policies: dict[str, Any]) -> str:

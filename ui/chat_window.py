@@ -84,6 +84,9 @@ TEXT_FILE_SUFFIXES = {
     ".hpp",
 }
 MAX_INLINE_FILE_BYTES = 64 * 1024
+HISTORY_INITIAL_RENDER_LIMIT = 12
+HISTORY_LAZY_BATCH_SIZE = 12
+HISTORY_SCROLL_LOAD_THRESHOLD_PX = 24
 
 
 def _configure_qt_startup() -> None:
@@ -123,6 +126,10 @@ class ChatWindow(proto.ExactChatWindow):
         self._chat_sessions: list[dict] = []
         self._active_chat_id: str | None = None
         self._history: list[HistoryRow] = []
+        self._lazy_history_start_index = 0
+        self._lazy_history_button: QWidget | None = None
+        self._lazy_history_loading = False
+        self._lazy_history_scroll_connected = False
         self._active_model: str = ""
         self._available_models: list[str] = []
         self._thinking_enabled = True
@@ -171,6 +178,9 @@ class ChatWindow(proto.ExactChatWindow):
 
     def _build_ui(self):
         super()._build_ui()
+        if not self._lazy_history_scroll_connected:
+            self.scroll.verticalScrollBar().valueChanged.connect(self._on_history_scroll_value_changed)
+            self._lazy_history_scroll_connected = True
         self._refresh_persona_label()
         self.input.setPlaceholderText("Напиши сообщение")
         self.search_btn.setText("Очистить")
@@ -350,6 +360,7 @@ class ChatWindow(proto.ExactChatWindow):
             taken = self.messages_layout.takeAt(index)
             if taken is not None and widget is not None:
                 widget.deleteLater()
+        self._lazy_history_button = None
         sync = getattr(self, "_sync_messages_view_height", None)
         if callable(sync):
             sync()
@@ -360,6 +371,125 @@ class ChatWindow(proto.ExactChatWindow):
         sync = getattr(self, "_schedule_messages_view_height_sync", None)
         if callable(sync):
             sync()
+
+    def _last_user_text_before(self, index: int) -> str:
+        start = max(0, min(int(index), len(self._history)))
+        for role, text, _stat_line, _feedback, _thinking in reversed(self._history[:start]):
+            if role == "user" and str(text or "").strip():
+                return str(text or "")
+        return ""
+
+    def _history_bubble_for_index(self, index: int, last_user_text: str) -> tuple[QWidget, bool, str]:
+        role, text, stat_line, feedback, thinking = self._history[index]
+        upgraded_stat_line = self._upgrade_legacy_verbose_stat_line(
+            role=role,
+            text=text,
+            stat_line=stat_line,
+            thinking=thinking,
+            user_text=last_user_text,
+        )
+        if str(role or "").strip() == "ai":
+            upgraded_stat_line = self._normalize_stat_line_time_units(upgraded_stat_line)
+        history_changed = upgraded_stat_line != stat_line
+        if history_changed:
+            self._history[index] = (role, text, upgraded_stat_line, feedback, thinking)
+            stat_line = upgraded_stat_line
+        thinking_ms = self._extract_thinking_ms_from_stat_line(stat_line)
+        perf_items = self._split_stat_line(stat_line)
+        bubble = proto.MessageBubble(
+            _display_role(role),
+            text or "",
+            thinking or "",
+            thinking_ms if str(thinking or "").strip() else "",
+            perf_items,
+            show_thinking_header=bool(str(thinking or "").strip()),
+        )
+        if role == "user" and str(text or "").strip():
+            last_user_text = str(text or "")
+        return bubble, history_changed, last_user_text
+
+    def _render_history_range(self, start: int, end: int, *, insert_at: int | None = None) -> bool:
+        history_changed = False
+        start = max(0, min(int(start), len(self._history)))
+        end = max(start, min(int(end), len(self._history)))
+        last_user_text = self._last_user_text_before(start)
+        inserted = 0
+        for index in range(start, end):
+            bubble, row_changed, last_user_text = self._history_bubble_for_index(index, last_user_text)
+            history_changed = history_changed or row_changed
+            if insert_at is None:
+                self._insert_message_bubble(bubble)
+            else:
+                self.messages_layout.insertWidget(insert_at + inserted, bubble)
+                inserted += 1
+        if insert_at is not None:
+            sync = getattr(self, "_schedule_messages_view_height_sync", None)
+            if callable(sync):
+                sync()
+        return history_changed
+
+    def _remove_lazy_history_button(self) -> None:
+        button = self._lazy_history_button
+        if button is None:
+            return
+        layout = self.messages_layout
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item is not None and item.widget() is button:
+                layout.takeAt(index)
+                break
+        self._lazy_history_button = None
+        button.deleteLater()
+
+    def _sync_lazy_history_button(self) -> None:
+        if self._lazy_history_start_index <= 0:
+            self._remove_lazy_history_button()
+            return
+        if self._lazy_history_button is not None:
+            return
+        button = proto.HoverButton("Загрузить ещё историю")
+        button.setToolTip("Показать более старые сообщения")
+        button.clicked.connect(self._load_older_history_batch)
+        self._lazy_history_button = button
+        self.messages_layout.insertWidget(0, button, 0, Qt.AlignmentFlag.AlignHCenter)
+        sync = getattr(self, "_schedule_messages_view_height_sync", None)
+        if callable(sync):
+            sync()
+
+    @Slot(int)
+    def _on_history_scroll_value_changed(self, value: int) -> None:
+        if self._lazy_history_loading or self._lazy_history_start_index <= 0:
+            return
+        bar = self.scroll.verticalScrollBar()
+        if bar.maximum() <= 0:
+            return
+        if int(value) <= HISTORY_SCROLL_LOAD_THRESHOLD_PX:
+            self._schedule_load_older_history()
+
+    def _schedule_load_older_history(self) -> None:
+        if self._lazy_history_loading:
+            return
+        self._lazy_history_loading = True
+        QTimer.singleShot(0, self._load_older_history_batch)
+
+    @Slot()
+    def _load_older_history_batch(self) -> None:
+        if self._lazy_history_start_index <= 0:
+            self._lazy_history_loading = False
+            self._sync_lazy_history_button()
+            return
+        old_start = int(self._lazy_history_start_index)
+        new_start = max(0, old_start - HISTORY_LAZY_BATCH_SIZE)
+        self._remove_lazy_history_button()
+        history_changed = self._render_history_range(new_start, old_start, insert_at=0)
+        self._lazy_history_start_index = new_start
+        self._sync_lazy_history_button()
+        if history_changed:
+            self._save_chat_sessions()
+        sync = getattr(self, "_sync_messages_view_height", None)
+        if callable(sync):
+            sync()
+        QTimer.singleShot(0, lambda: setattr(self, "_lazy_history_loading", False))
 
     def _clear_messages(self) -> None:
         if self._worker and self._worker.isRunning():
@@ -385,35 +515,10 @@ class ChatWindow(proto.ExactChatWindow):
 
     def _render_history(self) -> None:
         self._clear_message_widgets()
-        history_changed = False
-        last_user_text = ""
-        for index, (role, text, stat_line, feedback, thinking) in enumerate(self._history):
-            upgraded_stat_line = self._upgrade_legacy_verbose_stat_line(
-                role=role,
-                text=text,
-                stat_line=stat_line,
-                thinking=thinking,
-                user_text=last_user_text,
-            )
-            if str(role or "").strip() == "ai":
-                upgraded_stat_line = self._normalize_stat_line_time_units(upgraded_stat_line)
-            if upgraded_stat_line != stat_line:
-                self._history[index] = (role, text, upgraded_stat_line, feedback, thinking)
-                stat_line = upgraded_stat_line
-                history_changed = True
-            thinking_ms = self._extract_thinking_ms_from_stat_line(stat_line)
-            perf_items = self._split_stat_line(stat_line)
-            bubble = proto.MessageBubble(
-                _display_role(role),
-                text or "",
-                thinking or "",
-                thinking_ms if str(thinking or "").strip() else "",
-                perf_items,
-                show_thinking_header=bool(str(thinking or "").strip()),
-            )
-            self._insert_message_bubble(bubble)
-            if role == "user" and str(text or "").strip():
-                last_user_text = str(text or "")
+        self._lazy_history_loading = False
+        self._lazy_history_start_index = max(0, len(self._history) - HISTORY_INITIAL_RENDER_LIMIT)
+        history_changed = self._render_history_range(self._lazy_history_start_index, len(self._history))
+        self._sync_lazy_history_button()
         if history_changed:
             self._save_chat_sessions()
         QTimer.singleShot(0, self._scroll_bottom)
