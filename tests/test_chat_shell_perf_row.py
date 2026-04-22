@@ -8,7 +8,7 @@ from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
-from ui.chat_shell import ComposerEdit, ExactChatWindow, MessageBubble, PendingAssistant
+from ui.chat_shell import ComposerEdit, ExactChatWindow, MessageBubble, PendingAssistant, _format_message_html
 
 
 class _FakeBubble:
@@ -104,6 +104,67 @@ def test_message_bubble_set_perf_recomputes_geometry() -> None:
 
     assert bubble.perf_wrap.layout().count() == 5
     assert bubble.perf_wrap.sizeHint().width() >= 300
+
+
+def test_message_text_formats_bold_and_inline_code_as_rich_text() -> None:
+    html = _format_message_html("1. **Duplication** text `visible layer` (plain note)")
+
+    assert "<b>Duplication</b>" in html
+    assert "**" not in html
+    assert "`" not in html
+    assert "background-color" in html
+    assert "Cascadia Code" in html
+    assert "font-size:12px" in html
+    assert "visible layer" in html
+    assert "(plain note)" in html
+
+
+def test_message_text_does_not_highlight_plain_parentheses() -> None:
+    html = _format_message_html("text (plain note)")
+
+    assert "background-color" not in html
+    assert "(plain note)" in html
+
+
+def test_message_bubble_keeps_plain_text_value_while_rendering_inline_markup() -> None:
+    app = _app()
+    text = "**Problem**: answer `detail` (plain note)"
+    bubble = MessageBubble("assistant", text, "", "", [])
+    bubble.show()
+    app.processEvents()
+
+    assert bubble.text_label.text() == text
+    assert "<b>Problem</b>" in bubble.text_label.rendered_html()
+    assert "background-color" in bubble.text_label.rendered_html()
+    assert "`" not in bubble.text_label.rendered_html()
+    assert "(plain note)" in bubble.text_label.rendered_html()
+
+
+def test_user_message_regenerate_button_is_hover_revealed_and_emits_request() -> None:
+    app = _app()
+    bubble = MessageBubble("user", "question", "", "", [])
+    requested: list[object] = []
+    bubble.regenerateRequested.connect(lambda item: requested.append(item))
+    bubble.show()
+    app.processEvents()
+
+    assert bubble.regenerate_btn is not None
+    bubble._set_regenerate_button_visible(False)
+    app.processEvents()
+    assert not bubble.regenerate_btn.isVisible()
+
+    bubble._set_regenerate_button_visible(True)
+    app.processEvents()
+
+    assert bubble.regenerate_btn.isVisible()
+    bubble.regenerate_btn.click()
+
+    assert requested == [bubble]
+
+    bubble._set_regenerate_button_visible(False)
+    app.processEvents()
+
+    assert not bubble.regenerate_btn.isVisible()
 
 
 def test_short_messages_keep_content_height_when_chat_has_free_space() -> None:

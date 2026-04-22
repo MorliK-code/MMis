@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest import mock
 
@@ -8,8 +9,17 @@ import ui_console
 
 class UiConsoleShutdownTests(unittest.TestCase):
     def test_stop_memory_ollama_model_uses_configured_memory_profile(self) -> None:
-        with mock.patch.object(ui_console, "_stop_ollama_models", return_value=True) as stop_models:
-            self.assertTrue(ui_console._stop_memory_ollama_model())
+        payload = {
+            "task_model_profiles": {
+                "memory_llm_process": {
+                    "provider": "ollama",
+                    "model": "qwen3:4b",
+                }
+            }
+        }
+        with mock.patch("pathlib.Path.read_text", return_value=json.dumps(payload)):
+            with mock.patch.object(ui_console, "_stop_ollama_models", return_value=True) as stop_models:
+                self.assertTrue(ui_console._stop_memory_ollama_model())
 
         stop_models.assert_called_once_with(["qwen3:4b"])
 

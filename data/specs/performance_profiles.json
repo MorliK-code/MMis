@@ -157,8 +157,8 @@
       },
       "ollama": {
         "num_thread": 6,
-        "num_ctx": 8192,
-        "num_gpu": 9999,
+        "num_ctx": 32000,
+        "num_gpu": 64,
         "num_batch": 128,
         "keep_alive": "5m"
       },

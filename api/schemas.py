@@ -3,12 +3,23 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class ChatAttachment(BaseModel):
+    kind: str = "file"
+    name: str = ""
+    mime_type: str = ""
+    size: int = 0
+    path: str = ""
+    text: str | None = None
+    data_base64: str | None = None
+
+
 class ChatRequest(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = ""
     store_turn: bool = True
     think: bool | None = None
     verbose: bool | None = None
     json_mode: bool | None = None
+    attachments: list[ChatAttachment] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):

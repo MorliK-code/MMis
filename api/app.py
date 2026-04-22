@@ -264,6 +264,30 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _memory_llm_cached_provider(worker: Any) -> Any | None:
+    processor = getattr(worker, "memory_llm_processor", None)
+    if processor is None:
+        return None
+
+    getter = getattr(processor, "get_provider", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            return None
+
+    task_router = getattr(processor, "task_router", None)
+    router_getter = getattr(task_router, "get_cached_provider", None)
+    if callable(router_getter):
+        task_name = str(getattr(processor, "TASK_NAME", "") or "memory_llm_process")
+        try:
+            return router_getter(task_name)
+        except Exception:
+            return None
+
+    return None
+
+
 def _build_memory_llm_status() -> dict[str, Any]:
     status: dict[str, Any] = {
         "enabled": False,
@@ -273,6 +297,7 @@ def _build_memory_llm_status() -> dict[str, Any]:
         "state": "disabled",
         "scheduler_mode": "",
         "provider_unloaded": True,
+        "provider_cached": False,
         "jobs_queued": 0,
         "jobs_processing": 0,
         "jobs_retry_wait": 0,
@@ -301,7 +326,9 @@ def _build_memory_llm_status() -> dict[str, Any]:
         running = bool(worker_stats.get("running"))
         paused = bool(worker_stats.get("paused"))
         locked = bool(worker_stats.get("memory_llm_locked"))
-        provider_unloaded = bool(worker_stats.get("memory_llm_provider_unloaded", True))
+        provider = _memory_llm_cached_provider(worker)
+        provider_cached = provider is not None
+        provider_unloaded = bool(worker_stats.get("memory_llm_provider_unloaded", True)) or not provider_cached
         queued = _as_int(job_stats.get("queued"), 0)
         processing = _as_int(job_stats.get("processing"), 0)
         retry_wait = _as_int(job_stats.get("retry_wait"), 0)
@@ -331,6 +358,7 @@ def _build_memory_llm_status() -> dict[str, Any]:
                 "state": state,
                 "scheduler_mode": str(config.get("scheduler_mode") or ""),
                 "provider_unloaded": provider_unloaded,
+                "provider_cached": provider_cached,
                 "locked": locked,
                 "jobs_queued": queued,
                 "jobs_processing": processing,
@@ -385,6 +413,93 @@ def _model_name_matches(model: str, candidates: list[str]) -> bool:
         if current.split("@", 1)[0] == target:
             return True
     return False
+
+
+def _is_embedding_model_name(model: str) -> bool:
+    lower = str(model or "").strip().lower()
+    return any(token in lower for token in ("embed", "embedding", "bge", "nomic"))
+
+
+def _model_family_tokens(model: str) -> set[str]:
+    lower = str(model or "").strip().lower()
+    families = {"qwen", "gemma", "llama", "mistral", "nemotron", "gpt", "deepseek", "phi", "mixtral"}
+    return {family for family in families if family in lower}
+
+
+def _model_size_b(model: str) -> float | None:
+    match = re.search(r"(\d+(?:\.\d+)?)\s*b(?:\b|[-_:])", str(model or "").lower())
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except Exception:
+        return None
+
+
+def _select_runtime_model_replacement(current: str, models: list[str]) -> str:
+    candidates = [str(model or "").strip() for model in list(models or []) if str(model or "").strip()]
+    if not candidates:
+        return ""
+    chat_candidates = [model for model in candidates if not _is_embedding_model_name(model)]
+    candidates = chat_candidates or candidates
+    current_text = str(current or "").strip().lower()
+    current_families = _model_family_tokens(current_text)
+    current_size = _model_size_b(current_text)
+    current_is_coder = "coder" in current_text
+
+    def score(item: tuple[int, str]) -> tuple[float, int]:
+        index, model = item
+        lower = model.lower()
+        value = 0.0
+        if current_families and (_model_family_tokens(lower) & current_families):
+            value += 100.0
+        if current_is_coder == ("coder" in lower):
+            value += 12.0
+        elif "coder" in lower:
+            value -= 20.0
+        size = _model_size_b(lower)
+        if current_size is not None and size is not None:
+            value -= abs(float(size) - float(current_size))
+        elif size is not None:
+            value -= min(float(size), 80.0) / 10.0
+        if _is_embedding_model_name(lower):
+            value -= 1000.0
+        return value, -index
+
+    return max(enumerate(candidates), key=score)[1]
+
+
+def _set_runtime_model(model: str) -> None:
+    target = str(model or "").strip()
+    if not target:
+        return
+    _runtime.model = target
+    try:
+        if hasattr(_runtime.provider, "default_model"):
+            setattr(_runtime.provider, "default_model", target)
+    except Exception:
+        pass
+
+
+def _ensure_runtime_model_available() -> list[str]:
+    if str(getattr(_runtime, "provider_name", "") or "").strip().lower() != "ollama":
+        return _safe_list_models(_runtime.provider)
+    models = _safe_list_models(_runtime.provider)
+    current = str(_runtime.model or "").strip()
+    if not models or _model_name_matches(current, models):
+        return models
+    replacement = _select_runtime_model_replacement(current, models)
+    if not replacement:
+        return models
+    _set_runtime_model(replacement)
+    log_json(
+        LOGGER,
+        "api_runtime_model_auto_switch",
+        old_model=current,
+        new_model=replacement,
+        available_models=len(models),
+    )
+    return models
 
 
 def _ollama_loaded_models(provider: Any) -> tuple[list[str], bool]:
@@ -492,7 +607,7 @@ def health() -> HealthResponse:
 @app.get("/models", response_model=ModelsResponse)
 def list_models() -> ModelsResponse:
     with _runtime.lock:
-        models = _safe_list_models(_runtime.provider)
+        models = _ensure_runtime_model_available()
         return ModelsResponse(runtime_model=_runtime.model, models=models)
 
 
@@ -592,6 +707,8 @@ def memory_inspector_debug(
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     text = str(req.text or "").strip()
+    if not text and list(req.attachments or []):
+        text = "Проанализируй вложения."
     if not text:
         raise HTTPException(status_code=400, detail="Text is empty")
 
@@ -618,6 +735,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                     summary=None,
                 )
 
+        _ensure_runtime_model_available()
         log_json(
             LOGGER,
             "api_chat_start",
@@ -701,8 +819,13 @@ def chat(req: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest):
     text = str(req.text or "").strip()
+    if not text and list(req.attachments or []):
+        text = "Проанализируй вложения."
     if not text:
         raise HTTPException(status_code=400, detail="Text is empty")
+
+    with _runtime.lock:
+        _ensure_runtime_model_available()
 
     def generate():
         request_text = text
@@ -1007,12 +1130,7 @@ def _apply_runtime_model(target: str) -> tuple[bool, str, list[str]]:
     models = _safe_list_models(_runtime.provider)
     if models and model not in models:
         return False, f"Model '{model}' is not available", models
-    _runtime.model = model
-    try:
-        if hasattr(_runtime.provider, "default_model"):
-            setattr(_runtime.provider, "default_model", model)
-    except Exception:
-        pass
+    _set_runtime_model(model)
     if model and model not in models:
         models = [model, *models]
     return True, "", models
@@ -1022,6 +1140,16 @@ def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str
     active_profile, quality_profile = _resolve_effective_profiles()
     profile = get_profile(active_profile)
     requested_think = _requested_think_enabled(req)
+    attachments: list[dict[str, Any]] = []
+    for item in list(req.attachments or []):
+        dump = getattr(item, "model_dump", None)
+        if callable(dump):
+            row = dump(exclude_none=True)
+        else:
+            as_dict = getattr(item, "dict", None)
+            row = as_dict(exclude_none=True) if callable(as_dict) else item
+        if isinstance(row, dict):
+            attachments.append({str(key): value for key, value in row.items() if value is not None})
     meta: dict[str, Any] = {
         "model": _runtime.model,
         "think": requested_think,
@@ -1035,6 +1163,8 @@ def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str
         "top_p": float(profile.generation.top_p),
         "repeat_penalty": float(profile.generation.repeat_penalty),
     }
+    if attachments:
+        meta["attachments"] = attachments
     if profile.generation.max_tokens is not None:
         meta["max_tokens"] = int(profile.generation.max_tokens)
     if profile.generation.stop:

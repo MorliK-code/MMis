@@ -21,15 +21,10 @@
     "informal_you": true
   },
   "bans": [
-    "could you clarify what you mean",
     "быть полезной"
   ],
   "learned": {
     "preferences_confirmed": [
-      "less_warmth",
-      "shorter_answers",
-      "ban_word:быть полезной",
-      "ban_word:could you clarify what you mean"
     ],
     "preferences_pending": [],
     "style_bias": {

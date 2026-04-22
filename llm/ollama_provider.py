@@ -128,6 +128,40 @@ def _message_to_dict(msg: Message) -> dict[str, Any]:
     return out
 
 
+def _image_payloads_from_metadata(metadata: dict[str, Any] | None) -> list[str]:
+    meta = dict(metadata or {})
+    out: list[str] = []
+    for item in list(meta.get("attachments") or []):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        mime_type = str(item.get("mime_type") or "").strip().lower()
+        if kind != "image" and not mime_type.startswith("image/"):
+            continue
+        raw = str(item.get("data_base64") or item.get("base64") or "").strip()
+        if not raw:
+            continue
+        if raw.lower().startswith("data:") and "," in raw:
+            raw = raw.split(",", 1)[1].strip()
+        if raw:
+            out.append(raw)
+    return out
+
+
+def _messages_with_images(messages: list[dict[str, Any]], images: list[str]) -> list[dict[str, Any]]:
+    if not images:
+        return messages
+    out = [dict(row or {}) for row in list(messages or [])]
+    for index in range(len(out) - 1, -1, -1):
+        if str(out[index].get("role") or "").strip().lower() != "user":
+            continue
+        existing = list(out[index].get("images") or [])
+        out[index]["images"] = existing + list(images)
+        return out
+    out.append({"role": "user", "content": "", "images": list(images)})
+    return out
+
+
 def _toolspec_to_ollama(tool: ToolSpec) -> dict[str, Any]:
     schema = dict(tool.input_schema or {})
     return {
@@ -228,6 +262,13 @@ def _extract_thinking(message: dict[str, Any], payload: dict[str, Any] | None = 
 
 def _message_log_fields(messages: list[dict[str, Any]]) -> dict[str, Any]:
     rows = list(messages or [])
+    safe_rows: list[dict[str, Any]] = []
+    for row in rows:
+        safe = dict(row or {})
+        images = list(safe.get("images") or [])
+        if images:
+            safe["images"] = [f"<image:{len(str(item or ''))} chars>" for item in images]
+        safe_rows.append(safe)
     roles = [str(m.get("role") or "") for m in rows]
     order = [f"{idx}:{role}" for idx, role in enumerate(roles)]
     system_content = ""
@@ -236,7 +277,7 @@ def _message_log_fields(messages: list[dict[str, Any]]) -> dict[str, Any]:
             system_content = str(row.get("content") or "")
             break
     return {
-        "messages": rows,
+        "messages": safe_rows,
         "message_roles": roles,
         "message_order": order,
         "system_message": system_content,
@@ -333,6 +374,7 @@ class OllamaProvider(LLMProviderBase):
         self.debug_raw = bool(debug_raw if debug_raw is not None else False)
         self._client = ollama.Client(host=self.host, timeout=self.timeout_sec)
         self._current_model = self.default_model
+        self.paused = False
 
     @staticmethod
     def _is_reasoning_model(model: str) -> bool:
@@ -711,6 +753,9 @@ class OllamaProvider(LLMProviderBase):
     def _chat_once(self, *, req: LLMRequest, model: str, stream: bool, disable_think: bool = False):
         self._remember_model(model)
         messages = [_message_to_dict(m) for m in list(req.messages or [])]
+        image_payloads = _image_payloads_from_metadata(req.metadata)
+        if image_payloads:
+            messages = _messages_with_images(messages, image_payloads)
         options = self._build_options(req)
         tools = [_tools for _tools in [_toolspec_to_ollama(t) for t in list(req.tools or [])] if _tools]
 
@@ -750,6 +795,7 @@ class OllamaProvider(LLMProviderBase):
             "llm_request_payload",
             provider="ollama",
             payload=request_payload,
+            image_count=len(image_payloads),
             **_message_log_fields(messages),
         )
         
@@ -1022,39 +1068,84 @@ class OllamaProvider(LLMProviderBase):
         
         LOGGER.info("OllamaProvider.shutdown() COMPLETE - VRAM should be freed")
 
+    def yield_control(self) -> None:
+        """Cooperative lifecycle hook: yield without unloading the model."""
+        return
+
     def pause(self) -> None:
-        """
-        Приостанавливает LLM provider, освобождая VRAM.
-        
-        Для Ollama это означает явную выгрузку модели из памяти.
-        """
-        LOGGER.info("OllamaProvider.pause() called - releasing VRAM...")
-        self._unload_known_model()
-        LOGGER.info("OllamaProvider.pause() complete - model unloaded, client kept alive")
+        """Pause the provider lifecycle without unloading the model."""
+        self.paused = True
+        return
 
     def resume(self) -> None:
-        """
-        Возобновляет работу LLM provider.
-        
-        Для Ollama это означает готовность к новым запросам.
-        """
-        LOGGER.info("OllamaProvider.resume() called")
-        try:
-            self._client = ollama.Client(host=self.host, timeout=self.timeout_sec)
-        except Exception as exc:
-            LOGGER.warning(f"OllamaProvider.resume() failed to recreate client: {exc}")
+        """Resume the provider lifecycle without reloading or unloading models."""
+        self.paused = False
+        return
 
-    def warmup(self, keep_alive: Any | None = None) -> bool:
+    @staticmethod
+    def _model_name_matches(target: str, candidates: list[str]) -> bool:
+        wanted = str(target or "").strip()
+        if not wanted:
+            return False
+        for row in list(candidates or []):
+            current = str(row or "").strip()
+            if not current:
+                continue
+            if current == wanted or current.split("@", 1)[0] == wanted:
+                return True
+        return False
+
+    def _loaded_model_names(self) -> tuple[list[str], bool]:
+        ps = getattr(getattr(self, "_client", None), "ps", None)
+        if not callable(ps):
+            return [], False
+        try:
+            payload = _as_dict(ps())
+        except Exception as exc:
+            LOGGER.debug(f"OllamaProvider: ps() failed during warmup verification: {exc}")
+            return [], False
+
+        names: list[str] = []
+        for row in list(payload.get("models") or []):
+            data = _as_dict(row)
+            name = str(
+                data.get("model")
+                or data.get("name")
+                or data.get("id")
+                or getattr(row, "model", "")
+                or getattr(row, "name", "")
+                or getattr(row, "id", "")
+                or ""
+            ).strip()
+            if name:
+                names.append(name)
+        return names, True
+
+    def _is_model_loaded(self, model: str) -> tuple[bool, bool]:
+        names, checked = self._loaded_model_names()
+        if not checked:
+            return False, False
+        return self._model_name_matches(model, names), True
+
+    def warmup(
+        self,
+        keep_alive: Any | None = None,
+        *,
+        model: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> bool:
         """Прогревает модель в VRAM без полноценной генерации."""
-        target = str(getattr(self, "_current_model", None) or self.default_model or "").strip()
+        target = str(model or getattr(self, "_current_model", None) or self.default_model or "").strip()
         if not target:
             return False
 
         self._remember_model(target)
+        warmup_options = dict(options or {})
+        warmup_options["num_predict"] = 0
         payload: dict[str, Any] = {
             "model": target,
             "prompt": "",
-            "options": {"num_predict": 0},
+            "options": warmup_options,
         }
         if keep_alive is not None and str(keep_alive).strip() != "":
             payload["keep_alive"] = keep_alive
@@ -1062,6 +1153,24 @@ class OllamaProvider(LLMProviderBase):
         started_at = time.perf_counter()
         try:
             self._client.generate(**payload)
+            loaded, checked = self._is_model_loaded(target)
+            if checked and not loaded:
+                fallback_options = dict(options or {})
+                fallback_options["num_predict"] = 1
+                fallback_options.setdefault("temperature", 0)
+                fallback_payload: dict[str, Any] = {
+                    "model": target,
+                    "messages": [{"role": "user", "content": "."}],
+                    "stream": False,
+                    "options": fallback_options,
+                }
+                if keep_alive is not None and str(keep_alive).strip() != "":
+                    fallback_payload["keep_alive"] = keep_alive
+                self._client.chat(**fallback_payload)
+                loaded, checked = self._is_model_loaded(target)
+                if checked and not loaded:
+                    LOGGER.warning("OllamaProvider.warmup() did not leave model '%s' loaded", target)
+                    return False
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             LOGGER.info(
                 "OllamaProvider.warmup() complete for model '%s' in %.1fms",
@@ -1080,13 +1189,8 @@ class OllamaProvider(LLMProviderBase):
         Для Ollama это означает отправку пустого запроса для выгрузки.
         """
         LOGGER.info("OllamaProvider.unload_model() called - unloading model from VRAM...")
+        self.unload()
+
+    def unload(self) -> None:
+        """Explicitly unload the current model from VRAM."""
         self._unload_known_model()
-        return
-        try:
-            model_name = getattr(self, '_current_model', None) or getattr(self, 'default_model', None)
-            if model_name:
-                # Пустой запрос выгружает модель из памяти
-                ollama.generate(model=model_name, prompt="")
-                LOGGER.info(f"Ollama model '{model_name}' unloaded from VRAM")
-        except Exception as exc:
-            LOGGER.warning(f"OllamaProvider.unload_model() error: {exc}")

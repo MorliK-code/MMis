@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import os
 import shutil
 import sys
@@ -24,7 +26,7 @@ if __package__ in {None, ""}:
 
 from PySide6.QtCore import QTimer, Qt, QUrl, Slot
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QToolButton, QVBoxLayout, QWidget
 
 from config.settings import DATA_DIR, load_config
 from llm.tokenizer import estimate_tokens
@@ -83,7 +85,11 @@ TEXT_FILE_SUFFIXES = {
     ".h",
     ".hpp",
 }
+IMAGE_FILE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 MAX_INLINE_FILE_BYTES = 64 * 1024
+MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
+MAX_PENDING_ATTACHMENTS = 8
+ATTACHMENT_EMPTY_PROMPT = "Проанализируй вложения."
 HISTORY_INITIAL_RENDER_LIMIT = 12
 HISTORY_LAZY_BATCH_SIZE = 12
 HISTORY_SCROLL_LOAD_THRESHOLD_PX = 24
@@ -162,6 +168,9 @@ class ChatWindow(proto.ExactChatWindow):
         self._think_chip = None
         self._verbose_chip = None
         self._json_chip = None
+        self._pending_attachments: list[dict] = []
+        self._attachment_row: QWidget | None = None
+        self._attachment_layout: QHBoxLayout | None = None
         self._load_ui_state()
         super().__init__()
         self.setWindowTitle("MMis - Chat")
@@ -195,6 +204,7 @@ class ChatWindow(proto.ExactChatWindow):
         self.models_button.setToolTip("Модели")
         self.send_btn.setToolTip("Отправить сообщение")
         self._rebuild_mode_row()
+        self._install_attachment_row()
         self._wire_rail_buttons()
 
     @staticmethod
@@ -366,6 +376,9 @@ class ChatWindow(proto.ExactChatWindow):
             sync()
 
     def _insert_message_bubble(self, bubble: QWidget) -> None:
+        wire = getattr(self, "_wire_regenerate_bubble", None)
+        if callable(wire):
+            wire(bubble)
         insert_index = self.messages_layout.count()
         self.messages_layout.insertWidget(insert_index, bubble)
         sync = getattr(self, "_schedule_messages_view_height_sync", None)
@@ -404,6 +417,8 @@ class ChatWindow(proto.ExactChatWindow):
             perf_items,
             show_thinking_header=bool(str(thinking or "").strip()),
         )
+        if role == "user":
+            bubble.setProperty("history_index", index)
         if role == "user" and str(text or "").strip():
             last_user_text = str(text or "")
         return bubble, history_changed, last_user_text
@@ -825,6 +840,96 @@ class ChatWindow(proto.ExactChatWindow):
         self._settings_rail_button.setToolTip("Функции")
         self._settings_rail_button.clicked.connect(self._toggle_functions)
 
+    def _install_attachment_row(self) -> None:
+        if self._attachment_row is not None:
+            return
+        composer = self.input.parentWidget()
+        composer_layout = composer.layout() if composer is not None else None
+        if composer_layout is None:
+            return
+        row = QWidget(composer)
+        row.setObjectName("attachment_row")
+        row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row.setStyleSheet("QWidget#attachment_row { background: transparent; }")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setSpacing(6)
+        self._attachment_row = row
+        self._attachment_layout = layout
+        composer_layout.insertWidget(1, row)
+        row.setVisible(False)
+        self._sync_composer_height()
+
+    def _sync_composer_height(self) -> None:
+        composer_wrap = self.findChild(QWidget, "composer_wrap")
+        if composer_wrap is not None:
+            composer_wrap.setFixedHeight(composer_wrap.sizeHint().height())
+        sync = getattr(self, "_sync_messages_view_height", None)
+        if callable(sync):
+            sync()
+
+    def _sync_attachment_row(self) -> None:
+        row = self._attachment_row
+        layout = self._attachment_layout
+        if row is None or layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for index, attachment in enumerate(list(self._pending_attachments or [])):
+            layout.addWidget(self._build_attachment_chip(index, attachment), 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addStretch(1)
+        row.setVisible(bool(self._pending_attachments))
+        self._sync_composer_height()
+
+    def _build_attachment_chip(self, index: int, attachment: dict) -> QWidget:
+        chip = QWidget(self._attachment_row)
+        chip.setObjectName("attachment_chip")
+        chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        chip.setStyleSheet(
+            """
+            QWidget#attachment_chip {
+                background: rgba(31, 36, 44, .82);
+                border: 1px solid rgba(148, 163, 184, .22);
+                border-radius: 7px;
+            }
+            QLabel {
+                color: rgba(226, 232, 240, .92);
+                background: transparent;
+            }
+            QToolButton {
+                color: rgba(148, 163, 184, .95);
+                background: transparent;
+                border: none;
+                padding: 0;
+            }
+            QToolButton:hover {
+                color: rgba(248, 250, 252, .98);
+            }
+            """
+        )
+        layout = QHBoxLayout(chip)
+        layout.setContentsMargins(8, 3, 5, 3)
+        layout.setSpacing(5)
+        label = QLabel(self._attachment_chip_text(attachment), chip)
+        label.setToolTip(str(attachment.get("path") or attachment.get("name") or ""))
+        layout.addWidget(label)
+        close_btn = QToolButton(chip)
+        close_btn.setText("x")
+        close_btn.setFixedSize(16, 16)
+        close_btn.setToolTip("Убрать вложение")
+        close_btn.clicked.connect(lambda _checked=False, idx=index: self._remove_pending_attachment(idx))
+        layout.addWidget(close_btn)
+        return chip
+
+    def _remove_pending_attachment(self, index: int) -> None:
+        if 0 <= int(index) < len(self._pending_attachments):
+            self._pending_attachments.pop(int(index))
+            self._sync_attachment_row()
+            self.input.setFocus()
+
     def _sync_runtime_controls(self) -> None:
         if not self.api:
             return
@@ -1070,6 +1175,109 @@ class ChatWindow(proto.ExactChatWindow):
         bar = self.scroll.verticalScrollBar()
         self._stream_follow_scroll = self._should_follow_stream_scroll(bar.value(), bar.maximum())
 
+    def _remove_message_widgets_after(self, bubble: QWidget) -> None:
+        layout = getattr(self, "messages_layout", None)
+        if layout is None:
+            return
+        start = self._message_layout_index(bubble)
+        if start < 0:
+            return
+        for index in range(layout.count() - 1, start, -1):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is None:
+                continue
+            taken = layout.takeAt(index)
+            if taken is not None:
+                widget.deleteLater()
+        sync = getattr(self, "_schedule_messages_view_height_sync", None)
+        if callable(sync):
+            sync()
+
+    def _history_index_for_user_bubble(self, bubble: QWidget) -> int:
+        raw_index = bubble.property("history_index")
+        try:
+            index = int(raw_index)
+        except Exception:
+            index = -1
+        if 0 <= index < len(self._history) and self._history[index][0] == "user":
+            return index
+
+        text = ""
+        if isinstance(bubble, proto.MessageBubble):
+            text = bubble.text_label.text().strip()
+        for candidate in range(len(self._history) - 1, -1, -1):
+            role, row_text, _stat_line, _feedback, _thinking = self._history[candidate]
+            if role == "user" and str(row_text or "").strip() == text:
+                return candidate
+        return -1
+
+    def _start_reply_worker_for_text(self, text: str, *, store_turn: bool, attachments: list[dict] | None = None) -> None:
+        if self.api is None:
+            self._finalize_pending(
+                text="Нативное окно поднялось, но API сейчас недоступен.",
+                thinking="Нужен доступный ApiClient, чтобы окно работало как основной чат.",
+                thinking_ms=None,
+                perf=["offline"],
+                stat_line="offline",
+            )
+            return
+
+        self._set_busy_state(True)
+        self._worker = ReplyWorker(
+            self.api,
+            user_text=text,
+            store_turn=store_turn,
+            think=self._thinking_enabled,
+            verbose=self._verbose_enabled,
+            attachments=attachments,
+        )
+        self._worker.chunk.connect(self._on_answer_chunk)
+        self._worker.thinking_chunk.connect(self._on_thinking_chunk)
+        self._worker.debug_event.connect(self._on_memory_debug_event)
+        self._worker.finished.connect(self._on_reply_finished)
+        self._worker.errored.connect(self._on_reply_error)
+        self._worker.finished.connect(self._cleanup_request)
+        self._worker.errored.connect(self._cleanup_request)
+        self._worker.start()
+
+    @Slot(object)
+    def _on_regenerate_requested(self, bubble: object) -> None:
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
+            return
+        if not isinstance(bubble, proto.MessageBubble):
+            return
+        user_index = self._history_index_for_user_bubble(bubble)
+        if user_index < 0:
+            return
+        role, text, _stat_line, _feedback, _thinking = self._history[user_index]
+        if role != "user":
+            return
+        text = str(bubble.property("raw_user_text") or text or "").strip()
+        if not text:
+            return
+        attachments = self._attachment_payloads_from_value(bubble.property("attachments_payload"))
+
+        self._capture_stream_scroll_mode()
+        self._history = self._history[: user_index + 1]
+        self._pending_user_text = text
+        self._pending_history_index = len(self._history)
+        self._history.append(("ai", "", "…", None, None))
+        self._remove_message_widgets_after(bubble)
+
+        assistant_bubble = proto.MessageBubble("assistant", "", "", "", [])
+        self._insert_message_bubble(assistant_bubble)
+        self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
+        if hasattr(self, "_lazy_history_start_index"):
+            self._lazy_history_start_index = min(self._lazy_history_start_index, len(self._history))
+        sync_lazy = getattr(self, "_sync_lazy_history_button", None)
+        if callable(sync_lazy):
+            sync_lazy()
+        self._save_chat_sessions()
+        self._schedule_scroll_bottom()
+        self._start_reply_worker_for_text(text, store_turn=False, attachments=attachments)
+
     def _schedule_scroll_bottom(self, *, follow_stream_only: bool = False) -> None:
         requested_follow_only = bool(follow_stream_only)
         if self._scroll_bottom_queued:
@@ -1107,19 +1315,26 @@ class ChatWindow(proto.ExactChatWindow):
             self.web_mode_selector.setEnabled(not busy)
 
     def _send_message(self) -> None:
-        text = self.input.toPlainText().strip()
-        if not text:
+        typed_text = self.input.toPlainText().strip()
+        attachments = self._pending_attachment_payloads()
+        if not typed_text and not attachments:
             return
+        text = typed_text or ATTACHMENT_EMPTY_PROMPT
+        display_text = self._display_text_for_message(text, attachments)
         if self._worker and self._worker.isRunning():
             QMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
             return
 
         self._capture_stream_scroll_mode()
         chat = self._ensure_active_chat()
-        self._history.append(("user", text, None, None, None))
+        user_history_index = len(self._history)
+        self._history.append(("user", display_text, None, None, None))
         self._pending_user_text = text
-        self._update_active_chat_title(text)
-        user_bubble = proto.MessageBubble("user", text, "", "", [])
+        self._update_active_chat_title(display_text)
+        user_bubble = proto.MessageBubble("user", display_text, "", "", [])
+        user_bubble.setProperty("history_index", user_history_index)
+        user_bubble.setProperty("raw_user_text", text)
+        user_bubble.setProperty("attachments_payload", attachments)
         self._insert_message_bubble(user_bubble)
         assistant_bubble = proto.MessageBubble("assistant", "", "", "", [])
         self._insert_message_bubble(assistant_bubble)
@@ -1127,6 +1342,8 @@ class ChatWindow(proto.ExactChatWindow):
         self._pending_history_index = len(self._history)
         self._history.append(("ai", "", "…", None, None))
         self.input.clear()
+        self._pending_attachments = []
+        self._sync_attachment_row()
         self._schedule_scroll_bottom()
         self._save_chat_sessions()
 
@@ -1140,23 +1357,8 @@ class ChatWindow(proto.ExactChatWindow):
             )
             return
 
-        self._set_busy_state(True)
         store_turn = not bool(chat.get("incognito", False))
-        self._worker = ReplyWorker(
-            self.api,
-            user_text=text,
-            store_turn=store_turn,
-            think=self._thinking_enabled,
-            verbose=self._verbose_enabled,
-        )
-        self._worker.chunk.connect(self._on_answer_chunk)
-        self._worker.thinking_chunk.connect(self._on_thinking_chunk)
-        self._worker.debug_event.connect(self._on_memory_debug_event)
-        self._worker.finished.connect(self._on_reply_finished)
-        self._worker.errored.connect(self._on_reply_error)
-        self._worker.finished.connect(self._cleanup_request)
-        self._worker.errored.connect(self._cleanup_request)
-        self._worker.start()
+        self._start_reply_worker_for_text(text, store_turn=store_turn, attachments=attachments)
 
     @Slot(str)
     def _on_answer_chunk(self, piece: str) -> None:
@@ -1571,40 +1773,134 @@ class ChatWindow(proto.ExactChatWindow):
         if self._worker and self._worker.isRunning():
             QMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
             return
-        selected, _flt = QFileDialog.getOpenFileName(
+        selected, _flt = QFileDialog.getOpenFileNames(
             self,
             "Выбери файл",
             str(Path.cwd()),
-            "All files (*.*)",
+            "Files (*.txt *.md *.py *.json *.yaml *.yml *.toml *.log *.csv *.png *.jpg *.jpeg *.webp *.bmp *.gif);;All files (*.*)",
         )
         if not selected:
             return
-        path = Path(selected).expanduser().resolve()
-        block = self._build_file_prompt_block(path)
-        current = self.input.toPlainText().rstrip()
-        if current:
-            current += "\n\n"
-        self.input.setPlainText(current + block)
-        self.input.setFocus()
-
-    def _build_file_prompt_block(self, path: Path) -> str:
-        header = f"[Файл: {path.name}]"
-        try:
-            size = path.stat().st_size
-        except Exception:
-            size = -1
-        if path.suffix.lower() not in TEXT_FILE_SUFFIXES or size < 0 or size > MAX_INLINE_FILE_BYTES:
-            return f"{header}\nПуть: {path}"
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+        errors: list[str] = []
+        existing = {str(item.get("path") or "") for item in self._pending_attachments}
+        for raw_path in list(selected):
+            if len(self._pending_attachments) >= MAX_PENDING_ATTACHMENTS:
+                errors.append(f"Максимум вложений: {MAX_PENDING_ATTACHMENTS}")
+                break
             try:
-                text = path.read_text(encoding="utf-8-sig")
+                attachment = self._attachment_from_path(Path(raw_path).expanduser().resolve())
+            except Exception as exc:
+                errors.append(str(exc))
+                continue
+            path_key = str(attachment.get("path") or "")
+            if path_key and path_key in existing:
+                continue
+            existing.add(path_key)
+            self._pending_attachments.append(attachment)
+        self._sync_attachment_row()
+        self.input.setFocus()
+        if errors:
+            QMessageBox.warning(self, "Вложения", "\n".join(errors[:4]))
+
+    def _attachment_from_path(self, path: Path) -> dict:
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Не найден файл: {path}")
+        size = int(path.stat().st_size)
+        suffix = path.suffix.lower()
+        mime_type = str(mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+        attachment = {
+            "kind": "file",
+            "name": path.name,
+            "mime_type": mime_type,
+            "size": size,
+            "path": str(path),
+        }
+        is_image = suffix in IMAGE_FILE_SUFFIXES or mime_type.lower().startswith("image/")
+        if is_image:
+            if size > MAX_IMAGE_ATTACHMENT_BYTES:
+                raise ValueError(f"{path.name}: изображение больше {self._format_attachment_size(MAX_IMAGE_ATTACHMENT_BYTES)}")
+            attachment["kind"] = "image"
+            attachment["data_base64"] = base64.b64encode(path.read_bytes()).decode("ascii")
+            return attachment
+
+        is_text = suffix in TEXT_FILE_SUFFIXES or mime_type.lower().startswith("text/")
+        if is_text and 0 <= size <= MAX_INLINE_FILE_BYTES:
+            text = self._read_attachment_text(path)
+            if text:
+                attachment["kind"] = "text"
+                attachment["text"] = text
+        return attachment
+
+    @staticmethod
+    def _read_attachment_text(path: Path) -> str:
+        for encoding in ("utf-8", "utf-8-sig", "cp1251"):
+            try:
+                return path.read_text(encoding=encoding).strip()
+            except UnicodeDecodeError:
+                continue
             except Exception:
-                return f"{header}\nПуть: {path}"
+                return ""
+        return ""
+
+    @classmethod
+    def _attachment_payloads_from_value(cls, value) -> list[dict]:
+        rows = value if isinstance(value, (list, tuple)) else []
+        out: list[dict] = []
+        allowed = {"kind", "name", "mime_type", "size", "path", "text", "data_base64"}
+        for item in list(rows):
+            if not isinstance(item, dict):
+                continue
+            row = {str(key): item.get(key) for key in allowed if item.get(key) is not None}
+            if not str(row.get("name") or "").strip() and not str(row.get("path") or "").strip():
+                continue
+            row["kind"] = str(row.get("kind") or "file").strip().lower() or "file"
+            row["name"] = str(row.get("name") or Path(str(row.get("path") or "")).name or "attachment")
+            row["mime_type"] = str(row.get("mime_type") or "application/octet-stream")
+            try:
+                row["size"] = max(0, int(row.get("size") or 0))
+            except Exception:
+                row["size"] = 0
+            out.append(row)
+        return out
+
+    def _pending_attachment_payloads(self) -> list[dict]:
+        return self._attachment_payloads_from_value(self._pending_attachments)
+
+    @staticmethod
+    def _format_attachment_size(size: int | float | str | None) -> str:
+        try:
+            value = max(0, int(float(size or 0)))
         except Exception:
-            return f"{header}\nПуть: {path}"
-        return f"{header}\n{text.strip()}"
+            value = 0
+        if value >= 1024 * 1024:
+            return f"{value / (1024 * 1024):.1f} MB"
+        if value >= 1024:
+            return f"{value / 1024:.1f} KB"
+        return f"{value} B"
+
+    @classmethod
+    def _attachment_chip_text(cls, attachment: dict) -> str:
+        name = str(attachment.get("name") or "attachment")
+        if len(name) > 34:
+            name = name[:16].rstrip() + "..." + name[-13:].lstrip()
+        kind = str(attachment.get("kind") or "file").strip().lower()
+        label = "img" if kind == "image" else ("txt" if kind == "text" else "file")
+        return f"{label}: {name} ({cls._format_attachment_size(attachment.get('size'))})"
+
+    @classmethod
+    def _display_text_for_message(cls, text: str, attachments: list[dict] | None) -> str:
+        rows = cls._attachment_payloads_from_value(attachments or [])
+        if not rows:
+            return str(text or "").strip()
+        lines = [str(text or "").strip(), "", "Вложения:"]
+        for attachment in rows:
+            name = str(attachment.get("name") or "attachment")
+            kind = str(attachment.get("kind") or "file").strip().lower() or "file"
+            mime_type = str(attachment.get("mime_type") or "")
+            size = cls._format_attachment_size(attachment.get("size"))
+            details = ", ".join(part for part in (kind, mime_type, size) if part)
+            lines.append(f"- {name} ({details})")
+        return "\n".join(lines).strip()
 
     def _latest_ai_text(self) -> str:
         for role, text, _stat_line, _feedback, _thinking in reversed(self._history):

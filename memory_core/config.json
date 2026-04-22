@@ -11,6 +11,8 @@
   "enable_worker_pause_during_api_request": true,
   "worker_pause_timeout": 0.0,
   "memory_llm_scheduler_mode": "cooperative",
+  "memory_llm_wake_delay_after_main_sec": 120.0,
+  "unload_memory_llm_before_main_request": true,
   
   "worker_shutdown_idle_timeout": 0.0,
   

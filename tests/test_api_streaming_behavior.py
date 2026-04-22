@@ -134,6 +134,86 @@ class ApiStreamingBehaviorTests(unittest.TestCase):
         self.assertTrue(bool(qwen_meta.get("think")))
         self.assertTrue(bool(other_meta.get("think")))
 
+    def test_missing_ollama_runtime_model_switches_to_closest_chat_model(self) -> None:
+        api_app = self._api_app()
+        provider = SimpleNamespace(
+            default_model="qcwind/qwen3-8b-instruct-Q4-K-M",
+            list_models=lambda: [
+                "qwen3.6:35b-a3b",
+                "qwen3-embedding:4b",
+                "qwen3-coder:30b",
+                "qwen3.5:9b",
+            ],
+        )
+        old_provider = api_app._runtime.provider
+        old_provider_name = api_app._runtime.provider_name
+        old_model = api_app._runtime.model
+        try:
+            api_app._runtime.provider = provider
+            api_app._runtime.provider_name = "ollama"
+            api_app._runtime.model = "qcwind/qwen3-8b-instruct-Q4-K-M"
+
+            models = api_app._ensure_runtime_model_available()
+
+            self.assertEqual(models[0], "qwen3.6:35b-a3b")
+            self.assertEqual(api_app._runtime.model, "qwen3.5:9b")
+            self.assertEqual(provider.default_model, "qwen3.5:9b")
+        finally:
+            api_app._runtime.provider = old_provider
+            api_app._runtime.provider_name = old_provider_name
+            api_app._runtime.model = old_model
+
+    def test_memory_status_is_idle_when_worker_runs_without_cached_provider(self) -> None:
+        api_app = self._api_app()
+        worker = SimpleNamespace(
+            memory_llm_processor=SimpleNamespace(get_provider=lambda: None),
+            get_stats=lambda: {
+                "running": True,
+                "paused": False,
+                "memory_llm_locked": False,
+                "memory_llm_provider_unloaded": False,
+                "config": {"enabled": True, "scheduler_mode": "cooperative"},
+            },
+        )
+        service = SimpleNamespace(
+            worker=worker,
+            job_queue=SimpleNamespace(get_stats=lambda: {"queued": 0, "processing": 0}),
+        )
+
+        with patch.object(api_app, "memory_core_adapter", SimpleNamespace(service=service)):
+            status = api_app._build_memory_llm_status()
+
+        self.assertEqual(status.get("state"), "idle")
+        self.assertFalse(bool(status.get("active")))
+        self.assertFalse(bool(status.get("provider_cached")))
+        self.assertTrue(bool(status.get("provider_unloaded")))
+
+    def test_memory_status_ready_requires_cached_provider(self) -> None:
+        api_app = self._api_app()
+        provider = object()
+        worker = SimpleNamespace(
+            memory_llm_processor=SimpleNamespace(get_provider=lambda: provider),
+            get_stats=lambda: {
+                "running": True,
+                "paused": False,
+                "memory_llm_locked": False,
+                "memory_llm_provider_unloaded": False,
+                "config": {"enabled": True, "scheduler_mode": "cooperative"},
+            },
+        )
+        service = SimpleNamespace(
+            worker=worker,
+            job_queue=SimpleNamespace(get_stats=lambda: {"queued": 0, "processing": 0}),
+        )
+
+        with patch.object(api_app, "memory_core_adapter", SimpleNamespace(service=service)):
+            status = api_app._build_memory_llm_status()
+
+        self.assertEqual(status.get("state"), "ready")
+        self.assertTrue(bool(status.get("active")))
+        self.assertTrue(bool(status.get("provider_cached")))
+        self.assertFalse(bool(status.get("provider_unloaded")))
+
 
 if __name__ == "__main__":
     unittest.main()

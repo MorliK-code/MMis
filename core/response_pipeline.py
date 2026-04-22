@@ -58,6 +58,7 @@ _TOPIC_TOOL_NAMES = {"topic_read", "topic_search", "topic_related"}
 _MEMORY_REASONING_TAG = "[MEMORY_REASONING_CHECK]"
 _AGENT_LOOP_MIN_TOOL_CALLS = 1
 _AGENT_LOOP_MAX_TOOL_CALLS = 2
+_ATTACHMENT_TEXT_PROMPT_LIMIT_CHARS = 24_000
 LOGGER = get_logger(__name__)
 WEB_TRACE_LOGGER = get_logger("web.trace")
 _WEB_TRACE_JSONL_LOCK = RLock()
@@ -92,6 +93,8 @@ class PipelineContext:
     logs: list[str] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    status: str = "ok"
+    error: str = ""
     stop: bool = False
 
 
@@ -105,8 +108,36 @@ class PipelineResult:
     ui_actions: list[dict[str, Any]] = field(default_factory=list)
     logs: list[str] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
+    status: str = "ok"
+    error: str = ""
     debug_trace: dict[str, Any] = field(default_factory=dict)
     memory_debug_snapshot: dict[str, Any] = field(default_factory=dict)
+
+
+def _compact_error_detail(exc: Exception, *, limit: int = 320) -> str:
+    detail = re.sub(r"\s+", " ", str(exc or "")).strip()
+    if not detail:
+        detail = type(exc).__name__
+    if len(detail) > limit:
+        detail = detail[: max(0, limit - 3)].rstrip() + "..."
+    return detail
+
+
+def _generation_failure_text(exc: Exception, *, model: str = "") -> str:
+    detail = _compact_error_detail(exc)
+    lower = detail.lower()
+    model_name = str(model or "").strip()
+    model_hint = f' "{model_name}"' if model_name else ""
+
+    if "upgrade in progress" in lower:
+        return f"Ollama is busy with an upgrade right now. Retry after it finishes. Details: {detail}"
+    if any(token in lower for token in ("connection refused", "failed to establish", "unable to connect", "could not connect", "connection error")):
+        return f"Ollama is unavailable right now. Check that the Ollama service is running, then retry. Details: {detail}"
+    if "timed out" in lower or "timeout" in lower:
+        return f"The model{model_hint} timed out before generation finished. Details: {detail}"
+    if "404" in lower or "not found" in lower or "no such model" in lower or "does not exist" in lower:
+        return f"Ollama cannot find model{model_hint}. Select another model or pull it, then retry. Details: {detail}"
+    return f"Generation failed before the model returned an answer. Details: {detail}"
 
 
 class PipelineStage(ABC):
@@ -948,6 +979,107 @@ def _memory_tool_blocks(pack: dict[str, Any]) -> dict[str, str]:
         text = str(blocks.get(key) or "").strip()
         if text:
             out[key] = text
+    return out
+
+
+def _normalise_chat_attachments(value) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in _as_list(value):
+        row = _as_dict(item)
+        if not row:
+            continue
+        name = str(row.get("name") or row.get("filename") or "").strip()
+        path = str(row.get("path") or "").strip()
+        if not name and path:
+            name = Path(path).name
+        if not name:
+            continue
+        kind = str(row.get("kind") or row.get("type") or "file").strip().lower() or "file"
+        mime_type = str(row.get("mime_type") or row.get("mime") or "application/octet-stream").strip()
+        try:
+            size = max(0, int(float(row.get("size") or 0)))
+        except Exception:
+            size = 0
+        normalised: dict[str, Any] = {
+            "kind": kind,
+            "name": name,
+            "mime_type": mime_type,
+            "size": size,
+        }
+        if path:
+            normalised["path"] = path
+        text = str(row.get("text") or "")
+        if text:
+            normalised["text"] = text
+            if kind == "file":
+                normalised["kind"] = "text"
+        data_base64 = str(row.get("data_base64") or row.get("base64") or "")
+        if data_base64:
+            normalised["data_base64"] = data_base64
+            if kind == "file" and mime_type.lower().startswith("image/"):
+                normalised["kind"] = "image"
+        out.append(normalised)
+    return out
+
+
+def _attachment_size_label(size: Any) -> str:
+    try:
+        value = max(0, int(float(size or 0)))
+    except Exception:
+        value = 0
+    if value >= 1024 * 1024:
+        return f"{value / (1024 * 1024):.1f} MB"
+    if value >= 1024:
+        return f"{value / 1024:.1f} KB"
+    return f"{value} B"
+
+
+def _attachment_prompt_block(attachments: list[dict[str, Any]]) -> str:
+    rows = _normalise_chat_attachments(attachments)
+    if not rows:
+        return ""
+    lines = ["User attachments for this turn:"]
+    for idx, row in enumerate(rows, start=1):
+        kind = str(row.get("kind") or "file")
+        name = str(row.get("name") or "attachment")
+        mime_type = str(row.get("mime_type") or "")
+        size = _attachment_size_label(row.get("size"))
+        lines.append(f"{idx}. {name} ({kind}, {mime_type}, {size})")
+        if kind == "image":
+            if str(row.get("data_base64") or "").strip():
+                lines.append("   Image bytes are attached to the model input.")
+            else:
+                lines.append("   Image metadata is present, but image bytes were not supplied.")
+            continue
+        text = str(row.get("text") or "")
+        if text:
+            if len(text) > _ATTACHMENT_TEXT_PROMPT_LIMIT_CHARS:
+                text = text[:_ATTACHMENT_TEXT_PROMPT_LIMIT_CHARS].rstrip() + "\n[attachment text truncated]"
+            text = text.replace("```", "'''")
+            lines.append("```text")
+            lines.append(text)
+            lines.append("```")
+            continue
+        path = str(row.get("path") or "").strip()
+        if path:
+            lines.append(f"   Local path: {path}")
+    return "\n".join(lines).strip()
+
+
+def _messages_with_attachment_prompt(messages: list[Message], attachments: list[dict[str, Any]]) -> list[Message]:
+    block = _attachment_prompt_block(attachments)
+    if not block:
+        return messages
+    out = list(messages or [])
+    for index in range(len(out) - 1, -1, -1):
+        msg = out[index]
+        if str(msg.role or "").strip().lower() != "user":
+            continue
+        content = str(msg.content or "").strip()
+        merged = f"{content}\n\n{block}".strip() if content else block
+        out[index] = replace(msg, content=merged)
+        return out
+    out.append(Message(role="user", content=block))
     return out
 
 
@@ -2148,25 +2280,33 @@ class GenerateStage(PipelineStage):
             resp, agent_tool_calls, agent_passes = self._generate_with_agent_loop(ctx, req)
         else:
             # Приоритет для основной модели — захватываем turn перед генерацией
+            turn_manager = None
+            turn_acquired = False
             try:
                 from llm.priority_manager import get_priority_manager, LLMPriorityManager
                 manager = get_priority_manager()
                 if manager:
                     # Основная модель имеет приоритет 0 (highest)
-                    manager.acquire_turn(LLMPriorityManager.PRIORITY_MAIN, timeout=30.0)
+                    acquire_turn = getattr(manager, "acquire_turn", None)
+                    if callable(acquire_turn):
+                        acquire_turn(LLMPriorityManager.PRIORITY_MAIN, timeout=30.0)
+                        turn_manager = manager
+                        turn_acquired = True
             except Exception:
                 pass  # Игнорируем ошибки priority manager
             
-            resp = self.provider.generate(req)
-            
-            # Освобождаем приоритет после генерации
             try:
-                from llm.priority_manager import get_priority_manager, LLMPriorityManager
-                manager = get_priority_manager()
-                if manager:
-                    manager.release_turn(LLMPriorityManager.PRIORITY_MAIN)
-            except Exception:
-                pass  # Игнорируем ошибки priority manager
+                resp = self.provider.generate(req)
+            finally:
+                if turn_acquired and turn_manager is not None:
+                    try:
+                        from llm.priority_manager import LLMPriorityManager
+                        release_turn = getattr(turn_manager, "release_turn", None)
+                        if callable(release_turn):
+                            release_turn(LLMPriorityManager.PRIORITY_MAIN)
+                    except Exception:
+                        pass
+            
         ctx.raw_output = str(resp.text or "")
         ctx.text = ctx.raw_output
         ctx.thinking = str(getattr(resp, "thinking", "") or "")
@@ -4353,6 +4493,11 @@ class GenerateStage(PipelineStage):
                 Message(role="user", content=ctx.clean_user_msg),
             ]
 
+        attachments = _normalise_chat_attachments(ctx.meta.get("attachments"))
+        if attachments:
+            ctx.meta["attachments"] = attachments
+            messages = _messages_with_attachment_prompt(messages, attachments)
+
         tools = _parse_tools(_pick_value(ctx.meta.get("tools"), ctx.policies.get("tools"), ctx.state.get("tools")))
         agent_loop_enabled = _should_enable_agent_loop(ctx)
         if agent_loop_enabled:
@@ -5397,10 +5542,23 @@ class ResponsePipeline:
                 ctx.errors.append(f"{name}:{type(exc).__name__}:{exc}")
                 ctx.logs.append(f"stage={name} error={type(exc).__name__}:{exc}")
                 if name == "generate":
+                    ctx.status = "error"
+                    ctx.error = _compact_error_detail(exc)
+                    ctx.structured_output["status"] = "error"
+                    ctx.structured_output["error_type"] = type(exc).__name__
+                    ctx.structured_output["error"] = ctx.error
+                    ctx.stats.update(
+                        {
+                            "error": True,
+                            "error_stage": "generate",
+                            "error_type": type(exc).__name__,
+                            "served_model": str(_pick(ctx.meta.get("model"), ctx.state.get("model"), ctx.policies.get("model"), "") or ""),
+                        }
+                    )
                     if ctx.route == "command":
                         ctx.text = "Command processing failed. Check logs and command syntax."
                     else:
-                        ctx.text = "I got stuck during generation. Please try again."
+                        ctx.text = _generation_failure_text(exc, model=str(ctx.stats.get("served_model") or ""))
                     ctx.stop = True
             if ctx.stop:
                 break
@@ -5569,6 +5727,8 @@ class ResponsePipeline:
             ui_actions=list(ctx.ui_actions or []),
             logs=list(ctx.logs or []),
             stats=dict(ctx.stats or {}),
+            status=str(ctx.status or ("error" if ctx.errors else "ok")),
+            error=str(ctx.error or ""),
             debug_trace=dict(meta.get("debug_trace") or {}),
             memory_debug_snapshot=dict(meta.get("memory_debug_snapshot") or {}),
         )
@@ -7120,6 +7280,7 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "same_calendar_day",
         "continuation_ref",
         "context_confidence",
+        "attachments",
     ):
         if key in meta:
             out[key] = meta.get(key)

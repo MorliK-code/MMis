@@ -8,6 +8,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
+import ui.chat_shell as proto
+import ui.chat_window as chat_window_module
 from ui.chat_window import ChatWindow, HISTORY_INITIAL_RENDER_LIMIT, HISTORY_LAZY_BATCH_SIZE
 
 
@@ -49,15 +51,63 @@ def _lazy_window() -> ChatWindow:
         "_load_older_history_batch",
         "_render_history",
         "_upgrade_legacy_verbose_stat_line",
+        "_remove_message_widgets_after",
+        "_history_index_for_user_bubble",
+        "_start_reply_worker_for_text",
+        "_on_regenerate_requested",
     ):
         setattr(window, name, MethodType(getattr(ChatWindow, name), window))
+    for name in (
+        "_wire_regenerate_bubble",
+        "_message_layout_index",
+        "_remove_message_bubble",
+    ):
+        setattr(window, name, MethodType(getattr(proto.ExactChatWindow, name), window))
     for name in (
         "_split_stat_line",
         "_extract_thinking_ms_from_stat_line",
         "_normalize_stat_line_time_units",
+        "_attachment_payloads_from_value",
     ):
         setattr(window, name, getattr(ChatWindow, name))
     return window
+
+
+class _FakeSignal:
+    def __init__(self) -> None:
+        self.connected: list[object] = []
+
+    def connect(self, callback) -> None:
+        self.connected.append(callback)
+
+
+class _FakeReplyWorker:
+    instances: list["_FakeReplyWorker"] = []
+
+    def __init__(self, api, user_text: str, store_turn: bool = True, think=None, verbose=None, attachments=None) -> None:
+        self.api = api
+        self.user_text = user_text
+        self.store_turn = store_turn
+        self.think = think
+        self.verbose = verbose
+        self.attachments = list(attachments or [])
+        self.chunk = _FakeSignal()
+        self.thinking_chunk = _FakeSignal()
+        self.debug_event = _FakeSignal()
+        self.finished = _FakeSignal()
+        self.errored = _FakeSignal()
+        self.started = False
+        self.deleted = False
+        self.instances.append(self)
+
+    def isRunning(self) -> bool:
+        return False
+
+    def start(self) -> None:
+        self.started = True
+
+    def deleteLater(self) -> None:
+        self.deleted = True
 
 
 def _message_bubble_count(window: ChatWindow) -> int:
@@ -103,3 +153,59 @@ def test_chat_window_renders_recent_history_first_and_loads_older_batches() -> N
     window.messages_host.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+def test_chat_window_regenerate_removes_old_answer_and_does_not_store_duplicate_user(monkeypatch) -> None:
+    app = _app()
+    window = _lazy_window()
+    window._history = [
+        ("user", "question", None, None, None),
+        ("ai", "old answer", "1.0 s", None, None),
+    ]
+    window.api = object()
+    window._worker = None
+    window._pending = None
+    window._pending_history_index = None
+    window._pending_user_text = ""
+    window._thinking_enabled = True
+    window._verbose_enabled = False
+    window._capture_stream_scroll_mode = lambda: None
+    window._schedule_scroll_bottom = lambda **_kwargs: None
+    window._set_busy_state = lambda _busy: None
+    window._on_answer_chunk = lambda _piece: None
+    window._on_thinking_chunk = lambda _piece: None
+    window._on_memory_debug_event = lambda _payload: None
+    window._on_reply_finished = lambda _result: None
+    window._on_reply_error = lambda _error: None
+    window._cleanup_request = lambda: None
+    saved: list[list[tuple]] = []
+    window._save_chat_sessions = lambda: saved.append(list(window._history))
+
+    user_bubble = proto.MessageBubble("user", "question", "", "", [])
+    user_bubble.setProperty("history_index", 0)
+    assistant_bubble = proto.MessageBubble("assistant", "old answer", "", "", [])
+    window._insert_message_bubble(user_bubble)
+    window._insert_message_bubble(assistant_bubble)
+    app.processEvents()
+
+    _FakeReplyWorker.instances = []
+    monkeypatch.setattr(chat_window_module, "ReplyWorker", _FakeReplyWorker)
+
+    window._on_regenerate_requested(user_bubble)
+    app.processEvents()
+
+    assert len(_FakeReplyWorker.instances) == 1
+    worker = _FakeReplyWorker.instances[0]
+    assert worker.user_text == "question"
+    assert worker.store_turn is False
+    assert worker.started
+    assert window._pending_user_text == "question"
+    assert window._pending_history_index == 1
+    assert window._history == [
+        ("user", "question", None, None, None),
+        ("ai", "", "…", None, None),
+    ]
+    assert window.messages_layout.count() == 2
+    assert window.messages_layout.itemAt(0).widget() is user_bubble
+    assert isinstance(window.messages_layout.itemAt(1).widget(), proto.MessageBubble)
+    assert saved[-1] == window._history

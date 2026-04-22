@@ -74,6 +74,8 @@ class MemoryCoreConfig:
     enable_worker_pause_during_api_request: bool = True
     worker_pause_timeout: float = 0.0  # 0 = без ограничения, >0 = макс. время паузы в секундах
     memory_llm_scheduler_mode: str = "strict"  # strict | cooperative
+    memory_llm_wake_delay_after_main_sec: float = 0.0
+    unload_memory_llm_before_main_request: bool = False
     
     # Таймаут завершения worker при простое
     worker_shutdown_idle_timeout: float = 300.0  # 5 минут по умолчанию
@@ -134,6 +136,13 @@ class MemoryCoreConfig:
         config.worker_pause_timeout = float(data.get("worker_pause_timeout", 0.0))
         scheduler_mode = str(data.get("memory_llm_scheduler_mode", "strict")).strip().lower()
         config.memory_llm_scheduler_mode = scheduler_mode if scheduler_mode in {"strict", "cooperative"} else "strict"
+        config.memory_llm_wake_delay_after_main_sec = max(
+            0.0,
+            float(data.get("memory_llm_wake_delay_after_main_sec", 0.0)),
+        )
+        config.unload_memory_llm_before_main_request = bool(
+            data.get("unload_memory_llm_before_main_request", False)
+        )
         config.worker_shutdown_idle_timeout = float(data.get("worker_shutdown_idle_timeout", 300.0))
         
         # Task model profiles (основной источник настроек LLM)
@@ -210,6 +219,8 @@ class MemoryCoreConfig:
             "enable_worker_pause_during_api_request": self.enable_worker_pause_during_api_request,
             "worker_pause_timeout": self.worker_pause_timeout,
             "memory_llm_scheduler_mode": self.memory_llm_scheduler_mode,
+            "memory_llm_wake_delay_after_main_sec": self.memory_llm_wake_delay_after_main_sec,
+            "unload_memory_llm_before_main_request": self.unload_memory_llm_before_main_request,
             "worker_shutdown_idle_timeout": self.worker_shutdown_idle_timeout,
             "llm": {
                 "provider": self.llm.provider,

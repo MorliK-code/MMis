@@ -312,7 +312,8 @@ class Brain:
             ui_actions=list(pipeline_result.ui_actions or []),
             logs=list(pipeline_result.logs or []),
             stats=dict(pipeline_result.stats or {}),
-            status="ok",
+            status=str(getattr(pipeline_result, "status", "") or "ok"),
+            error=str(getattr(pipeline_result, "error", "") or ""),
             debug_trace=dict(pipeline_result.debug_trace or {}),
             memory_debug_snapshot=dict(pipeline_result.memory_debug_snapshot or {}),
         )

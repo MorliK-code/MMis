@@ -136,6 +136,7 @@ class BackgroundWorker:
         self._running = False
         self._memory_llm_provider_unloaded = False
         self._scheduler_mode = self._resolve_scheduler_mode()
+        self.on_memory_queue_idle: Callable[[], None] | None = None
 
     def _memory_llm_control_method(self, method_name: str):
         processor = getattr(self, "memory_llm_processor", None)
@@ -259,16 +260,14 @@ class BackgroundWorker:
 
     def pause(self) -> None:
         """
-        Ставит воркер на паузу и приостанавливает Memory LLM.
+        Ставит воркер на паузу и уступает управление Memory LLM.
         
         Воркер продолжит работу, но не будет брать новые задачи из очереди.
-        Memory LLM будет выгружен из VRAM.
         """
         self._pause_event.set()
         LOGGER.debug(f"Worker {self.config.worker_id} paused")
         
-        # Приостанавливаем Memory LLM для освобождения VRAM
-        self._pause_memory_llm_provider()
+        self._yield_memory_llm_provider()
 
     def resume(self) -> None:
         """
@@ -284,6 +283,12 @@ class BackgroundWorker:
         # Возобновляем Memory LLM
         self._resume_memory_llm_provider()
 
+    def resume_idle(self) -> None:
+        """Resume worker polling without touching the Memory LLM provider."""
+        self._pause_event.clear()
+        self._wake_event.set()
+        LOGGER.debug(f"Worker {self.config.worker_id} resumed idle without Memory LLM provider wake")
+
     def wake(self) -> None:
         """Будит воркер для немедленной проверки очереди."""
         self._wake_event.set()
@@ -295,17 +300,32 @@ class BackgroundWorker:
         self._wake_event.wait(timeout=timeout)
         self._wake_event.clear()
 
-    def _pause_memory_llm_provider(self) -> None:
-        """Приостанавливает Memory LLM provider для освобождения VRAM."""
+    def _yield_memory_llm_provider(self) -> None:
+        """Yield Memory LLM provider without unloading it."""
         try:
-            pause = self._memory_llm_control_method("pause")
-            if pause is not None:
-                LOGGER.info(f"Worker {self.config.worker_id}: Pausing Memory LLM provider...")
-                pause()
-                LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider paused")
+            yield_control = self._memory_llm_control_method("yield_control")
+            if yield_control is not None:
+                LOGGER.info(f"Worker {self.config.worker_id}: Yielding Memory LLM provider...")
+                yield_control()
+                LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider yielded")
+                self._memory_llm_provider_unloaded = False
+        except Exception as exc:
+            LOGGER.debug(f"Worker {self.config.worker_id}: Failed to yield Memory LLM provider: {exc}")
+
+    def _unload_memory_llm_provider(self) -> None:
+        """Unload Memory LLM provider explicitly."""
+        try:
+            unload = self._memory_llm_control_method("unload")
+            if unload is not None:
+                LOGGER.info(f"Worker {self.config.worker_id}: Unloading Memory LLM provider...")
+                unload()
+                LOGGER.info(f"Worker {self.config.worker_id}: Memory LLM provider unloaded")
                 self._memory_llm_provider_unloaded = True
         except Exception as exc:
-            LOGGER.debug(f"Worker {self.config.worker_id}: Failed to pause Memory LLM provider: {exc}")
+            LOGGER.debug(f"Worker {self.config.worker_id}: Failed to unload Memory LLM provider: {exc}")
+
+    def _pause_memory_llm_provider(self) -> None:
+        self._yield_memory_llm_provider()
 
     def _resume_memory_llm_provider(self) -> None:
         """Возобновляет Memory LLM provider после паузы."""
@@ -440,6 +460,24 @@ class BackgroundWorker:
             self.stats.last_job_at = time.time()
             print(f"[WORKER] {self.config.worker_id}: Total processed: {self.stats.jobs_processed}", flush=True)
             sys.stdout.flush()
+            self._notify_memory_queue_idle_if_needed()
+
+    def _notify_memory_queue_idle_if_needed(self) -> None:
+        callback = getattr(self, "on_memory_queue_idle", None)
+        if not callable(callback):
+            return
+        try:
+            stats = dict(self.job_queue.get_stats() or {})
+            by_type = dict(stats.get("by_type") or {})
+            pending = int(by_type.get("memory_llm_process") or 0)
+        except Exception:
+            return
+        if pending > 0:
+            return
+        try:
+            callback()
+        except Exception as exc:
+            LOGGER.debug(f"Worker {self.config.worker_id}: memory idle callback failed: {exc}")
 
     def _is_memory_llm_locked(self) -> bool:
         """Проверяет, заблокирован ли Memory LLM основной моделью."""
@@ -745,10 +783,6 @@ class BackgroundWorker:
 
                 # Если задач не было — проверяем idle timeout
                 if jobs_count == 0:
-                    if not self._memory_llm_provider_unloaded:
-                        LOGGER.info(f"Worker {self.config.worker_id}: Queue is empty, unloading Memory LLM provider...")
-                        self._pause_memory_llm_provider()
-
                     # Проверяем настройку shutdown_idle_timeout
                     if self.config.shutdown_idle_timeout_sec > 0:
                         if idle_start_time is None:
@@ -756,16 +790,17 @@ class BackgroundWorker:
 
                         idle_duration = time.time() - idle_start_time
                         if idle_duration >= self.config.shutdown_idle_timeout_sec:
-                            LOGGER.info(
-                                f"Worker {self.config.worker_id}: Idle timeout "
-                                f"({idle_duration:.1f}s >= {self.config.shutdown_idle_timeout_sec}s), shutting down..."
+                            if not self._memory_llm_provider_unloaded:
+                                LOGGER.info(
+                                    f"Worker {self.config.worker_id}: Idle timeout "
+                                    f"({idle_duration:.1f}s >= {self.config.shutdown_idle_timeout_sec}s), unloading Memory LLM provider..."
+                                )
+                                self._unload_memory_llm_provider()
+                        else:
+                            LOGGER.debug(
+                                f"Worker {self.config.worker_id}: Idle for {idle_duration:.1f}s, "
+                                f"timeout in {self.config.shutdown_idle_timeout_sec - idle_duration:.1f}s"
                             )
-                            self._stop_event.set()
-                            break
-                        LOGGER.debug(
-                            f"Worker {self.config.worker_id}: Idle for {idle_duration:.1f}s, "
-                            f"timeout in {self.config.shutdown_idle_timeout_sec - idle_duration:.1f}s"
-                        )
                     # Не сбрасываем idle_start_time здесь, чтобы отслеживать общий простой
 
                     LOGGER.info(f"Worker {self.config.worker_id}: No jobs, sleeping for {self.config.poll_interval_sec}s...")

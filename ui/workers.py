@@ -35,6 +35,7 @@ class ReplyWorker(QThread):
         store_turn: bool = True,
         think: bool | None = None,
         verbose: bool | None = None,
+        attachments: list[dict] | None = None,
     ):
         super().__init__()
         self.api = api
@@ -42,6 +43,7 @@ class ReplyWorker(QThread):
         self.store_turn = bool(store_turn)
         self.think = think
         self.verbose = verbose
+        self.attachments = [dict(item) for item in list(attachments or []) if isinstance(item, dict)]
         self._cancel_requested = False
 
     def request_cancel(self):
@@ -58,6 +60,7 @@ class ReplyWorker(QThread):
                 store_turn=self.store_turn,
                 think=self.think,
                 verbose=self.verbose,
+                attachments=self.attachments,
                 on_chunk=lambda piece: self._emit_stream_piece(piece, self.chunk),
                 on_thinking_chunk=lambda piece: self._emit_stream_piece(piece, self.thinking_chunk),
                 on_debug_event=self.debug_event.emit,

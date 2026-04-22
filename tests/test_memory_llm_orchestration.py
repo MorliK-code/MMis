@@ -29,14 +29,22 @@ class _FakeControlledProvider:
     def __init__(self) -> None:
         self.pause_calls = 0
         self.resume_calls = 0
+        self.yield_control_calls = 0
+        self.unload_calls = 0
         self.shutdown_calls = 0
         self.warmup_calls: list[object] = []
+
+    def yield_control(self) -> None:
+        self.yield_control_calls += 1
 
     def pause(self) -> None:
         self.pause_calls += 1
 
     def resume(self) -> None:
         self.resume_calls += 1
+
+    def unload(self) -> None:
+        self.unload_calls += 1
 
     def shutdown(self) -> None:
         self.shutdown_calls += 1
@@ -148,11 +156,36 @@ class _FakeStreamingClient:
         return {}
 
 
+class _FakeWarmupClient:
+    def __init__(self, *, loaded_after_generate: bool) -> None:
+        self.loaded_after_generate = loaded_after_generate
+        self.loaded = False
+        self.chat_calls: list[dict] = []
+        self.generate_calls: list[dict] = []
+
+    def generate(self, **kwargs):
+        self.generate_calls.append(dict(kwargs))
+        if self.loaded_after_generate:
+            self.loaded = True
+        return {}
+
+    def chat(self, **kwargs):
+        self.chat_calls.append(dict(kwargs))
+        self.loaded = True
+        return {}
+
+    def ps(self):
+        models = [{"model": "main-model"}] if self.loaded else []
+        return {"models": models}
+
+
 class _FakeWorker:
     def __init__(self, running: bool) -> None:
         self.running = running
         self.start_calls = 0
         self.resume_calls = 0
+        self.resume_idle_calls = 0
+        self.pause_calls = 0
         self.wake_calls = 0
 
     def is_running(self) -> bool:
@@ -164,6 +197,12 @@ class _FakeWorker:
 
     def resume(self) -> None:
         self.resume_calls += 1
+
+    def resume_idle(self) -> None:
+        self.resume_idle_calls += 1
+
+    def pause(self) -> None:
+        self.pause_calls += 1
 
     def wake(self) -> None:
         self.wake_calls += 1
@@ -237,6 +276,10 @@ class _ImmediateRequeueQueue:
         job, self._job = self._job, None
         return job
 
+    def get_stats(self) -> dict[str, object]:
+        pending = 1 if self._job is not None else 0
+        return {"by_type": {"memory_llm_process": pending}}
+
     def requeue_immediately(self, job_id: str, error_text: str = "") -> bool:
         self.requeue_calls.append((job_id, error_text))
         return True
@@ -260,6 +303,8 @@ class _EventStoreForInterrupt:
 
 class MemoryLLMOrchestrationTests(unittest.TestCase):
     def tearDown(self) -> None:
+        if _memory_llm_lock.locked():
+            _memory_llm_lock.release()
         _memory_llm_interrupt.clear()
 
     def test_memory_processor_marks_requests_as_memory_and_uses_configured_keep_alive(self) -> None:
@@ -499,7 +544,8 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         worker._running = True
         worker.stop(timeout_sec=0.0)
 
-        self.assertEqual(router.provider.pause_calls, 1)
+        self.assertEqual(router.provider.yield_control_calls, 1)
+        self.assertEqual(router.provider.pause_calls, 0)
         self.assertEqual(router.provider.resume_calls, 1)
         self.assertEqual(router.provider.shutdown_calls, 1)
 
@@ -628,42 +674,81 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertTrue(result["queued"])
         self.assertEqual(service.worker.start_calls, 1)
 
-    def test_adapter_resume_starts_worker_if_it_was_stopped(self) -> None:
+    def test_adapter_resume_starts_worker_if_memory_jobs_are_waiting(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
         adapter._enable_pause = True
         adapter._cancel_auto_resume_timer = lambda: None
+        adapter._main_model_keep_alive_delay_sec = lambda: 0.0
         adapter._unload_main_model_from_vram = lambda: None
         adapter._resume_memory_llm = lambda: None
-        adapter._release_memory_llm_lock = lambda: None
-        adapter.service = SimpleNamespace(worker=_FakeWorker(running=False))
+        order: list[str] = []
+        adapter._release_memory_llm_lock = lambda: order.append("release")
+        worker = _FakeWorker(running=False)
+        original_start = worker.start
+        worker.start = lambda: order.append("start") or original_start()
+        original_wake = worker.wake
+        worker.wake = lambda: order.append("wake") or original_wake()
+        worker.job_queue = SimpleNamespace(get_stats=lambda: {"by_type": {"memory_llm_process": 1}})
+        adapter.service = SimpleNamespace(worker=worker)
 
         adapter.resume_worker()
 
         self.assertEqual(adapter.service.worker.start_calls, 1)
         self.assertEqual(adapter.service.worker.resume_calls, 0)
         self.assertEqual(adapter.service.worker.wake_calls, 1)
+        self.assertEqual(order, ["release", "start", "wake"])
+
+    def test_adapter_resume_schedules_memory_handoff_and_main_sleep_separately(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._enable_pause = True
+        adapter._memory_wake_delay_after_main_sec = 3.0
+        adapter._main_model_keep_alive_delay_sec = lambda: 300.0
+        adapter._resume_epoch = 0
+        adapter._resume_epoch_lock = threading.Lock()
+        calls: list[object] = []
+        adapter._cancel_auto_resume_timer = lambda: calls.append("cancel")
+        adapter._schedule_main_sleep_unload = (
+            lambda epoch, delay: calls.append(("sleep", epoch, delay))
+        )
+        adapter._schedule_delayed_memory_resume = (
+            lambda epoch, delay: calls.append(("delay", epoch, delay))
+        )
+        adapter._resume_worker_now = lambda epoch: calls.append(("now", epoch))
+
+        adapter.resume_worker()
+
+        self.assertEqual(calls, ["cancel", ("sleep", 1, 300.0), ("delay", 1, 3.0)])
 
     def test_adapter_defaults_to_strict_scheduler_mode_when_uninitialized(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
         self.assertEqual(adapter.scheduler_mode(), "strict")
         self.assertTrue(adapter.is_strict_scheduler_mode())
 
-    def test_adapter_should_pause_worker_only_in_strict_mode(self) -> None:
-        strict_adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
-        strict_adapter._enable_pause = True
-        strict_adapter._scheduler_mode = "strict"
-        self.assertTrue(strict_adapter.should_pause_worker_for_api_request())
+    def test_adapter_parses_ollama_keep_alive_duration(self) -> None:
+        self.assertEqual(MemoryCoreAdapter._duration_to_seconds("5m"), 300.0)
+        self.assertEqual(MemoryCoreAdapter._duration_to_seconds("30s"), 30.0)
+        self.assertEqual(MemoryCoreAdapter._duration_to_seconds("2h"), 7200.0)
+        self.assertEqual(MemoryCoreAdapter._duration_to_seconds("250ms"), 0.25)
+        self.assertEqual(MemoryCoreAdapter._duration_to_seconds(12), 12.0)
+        self.assertEqual(MemoryCoreAdapter._duration_to_seconds("-1"), 0.0)
 
-        cooperative_adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
-        cooperative_adapter._enable_pause = True
-        cooperative_adapter._scheduler_mode = "cooperative"
-        self.assertFalse(cooperative_adapter.should_pause_worker_for_api_request())
+    def test_adapter_should_pause_worker_when_api_arbitration_is_enabled(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._enable_pause = True
+        adapter._scheduler_mode = "cooperative"
+        self.assertTrue(adapter.should_pause_worker_for_api_request())
+
+        disabled_adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        disabled_adapter._enable_pause = False
+        disabled_adapter._scheduler_mode = "strict"
+        self.assertFalse(disabled_adapter.should_pause_worker_for_api_request())
 
     def test_pause_worker_does_not_schedule_auto_resume_timer(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
         adapter._enable_pause = True
         adapter._pause_timeout = 2.0
         adapter._auto_resume_timer = None
+        adapter._unload_memory_llm_before_main_request = False
         adapter._cancel_auto_resume_timer = lambda: None
         adapter._acquire_memory_llm_lock = lambda: None
         adapter._pause_memory_llm = lambda: None
@@ -672,6 +757,225 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         adapter.pause_worker()
 
         self.assertIsNone(adapter._auto_resume_timer)
+
+    def test_pause_worker_unloads_memory_when_configured_for_main_priority(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._enable_pause = True
+        adapter._unload_memory_llm_before_main_request = True
+        calls: list[str] = []
+        adapter._cancel_auto_resume_timer = lambda: calls.append("cancel")
+        adapter._bump_resume_epoch = lambda: calls.append("epoch") or 1
+        adapter._acquire_memory_llm_lock = lambda: calls.append("lock")
+        adapter._unload_memory_llm = lambda: calls.append("unload")
+        adapter._pause_memory_llm = lambda: calls.append("yield")
+        adapter.service = SimpleNamespace(worker=SimpleNamespace(pause=lambda: calls.append("pause")))
+
+        adapter.pause_worker()
+
+        self.assertEqual(calls, ["cancel", "epoch", "lock", "pause", "unload"])
+
+    def test_adapter_resume_delays_memory_wake_after_main_response(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._enable_pause = True
+        adapter._memory_wake_delay_after_main_sec = 3.0
+        adapter._main_model_keep_alive_delay_sec = lambda: 0.0
+        adapter._resume_epoch = 0
+        adapter._resume_epoch_lock = threading.Lock()
+        calls: list[object] = []
+        adapter._cancel_auto_resume_timer = lambda: calls.append("cancel")
+        adapter._schedule_delayed_memory_resume = (
+            lambda epoch, delay: calls.append(("delay", epoch, delay))
+        )
+        adapter._resume_worker_now = lambda epoch: calls.append(("now", epoch))
+
+        adapter.resume_worker()
+
+        self.assertEqual(calls, ["cancel", ("delay", 1, 3.0)])
+
+    def test_adapter_resume_wakes_memory_immediately_without_delay(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._enable_pause = True
+        adapter._memory_wake_delay_after_main_sec = 0.0
+        adapter._main_model_keep_alive_delay_sec = lambda: 0.0
+        adapter._resume_epoch = 0
+        adapter._resume_epoch_lock = threading.Lock()
+        calls: list[object] = []
+        adapter._cancel_auto_resume_timer = lambda: calls.append("cancel")
+        adapter._schedule_delayed_memory_resume = (
+            lambda epoch, delay: calls.append(("delay", epoch, delay))
+        )
+        adapter._resume_worker_now = lambda epoch: calls.append(("now", epoch))
+
+        adapter.resume_worker()
+
+        self.assertEqual(calls, ["cancel", ("now", 1)])
+
+    def test_main_sleep_timer_unloads_main_model_at_deadline(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._resume_epoch = 1
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._main_sleep_timer = None
+        unload_calls: list[str] = []
+        adapter._unload_main_model_from_vram = lambda: unload_calls.append("unload")
+
+        def _timer_factory(_delay, target):
+            return SimpleNamespace(
+                daemon=False,
+                start=lambda: target(),
+                cancel=lambda: None,
+            )
+
+        with mock.patch.object(adapter_module.threading, "Timer", side_effect=_timer_factory):
+            adapter._schedule_main_sleep_unload(1, 5.0)
+
+        self.assertEqual(unload_calls, ["unload"])
+        self.assertEqual(adapter._main_sleep_deadline_at, 0.0)
+
+    def test_main_sleep_deadline_releases_memory_lease(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._resume_epoch = 1
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._main_sleep_timer = None
+        adapter._main_lease_holds_memory = True
+        calls: list[object] = []
+        adapter._unload_main_model_from_vram = lambda: calls.append("unload")
+        adapter._resume_worker_now = lambda epoch: calls.append(("resume", epoch))
+
+        def _timer_factory(_delay, target):
+            return SimpleNamespace(
+                daemon=False,
+                start=lambda: target(),
+                cancel=lambda: None,
+            )
+
+        with mock.patch.object(adapter_module.threading, "Timer", side_effect=_timer_factory):
+            adapter._schedule_main_sleep_unload(1, 5.0)
+
+        self.assertEqual(calls, ["unload", ("resume", 1)])
+        self.assertFalse(adapter._main_lease_holds_memory)
+
+    def test_no_memory_jobs_keeps_worker_paused_until_main_sleep_deadline(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._resume_epoch = 1
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._main_sleep_deadline_at = time.monotonic() + 30.0
+        adapter._main_lease_holds_memory = False
+        worker = _FakeWorker(running=True)
+        worker.job_queue = SimpleNamespace(get_stats=lambda: {"by_type": {"memory_llm_process": 0}})
+        adapter.service = SimpleNamespace(worker=worker)
+        release_calls: list[str] = []
+        adapter._release_memory_llm_lock = lambda: release_calls.append("release")
+
+        adapter._resume_worker_now(1)
+
+        self.assertTrue(adapter._main_lease_holds_memory)
+        self.assertEqual(worker.resume_idle_calls, 0)
+        self.assertEqual(worker.wake_calls, 0)
+        self.assertEqual(release_calls, [])
+
+    def test_memory_drain_returns_main_before_sleep_deadline(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._resume_epoch = 1
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._memory_drain_lock = threading.Lock()
+        adapter._memory_drained_epoch = None
+        adapter._main_sleep_deadline_at = time.monotonic() + 30.0
+        calls: list[object] = []
+        worker = _FakeWorker(running=True)
+        adapter.service = SimpleNamespace(worker=worker)
+        adapter._acquire_memory_llm_lock = lambda: calls.append("lock")
+        adapter._unload_memory_llm = lambda: calls.append("unload_memory")
+        adapter._warm_main_model_in_vram = lambda remaining: calls.append(("warm_main", round(float(remaining)))) or True
+
+        adapter._on_memory_jobs_drained(1)
+
+        self.assertEqual(calls[0], "lock")
+        self.assertEqual(calls[1], "unload_memory")
+        self.assertEqual(calls[2][0], "warm_main")
+        self.assertGreaterEqual(calls[2][1], 1)
+        self.assertEqual(worker.pause_calls, 1)
+        self.assertTrue(adapter._main_lease_holds_memory)
+
+    def test_memory_drain_does_not_return_main_after_sleep_deadline(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._resume_epoch = 1
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._main_sleep_deadline_at = time.monotonic() - 1.0
+        calls: list[str] = []
+        adapter._unload_memory_llm = lambda: calls.append("unload_memory")
+        adapter._warm_main_model_in_vram = lambda _remaining: calls.append("warm_main") or True
+
+        adapter._on_memory_jobs_drained(1)
+
+        self.assertEqual(calls, [])
+
+    def test_worker_idle_callback_restores_main_when_memory_queue_drains(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._resume_epoch = 1
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._memory_drain_lock = threading.Lock()
+        adapter._memory_drained_epoch = None
+        adapter._main_sleep_deadline_at = time.monotonic() + 30.0
+        calls: list[object] = []
+        worker = _FakeWorker(running=True)
+        worker.job_queue = SimpleNamespace(get_stats=lambda: {"by_type": {"memory_llm_process": 0}})
+        adapter.service = SimpleNamespace(worker=worker)
+        adapter._acquire_memory_llm_lock = lambda: calls.append("lock")
+        adapter._unload_memory_llm = lambda: calls.append("unload_memory")
+        adapter._warm_main_model_in_vram = lambda remaining: calls.append(("warm_main", round(float(remaining)))) or True
+
+        adapter._on_memory_worker_queue_idle()
+
+        self.assertEqual(calls[0], "lock")
+        self.assertEqual(calls[1], "unload_memory")
+        self.assertEqual(calls[2][0], "warm_main")
+        self.assertEqual(worker.pause_calls, 1)
+        self.assertEqual(adapter._memory_drained_epoch, 1)
+
+    def test_worker_idle_callback_restores_main_only_once_per_epoch(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        adapter._resume_epoch = 1
+        adapter._resume_epoch_lock = threading.Lock()
+        adapter._memory_drain_lock = threading.Lock()
+        adapter._memory_drained_epoch = None
+        adapter._main_sleep_deadline_at = time.monotonic() + 30.0
+        calls: list[str] = []
+        worker = _FakeWorker(running=True)
+        worker.job_queue = SimpleNamespace(get_stats=lambda: {"by_type": {"memory_llm_process": 0}})
+        adapter.service = SimpleNamespace(worker=worker)
+        adapter._acquire_memory_llm_lock = lambda: None
+        adapter._unload_memory_llm = lambda: calls.append("unload_memory")
+        adapter._warm_main_model_in_vram = lambda _remaining: calls.append("warm_main") or True
+
+        adapter._on_memory_worker_queue_idle()
+        adapter._on_memory_worker_queue_idle()
+
+        self.assertEqual(calls, ["unload_memory", "warm_main"])
+
+    def test_adapter_warms_runtime_main_model_with_ollama_options(self) -> None:
+        adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
+        calls: list[dict[str, object]] = []
+        provider = SimpleNamespace(
+            warmup=lambda **kwargs: calls.append(dict(kwargs)) or True,
+        )
+        adapter._runtime_main_provider = lambda: provider
+        adapter._runtime_main_model_name = lambda: "main-model"
+        adapter._main_model_warmup_options = lambda: {
+            "num_ctx": 8192,
+            "num_thread": 6,
+            "num_gpu": 1,
+            "num_batch": 128,
+        }
+
+        self.assertTrue(adapter._warm_main_model_in_vram(12.4))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].get("keep_alive"), "12s")
+        self.assertEqual(calls[0].get("model"), "main-model")
+        self.assertEqual(
+            calls[0].get("options"),
+            {"num_ctx": 8192, "num_thread": 6, "num_gpu": 1, "num_batch": 128},
+        )
 
     def test_adapter_close_shuts_down_memory_provider_even_if_worker_is_already_stopped(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
@@ -712,9 +1016,10 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertFalse(worker.is_running())
         self.assertIsNone(worker._thread)
 
-    def test_pause_unloads_model_without_closing_client(self) -> None:
+    def test_pause_marks_provider_paused_without_unloading_or_closing_client(self) -> None:
         provider = OllamaProvider(default_model="memory-model", timeout_sec=1.0)
-        provider._unload_known_model = lambda model_name=None: True
+        unload_calls: list[object] = []
+        provider._unload_known_model = lambda model_name=None: unload_calls.append(model_name) or True
         fake_client = _FakeClosableClient()
         old_global_client = getattr(ollama_provider_module.ollama, "_client", None)
         ollama_provider_module.ollama._client = fake_client
@@ -723,16 +1028,29 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         finally:
             ollama_provider_module.ollama._client = old_global_client
 
+        self.assertTrue(provider.paused)
+        self.assertEqual(unload_calls, [])
         self.assertEqual(fake_client.close_calls, 0)
 
-    def test_resume_recreates_ollama_client(self) -> None:
+    def test_resume_marks_provider_unpaused_without_recreating_client(self) -> None:
         provider = OllamaProvider(default_model="memory-model", timeout_sec=1.0)
+        provider.paused = True
         recreated_client = object()
 
         with mock.patch.object(ollama_provider_module.ollama, "Client", return_value=recreated_client):
             provider.resume()
 
-        self.assertIs(provider._client, recreated_client)
+        self.assertFalse(provider.paused)
+        self.assertIsNot(provider._client, recreated_client)
+
+    def test_unload_explicitly_unloads_known_model(self) -> None:
+        provider = OllamaProvider(default_model="memory-model", timeout_sec=1.0)
+        unload_calls: list[object] = []
+        provider._unload_known_model = lambda model_name=None: unload_calls.append(model_name) or True
+
+        provider.unload()
+
+        self.assertEqual(unload_calls, [None])
 
     def test_warmup_uses_keep_alive_without_generating_tokens(self) -> None:
         provider = OllamaProvider(default_model="memory-model", timeout_sec=1.0)
@@ -745,6 +1063,48 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(len(fake_client.generate_calls), 1)
         self.assertEqual(fake_client.generate_calls[0].get("keep_alive"), "30m")
         self.assertEqual(dict(fake_client.generate_calls[0].get("options") or {}).get("num_predict"), 0)
+
+    def test_warmup_uses_requested_model_and_runtime_options(self) -> None:
+        provider = OllamaProvider(default_model="fallback-model", timeout_sec=1.0)
+        fake_client = _FakeWarmupClient(loaded_after_generate=True)
+        provider._client = fake_client
+
+        warmed = provider.warmup(
+            keep_alive="42s",
+            model="main-model",
+            options={"num_ctx": 8192, "num_gpu": 1, "num_batch": 128},
+        )
+
+        self.assertTrue(warmed)
+        self.assertEqual(len(fake_client.generate_calls), 1)
+        self.assertEqual(fake_client.generate_calls[0].get("model"), "main-model")
+        self.assertEqual(fake_client.generate_calls[0].get("keep_alive"), "42s")
+        self.assertEqual(
+            dict(fake_client.generate_calls[0].get("options") or {}),
+            {"num_ctx": 8192, "num_gpu": 1, "num_batch": 128, "num_predict": 0},
+        )
+        self.assertEqual(fake_client.chat_calls, [])
+
+    def test_warmup_falls_back_to_one_token_chat_when_generate_does_not_load_model(self) -> None:
+        provider = OllamaProvider(default_model="fallback-model", timeout_sec=1.0)
+        fake_client = _FakeWarmupClient(loaded_after_generate=False)
+        provider._client = fake_client
+
+        warmed = provider.warmup(
+            keep_alive="42s",
+            model="main-model",
+            options={"num_ctx": 8192},
+        )
+
+        self.assertTrue(warmed)
+        self.assertEqual(len(fake_client.generate_calls), 1)
+        self.assertEqual(len(fake_client.chat_calls), 1)
+        self.assertEqual(fake_client.chat_calls[0].get("model"), "main-model")
+        self.assertEqual(fake_client.chat_calls[0].get("keep_alive"), "42s")
+        self.assertEqual(
+            dict(fake_client.chat_calls[0].get("options") or {}),
+            {"num_ctx": 8192, "num_predict": 1, "temperature": 0},
+        )
 
     def test_shutdown_uses_zero_keep_alive_for_module_level_unload_attempts(self) -> None:
         provider = OllamaProvider(default_model="memory-model", timeout_sec=1.0)
@@ -779,16 +1139,23 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
         adapter._enable_pause = True
         adapter._cancel_auto_resume_timer = lambda: None
-        adapter._unload_main_model_from_vram = lambda: None
+        adapter._main_model_keep_alive_delay_sec = lambda: 0.0
+        unload_calls: list[str] = []
+        adapter._unload_main_model_from_vram = lambda: unload_calls.append("unload")
         adapter._resume_memory_llm = lambda: None
         adapter._resume_epoch = 0
         adapter._resume_epoch_lock = threading.Lock()
         release_calls: list[str] = []
-        adapter._release_memory_llm_lock = lambda: release_calls.append("release")
+        order: list[str] = []
+        adapter._release_memory_llm_lock = lambda: release_calls.append("release") or order.append("release")
 
         worker = _FakeWorker(running=False)
+        original_start = worker.start
+        worker.start = lambda: order.append("start") or original_start()
+        original_wake = worker.wake
+        worker.wake = lambda: order.append("wake") or original_wake()
         warmup_calls: list[str] = []
-        worker.memory_llm_processor = SimpleNamespace(warmup=lambda: warmup_calls.append("warm") or True)
+        worker.memory_llm_processor = SimpleNamespace(warmup=lambda: warmup_calls.append("warm") or order.append("warm") or True)
         worker.job_queue = SimpleNamespace(get_stats=lambda: {"by_type": {"memory_llm_process": 2}})
         adapter.service = SimpleNamespace(worker=worker)
 
@@ -804,26 +1171,33 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(warmup_calls, ["warm"])
         self.assertEqual(release_calls, ["release"])
         self.assertEqual(worker.wake_calls, 1)
+        self.assertEqual(unload_calls, ["unload"])
+        self.assertEqual(order, ["warm", "release", "start", "wake"])
 
     def test_adapter_resume_keeps_main_model_loaded_without_pending_memory_jobs(self) -> None:
         adapter = MemoryCoreAdapter.__new__(MemoryCoreAdapter)
         adapter._enable_pause = True
         adapter._cancel_auto_resume_timer = lambda: None
+        adapter._main_model_keep_alive_delay_sec = lambda: 0.0
         unload_calls: list[str] = []
         adapter._unload_main_model_from_vram = lambda: unload_calls.append("unload")
-        adapter._resume_memory_llm = lambda: None
+        resume_memory_calls: list[str] = []
+        adapter._resume_memory_llm = lambda: resume_memory_calls.append("memory")
         adapter._resume_epoch = 0
         adapter._resume_epoch_lock = threading.Lock()
         adapter._release_memory_llm_lock = lambda: None
 
-        worker = _FakeWorker(running=False)
+        worker = _FakeWorker(running=True)
         worker.job_queue = SimpleNamespace(get_stats=lambda: {"by_type": {"memory_llm_process": 0}})
         adapter.service = SimpleNamespace(worker=worker)
 
         adapter.resume_worker()
 
         self.assertEqual(unload_calls, [])
-        self.assertEqual(worker.start_calls, 1)
+        self.assertEqual(resume_memory_calls, [])
+        self.assertEqual(worker.start_calls, 0)
+        self.assertEqual(worker.resume_calls, 0)
+        self.assertEqual(worker.resume_idle_calls, 1)
         self.assertEqual(worker.wake_calls, 1)
 
     def test_priority_manager_memory_turn_is_immediate_without_main(self) -> None:
@@ -1088,22 +1462,30 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(queue.requeue_calls, [("job-2", "")])
         self.assertEqual(queue.complete_calls, [])
 
-    def test_worker_unloads_memory_provider_when_queue_becomes_empty(self) -> None:
+    def test_worker_unloads_memory_provider_after_idle_timeout(self) -> None:
         worker = BackgroundWorker(
             job_queue=SimpleNamespace(),
             event_store=SimpleNamespace(),
             memory_llm_processor=SimpleNamespace(),
             governor=lambda proposals, envelope: SimpleNamespace(decisions=[], artifacts=[]),
-            config=WorkerConfig(poll_interval_sec=0.01),
+            config=WorkerConfig(poll_interval_sec=0.01, shutdown_idle_timeout_sec=0.1),
         )
         calls: list[str] = []
         worker.process_one_job = lambda: False
-        worker._pause_memory_llm_provider = lambda: calls.append("pause") or setattr(worker, "_memory_llm_provider_unloaded", True)
-        worker._wait_or_wake = lambda timeout: worker._stop_event.set()
+        worker._unload_memory_llm_provider = lambda: calls.append("unload") or setattr(worker, "_memory_llm_provider_unloaded", True)
+        waits = {"count": 0}
 
-        worker._run_loop()
+        def _wait_or_stop(_timeout):
+            waits["count"] += 1
+            if waits["count"] >= 2:
+                worker._stop_event.set()
 
-        self.assertEqual(calls, ["pause"])
+        worker._wait_or_wake = _wait_or_stop
+
+        with mock.patch("memory_core.worker.background_worker.time.time", side_effect=[0.0, 0.0, 0.2]):
+            worker._run_loop()
+
+        self.assertEqual(calls, ["unload"])
         self.assertTrue(worker._memory_llm_provider_unloaded)
 
     def test_worker_resumes_memory_provider_before_processing_next_job_after_idle_unload(self) -> None:
@@ -1142,6 +1524,42 @@ class MemoryLLMOrchestrationTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(calls, ["resume"])
         self.assertEqual(queue.complete_calls, ["job-idle"])
+
+    def test_worker_notifies_when_memory_queue_becomes_idle_after_job(self) -> None:
+        job = IngestJob(
+            job_id="job-callback",
+            event_id="event-callback",
+            job_type="memory_llm_process",
+            status="queued",
+            payload_json="{}",
+        )
+        event = SimpleNamespace(
+            event_id="event-callback",
+            source_kind="user",
+            payload_type="message",
+            text="notify after job",
+            metadata={},
+            namespace="default",
+            workspace_id="global",
+            session_id="default",
+            ts=0.0,
+        )
+        queue = _ImmediateRequeueQueue(job)
+        worker = BackgroundWorker(
+            job_queue=queue,
+            event_store=_EventStoreForInterrupt(event),
+            memory_llm_processor=SimpleNamespace(process=lambda envelope: SimpleNamespace(should_process=False, proposals=[])),
+            governor=lambda proposals, envelope: SimpleNamespace(decisions=[], artifacts=[]),
+            config=WorkerConfig(),
+        )
+        callbacks: list[str] = []
+        worker.on_memory_queue_idle = lambda: callbacks.append("idle")
+
+        handled = worker.process_one_job()
+
+        self.assertTrue(handled)
+        self.assertEqual(queue.complete_calls, ["job-callback"])
+        self.assertEqual(callbacks, ["idle"])
 
     def test_worker_requeues_job_when_interrupt_happens_after_memory_result_before_empty_complete(self) -> None:
         job = IngestJob(

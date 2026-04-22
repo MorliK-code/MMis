@@ -172,12 +172,15 @@ class ApiClient:
         think: bool | None = None,
         verbose: bool | None = None,
         json_mode: bool | None = None,
+        attachments: list[dict] | None = None,
         on_chunk=None,
         on_thinking_chunk=None,
         on_debug_event=None,
         cancel_requested=None,
     ) -> ApiReply:
         payload = {"text": str(text or ""), "store_turn": bool(store_turn)}
+        if attachments:
+            payload["attachments"] = [dict(item) for item in list(attachments or []) if isinstance(item, dict)]
         if think is not None:
             payload["think"] = bool(think)
         if verbose is not None:
@@ -216,6 +219,7 @@ class ApiClient:
             verbose=verbose if verbose is not None else "runtime",
             json_mode=json_mode if json_mode is not None else "runtime",
             text_chars=len(str(text or "")),
+            attachments=len(payload.get("attachments") or []),
         )
 
         try:

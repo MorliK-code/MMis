@@ -13,7 +13,7 @@
   },
   "startup": {
     "mode": "api",
-    "active_profile": "asya",
+    "active_profile": "ASYA",
     "safety_mode": "allow_os_actions"
   },
   "api": {
@@ -24,7 +24,7 @@
     "provider": "ollama",
     "model_name": "gemma4:26b",
     "model_fallbacks": [],
-    "thinking_enabled": false,
+    "thinking_enabled": true,
     "json_mode_enabled": false,
     "task_models": {
       "emotion": {
@@ -516,7 +516,7 @@
       "timeout_sec": 2.5,
       "stream_timeout_sec": 600.0,
       "store_turn": true,
-      "show_thinking": true,
+      "show_thinking": false,
       "thinking_first": true,
       "auto_start_api": true,
       "auto_start_ollama": true,

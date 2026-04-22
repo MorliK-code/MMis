@@ -5,12 +5,13 @@ import re
 import sys
 import time
 import warnings
+from html import escape
 from math import exp
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPointF, Property, QPropertyAnimation, QRect, QRectF, QSize, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QFontMetricsF, QPen, QRadialGradient, QTextCursor
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QFontMetricsF, QPen, QRadialGradient, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -286,6 +287,153 @@ class CrispLabel(QLabel):
         painter.setPen(self._text_color)
         painter.setFont(self.font())
         painter.drawText(self._content_rect(), self._text_flags(), text)
+
+
+INLINE_CODE_TEXT = "#d8ccff"
+INLINE_CODE_BG = "#211a2f"
+
+
+def _paired_marker_positions(text: str, marker: str) -> set[int]:
+    positions: set[int] = set()
+    start_at = 0
+    marker_len = len(marker)
+    while True:
+        start = text.find(marker, start_at)
+        if start < 0:
+            break
+        end = text.find(marker, start + marker_len)
+        if end < 0:
+            break
+        positions.add(start)
+        positions.add(end)
+        start_at = end + marker_len
+    return positions
+
+
+def _format_message_html(text: str, *, text_color: str = TEXT) -> str:
+    raw = str(text or "")
+    if not raw:
+        return ""
+
+    bold_markers = _paired_marker_positions(raw, "**")
+    inline_code_markers = _paired_marker_positions(raw, "`")
+    chars: list[tuple[str, bool, bool]] = []
+    bold = False
+    inline_code = False
+    index = 0
+    while index < len(raw):
+        if index in inline_code_markers and raw.startswith("`", index):
+            inline_code = not inline_code
+            index += 1
+            continue
+        if not inline_code and index in bold_markers and raw.startswith("**", index):
+            bold = not bold
+            index += 2
+            continue
+        ch = raw[index]
+        chars.append((ch, bold, inline_code))
+        index += 1
+
+    parts: list[str] = []
+    run: list[str] = []
+    run_style: tuple[bool, bool] | None = None
+
+    def _flush() -> None:
+        nonlocal run, run_style
+        if not run:
+            return
+        bold_on, inline_code_on = run_style or (False, False)
+        body = "".join(run)
+        if bold_on:
+            body = f"<b>{body}</b>"
+        if inline_code_on:
+            body = (
+                f'<span style="color:{INLINE_CODE_TEXT}; background-color:{INLINE_CODE_BG}; '
+                f"font-family:'Cascadia Code','Consolas','monospace'; "
+                f"font-size:12px;\">{body}</span>"
+            )
+        parts.append(body)
+        run = []
+
+    for ch, bold_on, inline_code_on in chars:
+        style = (bold_on, inline_code_on)
+        if run_style is not None and style != run_style:
+            _flush()
+        run_style = style
+        run.append("<br>" if ch == "\n" else escape(ch))
+    _flush()
+    return f'<span style="color:{text_color};">{"".join(parts)}</span>'
+
+
+class StyledMessageLabel(QLabel):
+    def __init__(self, text: str = "", color: str = TEXT, parent: QWidget | None = None):
+        super().__init__("", parent)
+        self._raw_text = ""
+        self._text_color = str(color or TEXT)
+        self._preferred_text_width: int | None = None
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setStyleSheet("QLabel { background: transparent; }")
+        self.setText(text)
+
+    def text(self) -> str:  # noqa: N802
+        return self._raw_text
+
+    def rendered_html(self) -> str:
+        return super().text()
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._raw_text = str(text or "")
+        super().setText(_format_message_html(self._raw_text, text_color=self._text_color))
+        self.updateGeometry()
+        self.update()
+
+    def set_text_color(self, color: str) -> None:
+        self._text_color = str(color or TEXT)
+        super().setText(_format_message_html(self._raw_text, text_color=self._text_color))
+        self.update()
+
+    def set_preferred_text_width(self, width: int | None) -> None:
+        self._preferred_text_width = None if width is None else max(0, int(width))
+        self.updateGeometry()
+
+    def setWordWrap(self, on: bool) -> None:  # noqa: N802
+        super().setWordWrap(on)
+        self.updateGeometry()
+
+    def hasHeightForWidth(self) -> bool:
+        return self.wordWrap()
+
+    def heightForWidth(self, width: int) -> int:
+        return self._measure_size(width).height()
+
+    def sizeHint(self) -> QSize:
+        if self.wordWrap():
+            return self._measure_size(self._preferred_text_width or 320)
+        return self._measure_size(None)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def _document_for_width(self, width: int | None) -> QTextDocument:
+        doc = QTextDocument()
+        doc.setDefaultFont(self.font())
+        doc.setDocumentMargin(0)
+        doc.setHtml(self.rendered_html() or " ")
+        if width is not None:
+            doc.setTextWidth(max(24, int(width)))
+        return doc
+
+    def _measure_size(self, width: int | None) -> QSize:
+        if not self.wordWrap() or width is None:
+            doc = self._document_for_width(None)
+            return QSize(int(doc.idealWidth()), int(doc.size().height()) + 2)
+
+        target_width = max(24, int(width or self._preferred_text_width or 320))
+        ideal_doc = self._document_for_width(None)
+        text_width = min(target_width, max(24, int(ideal_doc.idealWidth()) + 1))
+        doc = self._document_for_width(text_width)
+        return QSize(text_width, int(doc.size().height()) + 2)
 
 
 class StreamingTextBox(QFrame):
@@ -1867,6 +2015,8 @@ class HoverSubmenuRow(QFrame):
 
 
 class MessageBubble(QFrame):
+    regenerateRequested = Signal(object)
+
     def __init__(
         self,
         role: str,
@@ -1878,15 +2028,18 @@ class MessageBubble(QFrame):
         show_thinking_header: bool = False,
     ):
         super().__init__()
+        self.role = str(role or "")
         self.setObjectName("message_bubble_host")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setStyleSheet("QFrame#message_bubble_host { background: transparent; border: none; }")
+        self.setMouseTracking(True)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
         bubble = QFrame()
         self._message_panel = bubble
+        bubble.setMouseTracking(True)
         bubble.setObjectName("message_bubble_panel")
         bubble.setStyleSheet(
             f"QFrame#message_bubble_panel {{ background:{ASSISTANT_BG if role == 'assistant' else USER_BG}; border:1px solid {LINE}; border-radius:14px; }}"
@@ -1939,7 +2092,7 @@ class MessageBubble(QFrame):
             self.thinking_toggle.toggled.connect(self._sync_thinking_toggle_text)
             self._sync_thinking_toggle_text(False)
             self._sync_thinking_header_visibility()
-        self.text_label = CrispLabel(text, color=TEXT)
+        self.text_label = StyledMessageLabel(text, color=TEXT)
         self.text_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.text_label.setFont(_ui_font(pixel_size=14))
         self.text_label.setWordWrap(True)
@@ -1947,7 +2100,38 @@ class MessageBubble(QFrame):
         self.text_label.set_preferred_text_width(self._body_text_width)
         bubble_lay.addWidget(self.text_label)
         self._sync_body_widths()
-        outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignRight if role == 'user' else Qt.AlignmentFlag.AlignLeft)
+        self.regenerate_btn = None
+        if role == "user":
+            row = QWidget()
+            row.setMouseTracking(True)
+            row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(6)
+            self.regenerate_btn = PaintedButton("↻")
+            self.regenerate_btn.setToolTip("Перегенерировать ответ")
+            self.regenerate_btn.setFixedSize(24, 24)
+            self.regenerate_btn.set_button_font(_button_font(pixel_size=14, weight=QFont.Weight.DemiBold))
+            self.regenerate_btn.set_button_padding(0, 0, 0, 1)
+            self.regenerate_btn.set_button_radius(7)
+            self.regenerate_btn.configure_colors(
+                normal_bg="rgba(16,18,22,.70)",
+                normal_border="rgba(255,255,255,.08)",
+                normal_text=MUTED,
+                hover_bg=_pct_color(),
+                hover_border=_pct_border(),
+                hover_text=TEXT,
+                active_bg=_pct_color(),
+                active_border=_pct_border(),
+                active_text=TEXT,
+            )
+            self.regenerate_btn.clicked.connect(lambda _checked=False: self.regenerateRequested.emit(self))
+            self.regenerate_btn.setVisible(False)
+            row_lay.addWidget(self.regenerate_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+            row_lay.addWidget(bubble, 0, Qt.AlignmentFlag.AlignVCenter)
+            outer.addWidget(row, 0, Qt.AlignmentFlag.AlignRight)
+        else:
+            outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
         self.perf_wrap = FlowWrap(self)
         self.perf_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.perf_wrap.setVisible(bool(perf))
@@ -1956,6 +2140,19 @@ class MessageBubble(QFrame):
         self.set_perf(list(perf or []))
         if role == "assistant":
             outer.addWidget(self.perf_wrap, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def _set_regenerate_button_visible(self, visible: bool) -> None:
+        if self.regenerate_btn is None:
+            return
+        self.regenerate_btn.setVisible(bool(visible) and self.isEnabled())
+
+    def enterEvent(self, event) -> None:
+        super().enterEvent(event)
+        self._set_regenerate_button_visible(True)
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        self._set_regenerate_button_visible(False)
 
     def _sync_thinking_toggle_text(self, checked: bool) -> None:
         if self.thinking_toggle is not None:
@@ -2560,11 +2757,103 @@ class ExactChatWindow(QMainWindow):
 
     def _append_message(self, role: str, text: str, thinking: str = "", thinking_ms: str = "", perf: list[str] | None = None) -> MessageBubble:
         bubble = MessageBubble(role, text, thinking, thinking_ms, perf)
+        self._wire_regenerate_bubble(bubble)
         insert_index = self.messages_layout.count()
         self.messages_layout.insertWidget(insert_index, bubble)
         self._schedule_messages_view_height_sync()
         QTimer.singleShot(0, self._scroll_bottom)
         return bubble
+
+    def _wire_regenerate_bubble(self, bubble: QWidget) -> None:
+        if not isinstance(bubble, MessageBubble) or getattr(bubble, "role", "") != "user":
+            return
+        if bool(bubble.property("regenerate_wired")):
+            return
+        bubble.regenerateRequested.connect(self._on_regenerate_requested)
+        bubble.setProperty("regenerate_wired", True)
+
+    def _message_layout_index(self, bubble: QWidget) -> int:
+        layout = getattr(self, "messages_layout", None)
+        if layout is None:
+            return -1
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item is not None and item.widget() is bubble:
+                return index
+        return -1
+
+    def _remove_message_bubble(self, bubble: QWidget) -> None:
+        layout = getattr(self, "messages_layout", None)
+        if layout is None:
+            return
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            if item is not None and item.widget() is bubble:
+                taken = layout.takeAt(index)
+                if taken is not None:
+                    bubble.deleteLater()
+                self._schedule_messages_view_height_sync()
+                return
+
+    def _remove_assistant_after_user_bubble(self, user_bubble: QWidget) -> MessageBubble | None:
+        layout = getattr(self, "messages_layout", None)
+        if layout is None:
+            return None
+        start = self._message_layout_index(user_bubble)
+        if start < 0:
+            return None
+        for index in range(start + 1, layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if not isinstance(widget, MessageBubble):
+                continue
+            if getattr(widget, "role", "") == "user":
+                return None
+            if getattr(widget, "role", "") == "assistant":
+                self._remove_message_bubble(widget)
+                return widget
+        return None
+
+    def _start_reply_for_text(self, text: str, *, store_turn: bool, append_user: bool) -> bool:
+        text = str(text or "").strip()
+        if not text:
+            return False
+        if self._worker is not None and self._worker.isRunning():
+            return False
+        if append_user:
+            self._append_message("user", text)
+        if self.api is None or ReplyWorker is None:
+            self._append_message(
+                "assistant",
+                "Я накинула тебе нативную PySide6-оболочку. Чтобы сделать её полностью живой, нужно подключить твой текущий ApiClient/ReplyWorker прямо в проекте.",
+                thinking="Сейчас это режим локального превью без реального API-ответа.",
+                thinking_ms="96 ms",
+                perf=["612 ms", "write 410 ms", "14.2 tok/s", "prompt 143", "gen 20"],
+            )
+            return True
+        self._pending = PendingAssistant(
+            bubble=self._append_message("assistant", "", thinking="", thinking_ms="0 ms", perf=[]),
+            started_at=time.perf_counter(),
+        )
+        self._worker = ReplyWorker(self.api, text, store_turn=store_turn, think=True)
+        self._worker.chunk.connect(self._on_answer_chunk)
+        self._worker.thinking_chunk.connect(self._on_thinking_chunk)
+        self._worker.finished.connect(self._on_reply_finished)
+        self._worker.errored.connect(self._on_reply_error)
+        self._worker.start()
+        return True
+
+    @Slot(object)
+    def _on_regenerate_requested(self, bubble: object) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if not isinstance(bubble, MessageBubble):
+            return
+        text = bubble.text_label.text().strip()
+        if not text:
+            return
+        self._remove_assistant_after_user_bubble(bubble)
+        self._start_reply_for_text(text, store_turn=False, append_user=False)
 
     def _clear_messages(self) -> None:
         for index in range(self.messages_layout.count() - 1, -1, -1):
@@ -2585,27 +2874,8 @@ class ExactChatWindow(QMainWindow):
         text = self.input.toPlainText().strip()
         if not text:
             return
-        self._append_message("user", text)
-        self.input.clear()
-        if self.api is None or ReplyWorker is None:
-            self._append_message(
-                "assistant",
-                "Я накинула тебе нативную PySide6-оболочку. Чтобы сделать её полностью живой, нужно подключить твой текущий ApiClient/ReplyWorker прямо в проекте.",
-                thinking="Сейчас это режим локального превью без реального API-ответа.",
-                thinking_ms="96 ms",
-                perf=["612 ms", "write 410 ms", "14.2 tok/s", "prompt 143", "gen 20"],
-            )
-            return
-        self._pending = PendingAssistant(
-            bubble=self._append_message("assistant", "", thinking="", thinking_ms="0 ms", perf=[]),
-            started_at=time.perf_counter(),
-        )
-        self._worker = ReplyWorker(self.api, text, store_turn=True, think=True)
-        self._worker.chunk.connect(self._on_answer_chunk)
-        self._worker.thinking_chunk.connect(self._on_thinking_chunk)
-        self._worker.finished.connect(self._on_reply_finished)
-        self._worker.errored.connect(self._on_reply_error)
-        self._worker.start()
+        if self._start_reply_for_text(text, store_turn=True, append_user=True):
+            self.input.clear()
 
     @Slot(str)
     def _on_answer_chunk(self, piece: str) -> None:

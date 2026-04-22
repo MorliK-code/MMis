@@ -508,6 +508,14 @@ class MemoryLLMProcessor:
         except Exception:
             return None
 
+    def yield_control(self) -> None:
+        provider = self.get_provider()
+        if provider is None:
+            return
+        method = getattr(provider, "yield_control", None)
+        if callable(method):
+            method()
+
     def pause(self) -> None:
         provider = self.get_provider()
         if provider is None:
@@ -535,6 +543,16 @@ class MemoryLLMProcessor:
             return bool(method(keep_alive=self.keep_alive))
         except TypeError:
             return bool(method())
+
+    def unload(self) -> None:
+        provider = self.get_provider()
+        if provider is None:
+            return
+        method = getattr(provider, "unload", None)
+        if not callable(method):
+            method = getattr(provider, "unload_model", None)
+        if callable(method):
+            method()
 
     def shutdown(self) -> None:
         if self.task_router is None:
