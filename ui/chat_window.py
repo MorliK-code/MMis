@@ -409,13 +409,26 @@ class ChatWindow(proto.ExactChatWindow):
             stat_line = upgraded_stat_line
         thinking_ms = self._extract_thinking_ms_from_stat_line(stat_line)
         perf_items = self._split_stat_line(stat_line)
+        display_text = str(text or "")
+        extracted_attachments = []
+        if display_text and "\n\nВложения:\n-" in display_text:
+            parts = display_text.split("\n\nВложения:\n")
+            display_text = parts[0]
+            for line in parts[1].split("\n"):
+                if line.startswith("- "):
+                    raw_name = line[2:]
+                    import re
+                    raw_name = re.sub(r"\((?:[^,]+,\s*)*(?=[^,]+$)", "(", raw_name)
+                    extracted_attachments.append({"name": raw_name})
+
         bubble = proto.MessageBubble(
             _display_role(role),
-            text or "",
+            display_text,
             thinking or "",
             thinking_ms if str(thinking or "").strip() else "",
             perf_items,
             show_thinking_header=bool(str(thinking or "").strip()),
+            attachments=extracted_attachments,
         )
         if role == "user":
             bubble.setProperty("history_index", index)
@@ -473,9 +486,14 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot(int)
     def _on_history_scroll_value_changed(self, value: int) -> None:
+        bar = self.scroll.verticalScrollBar()
+        
+        # Dynamically update whether we should stick to the bottom during generation
+        if getattr(self, "_worker", None) is not None and self._worker.isRunning():
+            self._stream_follow_scroll = self._should_follow_stream_scroll(value, bar.maximum())
+            
         if self._lazy_history_loading or self._lazy_history_start_index <= 0:
             return
-        bar = self.scroll.verticalScrollBar()
         if bar.maximum() <= 0:
             return
         if int(value) <= HISTORY_SCROLL_LOAD_THRESHOLD_PX:
@@ -847,13 +865,14 @@ class ChatWindow(proto.ExactChatWindow):
         composer_layout = composer.layout() if composer is not None else None
         if composer_layout is None:
             return
-        row = QWidget(composer)
+        from .chat_shell import FlowWrap, FlowLayout
+        row = FlowWrap(composer)
+        row.expand_width_hint = False
         row.setObjectName("attachment_row")
         row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row.setStyleSheet("QWidget#attachment_row { background: transparent; }")
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(2, 0, 2, 0)
-        layout.setSpacing(6)
+        layout = FlowLayout(row, margin=2, hspacing=6, vspacing=6, align_right=False)
+        row.setLayout(layout)
         self._attachment_row = row
         self._attachment_layout = layout
         composer_layout.insertWidget(1, row)
@@ -861,31 +880,59 @@ class ChatWindow(proto.ExactChatWindow):
         self._sync_composer_height()
 
     def _sync_composer_height(self) -> None:
-        composer_wrap = self.findChild(QWidget, "composer_wrap")
-        if composer_wrap is not None:
-            composer_wrap.setFixedHeight(composer_wrap.sizeHint().height())
-        sync = getattr(self, "_sync_messages_view_height", None)
-        if callable(sync):
-            sync()
+        def _apply_height():
+            composer_wrap = self.findChild(QWidget, "composer_wrap")
+            if composer_wrap is not None:
+                composer = self.input.parentWidget()
+                if composer and composer.layout():
+                    composer.layout().invalidate()
+                if composer_wrap.layout():
+                    composer_wrap.layout().invalidate()
+                composer_wrap.setFixedHeight(composer_wrap.sizeHint().height())
+            sync = getattr(self, "_sync_messages_view_height", None)
+            if callable(sync):
+                sync()
+        QTimer.singleShot(0, _apply_height)
 
     def _sync_attachment_row(self) -> None:
         row = self._attachment_row
         layout = self._attachment_layout
         if row is None or layout is None:
             return
+            
+        # Clean up existing chips completely
         while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+            layout.takeAt(0)
+            
+        for child in row.findChildren(QWidget, "attachment_chip"):
+            child.hide()
+            child.setParent(None)
+            child.deleteLater()
+            
+        # Add new chips
         for index, attachment in enumerate(list(self._pending_attachments or [])):
-            layout.addWidget(self._build_attachment_chip(index, attachment), 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addStretch(1)
-        row.setVisible(bool(self._pending_attachments))
+            layout.addWidget(self._build_attachment_chip(index, attachment))
+            
+        # Toggle visibility
+        is_visible = bool(self._pending_attachments)
+        row.setVisible(is_visible)
+        
+        # Invalidate layouts to guarantee correct sizeHint
+        composer = self.input.parentWidget()
+        if composer and composer.layout():
+            composer.layout().invalidate()
+        composer_wrap = self.findChild(QWidget, "composer_wrap")
+        if composer_wrap and composer_wrap.layout():
+            composer_wrap.layout().invalidate()
+            
+        if is_visible and hasattr(row, "refresh_height"):
+            row.refresh_height()
+            
         self._sync_composer_height()
 
     def _build_attachment_chip(self, index: int, attachment: dict) -> QWidget:
         chip = QWidget(self._attachment_row)
+        chip.setFixedHeight(22)
         chip.setObjectName("attachment_chip")
         chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         chip.setStyleSheet(
@@ -893,11 +940,12 @@ class ChatWindow(proto.ExactChatWindow):
             QWidget#attachment_chip {
                 background: rgba(31, 36, 44, .82);
                 border: 1px solid rgba(148, 163, 184, .22);
-                border-radius: 7px;
+                border-radius: 5px;
             }
             QLabel {
                 color: rgba(226, 232, 240, .92);
                 background: transparent;
+                font-size: 11px;
             }
             QToolButton {
                 color: rgba(148, 163, 184, .95);
@@ -911,7 +959,7 @@ class ChatWindow(proto.ExactChatWindow):
             """
         )
         layout = QHBoxLayout(chip)
-        layout.setContentsMargins(8, 3, 5, 3)
+        layout.setContentsMargins(6, 1, 4, 1)
         layout.setSpacing(5)
         label = QLabel(self._attachment_chip_text(attachment), chip)
         label.setToolTip(str(attachment.get("path") or attachment.get("name") or ""))
@@ -922,6 +970,11 @@ class ChatWindow(proto.ExactChatWindow):
         close_btn.setToolTip("Убрать вложение")
         close_btn.clicked.connect(lambda _checked=False, idx=index: self._remove_pending_attachment(idx))
         layout.addWidget(close_btn)
+        chip.show()
+        chip.layout().activate()
+        chip.adjustSize()
+        w = max(10, chip.sizeHint().width())
+        chip.setFixedWidth(w)
         return chip
 
     def _remove_pending_attachment(self, index: int) -> None:
@@ -1267,6 +1320,7 @@ class ChatWindow(proto.ExactChatWindow):
         self._remove_message_widgets_after(bubble)
 
         assistant_bubble = proto.MessageBubble("assistant", "", "", "", [])
+        assistant_bubble.hide()
         self._insert_message_bubble(assistant_bubble)
         self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
         if hasattr(self, "_lazy_history_start_index"):
@@ -1293,6 +1347,9 @@ class ChatWindow(proto.ExactChatWindow):
             self._queued_scroll_follow_only = False
             if follow_only and not self._stream_follow_scroll:
                 return
+            scroll_widget = getattr(self, "scroll", None)
+            if scroll_widget and scroll_widget.widget() and scroll_widget.widget().layout():
+                scroll_widget.widget().layout().activate()
             self._scroll_bottom()
 
         QTimer.singleShot(0, _flush)
@@ -1331,12 +1388,18 @@ class ChatWindow(proto.ExactChatWindow):
         self._history.append(("user", display_text, None, None, None))
         self._pending_user_text = text
         self._update_active_chat_title(display_text)
-        user_bubble = proto.MessageBubble("user", display_text, "", "", [])
+        ui_attachments = []
+        for att in (attachments or []):
+            name = str(att.get("name") or "файл")
+            size = self._format_attachment_size(att.get("size"))
+            ui_attachments.append({"name": f"{name} ({size})"})
+        user_bubble = proto.MessageBubble("user", text, "", "", [], attachments=ui_attachments)
         user_bubble.setProperty("history_index", user_history_index)
         user_bubble.setProperty("raw_user_text", text)
         user_bubble.setProperty("attachments_payload", attachments)
         self._insert_message_bubble(user_bubble)
         assistant_bubble = proto.MessageBubble("assistant", "", "", "", [])
+        assistant_bubble.hide()
         self._insert_message_bubble(assistant_bubble)
         self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
         self._pending_history_index = len(self._history)
@@ -1370,6 +1433,8 @@ class ChatWindow(proto.ExactChatWindow):
         self._pending.last_chunk_at = now
         self._pending.answer_text += piece or ""
         self._pending.bubble.update_text(self._pending.answer_text)
+        if not self._pending.bubble.isVisible():
+            self._pending.bubble.show()
         self._schedule_scroll_bottom(follow_stream_only=True)
 
     @Slot(str)
@@ -1395,6 +1460,8 @@ class ChatWindow(proto.ExactChatWindow):
             self._pending.thinking_text,
             self._format_duration_label(elapsed_ms),
         )
+        if not self._pending.bubble.isVisible():
+            self._pending.bubble.show()
         self._schedule_scroll_bottom(follow_stream_only=True)
 
     @Slot(object)
@@ -1883,9 +1950,7 @@ class ChatWindow(proto.ExactChatWindow):
         name = str(attachment.get("name") or "attachment")
         if len(name) > 34:
             name = name[:16].rstrip() + "..." + name[-13:].lstrip()
-        kind = str(attachment.get("kind") or "file").strip().lower()
-        label = "img" if kind == "image" else ("txt" if kind == "text" else "file")
-        return f"{label}: {name} ({cls._format_attachment_size(attachment.get('size'))})"
+        return f"{name} ({cls._format_attachment_size(attachment.get('size'))})"
 
     @classmethod
     def _display_text_for_message(cls, text: str, attachments: list[dict] | None) -> str:
@@ -1895,11 +1960,8 @@ class ChatWindow(proto.ExactChatWindow):
         lines = [str(text or "").strip(), "", "Вложения:"]
         for attachment in rows:
             name = str(attachment.get("name") or "attachment")
-            kind = str(attachment.get("kind") or "file").strip().lower() or "file"
-            mime_type = str(attachment.get("mime_type") or "")
             size = cls._format_attachment_size(attachment.get("size"))
-            details = ", ".join(part for part in (kind, mime_type, size) if part)
-            lines.append(f"- {name} ({details})")
+            lines.append(f"- {name} ({size})")
         return "\n".join(lines).strip()
 
     def _latest_ai_text(self) -> str:

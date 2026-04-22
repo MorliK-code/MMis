@@ -13,7 +13,7 @@
   },
   "startup": {
     "mode": "api",
-    "active_profile": "ASYA",
+    "active_profile": "BALANCED",
     "safety_mode": "allow_os_actions"
   },
   "api": {
@@ -22,7 +22,7 @@
   },
   "llm": {
     "provider": "ollama",
-    "model_name": "gemma4:26b",
+    "model_name": "qcwind/qwen3-8b-instruct-Q4-K-M",
     "model_fallbacks": [],
     "thinking_enabled": true,
     "json_mode_enabled": false,

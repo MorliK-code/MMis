@@ -413,7 +413,7 @@ class StyledMessageLabel(QLabel):
         return self._measure_size(None)
 
     def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
+        return QSize(0, 0)
 
     def _document_for_width(self, width: int | None) -> QTextDocument:
         doc = QTextDocument()
@@ -791,11 +791,12 @@ class BrandBadge(QWidget):
 
 
 class FlowLayout(QLayout):
-    def __init__(self, parent: QWidget | None = None, margin: int = 0, hspacing: int = 6, vspacing: int = 6):
+    def __init__(self, parent: QWidget | None = None, margin: int = 0, hspacing: int = 6, vspacing: int = 6, align_right: bool = False):
         super().__init__(parent)
         self._items: list[QLayoutItem] = []
         self._hspacing = hspacing
         self._vspacing = vspacing
+        self.align_right = align_right
         self.setContentsMargins(margin, margin, margin, margin)
 
     def addItem(self, item: QLayoutItem) -> None:
@@ -838,30 +839,45 @@ class FlowLayout(QLayout):
             height = max(height, hint.height())
             visible_count += 1
         if visible_count > 1:
-            width += self._hspacing * (visible_count - 1)
+            width += getattr(self, "_hspacing", 6) * (visible_count - 1)
         size = QSize(width, height)
         margins = self.contentsMargins()
         size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
         return size
 
     def _do_layout(self, rect: QRect, test_only: bool) -> int:
-        x = rect.x()
-        y = rect.y()
+        lines = []
+        current_line = []
+        current_line_width = 0
         line_height = 0
-        max_x = rect.x() + rect.width()
+        max_width = rect.width()
         for item in self._items:
             hint = item.sizeHint()
-            next_x = x + hint.width() + self._hspacing
-            if line_height > 0 and next_x - self._hspacing > max_x and rect.width() > 0:
-                x = rect.x()
-                y = y + line_height + self._vspacing
-                next_x = x + hint.width() + self._hspacing
+            item_w = hint.width()
+            if current_line and current_line_width + self._hspacing + item_w > max_width and max_width > 0:
+                lines.append((current_line, current_line_width, line_height))
+                current_line = []
+                current_line_width = 0
                 line_height = 0
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x, y), hint))
-            x = next_x
+            current_line.append((item, hint))
+            current_line_width += item_w if not current_line_width else self._hspacing + item_w
             line_height = max(line_height, hint.height())
-        return y + line_height - rect.y()
+        if current_line:
+            lines.append((current_line, current_line_width, line_height))
+            
+        y = rect.y()
+        for i, (line_items, line_w, line_h) in enumerate(lines):
+            x = rect.x()
+            if getattr(self, "align_right", False):
+                x += max(0, max_width - line_w)
+            for item, hint in line_items:
+                if not test_only:
+                    item.setGeometry(QRect(QPoint(x, y), hint))
+                x += hint.width() + self._hspacing
+            y += line_h + (self._vspacing if i < len(lines) - 1 else 0)
+            
+        total_height = y - rect.y() if lines else 0
+        return total_height
 
 
 class FlowWrap(QWidget):
@@ -880,11 +896,17 @@ class FlowWrap(QWidget):
         if layout is None:
             return super().sizeHint()
         base = layout.minimumSize()
-        width = max(1, self.width() or base.width())
-        height = self.heightForWidth(width)
-        return QSize(base.width(), max(base.height(), height))
+        if getattr(self, "expand_width_hint", True):
+            width = max(1, self.width() or base.width())
+            return QSize(base.width(), max(base.height(), self.heightForWidth(width)))
+        else:
+            width = 0
+            actual_w = max(1, self.width() or 100)
+            return QSize(width, max(base.height(), self.heightForWidth(actual_w)))
 
     def minimumSizeHint(self) -> QSize:
+        if not getattr(self, "expand_width_hint", True):
+            return QSize(0, 0)
         return self.sizeHint()
 
     def refresh_height(self) -> None:
@@ -892,6 +914,17 @@ class FlowWrap(QWidget):
         if layout is None:
             return
         width = max(1, self.width() or layout.minimumSize().width())
+        if not getattr(self, "expand_width_hint", True) and hasattr(self.parentWidget(), "width"):
+            p_width = self.parentWidget().width()
+            if p_width > 0:
+                # Account for parent layout margins if parent has a layout
+                p_layout = self.parentWidget().layout()
+                if p_layout:
+                    margins = p_layout.contentsMargins()
+                    p_width -= (margins.left() + margins.right())
+                # Only use parent width if our own width is suspiciously small (initial state)
+                if self.width() < p_width:
+                    width = p_width
         height = max(layout.minimumSize().height(), self.heightForWidth(width))
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
@@ -2026,6 +2059,7 @@ class MessageBubble(QFrame):
         perf: list[str] | None = None,
         *,
         show_thinking_header: bool = False,
+        attachments: list[dict] | None = None,
     ):
         super().__init__()
         self.role = str(role or "")
@@ -2037,6 +2071,22 @@ class MessageBubble(QFrame):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
+        
+        self.attachments_wrap = FlowWrap(self)
+        self.attachments_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.attachments_wrap.setMaximumWidth(760)
+        align_r = role == "user"
+        attachments_lay = FlowLayout(self.attachments_wrap, margin=0, hspacing=6, vspacing=6, align_right=align_r)
+        self.attachments_wrap.setLayout(attachments_lay)
+        if attachments:
+            for att in attachments:
+                name = str(att.get("name") or "файл")
+                chip = Chip(name)
+                attachments_lay.addWidget(chip)
+            outer.addWidget(self.attachments_wrap, 0, Qt.AlignmentFlag.AlignRight if role == "user" else Qt.AlignmentFlag.AlignLeft)
+        else:
+            self.attachments_wrap.setVisible(False)
+
         bubble = QFrame()
         self._message_panel = bubble
         bubble.setMouseTracking(True)
@@ -2552,7 +2602,7 @@ class ExactChatWindow(QMainWindow):
         composer_lay.setSpacing(6)
         self.input = ComposerEdit()
         self.input.setPlaceholderText("Напиши сообщение")
-        self.input.setFixedHeight(76)
+        self.input.setFixedHeight(46)
         self.input.setFont(_ui_font(pixel_size=14))
         self.input.submitRequested.connect(self._send_message)
         composer_lay.addWidget(self.input)
