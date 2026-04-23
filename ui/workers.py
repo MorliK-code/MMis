@@ -35,6 +35,7 @@ class ReplyWorker(QThread):
         store_turn: bool = True,
         think: bool | None = None,
         verbose: bool | None = None,
+        json_mode: bool | None = None,
         attachments: list[dict] | None = None,
     ):
         super().__init__()
@@ -43,6 +44,7 @@ class ReplyWorker(QThread):
         self.store_turn = bool(store_turn)
         self.think = think
         self.verbose = verbose
+        self.json_mode = json_mode
         self.attachments = [dict(item) for item in list(attachments or []) if isinstance(item, dict)]
         self._cancel_requested = False
 
@@ -60,6 +62,7 @@ class ReplyWorker(QThread):
                 store_turn=self.store_turn,
                 think=self.think,
                 verbose=self.verbose,
+                json_mode=self.json_mode,
                 attachments=self.attachments,
                 on_chunk=lambda piece: self._emit_stream_piece(piece, self.chunk),
                 on_thinking_chunk=lambda piece: self._emit_stream_piece(piece, self.thinking_chunk),
@@ -102,9 +105,13 @@ class StatusPollWorker(QThread):
             "error": "",
         }
         try:
-            health = self.api.health()
+            health = self.api.health(timeout=2.5)
             payload["api_ok"] = str(health.get("status") or "").strip().lower() == "ok"
             payload["model"] = str(health.get("model") or self.api.get_runtime_model() or "")
+            payload["thinking_enabled"] = bool(health.get("thinking_enabled", False))
+            payload["verbose_enabled"] = bool(health.get("verbose_enabled", False))
+            payload["json_mode_enabled"] = bool(health.get("json_mode_enabled", False))
+            payload["web_mode"] = str(health.get("web_mode") or "")
             payload["model_status"] = dict(health.get("model_status") or {})
             payload["memory_status"] = dict(health.get("memory_status") or {})
         except ApiClientError as exc:

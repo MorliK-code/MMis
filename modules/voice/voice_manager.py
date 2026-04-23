@@ -39,11 +39,13 @@ class VoiceManager:
         stt: STTService | None = None,
         on_partial: Callable[[str], None] | None = None,
         on_final: Callable[[str], None] | None = None,
+        on_state: Callable[[VoiceState], None] | None = None,
     ):
         self.tts = tts or TTSService()
         self.stt = stt or STTService()
         self._on_partial = on_partial
         self._on_final = on_final
+        self._on_state = on_state
 
         self._state = VoiceState.IDLE
         self._state_lock = threading.RLock()
@@ -59,9 +61,14 @@ class VoiceManager:
         *,
         on_partial: Callable[[str], None] | None = None,
         on_final: Callable[[str], None] | None = None,
+        on_state: Callable[[VoiceState], None] | None = None,
     ) -> None:
-        self._on_partial = on_partial
-        self._on_final = on_final
+        if on_partial is not None:
+            self._on_partial = on_partial
+        if on_final is not None:
+            self._on_final = on_final
+        if on_state is not None:
+            self._on_state = on_state
 
     def get_state(self) -> VoiceState:
         with self._state_lock:
@@ -71,13 +78,12 @@ class VoiceManager:
         with self._state_lock:
             if self._state == VoiceState.SPEAKING:
                 self.barge_in()
-            self._state = VoiceState.LISTENING
-            return self._state
+            return self._set_state_locked(VoiceState.LISTENING)
 
     def stop_listening(self) -> VoiceState:
         with self._state_lock:
             if self._state == VoiceState.LISTENING:
-                self._state = VoiceState.IDLE
+                self._set_state_locked(VoiceState.IDLE)
             return self._state
 
     def barge_in(self) -> None:
@@ -87,7 +93,7 @@ class VoiceManager:
                 self.tts.stop()
                 _drain_queue(self._tts_queue)
                 self._stt_paused = False
-                self._state = VoiceState.LISTENING
+                self._set_state_locked(VoiceState.LISTENING)
 
     def enqueue_speak(self, text: str, *, lang: str = "", config: TTSConfig | None = None) -> None:
         payload = str(text or "").strip()
@@ -101,7 +107,7 @@ class VoiceManager:
             raise ValueError("speak expects non-empty text")
 
         with self._state_lock:
-            self._state = VoiceState.SPEAKING
+            self._set_state_locked(VoiceState.SPEAKING)
             self._stt_paused = True
 
         try:
@@ -110,14 +116,14 @@ class VoiceManager:
         finally:
             with self._state_lock:
                 self._stt_paused = False
-                self._state = VoiceState.IDLE
+                self._set_state_locked(VoiceState.IDLE)
 
     def transcribe(self, audio: str | bytes, *, config: STTConfig | None = None) -> STTResult:
         if self._stt_paused:
             return STTResult(text="", conf=0.0, metadata={"paused": True})
 
         with self._state_lock:
-            self._state = VoiceState.PROCESSING
+            self._set_state_locked(VoiceState.PROCESSING)
 
         try:
             result = self.stt.transcribe(audio=audio, config=config or STTConfig())
@@ -126,7 +132,7 @@ class VoiceManager:
             return result
         finally:
             with self._state_lock:
-                self._state = VoiceState.IDLE
+                self._set_state_locked(VoiceState.IDLE)
 
     def on_partial(self, text: str) -> None:
         payload = str(text or "").strip()
@@ -154,7 +160,7 @@ class VoiceManager:
         except Exception:
             pass
         with self._state_lock:
-            self._state = VoiceState.IDLE
+            self._set_state_locked(VoiceState.IDLE)
             self._stt_paused = False
 
     def _worker_loop(self) -> None:
@@ -184,6 +190,18 @@ class VoiceManager:
                 self._on_final(text)
             except Exception as exc:
                 LOGGER.warning("on_final callback failed: %s", exc)
+
+    def _set_state_locked(self, state: VoiceState) -> VoiceState:
+        if self._state == state:
+            return self._state
+        self._state = state
+        callback = self._on_state
+        if callable(callback):
+            try:
+                callback(state)
+            except Exception as exc:
+                LOGGER.warning("on_state callback failed: %s", exc)
+        return self._state
 
 
 def _drain_queue(q: queue.Queue) -> None:

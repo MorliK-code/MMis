@@ -46,6 +46,7 @@ class TTSConfig:
     sample_rate: int = 22050
     device: str = "default"
     engine: str = "auto"
+    model: str = "Qwen3-TTS-0.6B"
     cache_enabled: bool = True
     max_chunk_chars: int = 320
 
@@ -182,7 +183,7 @@ class TTSService:
             )
 
         chunks = split_text_for_tts(normalized, max_chars=max(80, int(cfg.max_chunk_chars)))
-        engine = self._resolve_engine(cfg.engine)
+        engine = self._resolve_engine(cfg)
 
         if len(chunks) == 1:
             audio = engine.synthesize(chunks[0], lang, cfg, output_path)
@@ -221,22 +222,34 @@ class TTSService:
     def stop(self) -> None:
         _stop_audio_playback()
 
-    def _resolve_engine(self, requested: str) -> TTSEngine:
+    def _resolve_engine(self, config: TTSConfig) -> TTSEngine:
+        requested = config.engine
         name = str(requested or "auto").strip().lower()
         if name in {"", "auto"}:
-            if Pyttsx3Engine.available():
+            if _qwen_available():
+                name = "qwen"
+            elif Pyttsx3Engine.available():
                 name = "pyttsx3"
             else:
                 name = "tone"
 
         with self._lock:
-            if name in self._engine_cache:
-                return self._engine_cache[name]
-            if name == "pyttsx3" and Pyttsx3Engine.available():
+            cache_key = name
+            if name == "qwen":
+                cache_key = f"{name}|{config.model}|{config.device}"
+            if cache_key in self._engine_cache:
+                return self._engine_cache[cache_key]
+            if name == "qwen" and _qwen_available():
+                from modules.voice.tts_qwen import QwenTTSEngine
+
+                eng: TTSEngine = QwenTTSEngine(model_name=config.model, device=config.device)
+            elif name == "pyttsx3" and Pyttsx3Engine.available():
                 eng: TTSEngine = Pyttsx3Engine()
             else:
+                if name == "qwen":
+                    LOGGER.warning("Qwen TTS requested but dependencies are not installed; using fallback")
                 eng = ToneTTSEngine()
-            self._engine_cache[name] = eng
+            self._engine_cache[cache_key] = eng
             return eng
 
 
@@ -308,6 +321,15 @@ def tts_speak(text: str) -> None:
         speak(text=text)
     except Exception as exc:
         LOGGER.warning("tts_speak failed: %s", exc)
+
+
+def _qwen_available() -> bool:
+    try:
+        from modules.voice.tts_qwen import QwenTTSEngine
+
+        return QwenTTSEngine.available()
+    except Exception:
+        return False
 
 
 def _cache_key(text: str, lang: str, config: TTSConfig) -> str:

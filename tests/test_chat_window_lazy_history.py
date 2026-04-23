@@ -53,8 +53,10 @@ def _lazy_window() -> ChatWindow:
         "_upgrade_legacy_verbose_stat_line",
         "_remove_message_widgets_after",
         "_history_index_for_user_bubble",
+        "_assistant_bubble_after_user",
         "_start_reply_worker_for_text",
         "_on_regenerate_requested",
+        "_insert_message_bubble_after",
     ):
         setattr(window, name, MethodType(getattr(ChatWindow, name), window))
     for name in (
@@ -167,6 +169,8 @@ def test_chat_window_regenerate_removes_old_answer_and_does_not_store_duplicate_
     window._pending = None
     window._pending_history_index = None
     window._pending_user_text = ""
+    window._stream_follow_scroll = False
+    window._force_stream_follow_scroll = False
     window._thinking_enabled = True
     window._verbose_enabled = False
     window._capture_stream_scroll_mode = lambda: None
@@ -201,11 +205,13 @@ def test_chat_window_regenerate_removes_old_answer_and_does_not_store_duplicate_
     assert worker.started
     assert window._pending_user_text == "question"
     assert window._pending_history_index == 1
+    assert window._force_stream_follow_scroll is True
+    assert window._stream_follow_scroll is True
     assert window._history == [
         ("user", "question", None, None, None),
         ("ai", "", "…", None, None),
     ]
     assert window.messages_layout.count() == 2
     assert window.messages_layout.itemAt(0).widget() is user_bubble
-    assert isinstance(window.messages_layout.itemAt(1).widget(), proto.MessageBubble)
+    assert window.messages_layout.itemAt(1).widget() is assistant_bubble
     assert saved[-1] == window._history

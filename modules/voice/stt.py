@@ -23,6 +23,8 @@ class STTConfig:
     beam_size: int = 5
     speed_mode: str = "balanced"
     engine: str = "auto"
+    model: str = "small"
+    compute_type: str = "default"
     silence_ms: int = 900
     min_speech_ms: int = 200
 
@@ -118,11 +120,13 @@ class NullSTTEngine:
 
 class STTService:
     def __init__(self, engine: STTEngine | None = None):
-        self._engine: STTEngine = engine or NullSTTEngine()
+        self._explicit_engine = engine
+        self._engine_cache: dict[str, STTEngine] = {}
 
     def transcribe(self, audio: str | Path | bytes, config: STTConfig | None = None) -> STTResult:
         cfg = config or STTConfig()
-        result = self._engine.transcribe(audio=audio, config=cfg)
+        engine = self._explicit_engine or self._resolve_engine(cfg)
+        result = engine.transcribe(audio=audio, config=cfg)
         if not result.language_detected or result.language_detected == "unknown":
             lang = _detect_language(result.text)
             result = STTResult(
@@ -135,6 +139,19 @@ class STTService:
                 metadata=result.metadata,
             )
         return result
+
+    def _resolve_engine(self, config: STTConfig) -> STTEngine:
+        key = "|".join(
+            [
+                str(config.engine or "auto").strip().lower(),
+                str(config.model or "small").strip(),
+                str(config.device or "default").strip().lower(),
+                str(config.compute_type or "default").strip().lower(),
+            ]
+        )
+        if key not in self._engine_cache:
+            self._engine_cache[key] = create_stt_engine(config)
+        return self._engine_cache[key]
 
     def transcribe_stream(self, chunks: Iterable[bytes], config: STTConfig | None = None) -> Iterable[STTResult]:
         cfg = config or STTConfig()
@@ -180,6 +197,26 @@ def transcribe(audio: str | Path | bytes, config: STTConfig | None = None) -> tu
 
 def transcribe_result(audio: str | Path | bytes, config: STTConfig | None = None) -> STTResult:
     return _DEFAULT_STT.transcribe(audio=audio, config=config)
+
+
+def create_stt_engine(config: STTConfig | None = None, *, engine: str | None = None) -> STTEngine:
+    cfg = config or STTConfig()
+    requested = str(engine or cfg.engine or "auto").strip().lower()
+    if requested in {"", "auto", "faster", "faster-whisper", "faster_whisper"}:
+        try:
+            from modules.voice.stt_faster_whisper import FasterWhisperSTTEngine
+
+            if FasterWhisperSTTEngine.available():
+                return FasterWhisperSTTEngine(
+                    model_size=str(cfg.model or "small"),
+                    device=str(cfg.device or "auto"),
+                    compute_type=str(cfg.compute_type or "default"),
+                )
+            if requested not in {"", "auto"}:
+                LOGGER.warning("faster-whisper requested but package is not installed; using NullSTTEngine")
+        except Exception as exc:
+            LOGGER.warning("failed to initialize faster-whisper STT engine: %s", exc)
+    return NullSTTEngine()
 
 
 def stt_transcribe(path: str) -> str:

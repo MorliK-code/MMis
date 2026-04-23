@@ -22,7 +22,7 @@
   },
   "llm": {
     "provider": "ollama",
-    "model_name": "qcwind/qwen3-8b-instruct-Q4-K-M",
+    "model_name": "gemma4:26b",
     "model_fallbacks": [],
     "thinking_enabled": true,
     "json_mode_enabled": false,
@@ -30,7 +30,7 @@
       "emotion": {
         "name": "emotion",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.15,
         "max_tokens": 128,
         "timeout": 20.0,
@@ -40,7 +40,7 @@
       "tagging": {
         "name": "tagging",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.1,
         "max_tokens": 128,
         "timeout": 20.0,
@@ -50,7 +50,7 @@
       "intent_judge": {
         "name": "intent_judge",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.1,
         "max_tokens": 160,
         "timeout": 20.0,
@@ -60,7 +60,7 @@
       "query_rewrite": {
         "name": "query_rewrite",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.2,
         "max_tokens": 192,
         "timeout": 25.0,
@@ -70,7 +70,7 @@
       "source_relevance": {
         "name": "source_relevance",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.1,
         "max_tokens": 160,
         "timeout": 20.0,
@@ -80,7 +80,7 @@
       "summary_mini_pass": {
         "name": "summary_mini_pass",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.2,
         "max_tokens": 96,
         "timeout": 20.0,
@@ -90,7 +90,7 @@
       "studio_seed_extract": {
         "name": "studio_seed_extract",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.35,
         "max_tokens": 540,
         "timeout": 45.0,
@@ -100,7 +100,7 @@
       "studio_options": {
         "name": "studio_options",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.55,
         "max_tokens": 220,
         "timeout": 25.0,
@@ -110,7 +110,7 @@
       "studio_pack_blueprint": {
         "name": "studio_pack_blueprint",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.55,
         "max_tokens": 4096,
         "timeout": 90.0,
@@ -120,7 +120,7 @@
       "fact_filter": {
         "name": "fact_filter",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.1,
         "max_tokens": 192,
         "timeout": 20.0,
@@ -130,7 +130,7 @@
       "final_response": {
         "name": "final_response",
         "provider": "ollama",
-        "model": "qcwind/qwen3-8b-instruct-Q4-K-M",
+        "model": "gemma4:26b",
         "temperature": 0.7,
         "max_tokens": 1024,
         "timeout": 120.0,
@@ -143,7 +143,7 @@
       "upper_bound": 8192
     },
     "metadata": {
-      "model": "qwen3:1.7b",
+      "model": "gemma4:26b",
       "fallbacks": []
     },
     "providers": {
@@ -467,6 +467,19 @@
   },
   "voice": {
     "enabled": true,
+    "mode": "push_to_talk",
+    "open_mode_from_rail": true,
+    "stt_engine": "faster_whisper",
+    "stt_model": "small",
+    "stt_device": "cuda",
+    "stt_compute_type": "int8_float16",
+    "stt_language_hint": "ru",
+    "tts_engine": "qwen",
+    "tts_model": "Qwen3-TTS-0.6B",
+    "tts_voice": "default",
+    "tts_device": "cuda",
+    "auto_speak_replies": true,
+    "barge_in": true,
     "tts": {
       "voice": "ru-RU-DmitryNeural",
       "rate": "+0%",

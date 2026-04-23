@@ -1990,17 +1990,18 @@ class HoverSubmenuRow(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 8)
         lay.setSpacing(8)
+        row_font = _button_font(pixel_size=11)
         if icon_text:
             icon_label = CrispLabel(icon_text)
-            icon_label.setFont(_ui_font(pixel_size=11))
+            icon_label.setFont(row_font)
             icon_label.set_text_color("#d1d5db")
             lay.addWidget(icon_label)
         title_label = CrispLabel(title)
-        title_label.setFont(_ui_font(pixel_size=11))
+        title_label.setFont(row_font)
         title_label.set_text_color(TEXT)
         lay.addWidget(title_label)
         caret = CrispLabel(">")
-        caret.setFont(_ui_font(pixel_size=11))
+        caret.setFont(row_font)
         caret.set_text_color(MUTED)
         lay.addStretch(1)
         lay.addWidget(caret)
@@ -2011,7 +2012,7 @@ class HoverSubmenuRow(QFrame):
         v.setContentsMargins(10, 10, 10, 10)
         v.setSpacing(8)
         title_lbl = CrispLabel(submenu_title)
-        title_lbl.setFont(_ui_font(pixel_size=11, weight=QFont.Weight.Medium))
+        title_lbl.setFont(_button_font(pixel_size=11, weight=QFont.Weight.Medium))
         title_lbl.set_text_color(TEXT)
         v.addWidget(title_lbl)
         rows = submenu_rows or [("think", "think", True), ("verbose", "verbose", True), ("json", "json", False)]
@@ -2425,6 +2426,8 @@ class ExactChatWindow(QMainWindow):
         self._worker: ReplyWorker | None = None
         self._status_worker: QThread | None = None
         self._pending: PendingAssistant | None = None
+        self._backend_status_seen_ok = False
+        self._backend_status_failures = 0
         self._messages_view_height_sync_queued = False
         self._shutting_down = False
         self._gpu_ok = False
@@ -2699,7 +2702,7 @@ class ExactChatWindow(QMainWindow):
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
         title = CrispLabel("Модели")
-        title.setFont(_ui_font(pixel_size=11, weight=QFont.Weight.Medium))
+        title.setFont(_button_font(pixel_size=11, weight=QFont.Weight.Medium))
         title.set_text_color(TEXT)
         lay.addWidget(title)
         self.models_list_wrap = QWidget()
@@ -3084,8 +3087,13 @@ class ExactChatWindow(QMainWindow):
         row = dict(payload or {}) if isinstance(payload, dict) else {}
         api_ok = bool(row.get("api_ok"))
         if not api_ok:
+            self._backend_status_failures = int(getattr(self, "_backend_status_failures", 0)) + 1
+            if bool(getattr(self, "_backend_status_seen_ok", False)) and self._backend_status_failures < 3:
+                return
             self._apply_backend_status(api_ok=False, error=str(row.get("error") or ""))
             return
+        self._backend_status_seen_ok = True
+        self._backend_status_failures = 0
         model = str(row.get("model") or "").strip()
         memory_status = dict(row.get("memory_status") or {})
         model_status = dict(row.get("model_status") or {})
@@ -3142,7 +3150,7 @@ class ExactChatWindow(QMainWindow):
             self._populate_models("qwen3:8b", ["qwen3:8b", "mistral:7b", "qwen coder"])
             return
         try:
-            payload = self.api.list_models()
+            payload = self.api.list_models(timeout=2.5)
             runtime = str(payload.get("runtime_model") or self.api.get_runtime_model() or "")
             available = payload.get("available_models") or payload.get("models") or []
             models = [str(x) for x in available if str(x).strip()]
@@ -3169,11 +3177,11 @@ def function_row(label_text: str, *, icon_text: str = "") -> QFrame:
     lay.setSpacing(8)
     if icon_text:
         icon = CrispLabel(icon_text)
-        icon.setFont(_ui_font(pixel_size=11))
+        icon.setFont(_button_font(pixel_size=11))
         icon.set_text_color("#d1d5db")
         lay.addWidget(icon)
     label = CrispLabel(label_text)
-    label.setFont(_ui_font(pixel_size=11))
+    label.setFont(_button_font(pixel_size=11))
     label.set_text_color(TEXT)
     lay.addWidget(label)
     lay.addStretch(1)

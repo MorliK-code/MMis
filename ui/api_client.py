@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from dataclasses import dataclass
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -92,17 +93,20 @@ class ApiClient:
         except urllib_error.URLError as exc:
             LOGGER.warning("ui api connection error method=%s path=%s reason=%s", method, path, exc.reason)
             raise ApiClientError(f"API connection failed: {exc.reason}") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            LOGGER.debug("ui api timeout method=%s path=%s timeout=%s", method, path, timeout or self.timeout_sec)
+            raise ApiClientError(f"API request timed out: {path}") from exc
         except Exception as exc:  # pragma: no cover
             LOGGER.exception("ui api unexpected error method=%s path=%s", method, path)
             raise ApiClientError(str(exc)) from exc
 
-    def health(self) -> dict:
-        payload = self._request_json("GET", "/health")
+    def health(self, timeout: float | None = None) -> dict:
+        payload = self._request_json("GET", "/health", timeout=timeout)
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
         return payload
 
-    def list_models(self) -> dict:
-        payload = self._request_json("GET", "/models")
+    def list_models(self, timeout: float | None = None) -> dict:
+        payload = self._request_json("GET", "/models", timeout=timeout)
         self._runtime_model_cache = str(payload.get("runtime_model") or self._runtime_model_cache)
         return payload
 

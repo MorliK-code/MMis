@@ -24,9 +24,9 @@ if __package__ in {None, ""}:
     if _config_mod is not None and not hasattr(_config_mod, "__path__"):
         sys.modules.pop("config", None)
 
-from PySide6.QtCore import QTimer, Qt, QUrl, Slot
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl, Slot
+from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession, QMediaFormat, QMediaPlayer, QMediaRecorder
+from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
 from config.settings import DATA_DIR, load_config
 from llm.tokenizer import estimate_tokens
@@ -37,7 +37,9 @@ from ui.chat_sessions import collapse_to_single_visible_chat, history_to_seriali
 from ui.chat_sessions import load_sessions as load_chat_sessions
 from ui.chat_sessions import make_new_chat_payload, now_iso as chat_now_iso
 from ui.chat_sessions import save_sessions as save_chat_sessions
-from ui.voice_adapter import build_stt_engine, build_tts_engine
+from modules.voice.voice_manager import VoiceState
+from ui.voice_adapter import build_stt_config, build_stt_engine, build_tts_config, build_tts_engine, build_voice_manager
+from ui.voice_panel import VoicePanel
 from ui.widgets.memory_inspector_panel import MemoryInspectorPanel
 from ui.workers import ReplyResult, ReplyWorker
 
@@ -49,6 +51,7 @@ MMIS_VOICE_OUTPUT_DIR = Path(_cfg.voice_output_dir or (MemoryStorageDir / "voice
 MMIS_VOICE_TTS_VOICE = str(_cfg.voice_tts_voice or "ru-RU-DmitryNeural")
 MMIS_VOICE_TTS_RATE = str(_cfg.voice_tts_rate or "+0%")
 MMIS_VOICE_TTS_VOLUME = str(_cfg.voice_tts_volume or "+0%")
+MMIS_VOICE_AUTO_SPEAK = bool(getattr(_cfg, "voice_auto_speak_replies", True))
 
 HistoryRow = tuple[str, str, str | None, int | None, str | None]
 STAT_THINKING_PREFIX = "__thinking_ms__="
@@ -87,7 +90,6 @@ TEXT_FILE_SUFFIXES = {
 }
 IMAGE_FILE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 MAX_INLINE_FILE_BYTES = 64 * 1024
-MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_PENDING_ATTACHMENTS = 8
 ATTACHMENT_EMPTY_PROMPT = "Проанализируй вложения."
 HISTORY_INITIAL_RENDER_LIMIT = 12
@@ -146,8 +148,10 @@ class ChatWindow(proto.ExactChatWindow):
         self._pending_history_index: int | None = None
         self._pending_user_text: str = ""
         self._stream_follow_scroll = False
+        self._force_stream_follow_scroll = False
         self._scroll_bottom_queued = False
         self._queued_scroll_follow_only = False
+        self._regenerate_scroll_spacer: QWidget | None = None
         self._last_memory_debug_snapshot: dict = {}
         self._voice_stt = None
         self._voice_tts_voice = MMIS_VOICE_TTS_VOICE
@@ -156,8 +160,18 @@ class ChatWindow(proto.ExactChatWindow):
         self._voice_cache_dir = MMIS_VOICE_OUTPUT_DIR / ".cache"
         self._voice_cache_dir.mkdir(parents=True, exist_ok=True)
         self._voice_reply_cache_path = self._voice_cache_dir / "reply_live.wav"
+        self._voice_manager = build_voice_manager()
+        self._voice_stack: QStackedWidget | None = None
+        self._chat_page: QWidget | None = None
+        self._voice_page: VoicePanel | None = None
+        self._voice_capture_session: QMediaCaptureSession | None = None
+        self._voice_recorder: QMediaRecorder | None = None
+        self._voice_audio_input: QAudioInput | None = None
+        self._voice_recording_path: Path | None = None
+        self._voice_send_pending = False
         self._inspector_window: QMainWindow | None = None
         self._inspector_panel: MemoryInspectorPanel | None = None
+        self._chat_rail_button = None
         self._voice_rail_button = None
         self._file_rail_button = None
         self._memory_rail_button = None
@@ -182,11 +196,20 @@ class ChatWindow(proto.ExactChatWindow):
         self._media_player = QMediaPlayer(self)
         self._media_player.setAudioOutput(self._audio_output)
         self._media_player.errorOccurred.connect(self._on_media_error)
+        self._voice_manager.set_callbacks(
+            on_final=lambda text: QTimer.singleShot(0, lambda: self._on_voice_final_text(text)),
+            on_state=lambda state: QTimer.singleShot(0, lambda: self._set_voice_state_ui(state)),
+        )
+        self._voice_state_timer = QTimer(self)
+        self._voice_state_timer.setInterval(250)
+        self._voice_state_timer.timeout.connect(lambda: self._set_voice_state_ui(self._voice_manager.get_state()))
+        self._voice_state_timer.start()
         self._sync_runtime_controls()
         self._apply_context_chips()
 
     def _build_ui(self):
         super()._build_ui()
+        self._install_voice_stack()
         if not self._lazy_history_scroll_connected:
             self.scroll.verticalScrollBar().valueChanged.connect(self._on_history_scroll_value_changed)
             self._lazy_history_scroll_connected = True
@@ -206,6 +229,37 @@ class ChatWindow(proto.ExactChatWindow):
         self._rebuild_mode_row()
         self._install_attachment_row()
         self._wire_rail_buttons()
+
+    def _install_voice_stack(self) -> None:
+        if self._voice_stack is not None:
+            return
+        root_layout = self.centralWidget().layout()
+        body_layout = root_layout.itemAt(1).layout() if root_layout and root_layout.count() > 1 else None
+        if body_layout is None or body_layout.count() < 2:
+            return
+        item = body_layout.takeAt(1)
+        chat_page = item.widget() if item is not None else None
+        if chat_page is None:
+            return
+        stack = QStackedWidget(self.centralWidget())
+        stack.setObjectName("main_mode_stack")
+        self._chat_page = chat_page
+        self._voice_page = self._build_voice_page()
+        stack.addWidget(chat_page)
+        stack.addWidget(self._voice_page)
+        body_layout.insertWidget(1, stack, 1)
+        self._voice_stack = stack
+        self._set_voice_state_ui(VoiceState.IDLE)
+
+    def _build_voice_page(self) -> VoicePanel:
+        panel = VoicePanel(self)
+        panel.listenPressed.connect(self._start_voice_recording)
+        panel.listenReleased.connect(self._stop_voice_recording)
+        panel.repeatRequested.connect(self.on_voice_speak_last_ai)
+        panel.stopRequested.connect(self._stop_voice_mode_audio)
+        panel.closeRequested.connect(self._close_voice_mode)
+        panel.fileRequested.connect(self._voice_input_file_to_message)
+        return panel
 
     @staticmethod
     def _safe_character_id(value) -> str:
@@ -308,7 +362,7 @@ class ChatWindow(proto.ExactChatWindow):
         lay.setSpacing(8)
 
         title = proto.CrispLabel("Управление функциями")
-        title.setFont(proto._ui_font(pixel_size=11, weight=proto.QFont.Weight.Medium))
+        title.setFont(proto._button_font(pixel_size=11, weight=proto.QFont.Weight.Medium))
         title.set_text_color(proto.TEXT)
         lay.addWidget(title)
 
@@ -356,7 +410,7 @@ class ChatWindow(proto.ExactChatWindow):
         self.search_btn.clicked.connect(self._clear_messages)
         self.clear_btn.clicked.connect(self._toggle_inspector)
         self.plus_btn.clicked.connect(self._attach_file)
-        self.mic_btn.clicked.connect(self.on_voice_input_file)
+        self.mic_btn.clicked.connect(self._open_voice_mode)
 
     def _append_demo_messages(self) -> None:
         self._load_or_init_chat_sessions()
@@ -490,7 +544,10 @@ class ChatWindow(proto.ExactChatWindow):
         
         # Dynamically update whether we should stick to the bottom during generation
         if getattr(self, "_worker", None) is not None and self._worker.isRunning():
-            self._stream_follow_scroll = self._should_follow_stream_scroll(value, bar.maximum())
+            if getattr(self, "_force_stream_follow_scroll", False):
+                self._stream_follow_scroll = True
+            else:
+                self._stream_follow_scroll = self._should_follow_stream_scroll(value, bar.maximum())
             
         if self._lazy_history_loading or self._lazy_history_start_index <= 0:
             return
@@ -826,9 +883,11 @@ class ChatWindow(proto.ExactChatWindow):
         self._apply_context_chips()
 
     def _mode_row_layout(self):
-        root_layout = self.centralWidget().layout()
-        body_layout = root_layout.itemAt(1).layout() if root_layout and root_layout.count() > 1 else None
-        chat_frame = body_layout.itemAt(1).widget() if body_layout and body_layout.count() > 1 else None
+        chat_frame = self._chat_page
+        if chat_frame is None:
+            root_layout = self.centralWidget().layout()
+            body_layout = root_layout.itemAt(1).layout() if root_layout and root_layout.count() > 1 else None
+            chat_frame = body_layout.itemAt(1).widget() if body_layout and body_layout.count() > 1 else None
         chat_layout = chat_frame.layout() if chat_frame is not None else None
         modes_frame = chat_layout.itemAt(1).widget() if chat_layout and chat_layout.count() > 1 else None
         return modes_frame.layout() if modes_frame is not None else None
@@ -844,19 +903,23 @@ class ChatWindow(proto.ExactChatWindow):
         actual_widgets = [widget for widget in widgets if widget is not None]
         if len(actual_widgets) < 6:
             return
+        self._chat_rail_button = actual_widgets[0]
         self._voice_rail_button = actual_widgets[1]
         self._file_rail_button = actual_widgets[2]
         self._memory_rail_button = actual_widgets[3]
         self._settings_rail_button = actual_widgets[5]
 
-        self._voice_rail_button.setToolTip("Озвучить последний ответ")
-        self._voice_rail_button.clicked.connect(self.on_voice_speak_last_ai)
+        self._chat_rail_button.setToolTip("Чат")
+        self._chat_rail_button.clicked.connect(self._close_voice_mode)
+        self._voice_rail_button.setToolTip("Голосовое общение")
+        self._voice_rail_button.clicked.connect(self._open_voice_mode)
         self._file_rail_button.setToolTip("Прикрепить файл")
         self._file_rail_button.clicked.connect(self._attach_file)
         self._memory_rail_button.setToolTip("Память / Inspector")
         self._memory_rail_button.clicked.connect(self._toggle_inspector)
         self._settings_rail_button.setToolTip("Функции")
         self._settings_rail_button.clicked.connect(self._toggle_functions)
+        self._sync_rail_mode_buttons()
 
     def _install_attachment_row(self) -> None:
         if self._attachment_row is not None:
@@ -984,27 +1047,50 @@ class ChatWindow(proto.ExactChatWindow):
             self.input.setFocus()
 
     def _sync_runtime_controls(self) -> None:
-        if not self.api:
-            return
-        try:
-            self._thinking_enabled = bool(self.api.set_thinking_enabled(self._thinking_enabled))
-        except Exception:
-            pass
-        try:
-            self._verbose_enabled = bool(self.api.set_verbose_enabled(self._verbose_enabled))
-        except Exception:
-            pass
-        try:
-            self._json_mode_enabled = bool(self.api.set_json_mode_enabled(self._json_mode_enabled))
-        except Exception:
-            pass
-        try:
-            self._web_mode = str(self.api.set_web_mode(self._web_mode) or self._web_mode)
-        except Exception:
-            pass
+        if self.api:
+            try:
+                payload = self.api.health(timeout=2.5)
+                if str(payload.get("status") or "").strip().lower() == "ok":
+                    self._thinking_enabled = bool(payload.get("thinking_enabled", self._thinking_enabled))
+                    self._verbose_enabled = bool(payload.get("verbose_enabled", self._verbose_enabled))
+                    self._json_mode_enabled = bool(payload.get("json_mode_enabled", self._json_mode_enabled))
+                    self._web_mode = str(payload.get("web_mode") or self._web_mode)
+                    model = str(payload.get("model") or "").strip()
+                    if model:
+                        self._active_model = model
+                        if model not in self._available_models:
+                            self._available_models.append(model)
+                        self._populate_models(self._active_model, self._available_models)
+                    self._backend_status_seen_ok = True
+                    self._backend_status_failures = 0
+            except Exception:
+                pass
         self._sync_controls_to_state()
         self._save_ui_state()
         self._render_history()
+
+    @Slot(object)
+    def _on_backend_status_result(self, payload: object) -> None:
+        super()._on_backend_status_result(payload)
+        row = dict(payload or {}) if isinstance(payload, dict) else {}
+        if not bool(row.get("api_ok")):
+            return
+        model = str(row.get("model") or "").strip()
+        if model:
+            self._active_model = model
+            if model not in self._available_models:
+                self._available_models.append(model)
+            self._populate_models(self._active_model, self._available_models)
+        for attr, key in (
+            ("_thinking_enabled", "thinking_enabled"),
+            ("_verbose_enabled", "verbose_enabled"),
+            ("_json_mode_enabled", "json_mode_enabled"),
+        ):
+            if key in row:
+                setattr(self, attr, bool(row.get(key)))
+        if str(row.get("web_mode") or "").strip():
+            self._web_mode = str(row.get("web_mode") or self._web_mode)
+        self._sync_controls_to_state()
 
     def _sync_controls_to_state(self) -> None:
         if hasattr(self, "think_toggle"):
@@ -1061,7 +1147,7 @@ class ChatWindow(proto.ExactChatWindow):
         models = list(self._available_models)
         if self.api:
             try:
-                payload = self.api.list_models()
+                payload = self.api.list_models(timeout=2.5)
                 runtime = str(payload.get("runtime_model") or self.api.get_runtime_model() or runtime)
                 available = payload.get("available_models") or payload.get("models") or []
                 models = [str(x) for x in available if str(x).strip()]
@@ -1247,6 +1333,25 @@ class ChatWindow(proto.ExactChatWindow):
         if callable(sync):
             sync()
 
+    def _assistant_bubble_after_user(self, bubble: QWidget) -> proto.MessageBubble | None:
+        layout = getattr(self, "messages_layout", None)
+        if layout is None:
+            return None
+        start = self._message_layout_index(bubble)
+        if start < 0:
+            return None
+        for index in range(start + 1, layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if not isinstance(widget, proto.MessageBubble):
+                continue
+            role = str(getattr(widget, "role", "") or "")
+            if role == "user":
+                return None
+            if role == "assistant":
+                return widget
+        return None
+
     def _history_index_for_user_bubble(self, bubble: QWidget) -> int:
         raw_index = bubble.property("history_index")
         try:
@@ -1311,26 +1416,85 @@ class ChatWindow(proto.ExactChatWindow):
         if not text:
             return
         attachments = self._attachment_payloads_from_value(bubble.property("attachments_payload"))
+        existing_assistant = self._assistant_bubble_after_user(bubble)
 
-        self._capture_stream_scroll_mode()
-        self._history = self._history[: user_index + 1]
-        self._pending_user_text = text
-        self._pending_history_index = len(self._history)
-        self._history.append(("ai", "", "…", None, None))
-        self._remove_message_widgets_after(bubble)
+        scroll_widget = getattr(self, "scroll", None)
+        scroll_bar = scroll_widget.verticalScrollBar() if scroll_widget is not None else None
+        scroll_blocker = QSignalBlocker(scroll_bar) if scroll_bar is not None else None
+        frozen_widgets: list[QWidget] = []
+        for widget in (
+            scroll_widget,
+            scroll_widget.viewport() if scroll_widget is not None else None,
+            getattr(self, "messages_host", None),
+        ):
+            if isinstance(widget, QWidget) and widget not in frozen_widgets:
+                frozen_widgets.append(widget)
 
-        assistant_bubble = proto.MessageBubble("assistant", "", "", "", [])
-        assistant_bubble.hide()
-        self._insert_message_bubble(assistant_bubble)
-        self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
-        if hasattr(self, "_lazy_history_start_index"):
-            self._lazy_history_start_index = min(self._lazy_history_start_index, len(self._history))
-        sync_lazy = getattr(self, "_sync_lazy_history_button", None)
-        if callable(sync_lazy):
-            sync_lazy()
-        self._save_chat_sessions()
+        for widget in frozen_widgets:
+            widget.setUpdatesEnabled(False)
+
+        try:
+            self._history = self._history[: user_index + 1]
+            self._pending_user_text = text
+            self._pending_history_index = len(self._history)
+            self._history.append(("ai", "", "…", None, None))
+
+            if existing_assistant is not None:
+                assistant_bubble = existing_assistant
+                preserved_height = max(
+                    int(assistant_bubble.minimumHeight() or 0),
+                    int(assistant_bubble.height() or 0),
+                    int(assistant_bubble.sizeHint().height() or 0),
+                )
+                assistant_bubble.setProperty("regen_previous_min_height", assistant_bubble.minimumHeight())
+                if preserved_height > 0:
+                    assistant_bubble.setMinimumHeight(preserved_height)
+                self._remove_message_widgets_after(assistant_bubble)
+            else:
+                self._remove_message_widgets_after(bubble)
+                assistant_bubble = proto.MessageBubble("assistant", "", "", "", [])
+                self._insert_message_bubble_after(bubble, assistant_bubble)
+
+            assistant_bubble.update_text("")
+            assistant_bubble.update_thinking("", None)
+            assistant_bubble.set_perf([])
+            assistant_bubble.show()
+            self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
+            if hasattr(self, "_lazy_history_start_index"):
+                self._lazy_history_start_index = min(self._lazy_history_start_index, len(self._history))
+            sync_lazy = getattr(self, "_sync_lazy_history_button", None)
+            if callable(sync_lazy):
+                sync_lazy()
+            self._save_chat_sessions()
+            self._force_stream_follow_scroll = True
+            self._stream_follow_scroll = True
+            sync_height = getattr(self, "_sync_messages_view_height", None)
+            if callable(sync_height):
+                sync_height()
+            if scroll_widget and scroll_widget.widget() and scroll_widget.widget().layout():
+                scroll_widget.widget().layout().activate()
+            self._scroll_bottom()
+        finally:
+            del scroll_blocker
+            for widget in reversed(frozen_widgets):
+                widget.setUpdatesEnabled(True)
+
         self._schedule_scroll_bottom()
         self._start_reply_worker_for_text(text, store_turn=False, attachments=attachments)
+
+    def _insert_message_bubble_after(self, previous: QWidget, bubble: QWidget) -> None:
+        wire = getattr(self, "_wire_regenerate_bubble", None)
+        if callable(wire):
+            wire(bubble)
+        layout = getattr(self, "messages_layout", None)
+        if layout is None:
+            return
+        previous_index = self._message_layout_index(previous)
+        insert_index = layout.count() if previous_index < 0 else previous_index + 1
+        layout.insertWidget(insert_index, bubble)
+        sync = getattr(self, "_schedule_messages_view_height_sync", None)
+        if callable(sync):
+            sync()
 
     def _schedule_scroll_bottom(self, *, follow_stream_only: bool = False) -> None:
         requested_follow_only = bool(follow_stream_only)
@@ -1427,13 +1591,15 @@ class ChatWindow(proto.ExactChatWindow):
     def _on_answer_chunk(self, piece: str) -> None:
         if not self._pending:
             return
+        self._mark_api_online()
         now = time.perf_counter()
         if self._pending.first_answer_at is None:
             self._pending.first_answer_at = now
         self._pending.last_chunk_at = now
         self._pending.answer_text += piece or ""
         self._pending.bubble.update_text(self._pending.answer_text)
-        if not self._pending.bubble.isVisible():
+        is_visible = getattr(self._pending.bubble, "isVisible", lambda: True)
+        if not is_visible():
             self._pending.bubble.show()
         self._schedule_scroll_bottom(follow_stream_only=True)
 
@@ -1460,7 +1626,8 @@ class ChatWindow(proto.ExactChatWindow):
             self._pending.thinking_text,
             self._format_duration_label(elapsed_ms),
         )
-        if not self._pending.bubble.isVisible():
+        is_visible = getattr(self._pending.bubble, "isVisible", lambda: True)
+        if not is_visible():
             self._pending.bubble.show()
         self._schedule_scroll_bottom(follow_stream_only=True)
 
@@ -1493,6 +1660,7 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot(object)
     def _on_reply_finished(self, result: ReplyResult) -> None:
+        self._mark_api_online()
         stats = dict(result.stats or {})
         text = str(result.text or (self._pending.answer_text if self._pending else "")).strip()
         pending_thinking = self._pending.thinking_text if self._pending else ""
@@ -1566,10 +1734,19 @@ class ChatWindow(proto.ExactChatWindow):
         QMessageBox.warning(self, "Ошибка", str(error_text or "Не удалось получить ответ"))
 
     def _finalize_pending(self, *, text: str, thinking: str, thinking_ms: str | None, perf: list[str], stat_line: str | None) -> None:
+        pending_bubble = self._pending.bubble if self._pending else None
         if self._pending:
             self._pending.bubble.update_text(text)
             self._pending.bubble.update_thinking(thinking, thinking_ms)
             self._pending.bubble.set_perf(perf)
+        if pending_bubble is not None:
+            previous_min_height = pending_bubble.property("regen_previous_min_height")
+            if previous_min_height is not None:
+                try:
+                    pending_bubble.setMinimumHeight(max(0, int(previous_min_height)))
+                except Exception:
+                    pending_bubble.setMinimumHeight(0)
+                pending_bubble.setProperty("regen_previous_min_height", None)
         idx = self._pending_history_index
         if idx is not None and 0 <= idx < len(self._history):
             self._history[idx] = ("ai", text, stat_line, None, thinking or None)
@@ -1579,8 +1756,30 @@ class ChatWindow(proto.ExactChatWindow):
         self._pending_history_index = None
         self._pending_user_text = ""
         self._save_chat_sessions()
+        if self._voice_page is not None and text:
+            self._voice_page.set_assistant_text(text)
+        if MMIS_VOICE_AUTO_SPEAK and self._is_voice_mode_open() and text:
+            self._set_voice_state_ui(VoiceState.SPEAKING)
+            self._voice_manager.enqueue_speak(
+                text,
+                lang="",
+                config=build_tts_config(tts_voice=self._voice_tts_voice, tts_rate=self._int_to_percent(self._voice_rate_percent)),
+            )
         self._set_busy_state(False)
         self._schedule_scroll_bottom(follow_stream_only=True)
+
+    def _mark_api_online(self) -> None:
+        self._backend_status_seen_ok = True
+        self._backend_status_failures = 0
+        model = self._active_model or (self.api.get_runtime_model() if self.api else "")
+        self._apply_backend_status(
+            api_ok=True,
+            model_ok=bool(model),
+            memory_ok=False,
+            model=model,
+            model_state="active" if model else "",
+            memory_state="unknown",
+        )
 
     @Slot()
     def _cleanup_request(self) -> None:
@@ -1588,6 +1787,7 @@ class ChatWindow(proto.ExactChatWindow):
         if self._worker is not None:
             self._worker.deleteLater()
         self._worker = None
+        self._force_stream_follow_scroll = False
         self._stream_follow_scroll = False
         self._apply_context_chips()
 
@@ -1884,8 +2084,6 @@ class ChatWindow(proto.ExactChatWindow):
         }
         is_image = suffix in IMAGE_FILE_SUFFIXES or mime_type.lower().startswith("image/")
         if is_image:
-            if size > MAX_IMAGE_ATTACHMENT_BYTES:
-                raise ValueError(f"{path.name}: изображение больше {self._format_attachment_size(MAX_IMAGE_ATTACHMENT_BYTES)}")
             attachment["kind"] = "image"
             attachment["data_base64"] = base64.b64encode(path.read_bytes()).decode("ascii")
             return attachment
@@ -1998,6 +2196,150 @@ class ChatWindow(proto.ExactChatWindow):
         shutil.copy2(src, dst)
         return dst
 
+    def _is_voice_mode_open(self) -> bool:
+        return bool(self._voice_stack is not None and self._voice_page is not None and self._voice_stack.currentWidget() is self._voice_page)
+
+    def _sync_rail_mode_buttons(self) -> None:
+        voice_open = self._is_voice_mode_open()
+        for button, active in (
+            (getattr(self, "_chat_rail_button", None), not voice_open),
+            (getattr(self, "_voice_rail_button", None), voice_open),
+        ):
+            setter = getattr(button, "set_active", None)
+            if callable(setter):
+                setter(bool(active))
+
+    @Slot()
+    def _toggle_voice_mode(self) -> None:
+        if self._is_voice_mode_open():
+            self._close_voice_mode()
+        else:
+            self._open_voice_mode()
+
+    @Slot()
+    def _open_voice_mode(self) -> None:
+        if self._voice_stack is None or self._voice_page is None:
+            return
+        self._voice_page.set_user_text(self._last_user_text())
+        self._voice_page.set_assistant_text(self._latest_ai_text())
+        self._voice_stack.setCurrentWidget(self._voice_page)
+        self._sync_rail_mode_buttons()
+        self._set_voice_state_ui(self._voice_manager.get_state())
+
+    @Slot()
+    def _close_voice_mode(self) -> None:
+        if self._voice_stack is not None and self._chat_page is not None:
+            self._voice_stack.setCurrentWidget(self._chat_page)
+        self._sync_rail_mode_buttons()
+        self._stop_voice_mode_audio()
+
+    def _set_voice_state_ui(self, state) -> None:
+        if self._voice_page is None:
+            return
+        value = state.value if hasattr(state, "value") else str(state or "idle")
+        self._voice_page.set_state(value)
+
+    def _last_user_text(self) -> str:
+        for role, text, _stat_line, _feedback, _thinking in reversed(self._history):
+            if role == "user" and str(text or "").strip():
+                return str(text).strip()
+        return ""
+
+    @Slot()
+    def _start_voice_recording(self) -> None:
+        if self._worker and self._worker.isRunning():
+            QMessageBox.information(self, "Voice", "Wait until the current reply is finished.")
+            return
+        if self._voice_manager.get_state() == VoiceState.SPEAKING:
+            self._voice_manager.barge_in()
+        try:
+            MMIS_VOICE_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self._voice_recording_path = MMIS_VOICE_INPUT_DIR / f"ptt_{stamp}.wav"
+            self._voice_capture_session = QMediaCaptureSession(self)
+            self._voice_audio_input = QAudioInput(self)
+            self._voice_recorder = QMediaRecorder(self)
+            fmt = QMediaFormat()
+            fmt.setFileFormat(QMediaFormat.FileFormat.Wave)
+            self._voice_recorder.setMediaFormat(fmt)
+            self._voice_recorder.setOutputLocation(QUrl.fromLocalFile(str(self._voice_recording_path)))
+            self._voice_capture_session.setAudioInput(self._voice_audio_input)
+            self._voice_capture_session.setRecorder(self._voice_recorder)
+            self._voice_manager.start_listening()
+            self._voice_recorder.record()
+        except Exception as exc:
+            self._voice_manager.stop_listening()
+            QMessageBox.critical(self, "Voice", f"Could not start recording:\n{exc}")
+
+    @Slot()
+    def _stop_voice_recording(self) -> None:
+        recorder = self._voice_recorder
+        if recorder is None:
+            self._voice_manager.stop_listening()
+            return
+        try:
+            recorder.stop()
+        finally:
+            self._voice_manager.stop_listening()
+        path = self._voice_recording_path
+        if path is not None:
+            QTimer.singleShot(450, lambda p=path: self._process_voice_audio_file(p))
+
+    def _process_voice_audio_file(self, path: Path) -> None:
+        try:
+            if not path.exists() or path.stat().st_size <= 0:
+                QMessageBox.warning(self, "Voice", "Recording is empty.")
+                return
+            result = self._voice_manager.transcribe(str(path), config=build_stt_config())
+            text = str(result.text or "").strip()
+        except Exception as exc:
+            QMessageBox.critical(self, "Voice", f"Could not recognize audio:\n{exc}")
+            return
+        if not text:
+            QMessageBox.warning(self, "Voice", "Recognition returned empty text.")
+            return
+
+    def _on_voice_final_text(self, text: str) -> None:
+        payload = str(text or "").strip()
+        if not payload:
+            return
+        if self._voice_page is not None:
+            self._voice_page.set_user_text(payload)
+            self._voice_page.set_state("thinking")
+        self.input.setPlainText(payload)
+        self._send_message()
+
+    @Slot()
+    def _voice_input_file_to_message(self) -> None:
+        selected, _flt = QFileDialog.getOpenFileName(
+            self,
+            "Select audio file",
+            str(MMIS_VOICE_INPUT_DIR),
+            "Audio (*.wav *.mp3 *.m4a *.ogg *.flac);;All files (*.*)",
+        )
+        if not selected:
+            return
+        try:
+            source_path = self._copy_audio_into_input_dir(Path(selected))
+            result = self._voice_manager.transcribe(str(source_path), config=build_stt_config())
+            text = str(result.text or "").strip()
+        except Exception as exc:
+            QMessageBox.critical(self, "Voice", f"Could not recognize file:\n{exc}")
+            return
+        if not text:
+            QMessageBox.warning(self, "Voice", "Recognition returned empty text.")
+            return
+
+    @Slot()
+    def _stop_voice_mode_audio(self) -> None:
+        try:
+            self._media_player.stop()
+        except Exception:
+            pass
+        self._voice_manager.barge_in()
+        self._voice_manager.tts.stop()
+        self._set_voice_state_ui(VoiceState.IDLE)
+
     @Slot(object, str)
     def _on_media_error(self, _error, error_text: str) -> None:
         if error_text:
@@ -2006,13 +2348,11 @@ class ChatWindow(proto.ExactChatWindow):
     def _speak_text_in_app(self, text: str) -> bool:
         if not text.strip():
             return False
-        rate = self._int_to_percent(self._voice_rate_percent)
-        volume = self._int_to_percent(self._voice_volume_percent)
-        tts = build_tts_engine(tts_voice=self._voice_tts_voice, tts_rate=rate, tts_volume=volume)
-        saved = tts.synthesize_to_file(text, self._voice_reply_cache_path)
-        self._media_player.stop()
-        self._media_player.setSource(QUrl.fromLocalFile(str(saved.resolve())))
-        self._media_player.play()
+        self._voice_manager.enqueue_speak(
+            text,
+            lang="",
+            config=build_tts_config(tts_voice=self._voice_tts_voice, tts_rate=self._int_to_percent(self._voice_rate_percent)),
+        )
         return True
 
     @Slot()
@@ -2070,6 +2410,16 @@ class ChatWindow(proto.ExactChatWindow):
             except Exception:
                 pass
         self._save_chat_sessions()
+        voice_state_timer = getattr(self, "_voice_state_timer", None)
+        if voice_state_timer is not None:
+            try:
+                voice_state_timer.stop()
+            except Exception:
+                pass
+        try:
+            self._voice_manager.shutdown()
+        except Exception:
+            pass
         if self._worker is not None:
             try:
                 self._worker.request_cancel()
