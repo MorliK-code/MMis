@@ -1,12 +1,23 @@
 {
   "schema_version": 1,
   "addressing": {
-    "canonical_name": "Павел",
-    "allowed_forms": [],
-    "forbidden_forms": [],
+    "canonical_name": "то",
+    "allowed_forms": [
+      "на",
+      "игнорирует",
+      "то",
+      "меня"
+    ],
+    "forbidden_forms": [
+      "ответил",
+      "сегд",
+      "офигивай",
+      "забывал",
+      "забыл"
+    ],
     "allow_diminutives": false,
     "use_name_by_default": false,
-    "updated_at": ""
+    "updated_at": "2026-04-19T18:17:54.333+03:00"
   },
   "interaction_style": {
     "prefers_directness": 0.82,

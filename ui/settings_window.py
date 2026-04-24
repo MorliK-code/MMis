@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from config.settings import get_config_payload, update_config_values
-from ui.chat_shell import ChatScrollOverlay
+from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _ui_font
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE
 from ui.settings_widgets import SettingEditor
@@ -49,9 +49,12 @@ class SettingsHintPopup(QFrame):
         self.example_label.setWordWrap(True)
         self.restart_badge = QLabel("restart required")
         self.restart_badge.setObjectName("restart_badge")
+        self.updated_badge = QLabel("updated")
+        self.updated_badge.setObjectName("updated_badge")
         badge_layout = QHBoxLayout()
         badge_layout.setContentsMargins(0, 0, 0, 0)
         badge_layout.addWidget(self.restart_badge)
+        badge_layout.addWidget(self.updated_badge)
         badge_layout.addStretch()
 
         layout.addWidget(self.title_label)
@@ -60,12 +63,13 @@ class SettingsHintPopup(QFrame):
         layout.addWidget(self.example_label)
         self.hide()
 
-    def set_spec(self, spec: SettingSpec) -> None:
+    def set_spec(self, spec: SettingSpec, updated: bool = False) -> None:
         self.title_label.setText(_hint_title(spec))
         self.body_label.setText(_hint_description(spec))
         self.example_label.setText(_hint_example(spec))
         self.example_label.setVisible(bool(self.example_label.text().strip()))
         self.restart_badge.setVisible(bool(spec.restart_required))
+        self.updated_badge.setVisible(bool(updated))
 
 
 class SettingsWindow(QDialog):
@@ -123,7 +127,7 @@ class SettingsWindow(QDialog):
         self._panel = panel
         panel.setObjectName("settings_panel")
         panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        panel.setMaximumSize(1128, 750)
+        panel.setMaximumSize(1360, 750)
         overlay_layout.addWidget(panel, 0, Qt.AlignmentFlag.AlignCenter)
         panel_layout = QVBoxLayout(panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
@@ -167,7 +171,7 @@ class SettingsWindow(QDialog):
 
         self.nav = QFrame(panel)
         self.nav.setObjectName("settings_nav")
-        self.nav.setFixedWidth(216)
+        self.nav.setFixedWidth(196)
         self.nav_layout = QVBoxLayout(self.nav)
         self.nav_layout.setContentsMargins(14, 14, 10, 14)
         self.nav_layout.setSpacing(4)
@@ -204,14 +208,14 @@ class SettingsWindow(QDialog):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.scroll.viewport().setAutoFillBackground(False)
         self.content = QWidget()
         self.content.setObjectName("settings_content")
         self.content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.content_layout = QGridLayout(self.content)
-        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setContentsMargins(0, 0, 0, 20)
         self.content_layout.setHorizontalSpacing(8)
         self.content_layout.setVerticalSpacing(10)
         self.scroll.setWidget(self.content)
@@ -223,7 +227,7 @@ class SettingsWindow(QDialog):
         self.preview_panel = QFrame(panel)
         self.preview_panel.setObjectName("right_panel")
         self.preview_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.preview_panel.setFixedWidth(252)
+        self.preview_panel.setFixedWidth(220)
         preview_layout = QVBoxLayout(self.preview_panel)
         preview_layout.setContentsMargins(10, 12, 10, 12)
         preview_layout.setSpacing(10)
@@ -234,7 +238,9 @@ class SettingsWindow(QDialog):
         self.diff_box = QPlainTextEdit()
         self.diff_box.setObjectName("json_preview")
         self.diff_box.setReadOnly(True)
-        self.diff_box.setMinimumHeight(240)
+        self.diff_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.diff_box.setViewportMargins(4, 4, 16, 4)
+        self._diff_scroll_overlay = PlainTextScrollOverlay(self.diff_box)
         preview_layout.addWidget(self._preview_card("Предпросмотр JSON", self.diff_box), 1)
         self.warning_label = QLabel("")
         self.warning_label.setObjectName("settings_muted")
@@ -273,7 +279,7 @@ class SettingsWindow(QDialog):
             top_left = parent.mapToGlobal(parent.rect().topLeft())
             self.setGeometry(top_left.x(), top_left.y(), parent.width(), parent.height())
             
-        panel_width = max(1060, min(1180, parent.width() - 72))
+        panel_width = max(1060, min(1360, parent.width() - 56))
         panel_height = max(660, min(728, parent.height() - 96))
         if self._panel is not None:
             self._panel.setFixedSize(panel_width, panel_height)
@@ -325,12 +331,13 @@ class SettingsWindow(QDialog):
         frame.setObjectName("settings_card")
         frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setContentsMargins(12, 10, 12, 0)
         layout.setSpacing(8)
         label = QLabel(title)
         label.setObjectName("card_title")
         layout.addWidget(label)
-        layout.addWidget(widget)
+        layout.addWidget(widget, 1)
+        layout.addSpacing(14)
         return frame
 
     def _select_category(self, key: str) -> None:
@@ -368,9 +375,9 @@ class SettingsWindow(QDialog):
             frame.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
             layout = QVBoxLayout(frame)
             layout.setContentsMargins(10, 8, 10, 10)
-            layout.setSpacing(6)
+            layout.setSpacing(4)
             header_layout = QHBoxLayout()
-            header_layout.setContentsMargins(0, 0, 0, 4)
+            header_layout.setContentsMargins(0, 0, 0, 2)
             title_lbl = QLabel(card.title)
             title_lbl.setObjectName("danger_title" if card.dangerous else "card_title")
             tag_lbl = QLabel(card.tag)
@@ -394,39 +401,39 @@ class SettingsWindow(QDialog):
         row = QFrame()
         row.setObjectName("setting_row")
         row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        layout = QGridLayout(row)
-        layout.setContentsMargins(0, 4, 0, 4)
-        layout.setHorizontalSpacing(6)
-        layout.setVerticalSpacing(3)
-        name_layout = QHBoxLayout()
-        name_layout.setContentsMargins(0, 0, 0, 0)
-        name_layout.setSpacing(6)
-        
-        label = QLabel(spec.path)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        row.setFixedHeight(30)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 4, 0, 2)
+        layout.setSpacing(6)
+
+        label = QLabel(_setting_title(spec))
         label.setObjectName("setting_label")
-        label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        label.setFont(_ui_font(pixel_size=11))
+        label.ensurePolished()
+        label_width = max(44, label.sizeHint().width() + 24)
+        label.setFixedWidth(label_width)
+        label.setFixedHeight(18)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        
+
         hint = QToolButton()
         hint.setText("?")
         hint.setObjectName("hint_button")
         hint.setFixedSize(18, 18)
         hint.installEventFilter(self)
         self._hint_targets[hint] = spec
-        
-        name_layout.addWidget(label)
-        name_layout.addWidget(hint)
-        name_layout.addStretch()
-        
-        layout.addLayout(name_layout, 0, 0)
-        
+
+        layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addStretch(1)
+
         value = self._changed.get(spec.path, dotted_get(self._payload, spec.path))
         editor = SettingEditor(spec, value, row)
         editor.valueChanged.connect(lambda value, path=spec.path: self._on_editor_changed(path, value))
-        editor.control().setMinimumWidth(0)
-        layout.addWidget(editor.control(), 0, 1)
-        layout.setColumnMinimumWidth(0, 180)
-        layout.setColumnStretch(1, 1)
+        control = editor.control()
+        control.setMinimumWidth(0)
+        layout.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
         self._editors[spec.path] = editor
         self._labels[spec.path] = label
         self._update_badge(spec.path)
@@ -446,8 +453,13 @@ class SettingsWindow(QDialog):
     def _show_hint_popup(self, anchor: QWidget, spec: SettingSpec) -> None:
         if self._hint_popup is None:
             return
-        self._hint_popup.set_spec(spec)
-        self._hint_popup.adjustSize()
+        self._hint_popup.set_spec(spec, updated=spec.path in self._changed)
+        self._hint_popup.setFixedWidth(314)
+        layout = self._hint_popup.layout()
+        layout.invalidate()
+        layout.activate()
+        height = layout.minimumSize().height()
+        self._hint_popup.resize(314, height)
         preferred = anchor.mapTo(self, QPoint(-12, anchor.height() + 7))
         panel_rect = self._panel.geometry() if self._panel is not None else self.rect()
         width = self._hint_popup.width()
@@ -473,7 +485,7 @@ class SettingsWindow(QDialog):
                 self._invalid.pop(path, None)
             else:
                 self._invalid[path] = message
-        original = dotted_get(self._payload, path)
+        original = editor.initial_value() if editor is not None else dotted_get(self._payload, path)
         if value == original:
             self._changed.pop(path, None)
         else:
@@ -586,11 +598,15 @@ class SettingsWindow(QDialog):
 
 
 def _hint_text(spec: SettingSpec) -> str:
-    parts = [_hint_title(spec), _hint_description(spec), _hint_example(spec)]
+    parts = [_setting_title(spec), _hint_title(spec), _hint_description(spec), _hint_example(spec)]
     return "\n".join(part for part in parts if part)
 
 
 def _hint_title(spec: SettingSpec) -> str:
+    return spec.path
+
+
+def _setting_title(spec: SettingSpec) -> str:
     return _TITLE_BY_PATH.get(spec.path, spec.title or spec.path)
 
 

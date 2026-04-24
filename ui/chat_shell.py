@@ -1037,7 +1037,7 @@ class StatusPill(QWidget):
 
 
 class ChatScrollOverlay(QWidget):
-    def __init__(self, scroll_area: QScrollArea):
+    def __init__(self, scroll_area):
         super().__init__(scroll_area.viewport())
         self._scroll_area = scroll_area
         self._bar = scroll_area.verticalScrollBar()
@@ -1336,6 +1336,273 @@ class ChatScrollOverlay(QWidget):
         self.update()
 
 
+
+class PlainTextScrollOverlay(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self._editor = editor
+        self._bar = editor.verticalScrollBar()
+        self._dragging = False
+        self._drag_offset = 0.0
+        self._last_handle_rect = QRectF()
+        self._trail = []
+        self._trail_start_alpha = 0.42
+        self._last_scroll_direction = 0
+        self._trail_fade_delay = QTimer(self)
+        self._trail_fade_delay.setSingleShot(True)
+        self._trail_fade_delay.setInterval(35)
+        self._trail_fade_delay.timeout.connect(self._start_trail_fade)
+        self._trail_fade_timer = QTimer(self)
+        self._trail_fade_timer.setInterval(24)
+        self._trail_fade_timer.timeout.connect(self._fade_trail)
+        self.setFixedWidth(10)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        editor.installEventFilter(self)
+        self._bar.valueChanged.connect(self._on_value_changed)
+        self._bar.rangeChanged.connect(self._on_range_changed)
+        QTimer.singleShot(0, self._sync_geometry)
+
+    def eventFilter(self, watched, event):
+        if watched is self._editor and event.type() in {QEvent.Type.Resize, QEvent.Type.Show}:
+            self._sync_geometry()
+        return super().eventFilter(watched, event)
+
+    def _sync_geometry(self):
+        e = self._editor
+        self.setGeometry(e.width() - 12, 4, 10, e.height() - 8)
+        visible = self._bar.maximum() > self._bar.minimum()
+        self.setVisible(visible)
+        if visible:
+            self.raise_()
+        self.update()
+
+    def _track_rect(self):
+        return QRectF(self.rect()).adjusted(1.0, 6.0, -1.0, -6.0)
+
+    def _handle_rect(self):
+        track = self._track_rect()
+        if track.height() <= 0:
+            return QRectF()
+        minimum = self._bar.minimum()
+        maximum = self._bar.maximum()
+        if maximum <= minimum:
+            return QRectF()
+        page_step = max(1, self._bar.pageStep())
+        visible_ratio = page_step / max(1, (maximum - minimum) + page_step)
+        natural_height = track.height() * visible_ratio
+        max_height = min(92.0, track.height() * 0.34)
+        handle_height = max(28.0, min(natural_height, max_height))
+        handle_height = min(handle_height, track.height())
+        travel = max(0.0, track.height() - handle_height)
+        value_ratio = (self._bar.value() - minimum) / max(1, maximum - minimum)
+        top = track.top() + travel * value_ratio
+        return QRectF(track.left(), top, track.width(), handle_height)
+
+    def _set_value_from_y(self, y):
+        track = self._track_rect()
+        handle = self._handle_rect()
+        travel = max(1.0, track.height() - handle.height())
+        top = max(track.top(), min(y - self._drag_offset, track.bottom() - handle.height()))
+        ratio = (top - track.top()) / travel
+        minimum = self._bar.minimum()
+        maximum = self._bar.maximum()
+        self._bar.setValue(round(minimum + (maximum - minimum) * ratio))
+
+    def _on_value_changed(self, _value):
+        current = self._handle_rect()
+        delta = current.top() - self._last_handle_rect.top()
+        if self._last_handle_rect.width() > 0.0 and abs(delta) > 1.0:
+            direction = 1 if delta > 0.0 else -1
+            if self._last_scroll_direction and self._last_scroll_direction != direction:
+                self._trail.clear()
+            self._last_scroll_direction = direction
+            self._trail.append((QRectF(self._last_handle_rect), self._trail_start_alpha, direction))
+            self._trail = self._trail[-8:]
+            self._trail_fade_timer.stop()
+            self._trail_fade_delay.start()
+        self._last_handle_rect = QRectF(current)
+        self.update()
+
+    def _on_range_changed(self, _minimum, _maximum):
+        self._trail.clear()
+        self._last_scroll_direction = 0
+        self._trail_fade_delay.stop()
+        self._trail_fade_timer.stop()
+        self._last_handle_rect = self._handle_rect()
+        self._sync_geometry()
+
+    def _start_trail_fade(self):
+        if self._trail:
+            self._trail_fade_timer.start()
+
+    def _fade_trail(self):
+        if not self._trail:
+            self._trail_fade_timer.stop()
+            return
+        handle = self._handle_rect()
+        if handle.width() <= 0.0 or handle.height() <= 0.0:
+            self._trail.clear()
+            self._trail_fade_timer.stop()
+            self.update()
+            return
+        handle_center = handle.center().y()
+        distances = [abs(rect.center().y() - handle_center) for rect, _a, _d in self._trail]
+        max_distance = max(distances) if distances else 0.0
+        track_height = max(1.0, self._track_rect().height())
+        length_factor = 1.0 + min(1.6, max_distance / (track_height * 0.45))
+        faded_trail = []
+        for (rect, alpha, direction), distance in zip(self._trail, distances):
+            distance_ratio = (distance / max_distance) if max_distance > 0.0 else 0.0
+            geo_base = self._lerp(0.90, 0.56, distance_ratio)
+            next_alpha = float(alpha) * (geo_base ** length_factor)
+            if next_alpha > 0.006:
+                faded_trail.append((rect, next_alpha, direction))
+        self._trail = faded_trail
+        if not self._trail:
+            self._trail_fade_timer.stop()
+        self.update()
+
+    @staticmethod
+    def _scroll_color(alpha):
+        color = QColor(165, 139, 255)
+        color.setAlphaF(max(0.0, min(1.0, float(alpha))))
+        return color
+
+    @staticmethod
+    def _lerp(start, end, amount):
+        t = max(0.0, min(1.0, float(amount)))
+        return float(start) + ((float(end) - float(start)) * t)
+
+    def _paint_trail_smear(self, painter, track, handle):
+        if not self._trail:
+            return
+        direction = self._last_scroll_direction
+        relevant_trail = [
+            (rect, alpha, rect_direction)
+            for rect, alpha, rect_direction in self._trail
+            if alpha > 0.006 and rect.width() > 0.0 and rect.height() > 0.0
+            and (direction == 0 or rect_direction == direction)
+        ]
+        if not relevant_trail:
+            return
+        fade_progress = 1.0 - (relevant_trail[0][1] / max(0.001, self._trail_start_alpha))
+        if direction > 0:
+            relevant_trail = [(r, a, d) for r, a, d in relevant_trail if r.center().y() <= handle.center().y()]
+            if not relevant_trail:
+                return
+            far_rect = relevant_trail[0][0]
+            next_rect = relevant_trail[1][0] if len(relevant_trail) > 1 else handle
+            top = self._lerp(far_rect.top(), next_rect.top(), fade_progress)
+            bottom = handle.top() + min(5.0, handle.height() * 0.18)
+        elif direction < 0:
+            relevant_trail = [(r, a, d) for r, a, d in relevant_trail if r.center().y() >= handle.center().y()]
+            if not relevant_trail:
+                return
+            far_rect = relevant_trail[-1][0]
+            next_rect = relevant_trail[-2][0] if len(relevant_trail) > 1 else handle
+            bottom = self._lerp(far_rect.bottom(), next_rect.bottom(), fade_progress)
+            top = handle.bottom() - min(5.0, handle.height() * 0.18)
+        else:
+            rects = [rect for rect, _a, _d in relevant_trail]
+            top = min([r.top() for r in rects] + [handle.top()])
+            bottom = max([r.bottom() for r in rects] + [handle.bottom()])
+        if bottom <= top:
+            return
+        max_alpha = max(alpha for _r, alpha, _d in relevant_trail)
+        bounds = QRectF(track)
+        if direction > 0:
+            bounds.setBottom(min(track.bottom(), handle.top() + 8.0))
+        elif direction < 0:
+            bounds.setTop(max(track.top(), handle.bottom() - 8.0))
+        smear = QRectF(handle.left(), top - 9.0, handle.width(), (bottom - top) + 18.0).intersected(bounds)
+        if smear.width() <= 0.0 or smear.height() <= 0.0:
+            return
+        for rect, alpha_scale in (
+            (smear.adjusted(0.0, -3.0, 0.0, 3.0).intersected(bounds), 0.30),
+            (smear, 0.82),
+        ):
+            if rect.width() <= 0.0 or rect.height() <= 0.0:
+                continue
+            mid_alpha = max_alpha * alpha_scale
+            gradient = QLinearGradient(0.0, rect.top(), 0.0, rect.bottom())
+            if direction < 0:
+                gradient.setColorAt(0.0, self._scroll_color(mid_alpha * 0.88))
+                gradient.setColorAt(0.18, self._scroll_color(mid_alpha))
+                gradient.setColorAt(0.72, self._scroll_color(mid_alpha * 0.20))
+                gradient.setColorAt(1.0, self._scroll_color(0.0))
+            else:
+                gradient.setColorAt(0.0, self._scroll_color(0.0))
+                gradient.setColorAt(0.24, self._scroll_color(mid_alpha * 0.20))
+                gradient.setColorAt(0.82, self._scroll_color(mid_alpha))
+                gradient.setColorAt(1.0, self._scroll_color(mid_alpha * 0.88))
+            painter.setBrush(gradient)
+            painter.drawRect(rect)
+
+    def paintEvent(self, _event):
+        track = self._track_rect()
+        handle = self._handle_rect()
+        if handle.width() <= 0.0 or handle.height() <= 0.0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        track_color = QColor(165, 139, 255)
+        track_color.setAlphaF(0.035)
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(track, track.width() / 2.0, track.width() / 2.0)
+        painter.save()
+        full_path = QPainterPath()
+        full_path.addRect(QRectF(self.rect()))
+        handle_radius = min(handle.width(), handle.height()) / 2.0
+        handle_path = QPainterPath()
+        handle_path.addRoundedRect(handle, handle_radius, handle_radius)
+        painter.setClipPath(full_path.subtracted(handle_path))
+        self._paint_trail_smear(painter, track, handle)
+        painter.restore()
+        alpha = 0.76 if self._dragging else (0.66 if self.underMouse() else 0.56)
+        painter.setBrush(self._scroll_color(alpha))
+        painter.drawRoundedRect(handle, handle_radius, handle_radius)
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        handle = self._handle_rect()
+        y = event.position().y()
+        self._dragging = True
+        self._drag_offset = y - handle.top() if handle.contains(event.position()) else handle.height() / 2.0
+        self._set_value_from_y(y)
+        event.accept()
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            self._set_value_from_y(event.position().y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._dragging = False
+            event.accept()
+            self.update()
+            return
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.update()
+
+
 class ResourcePill(QWidget):
     def __init__(self, name: str, value: str):
         super().__init__()
@@ -1593,6 +1860,7 @@ class ComposerEdit(QPlainTextEdit):
         self.cursorPositionChanged.connect(self._refresh_overlay)
         self.selectionChanged.connect(self._refresh_overlay)
         self.updateRequest.connect(lambda *_args: self._refresh_overlay())
+        self.scroll_overlay = PlainTextScrollOverlay(self)
 
     def keyPressEvent(self, event) -> None:
         key = event.key()

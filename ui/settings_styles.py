@@ -150,6 +150,9 @@ QFrame#settings_card {
     border: 1px solid rgba(255, 255, 255, 36);
     border-radius: 12px;
 }
+QFrame#setting_row {
+    border: none;
+}
 QFrame#danger_card {
     background: rgba(127, 29, 29, 40);
     border: 1px solid rgba(252, 165, 165, 60);
@@ -177,7 +180,7 @@ QLabel#setting_label {
     color: #f3f4f6;
     font-size: 11px;
     font-weight: 600;
-    padding: 2px 6px;
+    padding: 0px 3px 0px 6px;
     border: 1px solid transparent;
     border-radius: 6px;
 }
@@ -186,7 +189,7 @@ QLabel#setting_label_changed {
     background: rgba(139, 92, 246, 28);
     border: 1px solid rgba(139, 92, 246, 52);
     border-radius: 6px;
-    padding: 2px 6px;
+    padding: 2px 3px 2px 6px;
     font-size: 11px;
     font-weight: 600;
 }
@@ -198,6 +201,14 @@ QLabel#restart_badge {
     color: #fbbf24;
     background: rgba(251, 191, 36, 22);
     border: 1px solid rgba(251, 191, 36, 48);
+    border-radius: 5px;
+    padding: 1px 5px;
+    font-size: 9px;
+}
+QLabel#updated_badge {
+    color: #c4b5fd;
+    background: rgba(139, 92, 246, 28);
+    border: 1px solid rgba(139, 92, 246, 52);
     border-radius: 5px;
     padding: 1px 5px;
     font-size: 9px;
@@ -225,6 +236,74 @@ QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QSpinBox:focus, QDoubleS
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     min-height: 26px;
     padding: 0 8px;
+}
+QPushButton#settings_value_preview {
+    min-height: 22px;
+    max-height: 22px;
+    border-top-left-radius: 8px;
+    border-bottom-left-radius: 8px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border: 1px solid rgba(255, 255, 255, 22);
+    border-right: 0;
+    background: rgba(8, 10, 14, 108);
+    color: #f3f4f6;
+    text-align: left;
+    padding: 0 7px 1px 7px;
+    font-size: 11px;
+}
+QPushButton#settings_value_preview:hover {
+    background: rgba(8, 10, 14, 108);
+    border-color: rgba(255, 255, 255, 22);
+    color: #f3f4f6;
+}
+QToolButton#settings_value_edit_button {
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 22px;
+    max-height: 22px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    border: 1px solid rgba(139, 92, 246, 46);
+    background: rgba(139, 92, 246, 20);
+    color: #c4b5fd;
+    padding: 0;
+    font-size: 12px;
+}
+QToolButton#settings_value_edit_button:hover {
+    background: rgba(139, 92, 246, 36);
+    border-color: rgba(139, 92, 246, 76);
+    color: #f3f4f6;
+}
+QFrame#settings_text_editor_popup {
+    background: rgba(15, 16, 24, 248);
+    border: 1px solid rgba(139, 92, 246, 82);
+    border-radius: 12px;
+}
+QLabel#settings_text_editor_title {
+    color: #c4b5fd;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLabel#settings_text_editor_description {
+    color: #eef0f6;
+    font-size: 11px;
+    line-height: 145%;
+}
+QPlainTextEdit#settings_text_editor_body {
+    border-radius: 7px;
+    border: 1px solid rgba(139, 92, 246, 62);
+    background: rgba(31, 25, 51, 230);
+    color: #f3f4f6;
+    selection-background-color: rgba(139, 92, 246, 96);
+    padding: 7px 9px;
+    font-size: 11px;
+}
+QPlainTextEdit#settings_text_editor_body:focus {
+    border-color: rgba(139, 92, 246, 118);
+    background: rgba(33, 25, 58, 238);
 }
 QPlainTextEdit {
     padding: 7px;
@@ -277,7 +356,8 @@ QScrollArea, QScrollArea#settings_scroll, QScrollArea#settings_scroll > QWidget 
 QPlainTextEdit#json_preview {
     color: #c4b5fd;
     background: rgba(139, 92, 246, 16);
-    border-color: rgba(139, 92, 246, 32);
+    border: 1px solid rgba(139, 92, 246, 45);
+    border-radius: 8px;
     font-family: Consolas, Cascadia Code, monospace;
     font-size: 10px;
 }
