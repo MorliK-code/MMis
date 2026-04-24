@@ -14,8 +14,6 @@ from config.settings import load_config
 from utils.logger import get_logger, log_json
 
 LOGGER = get_logger(__name__)
-_cfg = load_config()
-
 
 class ApiClientError(RuntimeError):
     pass
@@ -36,11 +34,12 @@ class ApiReply:
 
 class ApiClient:
     def __init__(self, base_url: str | None = None, timeout_sec: float = 2.5, stream_timeout_sec: float = 600.0):
-        env_url = _cfg.api_url
+        cfg = load_config(force_reload=True)
+        env_url = cfg.api_url
         self.base_url = (base_url or env_url).rstrip("/")
         self.timeout_sec = float(timeout_sec)
         self.stream_timeout_sec = float(stream_timeout_sec)
-        self._runtime_model_cache = str(_cfg.model_name).strip()
+        self._runtime_model_cache = str(cfg.model_name).strip()
 
     def _url(self, path: str) -> str:
         if not path.startswith("/"):

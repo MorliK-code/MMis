@@ -895,25 +895,13 @@ class OllamaProvider(LLMProviderBase):
         if req.seed is not None:
             options["seed"] = int(req.seed)
         
-        # Для thinking моделей увеличиваем лимит, чтобы хватило и на thinking, и на ответ
         max_tokens = req.max_tokens
         if max_tokens is not None:
             max_tokens = int(max_tokens)
         if max_tokens is not None and max_tokens <= 0:
             options["num_predict"] = int(max_tokens)
         elif max_tokens is not None:
-            think_enabled = bool(dict(req.metadata or {}).get("think", False))
-            # Reasoning модели всегда используют thinking
-            model = str(req.model or "")
-            is_reasoning = any(p in model.lower() for p in ["deepseek-r1", "deepseek-reasoner", "o1", "o3"])
-            if think_enabled or is_reasoning:
-                # Thinking может занимать до 50% токенов, поэтому увеличиваем лимит
-                options["num_predict"] = max(256, int(max_tokens * 2))
-            else:
-                # Минимум 256 токенов для нормального ответа
-                options["num_predict"] = max(256, int(max_tokens))
-        else:
-            options["num_predict"] = 4096
+            options["num_predict"] = int(max_tokens)
             
         if req.stop:
             options["stop"] = [str(x) for x in req.stop if str(x)]

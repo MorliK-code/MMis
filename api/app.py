@@ -235,11 +235,6 @@ def _resolved_profile_payload() -> tuple[Any, dict[str, Any]]:
             "temperature": float(profile.generation.temperature),
             "top_p": float(profile.generation.top_p),
             "repeat_penalty": float(profile.generation.repeat_penalty),
-            "max_tokens": (
-                int(profile.generation.max_tokens)
-                if profile.generation.max_tokens is not None
-                else None
-            ),
             "stop": [str(x) for x in list(profile.generation.stop or ()) if str(x)],
         },
         "ollama": {
@@ -1165,8 +1160,6 @@ def _build_chat_meta(req: ChatRequest, *, source: str, **extra: Any) -> dict[str
     }
     if attachments:
         meta["attachments"] = attachments
-    if profile.generation.max_tokens is not None:
-        meta["max_tokens"] = int(profile.generation.max_tokens)
     if profile.generation.stop:
         meta["stop"] = [str(x) for x in list(profile.generation.stop) if str(x)]
     if str(_runtime.provider_name or "").strip().lower() == "ollama":
@@ -1223,8 +1216,7 @@ def _handle_native_chat_command(text: str) -> dict[str, Any] | None:
                 f"quality_profile: {quality_profile}\n"
                 f"temperature: {float(profile.generation.temperature):.3f}\n"
                 f"top_p: {float(profile.generation.top_p):.3f}\n"
-                f"repeat_penalty: {float(profile.generation.repeat_penalty):.3f}\n"
-                f"max_tokens: {int(profile.generation.max_tokens) if profile.generation.max_tokens is not None else 'none'}"
+                f"repeat_penalty: {float(profile.generation.repeat_penalty):.3f}"
             )
         }
     if cmd == "/models":

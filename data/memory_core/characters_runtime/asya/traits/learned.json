@@ -14,8 +14,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:07:00.347+03:00",
-      "last_used_ts": "2026-04-23T04:07:00.347+03:00",
+      "updated_at": "2026-04-24T15:15:52.520+03:00",
+      "last_used_ts": "2026-04-24T15:15:52.520+03:00",
       "decay_ts": ""
     },
     "warmth": {
@@ -50,8 +50,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:07:00.347+03:00",
-      "last_used_ts": "2026-04-23T04:07:00.347+03:00",
+      "updated_at": "2026-04-24T15:15:52.520+03:00",
+      "last_used_ts": "2026-04-24T15:15:52.520+03:00",
       "decay_ts": ""
     },
     "verbosity": {
@@ -65,8 +65,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:05:51.917+03:00",
-      "last_used_ts": "2026-04-23T04:05:51.917+03:00",
+      "updated_at": "2026-04-24T15:15:53.564+03:00",
+      "last_used_ts": "2026-04-24T15:15:53.564+03:00",
       "decay_ts": ""
     },
     "directness": {
@@ -80,8 +80,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:05:51.917+03:00",
-      "last_used_ts": "2026-04-23T04:05:51.917+03:00",
+      "updated_at": "2026-04-24T15:15:53.564+03:00",
+      "last_used_ts": "2026-04-24T15:15:53.564+03:00",
       "decay_ts": ""
     },
     "humor": {
@@ -95,8 +95,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:07:00.347+03:00",
-      "last_used_ts": "2026-04-23T04:07:00.347+03:00",
+      "updated_at": "2026-04-24T15:15:52.520+03:00",
+      "last_used_ts": "2026-04-24T15:15:52.520+03:00",
       "decay_ts": ""
     },
     "energy": {
@@ -110,8 +110,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:07:00.347+03:00",
-      "last_used_ts": "2026-04-23T04:07:00.347+03:00",
+      "updated_at": "2026-04-24T15:15:52.520+03:00",
+      "last_used_ts": "2026-04-24T15:15:52.520+03:00",
       "decay_ts": ""
     },
     "emoji_rate": {
@@ -125,8 +125,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:07:00.347+03:00",
-      "last_used_ts": "2026-04-23T04:07:00.347+03:00",
+      "updated_at": "2026-04-24T15:15:52.520+03:00",
+      "last_used_ts": "2026-04-24T15:15:52.520+03:00",
       "decay_ts": ""
     },
     "empathy": {
@@ -170,8 +170,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-23T04:07:00.347+03:00",
-      "last_used_ts": "2026-04-23T04:07:00.347+03:00",
+      "updated_at": "2026-04-24T15:15:52.520+03:00",
+      "last_used_ts": "2026-04-24T15:15:52.520+03:00",
       "decay_ts": ""
     },
     "professionalism": {

@@ -23,10 +23,6 @@ LEGACY_KEY_MAP: dict[str, str] = {
     "model_fallbacks": "llm.model_fallbacks",
     "thinking_enabled": "llm.thinking_enabled",
     "json_mode_enabled": "llm.json_mode_enabled",
-    "llm_max_tokens_lower_bound": "llm.max_tokens.lower_bound",
-    "llm_max_tokens_upper_bound": "llm.max_tokens.upper_bound",
-    "metadata_model": "llm.metadata.model",
-    "metadata_model_fallbacks": "llm.metadata.fallbacks",
     "ollama_base_url": "llm.providers.ollama.base_url",
     "ollama_timeout_sec": "llm.providers.ollama.timeout_sec",
     "ollama_retries": "llm.providers.ollama.retries",
@@ -51,10 +47,6 @@ LEGACY_KEY_MAP: dict[str, str] = {
     "db_path": "memory_core.db_path",
     "data_dir": "paths.data_dir",
     "models_dir": "paths.models_dir",
-    "chat_recall_results": "memory_core.chat_recall_results",
-    "chat_events_limit": "memory_core.chat_events_limit",
-    "chat_proofread": "memory_core.chat_proofread",
-    "chat_proofread_strict": "memory_core.chat_proofread_strict",
     "dialog_new_session_after_min": "dialog.new_session_after_min",
     "dialog_greeting_max_words": "dialog.greeting_max_words",
     "dialog_greeting_max_chars": "dialog.greeting_max_chars",
@@ -79,8 +71,6 @@ LEGACY_KEY_MAP: dict[str, str] = {
     "log_channels": "logging.channels",
     "log_web_trace_enabled": "logging.web_trace_enabled",
     "log_web_trace_logger": "logging.web_trace_logger",
-    "gpu_vram_gb": "hardware.gpu_vram_gb",
-    "feature_flags": "features.flags",
     "console_model": "llm.model_name",
     "console_timeout_sec": "ui.console.timeout_sec",
     "console_stream_timeout_sec": "ui.console.stream_timeout_sec",
@@ -106,10 +96,13 @@ _DEPRECATED_TOP_LEVEL_KEYS: set[str] = {
     "legacy_memory_dir",
     "console_last_api_base_url",
     "web_auto_profile",
+    "features",
+    "hardware",
 }
 
 _DEPRECATED_DOTTED_KEYS: tuple[str, ...] = (
     "startup.read_only_tools",
+    "llm.max_tokens",
     "internet.web_auto_profile",
     "ui.console.model",
     "ui.console.json_mode_enabled",
@@ -119,7 +112,6 @@ _DEPRECATED_DOTTED_KEYS: tuple[str, ...] = (
     "ui.console.runtime.web_auto_profile",
     "ui.console.runtime.json_mode_enabled",
     "ui.console.runtime.model",
-    "features.extra_legacy.console_runtime_state",
     "paths.base_dir",
     "paths.config_dir",
     "paths.default_memory_dir",
@@ -215,8 +207,6 @@ class ConfigManager:
         changed = False
 
         known_sections = set(self.defaults.keys()) if isinstance(self.defaults, dict) else set()
-        extra_legacy = _as_dict(_get_dotted(out, "features.extra_legacy"))
-
         # Special handling for old `console_runtime_state`.
         runtime_state = _as_dict(out.get("console_runtime_state"))
         if runtime_state:
@@ -261,16 +251,12 @@ class ConfigManager:
                 continue
             if key.startswith("_"):
                 continue
-            extra_legacy[key] = out.get(key)
             out.pop(key, None)
             changed = True
 
         changed = _migrate_nested_deprecated_keys(out) or changed
         changed = _normalize_project_paths(out, project_root=self._project_root()) or changed
 
-        extra_legacy.pop("console_runtime_state", None)
-        if extra_legacy:
-            _set_dotted(out, "features.extra_legacy", extra_legacy)
         return out, changed
 
     def save_atomic(self, payload: dict[str, Any]) -> None:

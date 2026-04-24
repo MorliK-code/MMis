@@ -14,7 +14,6 @@
         "temperature": 0.55,
         "top_p": 0.9,
         "repeat_penalty": 1.05,
-        "max_tokens": 512,
         "stop": []
       },
       "ollama": {
@@ -41,7 +40,6 @@
         "temperature": 0.7,
         "top_p": 0.92,
         "repeat_penalty": 1.1,
-        "max_tokens": 1024,
         "stop": []
       },
       "ollama": {
@@ -68,7 +66,6 @@
         "temperature": 0.82,
         "top_p": 0.95,
         "repeat_penalty": 1.2,
-        "max_tokens": 2048,
         "stop": []
       },
       "ollama": {
@@ -94,7 +91,6 @@
         "temperature": 0.45,
         "top_p": 0.88,
         "repeat_penalty": 1.12,
-        "max_tokens": 384,
         "stop": []
       },
       "ollama": {
@@ -121,7 +117,6 @@
         "temperature": 0.75,
         "top_p": 0.93,
         "repeat_penalty": 1.15,
-        "max_tokens": 1500,
         "stop": []
       },
       "ollama": {
@@ -152,7 +147,6 @@
         "temperature": 0.7,
         "top_p": 0.9,
         "repeat_penalty": 1.2,
-        "max_tokens": -1,
         "stop": []
       },
       "ollama": {

@@ -4516,21 +4516,6 @@ class GenerateStage(PipelineStage):
             ctx.policies.get("response_format"),
             None,
         )
-        req_max_tokens = _to_int(_pick_value(ctx.meta.get("max_tokens"), ctx.policies.get("max_tokens"), None), None)
-        if req_max_tokens is None and str(ctx.profile or "").strip().upper() == PROFILE_AUTONOMOUS:
-            provider_name = str(type(self.provider).__name__ or "").strip().lower()
-            req_max_tokens = -1 if "ollama" in provider_name else None
-        if req_max_tokens is None:
-            verbosity = _to_float(
-                _pick_value(
-                    _as_dict(ctx.meta.get("dialog_mode")).get("verbosity_level"),
-                    ctx.meta.get("verbosity_level"),
-                    ctx.tags.get("dialog_verbosity_level"),
-                ),
-                None,
-            )
-            if verbosity is not None:
-                req_max_tokens = _verbosity_to_max_tokens(verbosity)
         req_metadata = _request_metadata(ctx)
         if agent_loop_enabled:
             req_metadata["agent_loop"] = True
@@ -4542,7 +4527,7 @@ class GenerateStage(PipelineStage):
             top_p=_to_float(_pick_value(ctx.meta.get("top_p"), ctx.policies.get("top_p"), None), None),
             repeat_penalty=_to_float(_pick_value(ctx.meta.get("repeat_penalty"), ctx.policies.get("repeat_penalty"), None), None),
             seed=_to_int(_pick_value(ctx.meta.get("seed"), ctx.policies.get("seed"), None), None),
-            max_tokens=req_max_tokens,
+            max_tokens=None,
             stop=[str(x) for x in _as_list(_pick_value(ctx.meta.get("stop"), ctx.policies.get("stop"), [])) if str(x)],
             json_mode=bool(_pick_value(ctx.meta.get("json_mode"), ctx.policies.get("json_mode"), False)),
             response_format=(dict(response_format) if isinstance(response_format, dict) else None),
@@ -5031,7 +5016,7 @@ class OutputFormatStage(PipelineStage):
                 ),
             ],
             temperature=0.2,
-            max_tokens=96,
+            max_tokens=None,
             metadata={
                 "trace_id": str(ctx.meta.get("trace_id") or f"summary_{int(time.time() * 1000)}"),
                 "summary_mini_pass": True,
@@ -9847,16 +9832,6 @@ def _to_int(value, default: int | None) -> int | None:
         return int(value)
     except Exception:
         return default
-
-
-def _verbosity_to_max_tokens(level: float) -> int:
-    value = max(0.0, min(1.0, float(level)))
-    from config.settings import load_config
-    cfg = load_config()
-    lower = cfg.llm_max_tokens_lower_bound
-    upper = cfg.llm_max_tokens_upper_bound
-    range_val = max(0, upper - lower)
-    return int(round(lower + (value * range_val)))
 
 
 def _normalize_text(value) -> str:

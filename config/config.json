@@ -13,11 +13,11 @@
   },
   "startup": {
     "mode": "api",
-    "active_profile": "BALANCED",
+    "active_profile": "ASYA",
     "safety_mode": "allow_os_actions"
   },
   "api": {
-    "host": "127.0.0.1",
+    "host": "0.0.0.0",
     "port": 8027
   },
   "llm": {
@@ -26,126 +26,6 @@
     "model_fallbacks": [],
     "thinking_enabled": true,
     "json_mode_enabled": false,
-    "task_models": {
-      "emotion": {
-        "name": "emotion",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.15,
-        "max_tokens": 128,
-        "timeout": 20.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "tagging": {
-        "name": "tagging",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.1,
-        "max_tokens": 128,
-        "timeout": 20.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "intent_judge": {
-        "name": "intent_judge",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.1,
-        "max_tokens": 160,
-        "timeout": 20.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "query_rewrite": {
-        "name": "query_rewrite",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.2,
-        "max_tokens": 192,
-        "timeout": 25.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "source_relevance": {
-        "name": "source_relevance",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.1,
-        "max_tokens": 160,
-        "timeout": 20.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "summary_mini_pass": {
-        "name": "summary_mini_pass",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.2,
-        "max_tokens": 96,
-        "timeout": 20.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "studio_seed_extract": {
-        "name": "studio_seed_extract",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.35,
-        "max_tokens": 540,
-        "timeout": 45.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "studio_options": {
-        "name": "studio_options",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.55,
-        "max_tokens": 220,
-        "timeout": 25.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "studio_pack_blueprint": {
-        "name": "studio_pack_blueprint",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.55,
-        "max_tokens": 4096,
-        "timeout": 90.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "fact_filter": {
-        "name": "fact_filter",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.1,
-        "max_tokens": 192,
-        "timeout": 20.0,
-        "enabled": true,
-        "fallback_profile": ""
-      },
-      "final_response": {
-        "name": "final_response",
-        "provider": "ollama",
-        "model": "gemma4:26b",
-        "temperature": 0.7,
-        "max_tokens": 1024,
-        "timeout": 120.0,
-        "enabled": true,
-        "fallback_profile": ""
-      }
-    },
-    "max_tokens": {
-      "lower_bound": 2048,
-      "upper_bound": 8192
-    },
-    "metadata": {
-      "model": "gemma4:26b",
-      "fallbacks": []
-    },
     "providers": {
       "ollama": {
         "base_url": "http://127.0.0.1:11434",
@@ -376,87 +256,7 @@
     "memory_dir": "{dir_path}\\data\\memory_core",
     "cache_dir": "{dir_path}\\data\\cache",
     "log_dir": "{dir_path}\\data\\logs",
-    "db_path": "{dir_path}\\data\\memory_core\\memory.db",
-    "version": "v2",
-    "backend": "chroma",
-    "embedding": {
-      "backend": "sentence_transformers",
-      "model": "all-MiniLM-L6-v2",
-      "dim": 384
-    },
-    "retrieval": {
-      "top_k": 8,
-      "rerank_top_k": 8,
-      "fusion_weights": {
-        "semantic_similarity": 0.34,
-        "lexical_score": 0.25,
-        "recency_score": 0.1,
-        "importance_score": 0.09,
-        "confidence_score": 0.08,
-        "entity_overlap_score": 0.07,
-        "exact_match_boost": 0.04,
-        "scope_match_score": 0.03
-      }
-    },
-    "documents": {
-      "chunk_size": 1200,
-      "chunk_overlap": 160
-    },
-    "summary": {
-      "trigger": 60,
-      "target_tokens": 220
-    },
-    "context_budget": {
-      "total": 2200,
-      "memory": 700,
-      "docs": 600,
-      "tools": 220,
-      "response_reserve": 260
-    },
-    "lifecycle": {
-      "stale_after_days": 30,
-      "archive_after_days": 90,
-      "promotion_thresholds": {
-        "message_importance": 0.55,
-        "message_confidence": 0.5
-      },
-      "promotion_signal_boosts": {
-        "project": 0.12,
-        "fact": 0.16,
-        "decision": 0.12,
-        "smalltalk_penalty": 0.2
-      },
-      "temporary_ttl_sec": 3600,
-      "private_runtime_ttl_sec": 900,
-      "working_limit": 120
-    },
-    "scoring": {
-      "importance_weights": {
-        "base": 0.42,
-        "decision": 0.24,
-        "remember": 0.18,
-        "project": 0.1
-      },
-      "salience_weights": {
-        "novelty": 0.22,
-        "permanence": 0.2,
-        "repetition": 0.14,
-        "project_relevance": 0.16,
-        "task_relevance": 0.16,
-        "explicit_save_signal": 0.12
-      }
-    },
-    "chat_recall_results": 3,
-    "chat_events_limit": 10,
-    "chat_proofread": false,
-    "chat_proofread_strict": false,
-    "facts_scope": "user_only",
-    "include_pending_facts_in_retrieval": false,
-    "confirmation_ttl_sec": 300,
-    "migration": {
-      "auto_on_start": true,
-      "schema_version": 2
-    }
+    "db_path": "{dir_path}\\data\\memory_core\\memory.db"
   },
   "dialog": {
     "new_session_after_min": 360,
@@ -525,6 +325,11 @@
     "web_trace_logger": "web.trace"
   },
   "ui": {
+    "api": {
+      "active_endpoint": "local",
+      "local_base_url": "http://192.168.1.2:8027",
+      "public_base_url": "http://45.82.9.3:8027"
+    },
     "console": {
       "timeout_sec": 2.5,
       "stream_timeout_sec": 600.0,
@@ -540,13 +345,6 @@
         "output_summary": false
       }
     }
-  },
-  "features": {
-    "flags": {},
-    "extra_legacy": {}
-  },
-  "hardware": {
-    "gpu_vram_gb": null
   },
   "paths": {
     "data_dir": "{dir_path}\\data",

@@ -1,0 +1,846 @@
+from __future__ import annotations
+
+import copy
+import json
+from typing import Any
+
+from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QGraphicsBlurEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from config.settings import get_config_payload, update_config_values
+from ui.chat_shell import ChatScrollOverlay
+from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
+from ui.settings_styles import SETTINGS_STYLE
+from ui.settings_widgets import SettingEditor
+
+
+class SettingsHintPopup(QFrame):
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("settings_hint_popup")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedWidth(314)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(7)
+        self.title_label = QLabel("")
+        self.title_label.setObjectName("hint_popup_title")
+        self.body_label = QLabel("")
+        self.body_label.setObjectName("hint_popup_body")
+        self.body_label.setWordWrap(True)
+        self.example_label = QLabel("")
+        self.example_label.setObjectName("hint_popup_example")
+        self.example_label.setWordWrap(True)
+        self.restart_badge = QLabel("restart required")
+        self.restart_badge.setObjectName("restart_badge")
+        badge_layout = QHBoxLayout()
+        badge_layout.setContentsMargins(0, 0, 0, 0)
+        badge_layout.addWidget(self.restart_badge)
+        badge_layout.addStretch()
+
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.body_label)
+        layout.addLayout(badge_layout)
+        layout.addWidget(self.example_label)
+        self.hide()
+
+    def set_spec(self, spec: SettingSpec) -> None:
+        self.title_label.setText(_hint_title(spec))
+        self.body_label.setText(_hint_description(spec))
+        self.example_label.setText(_hint_example(spec))
+        self.example_label.setVisible(bool(self.example_label.text().strip()))
+        self.restart_badge.setVisible(bool(spec.restart_required))
+
+
+class SettingsWindow(QDialog):
+    saved = Signal(dict)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("settings_window")
+        self.setWindowTitle("Настройки MMis")
+        self.setModal(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if parent is not None:
+            self.setWindowFlags(Qt.WindowType.Widget)
+            parent.installEventFilter(self)
+        else:
+            self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.resize(1200, 820)
+        self._payload: dict[str, Any] = {}
+        self._panel: QFrame | None = None
+        self._blur_target: QWidget | None = None
+        self._scroll_overlay: ChatScrollOverlay | None = None
+        self._hint_popup: SettingsHintPopup | None = None
+        self._hint_targets: dict[QWidget, SettingSpec] = {}
+        self._category_key = SETTINGS_CATEGORIES[0].key
+        self._editors: dict[str, SettingEditor] = {}
+        self._changed: dict[str, Any] = {}
+        self._invalid: dict[str, str] = {}
+        self._labels: dict[str, QLabel] = {}
+        self._nav_buttons: dict[str, QPushButton] = {}
+        self._search_text = ""
+        self._build_ui()
+        self.reload()
+
+    def reload(self) -> None:
+        self._payload = get_config_payload(force_reload=True)
+        self._changed.clear()
+        self._invalid.clear()
+        self._render_category()
+        self._refresh_preview()
+
+    def _build_ui(self) -> None:
+        self.setStyleSheet(SETTINGS_STYLE)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        overlay = QFrame(self)
+        overlay.setObjectName("settings_overlay")
+        overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        root.addWidget(overlay)
+        overlay_layout = QVBoxLayout(overlay)
+        overlay_layout.setContentsMargins(0, 0, 0, 0)
+        overlay_layout.setSpacing(0)
+
+        panel = QFrame(overlay)
+        self._panel = panel
+        panel.setObjectName("settings_panel")
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        panel.setMaximumSize(1128, 750)
+        overlay_layout.addWidget(panel, 0, Qt.AlignmentFlag.AlignCenter)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+
+        top = QFrame(panel)
+        top.setObjectName("settings_top")
+        top.setFixedHeight(58)
+        top_layout = QHBoxLayout(top)
+        top_layout.setContentsMargins(16, 10, 12, 10)
+        top_layout.setSpacing(12)
+        gear = QLabel("⚙")
+        gear.setObjectName("settings_gear")
+        gear.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        top_layout.addWidget(gear, 0)
+        title_col = QVBoxLayout()
+        title = QLabel("Настройки MMis")
+        title.setObjectName("settings_title")
+        subtitle = QLabel("Полупрозрачное окно поверх основного UI - config/settings.py + config.json")
+        subtitle.setObjectName("settings_subtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        top_layout.addLayout(title_col, 1)
+        self.search = QLineEdit(top)
+        self.search.setObjectName("settings_search")
+        self.search.setPlaceholderText("Поиск: memory top_k, ollama, voice...")
+        self.search.setFixedWidth(324)
+        self.search.textChanged.connect(self._on_search)
+        top_layout.addWidget(self.search, 0)
+        close_btn = QToolButton(top)
+        close_btn.setText("x")
+        close_btn.setObjectName("close_button")
+        close_btn.clicked.connect(self.close)
+        top_layout.addWidget(close_btn, 0)
+        panel_layout.addWidget(top)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        panel_layout.addLayout(body, 1)
+
+        self.nav = QFrame(panel)
+        self.nav.setObjectName("settings_nav")
+        self.nav.setFixedWidth(216)
+        self.nav_layout = QVBoxLayout(self.nav)
+        self.nav_layout.setContentsMargins(14, 14, 10, 14)
+        self.nav_layout.setSpacing(4)
+        self._build_nav()
+        body.addWidget(self.nav)
+
+        center = QWidget(panel)
+        center.setObjectName("settings_center")
+        center.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(14, 12, 10, 0)
+        center_layout.setSpacing(9)
+        header = QHBoxLayout()
+        self.category_title = QLabel("")
+        self.category_title.setObjectName("settings_title")
+        self.category_desc = QLabel("")
+        self.category_desc.setObjectName("settings_muted")
+        self.category_desc.setWordWrap(True)
+        header_text = QVBoxLayout()
+        header_text.addWidget(self.category_title)
+        header_text.addWidget(self.category_desc)
+        header.addLayout(header_text, 1)
+        reset_btn = QPushButton("Сбросить")
+        reset_btn.clicked.connect(self.reload)
+        self.save_btn = QPushButton("Сохранить")
+        self.save_btn.setObjectName("primary_button")
+        self.save_btn.clicked.connect(self._save)
+        header.addWidget(reset_btn)
+        header.addWidget(self.save_btn)
+        center_layout.addLayout(header)
+
+        self.scroll = QScrollArea(center)
+        self.scroll.setObjectName("settings_scroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.scroll.viewport().setAutoFillBackground(False)
+        self.content = QWidget()
+        self.content.setObjectName("settings_content")
+        self.content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.content_layout = QGridLayout(self.content)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setHorizontalSpacing(8)
+        self.content_layout.setVerticalSpacing(10)
+        self.scroll.setWidget(self.content)
+        self._scroll_overlay = ChatScrollOverlay(self.scroll)
+        self.scroll.verticalScrollBar().valueChanged.connect(lambda _value: self._hide_hint_popup())
+        center_layout.addWidget(self.scroll, 1)
+        body.addWidget(center, 1)
+
+        self.preview_panel = QFrame(panel)
+        self.preview_panel.setObjectName("right_panel")
+        self.preview_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.preview_panel.setFixedWidth(252)
+        preview_layout = QVBoxLayout(self.preview_panel)
+        preview_layout.setContentsMargins(10, 12, 10, 12)
+        preview_layout.setSpacing(10)
+        self.state_label = QLabel("")
+        self.state_label.setObjectName("settings_muted")
+        self.state_label.setWordWrap(True)
+        preview_layout.addWidget(self._preview_card("Живое состояние", self.state_label))
+        self.diff_box = QPlainTextEdit()
+        self.diff_box.setObjectName("json_preview")
+        self.diff_box.setReadOnly(True)
+        self.diff_box.setMinimumHeight(240)
+        preview_layout.addWidget(self._preview_card("Предпросмотр JSON", self.diff_box), 1)
+        self.warning_label = QLabel("")
+        self.warning_label.setObjectName("settings_muted")
+        self.warning_label.setWordWrap(True)
+        preview_layout.addWidget(self._preview_card("Warnings", self.warning_label))
+        ux_label = QLabel("ЛКМ по ?                         подсказка\nИзменённые поля           фиолетовая метка\nОпасные поля                    красная зона\nСохранение              update_config_values()")
+        ux_label.setObjectName("settings_muted")
+        ux_label.setWordWrap(True)
+        preview_layout.addWidget(self._preview_card("Идея UX", ux_label))
+        body.addWidget(self.preview_panel)
+        self._hint_popup = SettingsHintPopup(self)
+
+    def showEvent(self, event) -> None:
+        self._fit_to_parent()
+        self._apply_parent_blur()
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        self._clear_parent_blur()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:
+        self._clear_parent_blur()
+        super().closeEvent(event)
+
+    def _fit_to_parent(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            self.resize(1200, 820)
+            return
+            
+        is_dialog = bool(self.windowFlags() & Qt.WindowType.Dialog)
+        if not is_dialog:
+            self.setGeometry(0, 0, parent.width(), parent.height())
+        else:
+            top_left = parent.mapToGlobal(parent.rect().topLeft())
+            self.setGeometry(top_left.x(), top_left.y(), parent.width(), parent.height())
+            
+        panel_width = max(1060, min(1180, parent.width() - 72))
+        panel_height = max(660, min(728, parent.height() - 96))
+        if self._panel is not None:
+            self._panel.setFixedSize(panel_width, panel_height)
+
+    def _apply_parent_blur(self) -> None:
+        parent = self.parentWidget()
+        target = parent.centralWidget() if hasattr(parent, "centralWidget") else parent
+        if not isinstance(target, QWidget):
+            return
+        if self._blur_target is target:
+            return
+        self._clear_parent_blur()
+        effect = QGraphicsBlurEffect(target)
+        effect.setBlurRadius(7.0)
+        effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+        target.setGraphicsEffect(effect)
+        self._blur_target = target
+
+    def _clear_parent_blur(self) -> None:
+        if self._blur_target is not None:
+            self._blur_target.setGraphicsEffect(None)
+            self._blur_target = None
+
+    def _build_nav(self) -> None:
+        while self.nav_layout.count():
+            item = self.nav_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        current_group = ""
+        for category in SETTINGS_CATEGORIES:
+            if category.group != current_group:
+                current_group = category.group
+                label = QLabel(_group_title(current_group))
+                label.setObjectName("settings_muted")
+                self.nav_layout.addWidget(label)
+            count = sum(len(card.settings) for card in category.cards)
+            button = QPushButton(f"{_category_icon(category.key)} {category.title}  {count}")
+            button.setObjectName("nav_button")
+            button.setProperty("count", str(count))
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, key=category.key: self._select_category(key))
+            self.nav_layout.addWidget(button)
+            self._nav_buttons[category.key] = button
+        self.nav_layout.addStretch(1)
+
+    def _preview_card(self, title: str, widget: QWidget) -> QFrame:
+        frame = QFrame(self)
+        frame.setObjectName("settings_card")
+        frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+        label = QLabel(title)
+        label.setObjectName("card_title")
+        layout.addWidget(label)
+        layout.addWidget(widget)
+        return frame
+
+    def _select_category(self, key: str) -> None:
+        self._category_key = key
+        self._render_category()
+
+    def _render_category(self) -> None:
+        self._hide_hint_popup()
+        self._hint_targets.clear()
+        for button_key, button in self._nav_buttons.items():
+            button.setChecked(button_key == self._category_key)
+        self._editors.clear()
+        self._labels.clear()
+        while self.content_layout.count():
+            item = self.content_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        category = get_category(self._category_key)
+        self.category_title.setText(category.title)
+        self.category_desc.setText(_category_description(category))
+        cards = self._filtered_cards(category)
+        if not cards:
+            empty = QLabel("No settings match the search.")
+            empty.setObjectName("settings_muted")
+            self.content_layout.addWidget(empty, 0, 0)
+            return
+        for index, card in enumerate(cards):
+            two_column = index < 2 and len(cards) > 1
+            row = index // 2 if two_column else 1 + max(0, index - 2)
+            col = index % 2 if two_column else 0
+            frame = QFrame(self.content)
+            frame.setObjectName("danger_card" if card.dangerous else "settings_card")
+            frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            frame.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
+            layout = QVBoxLayout(frame)
+            layout.setContentsMargins(10, 8, 10, 10)
+            layout.setSpacing(6)
+            header_layout = QHBoxLayout()
+            header_layout.setContentsMargins(0, 0, 0, 4)
+            title_lbl = QLabel(card.title)
+            title_lbl.setObjectName("danger_title" if card.dangerous else "card_title")
+            tag_lbl = QLabel(card.tag)
+            tag_lbl.setObjectName("card_tag")
+            header_layout.addWidget(title_lbl)
+            header_layout.addStretch()
+            header_layout.addWidget(tag_lbl, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            layout.addLayout(header_layout)
+            for spec in card.settings:
+                if not self._matches_search(spec, category.title, card.title):
+                    continue
+                layout.addWidget(self._setting_row(spec))
+            layout.addStretch(1)
+            colspan = 1 if two_column else 2
+            self.content_layout.addWidget(frame, row, col, 1, colspan)
+        self.content_layout.setColumnStretch(0, 1)
+        self.content_layout.setColumnStretch(1, 1)
+        self._refresh_preview()
+
+    def _setting_row(self, spec: SettingSpec) -> QWidget:
+        row = QFrame()
+        row.setObjectName("setting_row")
+        row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QGridLayout(row)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(3)
+        name_layout = QHBoxLayout()
+        name_layout.setContentsMargins(0, 0, 0, 0)
+        name_layout.setSpacing(6)
+        
+        label = QLabel(spec.path)
+        label.setObjectName("setting_label")
+        label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        
+        hint = QToolButton()
+        hint.setText("?")
+        hint.setObjectName("hint_button")
+        hint.setFixedSize(18, 18)
+        hint.installEventFilter(self)
+        self._hint_targets[hint] = spec
+        
+        name_layout.addWidget(label)
+        name_layout.addWidget(hint)
+        name_layout.addStretch()
+        
+        layout.addLayout(name_layout, 0, 0)
+        
+        value = self._changed.get(spec.path, dotted_get(self._payload, spec.path))
+        editor = SettingEditor(spec, value, row)
+        editor.valueChanged.connect(lambda value, path=spec.path: self._on_editor_changed(path, value))
+        editor.control().setMinimumWidth(0)
+        layout.addWidget(editor.control(), 0, 1)
+        layout.setColumnMinimumWidth(0, 180)
+        layout.setColumnStretch(1, 1)
+        self._editors[spec.path] = editor
+        self._labels[spec.path] = label
+        self._update_badge(spec.path)
+        return row
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self._fit_to_parent()
+
+        if isinstance(watched, QWidget) and watched in self._hint_targets:
+            if event.type() in {QEvent.Type.Enter, QEvent.Type.MouseButtonPress}:
+                self._show_hint_popup(watched, self._hint_targets[watched])
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.Hide}:
+                self._hide_hint_popup()
+        return super().eventFilter(watched, event)
+
+    def _show_hint_popup(self, anchor: QWidget, spec: SettingSpec) -> None:
+        if self._hint_popup is None:
+            return
+        self._hint_popup.set_spec(spec)
+        self._hint_popup.adjustSize()
+        preferred = anchor.mapTo(self, QPoint(-12, anchor.height() + 7))
+        panel_rect = self._panel.geometry() if self._panel is not None else self.rect()
+        width = self._hint_popup.width()
+        height = self._hint_popup.height()
+        x = max(panel_rect.left() + 12, min(preferred.x(), panel_rect.right() - width - 12))
+        y = preferred.y()
+        if y + height > panel_rect.bottom() - 12:
+            y = anchor.mapTo(self, QPoint(-12, -height - 7)).y()
+        y = max(panel_rect.top() + 12, min(y, panel_rect.bottom() - height - 12))
+        self._hint_popup.move(x, y)
+        self._hint_popup.show()
+        self._hint_popup.raise_()
+
+    def _hide_hint_popup(self) -> None:
+        if self._hint_popup is not None:
+            self._hint_popup.hide()
+
+    def _on_editor_changed(self, path: str, value: Any) -> None:
+        editor = self._editors.get(path)
+        if editor is not None:
+            ok, message = editor.validate_value()
+            if ok:
+                self._invalid.pop(path, None)
+            else:
+                self._invalid[path] = message
+        original = dotted_get(self._payload, path)
+        if value == original:
+            self._changed.pop(path, None)
+        else:
+            self._changed[path] = value
+        self._update_badge(path)
+        self._refresh_preview()
+
+    def _update_badge(self, path: str) -> None:
+        label = self._labels.get(path)
+        spec = _spec_for(path)
+        changed = path in self._changed
+        
+        if label:
+            label.setObjectName("setting_label_changed" if changed else "setting_label")
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+    def _refresh_preview(self) -> None:
+        api_host = dotted_get(self._payload, "api.host", "")
+        api_port = dotted_get(self._payload, "api.port", "")
+        profile = dotted_get(self._payload, "startup.active_profile", "")
+        model = dotted_get(self._payload, "llm.model_name", "")
+        web_mode = dotted_get(self._payload, "internet.web_mode", "")
+        active_api = dotted_get(self._payload, "ui.api.active_endpoint", "local")
+        local_api = dotted_get(self._payload, "ui.api.local_base_url", "")
+        public_api = dotted_get(self._payload, "ui.api.public_base_url", "")
+        selected_api = public_api if str(active_api).lower() == "public" else local_api
+        self.state_label.setText(
+            f"API                                      {selected_api or f'{api_host}:{api_port}'}\n"
+            f"Profile: {profile}\n"
+            f"Memory: enabled\n"
+            f"Web: {web_mode}\n"
+            f"Voice: qwen/faster-whisper\n"
+            f"Changed: {len(self._changed)}"
+        )
+        self.diff_box.setPlainText(json.dumps(self._changed, ensure_ascii=False, indent=2, sort_keys=True))
+        warnings: list[str] = []
+        for path, message in self._invalid.items():
+            warnings.append(f"{path}: invalid value ({message})")
+        for path in self._changed:
+            spec = _spec_for(path)
+            if spec and spec.restart_required:
+                warnings.append(f"{path}: restart required")
+            if spec and spec.dangerous:
+                warnings.append(f"{path}: dangerous setting")
+        self.warning_label.setText("\n".join(warnings) if warnings else "No warnings.")
+        self.save_btn.setEnabled(bool(self._changed) and not bool(self._invalid))
+
+    def _save(self) -> None:
+        updates: dict[str, Any] = {}
+        errors: list[str] = []
+        for path, message in self._invalid.items():
+            errors.append(f"{path}: {message}")
+        for path, editor in self._editors.items():
+            if path not in self._changed:
+                continue
+            ok, message = editor.validate_value()
+            if not ok:
+                errors.append(f"{path}: {message}")
+                continue
+            updates[path] = editor.value()
+        for path, value in self._changed.items():
+            if path not in updates and path not in self._editors:
+                updates[path] = value
+        if errors:
+            QMessageBox.warning(self, "Settings validation", "\n".join(errors))
+            return
+        if not updates:
+            return
+        update_config_values(updates)
+        self.saved.emit(copy.deepcopy(updates))
+        self.reload()
+
+    def _on_search(self, text: str) -> None:
+        self._search_text = str(text or "").strip().lower()
+        if self._search_text:
+            current = get_category(self._category_key)
+            if not self._filtered_cards(current):
+                for category in SETTINGS_CATEGORIES:
+                    if self._filtered_cards(category):
+                        self._category_key = category.key
+                        break
+        self._render_category()
+
+    def _filtered_cards(self, category: SettingCategory):
+        if not self._search_text:
+            return category.cards
+        cards = []
+        for card in category.cards:
+            if any(self._matches_search(spec, category.title, card.title) for spec in card.settings):
+                cards.append(card)
+        return tuple(cards)
+
+    def _matches_search(self, spec: SettingSpec, category_title: str, card_title: str) -> bool:
+        needle = self._search_text
+        if not needle:
+            return True
+        haystack = " ".join(
+            [
+                category_title,
+                card_title,
+                spec.path,
+                spec.title,
+                spec.description,
+                spec.example,
+                " ".join(spec.options),
+            ]
+        ).lower()
+        return needle in haystack
+
+
+def _hint_text(spec: SettingSpec) -> str:
+    parts = [_hint_title(spec), _hint_description(spec), _hint_example(spec)]
+    return "\n".join(part for part in parts if part)
+
+
+def _hint_title(spec: SettingSpec) -> str:
+    return _TITLE_BY_PATH.get(spec.path, spec.title or spec.path)
+
+
+def _hint_description(spec: SettingSpec) -> str:
+    text = str(_DESCRIPTION_BY_PATH.get(spec.path) or spec.description or "").strip()
+    if not text:
+        text = f"Управляет параметром {spec.path}. Значение применяется при сохранении настроек."
+    if spec.dangerous:
+        text = f"{text}\n\nОпасный параметр: меняй только если понимаешь последствия."
+    return text
+
+
+def _hint_example(spec: SettingSpec) -> str:
+    if spec.example:
+        return str(spec.example)
+    if spec.options:
+        return " / ".join(str(option) for option in spec.options)
+    return ""
+
+
+_TITLE_BY_PATH: dict[str, str] = {
+    "app.name": "Название приложения",
+    "app.locale": "Локаль приложения",
+    "app.default_language": "Язык по умолчанию",
+    "app.debug": "Debug mode",
+    "startup.mode": "Режим запуска",
+    "startup.active_profile": "Активный профиль",
+    "startup.safety_mode": "Режим безопасности",
+    "api.host": "API host",
+    "api.port": "API port",
+    "ui.api.active_endpoint": "Активный API endpoint",
+    "ui.api.local_base_url": "Локальный API URL",
+    "ui.api.public_base_url": "Публичный API URL",
+    "llm.provider": "Провайдер LLM",
+    "llm.model_name": "Основная модель",
+    "llm.thinking_enabled": "Thinking",
+    "llm.json_mode_enabled": "JSON mode",
+    "llm.model_fallbacks": "Fallback модели",
+    "llm.providers.ollama.base_url": "Ollama URL",
+    "llm.providers.ollama.timeout_sec": "Ollama timeout",
+    "llm.providers.ollama.retries": "Ollama retries",
+    "llm.providers.openai.api_key": "OpenAI API key",
+    "llm.providers.openai.api_url": "OpenAI API URL",
+    "llm.providers.openai.timeout_sec": "OpenAI timeout",
+    "llm.providers.openai.max_retries": "OpenAI retries",
+    "memory.enabled": "Память",
+    "memory.memory_dir": "Папка памяти",
+    "memory.cache_dir": "Папка кеша",
+    "memory.db_path": "База памяти",
+    "memory.chat_recall_results": "Recall results",
+    "memory.chat_events_limit": "Events limit",
+    "memory.chat_proofread": "Proofread памяти",
+    "memory.chat_proofread_strict": "Строгий proofread",
+    "memory_core.enabled": "Memory Core",
+    "memory_core.worker_enabled": "Фоновый воркер",
+    "memory_core.worker_poll_interval": "Интервал воркера",
+    "internet.enabled": "Интернет",
+    "internet.web_mode": "Web mode",
+    "internet.search.provider": "Search provider",
+    "internet.search.api_url": "Search API URL",
+    "internet.search.timeout_sec": "Search timeout",
+    "internet.fetch.timeout_sec": "Fetch timeout",
+    "internet.fetch.retries": "Fetch retries",
+    "internet.fetch.clean_max_chars": "Clean max chars",
+    "internet.fetch.clean_min_chars": "Clean min chars",
+    "internet.web_v2": "Web v2 config",
+    "voice.enabled": "Голос",
+    "voice.mode": "Режим голоса",
+    "voice.open_mode_from_rail": "Открывать voice из rail",
+    "voice.auto_speak_replies": "Автоозвучка",
+    "voice.barge_in": "Barge-in",
+    "voice.stt_engine": "STT engine",
+    "voice.stt_model": "STT model",
+    "voice.stt_device": "STT device",
+    "voice.stt_compute_type": "STT compute type",
+    "voice.stt_language_hint": "STT language",
+    "voice.tts_engine": "TTS engine",
+    "voice.tts_model": "TTS model",
+    "voice.tts_device": "TTS device",
+    "voice.tts.voice": "TTS voice",
+    "voice.tts.rate": "TTS rate",
+    "voice.tts.volume": "TTS volume",
+    "dialog.new_session_after_min": "Новая сессия",
+    "dialog.greeting_max_words": "Greeting max words",
+    "dialog.greeting_max_chars": "Greeting max chars",
+    "dialog.greetings": "Приветствия",
+    "dialog.greeting_exclusions": "Исключения приветствий",
+    "ui.console.timeout_sec": "Console timeout",
+    "ui.console.stream_timeout_sec": "Stream timeout",
+    "ui.console.store_turn": "Store turn",
+    "ui.console.show_thinking": "Показывать thinking",
+    "ui.console.thinking_first": "Thinking первым",
+    "ui.console.auto_start_api": "Автостарт API",
+    "ui.console.auto_start_ollama": "Автостарт Ollama",
+    "debug.memory_inspector_enabled": "Memory Inspector",
+    "debug.show_raw_scores": "Raw scores",
+    "debug.show_filtered_items": "Filtered items",
+    "debug.show_prompt_blocks": "Prompt blocks",
+    "logging.level": "Уровень логов",
+    "logging.file": "Файл логов",
+    "logging.colors": "Цветные логи",
+    "logging.max_bytes": "Размер лог-файла",
+    "logging.backup_count": "Количество backup",
+    "logging.format": "Формат логов",
+    "logging.web_trace_enabled": "Web trace",
+    "logging.web_trace_logger": "Web trace logger",
+    "logging.channels": "Каналы логов",
+    "modules.automation_enabled": "Automation",
+    "modules.screen_enabled": "Screen tools",
+    "prompt.response_safety_filter_enabled": "Safety filter",
+    "prompt.response_formatting_enabled": "Response formatting",
+}
+
+
+_DESCRIPTION_BY_PATH: dict[str, str] = {
+    "app.name": "Имя, которое показывается в UI, логах и служебных сообщениях приложения.",
+    "app.locale": "Локаль интерфейса и форматирования. Влияет на языковые подсказки и региональные значения.",
+    "app.default_language": "Основной язык ответов и внутренних подсказок, если пользователь явно не выбрал другой.",
+    "app.debug": "Включает расширенную диагностику и больше служебной информации в логах.",
+    "startup.mode": "Определяет, как стартует приложение: API, UI или комбинированный режим.",
+    "startup.active_profile": "Выбирает профиль производительности из performance_profiles.json для основного LLM runtime.",
+    "startup.safety_mode": "Ограничивает или разрешает потенциально опасные действия инструментов и автоматизации.",
+    "api.host": "Адрес, на котором API-сервер принимает подключения. 127.0.0.1 только локально, 0.0.0.0 для сети.",
+    "api.port": "Порт FastAPI/uvicorn сервера. UI и внешние клиенты должны ходить на этот порт.",
+    "ui.api.active_endpoint": "Выбирает, куда десктопный UI будет отправлять запросы: локальный или публичный API endpoint.",
+    "ui.api.local_base_url": "URL API для подключения с этой же машины. Обычно это 127.0.0.1 с портом приложения.",
+    "ui.api.public_base_url": "URL API для подключения с другого устройства или через внешний адрес.",
+    "llm.provider": "Основной backend генерации ответов: локальная Ollama, OpenAI-compatible endpoint или auto.",
+    "llm.model_name": "Модель, которой отвечает главный чат. Значение должно совпадать с именем модели у провайдера.",
+    "llm.thinking_enabled": "Разрешает reasoning/thinking режим для моделей, которые его поддерживают.",
+    "llm.json_mode_enabled": "Включает JSON mode по умолчанию для запросов, которым нужен структурированный ответ.",
+    "llm.model_fallbacks": "Список моделей, которые можно пробовать, если основная модель недоступна.",
+    "llm.providers.ollama.base_url": "Адрес Ollama API, к которому подключается приложение.",
+    "llm.providers.ollama.timeout_sec": "Сколько секунд ждать ответ Ollama до ошибки timeout.",
+    "llm.providers.ollama.retries": "Сколько раз повторять запрос к Ollama после временной ошибки.",
+    "llm.providers.openai.api_key": "Ключ для OpenAI-compatible API. Если хранить здесь, он попадёт в config.json.",
+    "llm.providers.openai.api_url": "Base URL OpenAI-compatible API.",
+    "llm.providers.openai.timeout_sec": "Сколько секунд ждать ответ OpenAI-compatible API.",
+    "llm.providers.openai.max_retries": "Сколько повторных попыток делать для OpenAI-compatible API.",
+    "memory.enabled": "Включает или выключает слой памяти для чата.",
+    "memory.memory_dir": "Папка, где лежат файлы памяти, состояния и runtime-артефакты.",
+    "memory.cache_dir": "Папка временного кеша для памяти и вспомогательных процессов.",
+    "memory.db_path": "Путь к SQLite базе Memory Core.",
+    "memory.chat_recall_results": "Сколько найденных воспоминаний подтягивать в контекст ответа.",
+    "memory.chat_events_limit": "Сколько последних событий чата учитывать при сборке контекста.",
+    "memory.chat_proofread": "Включает дополнительную проверку памяти перед использованием в ответе.",
+    "memory.chat_proofread_strict": "Делает проверку памяти строже, снижая риск мусорного контекста.",
+    "memory_core.enabled": "Включает новый Memory Core runtime.",
+    "memory_core.worker_enabled": "Разрешает фоновую обработку событий памяти.",
+    "memory_core.worker_poll_interval": "Интервал в секундах, с которым воркер проверяет очередь задач памяти.",
+    "internet.enabled": "Разрешает интернет-модуль и web-поиск.",
+    "internet.web_mode": "Определяет агрессивность web-поиска: off, auto, on или aggressive.",
+    "internet.search.provider": "Выбирает поисковый backend, например локальный SearXNG.",
+    "internet.search.api_url": "Endpoint поискового API.",
+    "internet.search.timeout_sec": "Сколько секунд ждать ответ поискового сервиса.",
+    "internet.fetch.timeout_sec": "Сколько секунд ждать загрузку страницы.",
+    "internet.fetch.retries": "Сколько раз повторять fetch после временной ошибки.",
+    "internet.fetch.clean_max_chars": "Максимальный размер очищенного текста страницы.",
+    "internet.fetch.clean_min_chars": "Минимальный размер текста, при котором страница считается полезной.",
+    "internet.web_v2": "Расширенная JSON-конфигурация web policy, бюджетов, trust policy и citations.",
+    "voice.enabled": "Включает голосовые функции приложения.",
+    "voice.mode": "Определяет, как работает голосовой ввод: push-to-talk или переключатель.",
+    "voice.open_mode_from_rail": "Разрешает открывать голосовой экран кнопкой в левой панели.",
+    "voice.auto_speak_replies": "Автоматически озвучивает ответы ассистента.",
+    "voice.barge_in": "Позволяет перебить озвучку новым голосовым вводом.",
+    "voice.stt_engine": "Движок распознавания речи.",
+    "voice.stt_model": "Модель распознавания речи.",
+    "voice.stt_device": "Устройство для STT: cuda, cpu или auto.",
+    "voice.stt_compute_type": "Тип вычислений STT, влияющий на скорость и VRAM/RAM.",
+    "voice.stt_language_hint": "Языковая подсказка для распознавания речи.",
+    "voice.tts_engine": "Движок озвучки ответов.",
+    "voice.tts_model": "Модель синтеза речи.",
+    "voice.tts_device": "Устройство для TTS: cuda, cpu или auto.",
+    "voice.tts.voice": "Голос или пресет, который используется TTS.",
+    "voice.tts.rate": "Скорость речи TTS.",
+    "voice.tts.volume": "Громкость речи TTS.",
+    "dialog.new_session_after_min": "Через сколько минут простоя начинать новую диалоговую сессию.",
+    "dialog.greeting_max_words": "Максимум слов в автоприветствии.",
+    "dialog.greeting_max_chars": "Максимум символов в автоприветствии.",
+    "dialog.greetings": "Список разрешённых вариантов приветствий.",
+    "dialog.greeting_exclusions": "Слова и шаблоны, при которых приветствие не показывается.",
+    "ui.console.timeout_sec": "Timeout коротких API-запросов из UI/console.",
+    "ui.console.stream_timeout_sec": "Timeout потокового ответа чата.",
+    "ui.console.store_turn": "Сохранять реплики в историю и память.",
+    "ui.console.show_thinking": "Показывать блок thinking в интерфейсе.",
+    "ui.console.thinking_first": "Показывать thinking перед финальным ответом.",
+    "ui.console.auto_start_api": "Автоматически стартовать API при запуске UI/console.",
+    "ui.console.auto_start_ollama": "Автоматически стартовать Ollama при запуске UI/console.",
+    "debug.memory_inspector_enabled": "Включает Memory Inspector в интерфейсе.",
+    "debug.show_raw_scores": "Показывает сырые оценки retrieval/scoring.",
+    "debug.show_filtered_items": "Показывает элементы, отфильтрованные из memory retrieval.",
+    "debug.show_prompt_blocks": "Показывает блоки промпта для отладки сборки контекста.",
+    "logging.level": "Минимальный уровень сообщений, которые пишутся в лог.",
+    "logging.file": "Файл, куда пишутся логи приложения.",
+    "logging.colors": "Включает цветной вывод логов в консоли.",
+    "logging.max_bytes": "Максимальный размер одного лог-файла до ротации.",
+    "logging.backup_count": "Количество старых лог-файлов, которые сохраняются при ротации.",
+    "logging.format": "Формат строки логов.",
+    "logging.web_trace_enabled": "Включает отдельный trace web-пайплайна.",
+    "logging.web_trace_logger": "Имя logger для web trace.",
+    "logging.channels": "JSON-настройка каналов логирования и их prefix-фильтров.",
+    "modules.automation_enabled": "Разрешает модуль автоматизации действий.",
+    "modules.screen_enabled": "Разрешает screen/OCR инструменты.",
+    "prompt.response_safety_filter_enabled": "Включает фильтр безопасности финального ответа.",
+    "prompt.response_formatting_enabled": "Включает постобработку форматирования ответа.",
+}
+
+
+def _group_title(group: str) -> str:
+    mapping = {
+        "Core": "ОСНОВНОЕ",
+        "Modules": "МОДУЛИ",
+        "System": "СИСТЕМА",
+    }
+    return mapping.get(str(group or ""), str(group or "").upper())
+
+
+def _category_icon(key: str) -> str:
+    return {
+        "main": "⌂",
+        "memory": "●",
+        "llm": "◆",
+        "web": "◉",
+        "voice": "⌕",
+        "dialog_ui": "▣",
+        "debug": "⚙",
+        "logging": "□",
+        "safety": "!",
+    }.get(str(key or ""), "•")
+
+
+def _category_description(category: SettingCategory) -> str:
+    descriptions = {
+        "main": "Базовые параметры приложения, API, режим запуска и безопасные флаги. Нужные подсказки появляются при наведении на знак вопроса.",
+        "llm": "Основная модель, провайдеры и runtime-флаги. Лимитов max_tokens здесь нет: длину держат num_ctx и num_batch.",
+        "memory": "Пути, воркер памяти и параметры retrieval для контекста чата.",
+        "web": "Поиск, fetch, web mode и политика внешних источников.",
+        "voice": "STT, TTS, голосовой режим и устройства.",
+        "dialog_ui": "Поведение диалога, консольные флаги и отображение thinking.",
+        "debug": "Inspector, prompt blocks и диагностические панели.",
+        "logging": "Логи, ротация, каналы и web trace.",
+        "safety": "Опасные переключатели автоматизации и safety-фильтров.",
+    }
+    return descriptions.get(category.key, category.description)
+
+
+def _spec_for(path: str) -> SettingSpec | None:
+    for category in SETTINGS_CATEGORIES:
+        for card in category.cards:
+            for spec in card.settings:
+                if spec.path == path:
+                    return spec
+    return None

@@ -37,6 +37,7 @@ from ui.chat_sessions import collapse_to_single_visible_chat, history_to_seriali
 from ui.chat_sessions import load_sessions as load_chat_sessions
 from ui.chat_sessions import make_new_chat_payload, now_iso as chat_now_iso
 from ui.chat_sessions import save_sessions as save_chat_sessions
+from ui.settings_window import SettingsWindow
 from modules.voice.voice_manager import VoiceState
 from ui.voice_adapter import build_stt_config, build_stt_engine, build_tts_config, build_tts_engine, build_voice_manager
 from ui.voice_panel import VoicePanel
@@ -171,6 +172,7 @@ class ChatWindow(proto.ExactChatWindow):
         self._voice_send_pending = False
         self._inspector_window: QMainWindow | None = None
         self._inspector_panel: MemoryInspectorPanel | None = None
+        self._settings_window: SettingsWindow | None = None
         self._chat_rail_button = None
         self._voice_rail_button = None
         self._file_rail_button = None
@@ -917,9 +919,28 @@ class ChatWindow(proto.ExactChatWindow):
         self._file_rail_button.clicked.connect(self._attach_file)
         self._memory_rail_button.setToolTip("Память / Inspector")
         self._memory_rail_button.clicked.connect(self._toggle_inspector)
-        self._settings_rail_button.setToolTip("Функции")
-        self._settings_rail_button.clicked.connect(self._toggle_functions)
+        self._settings_rail_button.setToolTip("Настройки")
+        self._settings_rail_button.clicked.connect(self._open_settings_window)
         self._sync_rail_mode_buttons()
+
+    @Slot()
+    def _open_settings_window(self) -> None:
+        if self._settings_window is None:
+            self._settings_window = SettingsWindow(self)
+            self._settings_window.saved.connect(self._on_settings_saved)
+            self._settings_window.finished.connect(lambda _code: setattr(self, "_settings_window", None))
+        self._settings_window.reload()
+        self._settings_window.show()
+        self._settings_window.raise_()
+        self._settings_window.activateWindow()
+
+    @Slot(object)
+    def _on_settings_saved(self, _updates: object) -> None:
+        global _cfg
+        _cfg = load_config(force_reload=True)
+        self.api = ApiClient()
+        self._sync_runtime_controls()
+        self._apply_context_chips()
 
     def _install_attachment_row(self) -> None:
         if self._attachment_row is not None:

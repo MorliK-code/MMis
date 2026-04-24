@@ -124,7 +124,6 @@ class GenerationProfile:
     temperature: float = 0.7
     top_p: float = 0.9
     repeat_penalty: float = 1.1
-    max_tokens: int | None = None
     stop: tuple[str, ...] = ()
 
 
@@ -225,7 +224,6 @@ class AppSettings:
     dialog_greetings: list[str] = field(default_factory=list)
     dialog_greeting_exclusions: list[str] = field(default_factory=list)
     config_file: Path | None = None
-    feature_flags: dict[str, bool] = field(default_factory=dict)
 
     # Logging
     log_level: str = "INFO"
@@ -238,13 +236,7 @@ class AppSettings:
     log_web_trace_enabled: bool = True
     log_web_trace_logger: str = _LOG_WEB_TRACE_LOGGER_DEFAULT
 
-    # Metadata
-    metadata_model: str = "qwen3:1.7b"
-    metadata_model_fallbacks: list[str] = field(default_factory=list)
-
     # LLM Providers
-    llm_max_tokens_lower_bound: int = 2048
-    llm_max_tokens_upper_bound: int = 8192
     llm_profiles: dict[str, Any] = field(default_factory=dict)
     task_model_profiles: dict[str, Any] = field(default_factory=dict)
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -302,9 +294,6 @@ class AppSettings:
     memory_core_worker_poll_interval: float = 2.0
     model_fallbacks: list[str] = field(default_factory=list)
 
-    # Hardware
-    gpu_vram_gb: int | None = None
-
     # UI Console
     console_timeout_sec: float = 2.5
     console_stream_timeout_sec: float = 600.0
@@ -314,9 +303,17 @@ class AppSettings:
     console_auto_start_api: bool = True
     console_auto_start_ollama: bool = True
     console_runtime: dict[str, Any] = field(default_factory=dict)
+    ui_api_active_endpoint: str = "local"
+    ui_api_local_base_url: str = "http://127.0.0.1:8027"
+    ui_api_public_base_url: str = "http://0.0.0.0:8027"
 
     @property
     def api_url(self) -> str:
+        active = str(self.ui_api_active_endpoint or "local").strip().lower()
+        if active == "public":
+            return str(self.ui_api_public_base_url or "").strip().rstrip("/") or f"http://{self.host}:{self.port}"
+        if active == "local":
+            return str(self.ui_api_local_base_url or "").strip().rstrip("/") or f"http://{self.host}:{self.port}"
         return f"http://{self.host}:{self.port}"
 
     def to_dict(self) -> dict[str, Any]:
@@ -347,7 +344,6 @@ _SETTINGS_CACHE: AppSettings | None = None
 
 def load_config(force_reload: bool = True) -> AppSettings:  # Всегда перезагружаем для актуальных профилей
     global _SETTINGS_CACHE
-    # Кэш отключён — профили всегда загружаются из performance_profiles.json
     # if _SETTINGS_CACHE is not None and not force_reload:
     #     return _SETTINGS_CACHE
 
@@ -412,7 +408,6 @@ def update_config_values(updates: dict[str, Any]) -> AppSettings:
 def _default_model_profiles_tree() -> dict[str, Any]:
     profiles: dict[str, Any] = {}
     
-    # ЕДИНСТВЕННЫЙ источник: data/specs/performance_profiles.json
     specs_file = Path(__file__).parent.parent / "data" / "specs" / "performance_profiles.json"
     if specs_file.exists():
         try:
@@ -437,120 +432,7 @@ def _default_task_model_profiles_tree(
     provider: str = "ollama",
     model: str = "qcwind/qwen3-8b-instruct-Q4-K-M",
 ) -> dict[str, Any]:
-    provider_name = _norm_lower(provider) or "ollama"
-    model_name = _norm_str(model) or "qcwind/qwen3-8b-instruct-Q4-K-M"
-    return {
-        "emotion": {
-            "name": "emotion",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.15,
-            "max_tokens": 128,
-            "timeout": 20.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "tagging": {
-            "name": "tagging",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.10,
-            "max_tokens": 128,
-            "timeout": 20.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "intent_judge": {
-            "name": "intent_judge",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.10,
-            "max_tokens": 160,
-            "timeout": 20.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "query_rewrite": {
-            "name": "query_rewrite",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.20,
-            "max_tokens": 192,
-            "timeout": 25.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "source_relevance": {
-            "name": "source_relevance",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.10,
-            "max_tokens": 160,
-            "timeout": 20.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "summary_mini_pass": {
-            "name": "summary_mini_pass",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.20,
-            "max_tokens": 96,
-            "timeout": 20.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "studio_seed_extract": {
-            "name": "studio_seed_extract",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.35,
-            "max_tokens": 540,
-            "timeout": 45.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "studio_options": {
-            "name": "studio_options",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.55,
-            "max_tokens": 220,
-            "timeout": 25.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "studio_pack_blueprint": {
-            "name": "studio_pack_blueprint",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.55,
-            "max_tokens": 4096,
-            "timeout": 90.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "fact_filter": {
-            "name": "fact_filter",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.10,
-            "max_tokens": 192,
-            "timeout": 20.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-        "final_response": {
-            "name": "final_response",
-            "provider": provider_name,
-            "model": model_name,
-            "temperature": 0.70,
-            "max_tokens": 1024,
-            "timeout": 120.0,
-            "enabled": True,
-            "fallback_profile": "",
-        },
-    }
+    return {}
 
 
 def _default_config_tree() -> dict[str, Any]:
@@ -585,16 +467,6 @@ def _default_config_tree() -> dict[str, Any]:
             "model_fallbacks": [],
             "thinking_enabled": True,
             "json_mode_enabled": False,
-            # profiles удалены — теперь только в data/specs/performance_profiles.json
-            "task_models": _default_task_model_profiles_tree(),
-            "max_tokens": {
-                "lower_bound": 2048,
-                "upper_bound": 8192,
-            },
-            "metadata": {
-                "model": "qwen3:1.7b",
-                "fallbacks": [],
-            },
             "providers": {
                 "ollama": {
                     "base_url": "http://127.0.0.1:11434",
@@ -797,86 +669,6 @@ def _default_config_tree() -> dict[str, Any]:
             "cache_dir": _path_to_config_string(cache_dir),
             "log_dir": _path_to_config_string(log_dir),
             "db_path": _path_to_config_string(memory_dir / "memory.db"),
-            "version": "v2",
-            "backend": "chroma",
-            "embedding": {
-                "backend": "sentence_transformers",
-                "model": "all-MiniLM-L6-v2",
-                "dim": 384,
-            },
-            "retrieval": {
-                "top_k": 8,
-                "rerank_top_k": 8,
-                "fusion_weights": {
-                    "semantic_similarity": 0.34,
-                    "lexical_score": 0.25,
-                    "recency_score": 0.10,
-                    "importance_score": 0.09,
-                    "confidence_score": 0.08,
-                    "entity_overlap_score": 0.07,
-                    "exact_match_boost": 0.04,
-                    "scope_match_score": 0.03,
-                },
-            },
-            "documents": {
-                "chunk_size": 1200,
-                "chunk_overlap": 160,
-            },
-            "summary": {
-                "trigger": 60,
-                "target_tokens": 220,
-            },
-            "context_budget": {
-                "total": 2200,
-                "memory": 700,
-                "docs": 600,
-                "tools": 220,
-                "response_reserve": 260,
-            },
-            "lifecycle": {
-                "stale_after_days": 30,
-                "archive_after_days": 90,
-                "promotion_thresholds": {
-                    "message_importance": 0.55,
-                    "message_confidence": 0.50,
-                },
-                "promotion_signal_boosts": {
-                    "project": 0.12,
-                    "fact": 0.16,
-                    "decision": 0.12,
-                    "smalltalk_penalty": 0.20,
-                },
-                "temporary_ttl_sec": 3600,
-                "private_runtime_ttl_sec": 900,
-                "working_limit": 120,
-            },
-            "scoring": {
-                "importance_weights": {
-                    "base": 0.42,
-                    "decision": 0.24,
-                    "remember": 0.18,
-                    "project": 0.10,
-                },
-                "salience_weights": {
-                    "novelty": 0.22,
-                    "permanence": 0.20,
-                    "repetition": 0.14,
-                    "project_relevance": 0.16,
-                    "task_relevance": 0.16,
-                    "explicit_save_signal": 0.12,
-                },
-            },
-            "chat_recall_results": 3,
-            "chat_events_limit": 10,
-            "chat_proofread": False,
-            "chat_proofread_strict": False,
-            "facts_scope": "user_only",
-            "include_pending_facts_in_retrieval": False,
-            "confirmation_ttl_sec": 300,
-            "migration": {
-                "auto_on_start": True,
-                "schema_version": 2,
-            },
         },
         "dialog": {
             "new_session_after_min": 360,
@@ -922,6 +714,11 @@ def _default_config_tree() -> dict[str, Any]:
             "web_trace_logger": _LOG_WEB_TRACE_LOGGER_DEFAULT,
         },
         "ui": {
+            "api": {
+                "active_endpoint": "local",
+                "local_base_url": "http://127.0.0.1:8027",
+                "public_base_url": "http://0.0.0.0:8027",
+            },
             "console": {
                 "timeout_sec": 2.5,
                 "stream_timeout_sec": 600.0,
@@ -937,13 +734,6 @@ def _default_config_tree() -> dict[str, Any]:
                     "output_summary": False,
                 },
             },
-        },
-        "features": {
-            "flags": {},
-            "extra_legacy": {},
-        },
-        "hardware": {
-            "gpu_vram_gb": None,
         },
         "paths": {
             "data_dir": _path_to_config_string(DATA_DIR),
@@ -984,9 +774,7 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
     model_name = _norm_str(_get_dotted(row, "llm.model_name") or "qcwind/qwen3-8b-instruct-Q4-K-M")
 
     runtime = _normalize_ui_console_runtime(_as_dict(_get_dotted(row, "ui.console.runtime")))
-    features_flags = _as_dict(_get_dotted(row, "features.flags"))
     
-    # performance_profiles.json — единственный источник для chat-профилей
     # config.json llm.profiles больше не используется (legacy, игнорируется)
     profile_rows = copy.deepcopy(_default_model_profiles_tree())
     profile_rows = _normalize_profile_rows(profile_rows)
@@ -994,14 +782,9 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
     # Проверяем есть ли legacy llm.profiles в config.json — только для debug trace
     legacy_profile_rows = _as_dict(_get_dotted(row, "llm.profiles"))
     if legacy_profile_rows:
-        # Legacy detected — но не используем, performance_profiles.json главный
         pass
     
     task_model_rows = _as_dict(_get_dotted(row, "llm.task_models"))
-    if not task_model_rows:
-        task_model_rows = copy.deepcopy(
-            _default_task_model_profiles_tree(provider=llm_default_provider, model=model_name)
-        )
     task_model_rows = _normalize_task_model_profile_rows(
         task_model_rows,
         default_provider=llm_default_provider,
@@ -1051,7 +834,6 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         dialog_greetings=_to_csv_list(_get_dotted(row, "dialog.greetings")),
         dialog_greeting_exclusions=_to_csv_list(_get_dotted(row, "dialog.greeting_exclusions")),
         config_file=Path(config_file).expanduser().resolve(),
-        feature_flags={str(k): _to_bool(v) for k, v in features_flags.items()},
         log_level=_norm_upper(_get_dotted(row, "logging.level") or "INFO"),
         log_file=log_file,
         log_colors=_to_bool(_get_dotted(row, "logging.colors")),
@@ -1061,10 +843,6 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         log_channels=log_channels,
         log_web_trace_enabled=_to_bool(_pick_value(_get_dotted(row, "logging.web_trace_enabled"), True)),
         log_web_trace_logger=_norm_str(_get_dotted(row, "logging.web_trace_logger") or _LOG_WEB_TRACE_LOGGER_DEFAULT),
-        metadata_model=_norm_str(_get_dotted(row, "llm.metadata.model") or "qwen3:1.7b"),
-        metadata_model_fallbacks=_to_csv_list(_get_dotted(row, "llm.metadata.fallbacks")),
-        llm_max_tokens_lower_bound=max(1, _to_int(_get_dotted(row, "llm.max_tokens.lower_bound"), default=2048)),
-        llm_max_tokens_upper_bound=max(1, _to_int(_get_dotted(row, "llm.max_tokens.upper_bound"), default=8192)),
         llm_profiles=profile_rows,
         task_model_profiles=task_model_rows,
         ollama_base_url=_norm_str(_get_dotted(row, "llm.providers.ollama.base_url") or "http://127.0.0.1:11434"),
@@ -1106,7 +884,6 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         chat_proofread=_to_bool(_get_dotted(row, "memory.chat_proofread")),
         chat_proofread_strict=_to_bool(_get_dotted(row, "memory.chat_proofread_strict")),
         model_fallbacks=_to_csv_list(_get_dotted(row, "llm.model_fallbacks")),
-        gpu_vram_gb=_to_int_or_none(_get_dotted(row, "hardware.gpu_vram_gb")),
         console_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.timeout_sec"), 2.5)),
         console_stream_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.stream_timeout_sec"), 600.0)),
         console_store_turn=_to_bool(_get_dotted(row, "ui.console.store_turn")),
@@ -1115,6 +892,9 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         console_auto_start_api=_to_bool(_get_dotted(row, "ui.console.auto_start_api")),
         console_auto_start_ollama=_to_bool(_get_dotted(row, "ui.console.auto_start_ollama")),
         console_runtime=runtime,
+        ui_api_active_endpoint=_norm_lower(_get_dotted(row, "ui.api.active_endpoint") or "local"),
+        ui_api_local_base_url=_norm_str(_get_dotted(row, "ui.api.local_base_url") or "http://127.0.0.1:8027"),
+        ui_api_public_base_url=_norm_str(_get_dotted(row, "ui.api.public_base_url") or "http://0.0.0.0:8027"),
     )
     return settings
 
@@ -1133,7 +913,7 @@ def get_profile(name: str | None) -> ModelProfile:
     key = str(name or "BALANCED").strip().upper()
     if key not in profiles:
         key = "BALANCED"
-    return _apply_hardware_guards(profiles[key])
+    return profiles[key]
 
 
 def merge_profile(profile: ModelProfile | str, overrides: dict[str, Any] | None = None) -> ModelProfile:
@@ -1142,24 +922,20 @@ def merge_profile(profile: ModelProfile | str, overrides: dict[str, Any] | None 
         base = profile
     patch = dict(overrides or {})
     if not patch:
-        return _apply_hardware_guards(base)
+        return base
 
     payload = base.to_dict()
     _deep_merge(payload, patch)
-    merged = _profile_from_row(name=str(payload.get("name") or base.name), payload=payload)
-    return _apply_hardware_guards(merged)
+    return _profile_from_row(name=str(payload.get("name") or base.name), payload=payload)
 
 
 def build_ollama_options(task_type: str) -> dict[str, Any]:
     _ = task_type
     profile = get_profile(load_config().active_profile)
-    max_tokens = profile.generation.max_tokens
-    num_predict = int(max_tokens if max_tokens is not None else 768)
     return {
         "temperature": float(profile.generation.temperature),
         "top_p": float(profile.generation.top_p),
         "repeat_penalty": float(profile.generation.repeat_penalty),
-        "num_predict": num_predict,
     }
 
 
@@ -1237,7 +1013,6 @@ def _profile_from_row(*, name: str, payload: dict[str, Any]) -> ModelProfile:
         temperature=float(_pick_value(generation_row.get("temperature"), 0.7)),
         top_p=float(_pick_value(generation_row.get("top_p"), 0.9)),
         repeat_penalty=float(_pick_value(generation_row.get("repeat_penalty"), 1.1)),
-        max_tokens=_to_int_or_none(generation_row.get("max_tokens")),
         stop=stop_tuple,
     )
     ollama = OllamaProfile(
@@ -1253,31 +1028,6 @@ def _profile_from_row(*, name: str, payload: dict[str, Any]) -> ModelProfile:
     )
     profile_name = _norm_upper(_pick_value(defaults.get("name"), name, "BALANCED")) or "BALANCED"
     return ModelProfile(name=profile_name, generation=generation, ollama=ollama, openai=openai)
-
-
-def _apply_hardware_guards(profile: ModelProfile) -> ModelProfile:
-    app_settings = load_config()
-    vram = app_settings.gpu_vram_gb
-    if vram is None:
-        return profile
-    ollama = profile.ollama
-    if vram <= 4:
-        ollama = OllamaProfile(
-            num_thread=min(ollama.num_thread, 6),
-            num_ctx=min(ollama.num_ctx, 4096),
-            num_gpu=min(ollama.num_gpu, 1),
-            num_batch=min(ollama.num_batch, 64),
-            keep_alive=ollama.keep_alive,
-        )
-    elif vram <= 6:
-        ollama = OllamaProfile(
-            num_thread=min(ollama.num_thread, 8),
-            num_ctx=min(ollama.num_ctx, 6144),
-            num_gpu=min(ollama.num_gpu, 1),
-            num_batch=min(ollama.num_batch, 96),
-            keep_alive=ollama.keep_alive,
-        )
-    return ModelProfile(name=profile.name, generation=profile.generation, ollama=ollama, openai=profile.openai)
 
 
 def _normalize_profile_rows(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1447,10 +1197,6 @@ def _bootstrap_seed_from_env(*, dotenv_cfg: dict[str, str]) -> dict[str, Any]:
         ("MMIS_LOG_COLORS", "logging.colors", _to_bool),
         ("MMIS_LOG_MAX_BYTES", "logging.max_bytes", lambda x: _to_int(x, default=10485760)),
         ("MMIS_LOG_BACKUP_COUNT", "logging.backup_count", lambda x: _to_int(x, default=5)),
-        ("MMIS_METADATA_MODEL", "llm.metadata.model", _norm_str),
-        ("MMIS_METADATA_MODEL_FALLBACKS", "llm.metadata.fallbacks", _to_csv_list),
-        ("MMIS_LLM_MAX_TOKENS_LOWER_BOUND", "llm.max_tokens.lower_bound", lambda x: _to_int(x, default=2048)),
-        ("MMIS_LLM_MAX_TOKENS_UPPER_BOUND", "llm.max_tokens.upper_bound", lambda x: _to_int(x, default=8192)),
         ("OLLAMA_HOST", "llm.providers.ollama.base_url", _norm_str),
         ("OLLAMA_TIMEOUT_SEC", "llm.providers.ollama.timeout_sec", float),
         ("OLLAMA_RETRIES", "llm.providers.ollama.retries", lambda x: _to_int(x, default=1)),
@@ -1547,7 +1293,6 @@ def _validate_task_model_profiles(payload: dict[str, Any] | None) -> list[str]:
     errors: list[str] = []
     rows = _normalize_task_model_profile_rows(_as_dict(payload))
     if not rows:
-        errors.append("llm.task_models must define at least one task profile")
         return errors
     known_names = {str(name or "").strip().lower() for name in rows.keys()}
     for task_name, raw in rows.items():

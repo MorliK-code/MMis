@@ -10,6 +10,28 @@ from llm.task_models import TaskModelRegistry
 from llm.task_router import TaskModelRouter, TaskModelValidationError
 
 
+def _profile(name: str, *, temperature: float = 0.1, max_tokens: int = 128) -> dict:
+    return {
+        "name": name,
+        "provider": "ollama",
+        "model": "fake-model",
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "timeout": 20.0,
+        "enabled": True,
+        "fallback_profile": "",
+    }
+
+
+DEFAULT_TASK_ROWS = {
+    "emotion": _profile("emotion", temperature=0.15, max_tokens=128),
+    "tagging": _profile("tagging", temperature=0.1, max_tokens=128),
+    "intent_judge": _profile("intent_judge", temperature=0.1, max_tokens=160),
+    "query_rewrite": _profile("query_rewrite", temperature=0.2, max_tokens=192),
+    "fact_filter": _profile("fact_filter", temperature=0.1, max_tokens=192),
+}
+
+
 class _FakeProvider:
     def __init__(self, *, profile_name: str, scripted, requests_store: dict[str, list[LLMRequest]]):
         self._profile_name = profile_name
@@ -40,7 +62,7 @@ class _FakeProvider:
 class TaskModelRouterTests(unittest.TestCase):
     def _router(self, *, rows=None, scripted=None):
         settings = load_config(force_reload=True)
-        task_rows = copy.deepcopy(rows if rows is not None else settings.task_model_profiles)
+        task_rows = copy.deepcopy(rows if rows is not None else DEFAULT_TASK_ROWS)
         registry = TaskModelRegistry.from_settings(replace(settings, task_model_profiles=task_rows))
         plan = {str(k): list(v) for k, v in dict(scripted or {}).items()}
         requests_store: dict[str, list[LLMRequest]] = {}
@@ -70,8 +92,7 @@ class TaskModelRouterTests(unittest.TestCase):
         self.assertFalse(req.json_mode)
 
     def test_disabled_primary_profile_uses_fallback_profile(self) -> None:
-        settings = load_config(force_reload=True)
-        rows = copy.deepcopy(settings.task_model_profiles)
+        rows = copy.deepcopy(DEFAULT_TASK_ROWS)
         rows["emotion"]["enabled"] = False
         rows["emotion"]["fallback_profile"] = "tagging"
         router, _ = self._router(rows=rows, scripted={"tagging": ["tag-result"]})
@@ -83,8 +104,7 @@ class TaskModelRouterTests(unittest.TestCase):
         self.assertEqual(result.attempted_profiles, ("emotion", "tagging"))
 
     def test_failed_primary_profile_falls_back(self) -> None:
-        settings = load_config(force_reload=True)
-        rows = copy.deepcopy(settings.task_model_profiles)
+        rows = copy.deepcopy(DEFAULT_TASK_ROWS)
         rows["emotion"]["fallback_profile"] = "tagging"
         router, _ = self._router(
             rows=rows,
@@ -119,8 +139,7 @@ class TaskModelRouterTests(unittest.TestCase):
             router.run_task_model("emotion", "Should fail.")
 
     def test_missing_required_fields_uses_profile_fallback(self) -> None:
-        settings = load_config(force_reload=True)
-        rows = copy.deepcopy(settings.task_model_profiles)
+        rows = copy.deepcopy(DEFAULT_TASK_ROWS)
         rows["query_rewrite"]["fallback_profile"] = "fact_filter"
         router, _ = self._router(
             rows=rows,
