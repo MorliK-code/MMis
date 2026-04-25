@@ -23,6 +23,7 @@ QFrame#settings_top {
 }
 QLabel#settings_title {
     color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 16px;
     font-weight: 700;
 }
@@ -40,6 +41,7 @@ QLabel#settings_gear {
 }
 QLabel#settings_subtitle, QLabel#settings_muted {
     color: #8f96a3;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
 }
 QWidget#settings_center {
@@ -64,6 +66,7 @@ QPushButton, QToolButton {
     background: rgba(255, 255, 255, 8);
     color: #c4b5fd;
     padding: 0 10px;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
 }
 QToolButton#close_button {
@@ -81,12 +84,9 @@ QToolButton#hint_button {
     max-width: 18px;
     min-height: 18px;
     max-height: 18px;
-    border-radius: 9px;
+    border: 0;
+    background: transparent;
     padding: 0;
-    color: #9f8bff;
-    background: rgba(139, 92, 246, 16);
-    border-color: rgba(139, 92, 246, 40);
-    font-size: 10px;
 }
 QFrame#settings_hint_popup {
     background: rgba(15, 16, 24, 248);
@@ -95,11 +95,13 @@ QFrame#settings_hint_popup {
 }
 QLabel#hint_popup_title {
     color: #c4b5fd;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#hint_popup_body {
     color: #eef0f6;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     line-height: 145%;
 }
@@ -130,6 +132,7 @@ QPushButton#nav_button {
     color: #8f96a3;
     border-color: transparent;
     background: transparent;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 12px;
 }
 QPushButton#nav_button:checked {
@@ -160,27 +163,33 @@ QFrame#danger_card {
 }
 QLabel#card_title {
     color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 12px;
     font-weight: 700;
 }
 QLabel#danger_title {
     color: #fca5a5;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 12px;
     font-weight: 700;
 }
 QLabel#card_tag {
+    min-height: 18px;
+    max-height: 18px;
     background: rgba(139, 92, 246, 20);
     border: 1px solid rgba(139, 92, 246, 40);
-    border-radius: 10px;
+    border-radius: 9px;
     color: #c4b5fd;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 10px;
-    padding: 2px 7px;
+    padding: 0 7px;
 }
 QLabel#setting_label {
     color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 600;
-    padding: 0px 3px 0px 6px;
+    padding: 0px 1px 0px 6px;
     border: 1px solid transparent;
     border-radius: 6px;
 }
@@ -189,7 +198,8 @@ QLabel#setting_label_changed {
     background: rgba(139, 92, 246, 28);
     border: 1px solid rgba(139, 92, 246, 52);
     border-radius: 6px;
-    padding: 2px 3px 2px 6px;
+    padding: 2px 1px 2px 6px;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 600;
 }
@@ -203,6 +213,7 @@ QLabel#restart_badge {
     border: 1px solid rgba(251, 191, 36, 48);
     border-radius: 5px;
     padding: 1px 5px;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 9px;
 }
 QLabel#updated_badge {
@@ -211,6 +222,7 @@ QLabel#updated_badge {
     border: 1px solid rgba(139, 92, 246, 52);
     border-radius: 5px;
     padding: 1px 5px;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 9px;
 }
 QLabel#changed_badge {
@@ -219,6 +231,7 @@ QLabel#changed_badge {
     border: 1px solid rgba(139, 92, 246, 52);
     border-radius: 5px;
     padding: 1px 5px;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 9px;
 }
 QLineEdit, QComboBox, QPlainTextEdit, QSpinBox, QDoubleSpinBox {
@@ -250,6 +263,7 @@ QPushButton#settings_value_preview {
     color: #f3f4f6;
     text-align: left;
     padding: 0 7px 1px 7px;
+    font-family: Segoe UI, Arial, sans-serif;
     font-size: 11px;
 }
 QPushButton#settings_value_preview:hover {
@@ -277,6 +291,56 @@ QToolButton#settings_value_edit_button:hover {
     border-color: rgba(139, 92, 246, 76);
     color: #f3f4f6;
 }
+QLineEdit#settings_numeric_input {
+    min-height: 22px;
+    max-height: 22px;
+    border-top-left-radius: 8px;
+    border-bottom-left-radius: 8px;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border: 1px solid rgba(255, 255, 255, 22);
+    border-right: 0;
+    background: rgba(8, 10, 14, 128);
+    color: #f3f4f6;
+    padding: 0 7px;
+    font-size: 11px;
+}
+QLineEdit#settings_numeric_input:focus {
+    border-color: rgba(139, 92, 246, 96);
+    background: rgba(8, 10, 14, 168);
+}
+QWidget#settings_numeric_stepper {
+    background: rgba(139, 92, 246, 20);
+    border: 1px solid rgba(139, 92, 246, 46);
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+QToolButton#settings_numeric_step_button_up,
+QToolButton#settings_numeric_step_button_down {
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 11px;
+    max-height: 11px;
+    border-radius: 0;
+    border: 0;
+    background: transparent;
+    color: #c4b5fd;
+    padding: 0;
+    font-size: 8px;
+    font-weight: 700;
+}
+QToolButton#settings_numeric_step_button_up {
+    border-bottom: 1px solid rgba(139, 92, 246, 38);
+}
+QToolButton#settings_numeric_step_button_down {
+    border: 0;
+}
+QToolButton#settings_numeric_step_button_up:hover,
+QToolButton#settings_numeric_step_button_down:hover {
+    background: rgba(139, 92, 246, 36);
+    border-color: rgba(139, 92, 246, 76);
+    color: #f3f4f6;
+}
 QFrame#settings_text_editor_popup {
     background: rgba(15, 16, 24, 248);
     border: 1px solid rgba(139, 92, 246, 82);
@@ -284,11 +348,13 @@ QFrame#settings_text_editor_popup {
 }
 QLabel#settings_text_editor_title {
     color: #c4b5fd;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#settings_text_editor_description {
     color: #eef0f6;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     line-height: 145%;
 }

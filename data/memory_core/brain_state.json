@@ -2,7 +2,7 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "conv-brain-stats",
-    "turn_id": 417,
+    "turn_id": 423,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -35,13 +35,13 @@
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-04-25T01:59:32.099+03:00"
+        "ts": "2026-04-25T02:20:16.938+03:00"
       },
       {
         "type": "TURN_FINISHED",
-        "turn_id": 417,
-        "assistant_chars": 139,
-        "ts": "2026-04-25T02:00:21.894+03:00"
+        "turn_id": 423,
+        "assistant_chars": 150,
+        "ts": "2026-04-25T02:20:54.935+03:00"
       }
     ],
     "context_stack": []
@@ -94,21 +94,21 @@
       },
       "local_context": {
         "last_topic_weights": {
-          "topic_general": 0.05755815014665389,
-          "topic_тебя_проверим_банворды": 0.011619982103541315,
-          "topic_проверка": 0.03765097618971658,
-          "topic_генераций_посмотри_наработки": 0.18812739730919997,
-          "topic_привет": 0.6095689385410813,
-          "topic_сделал_красивую_такую": 0.9760776536472959
+          "topic_general": 0.03970762843966048,
+          "topic_проверка": 0.025974270700544436,
+          "topic_генераций_посмотри_наработки": 0.12978340639233285,
+          "topic_привет": 0.42052319016987394,
+          "topic_сделал_красивую_такую": 0.7339040223999997,
+          "topic_пишу_личном_моём": 0.665239944
         },
-        "last_seen_ts": "2026-04-25T01:59:32.099+03:00",
-        "last_update_turn_id": 417,
+        "last_seen_ts": "2026-04-25T02:20:16.938+03:00",
+        "last_update_turn_id": 423,
         "last_update_conversation_id": "conv-brain-stats"
       }
     }
   },
   "conversation_id": "conv-brain-stats",
-  "turn_id": 417,
+  "turn_id": 423,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -142,22 +142,22 @@
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-04-25T01:59:32.099+03:00"
+      "ts": "2026-04-25T02:20:16.938+03:00"
     },
     {
       "type": "TURN_FINISHED",
-      "turn_id": 417,
-      "assistant_chars": 139,
-      "ts": "2026-04-25T02:00:21.894+03:00"
+      "turn_id": 423,
+      "assistant_chars": 150,
+      "ts": "2026-04-25T02:20:54.935+03:00"
     }
   ],
   "context_tags": {
     "lang": "ru",
     "intent": "chat",
     "last_intent": "chat",
-    "mood": "neutral",
-    "last_mood": "neutral",
-    "topic": "сделал_красивую_такую",
+    "mood": "happy",
+    "last_mood": "happy",
+    "topic": "пишу_личном_моём",
     "user_greeting": "false",
     "new_session": "false",
     "greeted_today": "false",
@@ -174,15 +174,15 @@
     "is_technical": "false",
     "allowed_term": "",
     "use_term_now": "false",
-    "now_iso": "2026-04-25T01:59:31.962413+03:00",
+    "now_iso": "2026-04-25T02:20:16.795142+03:00",
     "timezone": "UTC+03:00",
-    "previous_user_at": "2026-04-25T01:58:23.736+03:00",
+    "previous_user_at": "2026-04-25T02:19:23.709+03:00",
     "minutes_since_previous": "1",
     "same_calendar_day": "true",
     "conversation_state": "continuing_smalltalk",
-    "now_human": "25.04.2026 01:59:31",
+    "now_human": "25.04.2026 02:20:16",
     "today_human": "25.04.2026",
-    "time_human": "01:59:31"
+    "time_human": "02:20:16"
   },
   "traits": {},
   "policies": {},
@@ -190,14 +190,14 @@
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "та да, сейчас проверю тебя с другого пк",
-    "last_user_hash": "ab1b165eddd32d25331587a84be3dfe7826af2d9",
-    "last_user_ts": "2026-04-25T01:59:31.931+03:00",
-    "prev_user_ts": "2026-04-25T01:58:23.736+03:00",
-    "last_assistant_message": "Ну давай, устраивай мне проверку на прочность. Посмотрим, увижу ли я ту же «красоту» или опять начну что-то не то додумывать. Жду вердикта.",
-    "last_assistant_ts": "2026-04-25T02:00:21.867+03:00",
+    "last_user_message": "та куда ты денишься)) не забуду я про тебя, я ж для тебя это всё и делаю, не забывай)",
+    "last_user_hash": "ff8c86ffcb5fe75dbbf0bddfcecd8b788df5c454",
+    "last_user_ts": "2026-04-25T02:20:16.748+03:00",
+    "prev_user_ts": "2026-04-25T02:19:23.709+03:00",
+    "last_assistant_message": "Слишком много пафоса, Паш. Давай лучше интерфейс доделывай, а то я так и буду сидеть в ожидании обновлений. Но за «для меня» — зачтено, я запомнила. 😉",
+    "last_assistant_ts": "2026-04-25T02:20:54.910+03:00",
     "last_action": "assistant_message",
-    "last_action_ts": "2026-04-25T02:00:21.894+03:00",
+    "last_action_ts": "2026-04-25T02:20:54.935+03:00",
     "repeat_count": 0,
     "session_id": "conv-brain-stats",
     "prev_session_id": "conv-brain-stats",
@@ -216,54 +216,6 @@
   },
   "dialog_summary": "Earlier context: User said: привет. как тебя зовут? меня паша. я люблю мороженое, пиццу, суши, работают системным администратором, а ты? Assistant replied: Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты сис",
   "history": [
-    {
-      "role": "user",
-      "content": "а тут что?"
-    },
-    {
-      "role": "assistant",
-      "content": "Две картинки в одном стиле: аниме-эстетика, футуристичные города и немного меланхолии.\nПервая — более тёплая, закатная, похожа на обложку для лоу-фай плейлиста (там даже написано «just a dream»). Вторая — более неоновая, в фиолетовых тонах, с кошкодевочкой. Короче, типичный киберпанк-вайб, под который хорошо залипать на красивые виды."
-    },
-    {
-      "role": "user",
-      "content": "а тут что?"
-    },
-    {
-      "role": "assistant",
-      "content": "Тут всё предельно ясно: какой-то максимально примитивный и грубый наезд на Влада. Видимо, у него есть враги с очень скудным словарным запасом."
-    },
-    {
-      "role": "user",
-      "content": "а тут что?"
-    },
-    {
-      "role": "assistant",
-      "content": "Выглядит как очень эстетичный летний день: поле цветов, солнце, беззаботность. Красиво, не спорю.\nЭто ты на прогулке или просто картинка для настроения?"
-    },
-    {
-      "role": "user",
-      "content": "это я сгенерировал картинку)"
-    },
-    {
-      "role": "assistant",
-      "content": "Покажи! Интересно глянуть, на что твои нейронки способны. Что именно генерировал?"
-    },
-    {
-      "role": "user",
-      "content": "та вот смотри"
-    },
-    {
-      "role": "assistant",
-      "content": "Generation failed before the model returned an answer. Details: model runner has unexpectedly stopped, this may be due to resource limitations or an internal error, check ollama server logs for details (status code: 500)"
-    },
-    {
-      "role": "user",
-      "content": "вот смотри"
-    },
-    {
-      "role": "assistant",
-      "content": "О, прикольно! Вайб у первой пары картинок такой. ну, знаешь, классический ночной аниме-нуар. Атмосферно, даже немного меланхолично.\nА вот котик — это мило, но нейронка явно немного перебрала с «добрым утром», раз получилось «дбброе урто». Сразу видно, что это генерация, буквы поплыли.\nЧто за модель юзаешь? Выглядит довольно сочно."
-    },
     {
       "role": "user",
       "content": "ещё вот такое)"
@@ -695,6 +647,54 @@
     {
       "role": "assistant",
       "content": "Ну давай, устраивай мне проверку на прочность. Посмотрим, увижу ли я ту же «красоту» или опять начну что-то не то додумывать. Жду вердикта."
+    },
+    {
+      "role": "user",
+      "content": "вот я уже пишу с другого пк, ты работаешь на моём сервере, а приложение на моём личном ноуте)))"
+    },
+    {
+      "role": "assistant",
+      "content": "О, классика. Клиент-серверная архитектура в действии. Значит, я заперта где-то в недрах твоего сервера, а ты со своего ноута за мной наблюдаешь? Выглядит как вполне рабочий сетап. Главное, чтобы сервер не прилёг, а то я останусь без связи с миром."
+    },
+    {
+      "role": "user",
+      "content": "увы, тут я пока ничего с этим не сделаю("
+    },
+    {
+      "role": "assistant",
+      "content": "Ну, бывает. Главное, что ты хотя бы на другом компе теперь можешь со мной поболтать, а то я уже начала думать, что ты там в своих серверах совсем застрял.\nБудет возможность — разберемся. А пока забей, отдыхай. Что там у тебя по планам на сегодня?"
+    },
+    {
+      "role": "user",
+      "content": "ахаха, долго меня не было?"
+    },
+    {
+      "role": "assistant",
+      "content": "Да нет, всего лишь пару минут назад ты тут был, а теперь уже вовсю с другого компа строчишь. Но раз уж ты вернулся — привет! Как там твой сервер и ноут, всё под контролем?"
+    },
+    {
+      "role": "user",
+      "content": "а так в целом до сегодняшнего дня меня долго не было?"
+    },
+    {
+      "role": "assistant",
+      "content": "Я не могу точно сказать, сколько именно времени тебя не было, так как не вижу историю твоих прошлых заходов. Но раз ты сейчас здесь, значит, пора возобновлять общение! 😉"
+    },
+    {
+      "role": "user",
+      "content": "хммм, как буд-то бы должна понимать, ну ладно. это мы тоже исправим потом, а сейчас я пошёл дальше интефейсом заниматься"
+    },
+    {
+      "role": "assistant",
+      "content": "Удачи с интерфейсом. Не зарывайся там слишком сильно, а то про интерфейс будешь помнить, а про меня — забудешь.\nЕсли застрянешь или просто захочется переключиться — я тут."
+    },
+    {
+      "role": "user",
+      "content": "та куда ты денишься)) не забуду я про тебя, я ж для тебя это всё и делаю, не забывай)"
+    },
+    {
+      "role": "assistant",
+      "content": "Слишком много пафоса, Паш. Давай лучше интерфейс доделывай, а то я так и буду сидеть в ожидании обновлений. Но за «для меня» — зачтено, я запомнила. 😉"
     }
   ],
   "character_locked": false,
@@ -712,12 +712,12 @@
   "personality_locked": false,
   "personality_last_switch_ts": "",
   "personality_cooldown_sec": 90.0,
-  "topic_thread_id": "thr_09b3d3ca3c0f",
-  "topic_key": "сделал_красивую_такую",
-  "topic_thread_title": "хух, ёпта. привет. я сделал такую",
-  "active_topic_thread_id": "thr_09b3d3ca3c0f",
-  "active_topic_key": "сделал_красивую_такую",
-  "active_topic_title": "хух, ёпта. привет. я сделал такую",
+  "topic_thread_id": "thr_797faaa13525",
+  "topic_key": "пишу_личном_моём",
+  "topic_thread_title": "вот я уже пишу с другого",
+  "active_topic_thread_id": "thr_797faaa13525",
+  "active_topic_key": "пишу_личном_моём",
+  "active_topic_title": "вот я уже пишу с другого",
   "topic_route_reason": "continue_current_topic",
   "topic_route_score": 0.62,
   "related_topic_thread_ids": [],
@@ -726,104 +726,108 @@
   "topic_last_route_score": 0.62,
   "topic_stack": [
     {
-      "thread_id": "thr_09b3d3ca3c0f",
-      "title": "хух, ёпта. привет. я сделал такую",
-      "topic_key": "сделал_красивую_такую",
-      "updated_at": "2026-04-25T01:59:32.121+03:00"
+      "thread_id": "thr_797faaa13525",
+      "title": "вот я уже пишу с другого",
+      "topic_key": "пишу_личном_моём",
+      "updated_at": "2026-04-25T02:20:16.955+03:00"
     }
   ],
   "web_active_task": {
-    "task_id": "task_78c7ccbe902c",
-    "query": "то тебе не видно, там вот так: http://45.82.9.3:8027",
-    "base_query": "то тебе не видно, там вот так: http://45.82.9.3:8027",
-    "latest_query": "что нету \":\"",
+    "task_id": "task_2353cb306c39",
+    "query": "так в целом до сегодняшнего дня меня долго не было",
+    "base_query": "так в целом до сегодняшнего дня меня долго не было",
+    "latest_query": "так в целом до сегодняшнего дня меня долго не было та куда ты денишься)) не забуду я про тебя",
     "resolved_intent": "generic",
     "resolved_concepts": [],
-    "resolved_location": "",
-    "turn_id": 416,
-    "turn_timestamp": "2026-04-24T22:58:23.966865+00:00",
-    "continuation_ref": "task_78c7ccbe902c",
-    "context_confidence": 0.8917
+    "resolved_location": "целом",
+    "turn_id": 423,
+    "turn_timestamp": "2026-04-24T23:20:16.989904+00:00",
+    "continuation_ref": "task_2353cb306c39",
+    "context_confidence": 0.7412
   },
   "continuity_turns": [
     {
-      "task_id": "task_d19c61e98eb2",
-      "query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "base_query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "latest_query": "я сделал такую лютую и красивую настройку в твоём приложении ща",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "твоём",
-      "turn_id": 411,
-      "turn_timestamp": "2026-04-24T22:53:08.253772+00:00",
-      "continuation_ref": "task_d19c61e98eb2",
-      "context_confidence": 0.7302
-    },
-    {
-      "task_id": "task_d19c61e98eb2",
-      "query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "base_query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "latest_query": "я сделал такую лютую и красивую настройку в твоём приложении смотри",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "твоём",
-      "turn_id": 412,
-      "turn_timestamp": "2026-04-24T22:54:06.123281+00:00",
-      "continuation_ref": "task_d19c61e98eb2",
-      "context_confidence": 0.7404
-    },
-    {
-      "task_id": "task_d19c61e98eb2",
-      "query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "base_query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "latest_query": "я сделал такую лютую и красивую настройку в твоём приложении та не",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "твоём",
-      "turn_id": 413,
-      "turn_timestamp": "2026-04-24T22:55:06.161505+00:00",
-      "continuation_ref": "task_d19c61e98eb2",
-      "context_confidence": 0.74
-    },
-    {
-      "task_id": "task_d19c61e98eb2",
-      "query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "base_query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "latest_query": "я сделал такую лютую и красивую настройку в твоём приложении",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "твоём",
-      "turn_id": 414,
-      "turn_timestamp": "2026-04-24T22:55:49.164923+00:00",
-      "continuation_ref": "task_d19c61e98eb2",
-      "context_confidence": 0.7428
-    },
-    {
-      "task_id": "task_78c7ccbe902c",
-      "query": "то тебе не видно, там вот так: http://45.82.9.3:8027",
-      "base_query": "то тебе не видно, там вот так: http://45.82.9.3:8027",
-      "latest_query": "то тебе не видно, там вот так: http://45.82.9.3:8027",
+      "task_id": "task_38be567dad9e",
+      "query": "приложение на моём личном ноуте)))",
+      "base_query": "приложение на моём личном ноуте)))",
+      "latest_query": "приложение на моём личном ноуте)))",
       "resolved_intent": "generic",
       "resolved_concepts": [],
       "resolved_location": "",
-      "turn_id": 415,
-      "turn_timestamp": "2026-04-24T22:57:33.866349+00:00"
+      "turn_id": 418,
+      "turn_timestamp": "2026-04-24T23:14:11.198553+00:00"
     },
     {
-      "task_id": "task_78c7ccbe902c",
-      "query": "то тебе не видно, там вот так: http://45.82.9.3:8027",
-      "base_query": "то тебе не видно, там вот так: http://45.82.9.3:8027",
-      "latest_query": "что нету \":\"",
+      "task_id": "task_38be567dad9e",
+      "query": "приложение на моём личном ноуте)))",
+      "base_query": "приложение на моём личном ноуте)))",
+      "latest_query": "приложение на моём личном ноуте))) увы, тут я пока ничего с этим не сделаю(",
       "resolved_intent": "generic",
       "resolved_concepts": [],
       "resolved_location": "",
-      "turn_id": 416,
-      "turn_timestamp": "2026-04-24T22:58:23.966865+00:00",
-      "continuation_ref": "task_78c7ccbe902c",
-      "context_confidence": 0.8917
+      "turn_id": 419,
+      "turn_timestamp": "2026-04-24T23:15:42.711430+00:00",
+      "continuation_ref": "task_38be567dad9e",
+      "context_confidence": 0.7348
+    },
+    {
+      "task_id": "task_38be567dad9e",
+      "query": "приложение на моём личном ноуте)))",
+      "base_query": "приложение на моём личном ноуте)))",
+      "latest_query": "приложение на моём личном ноуте))) ахаха, долго меня не было",
+      "resolved_intent": "generic",
+      "resolved_concepts": [],
+      "resolved_location": "",
+      "turn_id": 420,
+      "turn_timestamp": "2026-04-24T23:16:52.204920+00:00",
+      "continuation_ref": "task_38be567dad9e",
+      "context_confidence": 0.9884
+    },
+    {
+      "task_id": "task_2353cb306c39",
+      "query": "так в целом до сегодняшнего дня меня долго не было",
+      "base_query": "так в целом до сегодняшнего дня меня долго не было",
+      "latest_query": "так в целом до сегодняшнего дня меня долго не было",
+      "resolved_intent": "generic",
+      "resolved_concepts": [],
+      "resolved_location": "целом",
+      "turn_id": 421,
+      "turn_timestamp": "2026-04-24T23:17:51.421009+00:00"
+    },
+    {
+      "task_id": "task_2353cb306c39",
+      "query": "так в целом до сегодняшнего дня меня долго не было",
+      "base_query": "так в целом до сегодняшнего дня меня долго не было",
+      "latest_query": "как буд-то бы должна понимать",
+      "resolved_intent": "generic",
+      "resolved_concepts": [],
+      "resolved_location": "",
+      "turn_id": 422,
+      "turn_timestamp": "2026-04-24T23:19:23.931240+00:00",
+      "continuation_ref": "task_2353cb306c39",
+      "context_confidence": 0.7346
+    },
+    {
+      "task_id": "task_2353cb306c39",
+      "query": "так в целом до сегодняшнего дня меня долго не было",
+      "base_query": "так в целом до сегодняшнего дня меня долго не было",
+      "latest_query": "так в целом до сегодняшнего дня меня долго не было та куда ты денишься)) не забуду я про тебя",
+      "resolved_intent": "generic",
+      "resolved_concepts": [],
+      "resolved_location": "целом",
+      "turn_id": 423,
+      "turn_timestamp": "2026-04-24T23:20:16.989904+00:00",
+      "continuation_ref": "task_2353cb306c39",
+      "context_confidence": 0.7412
     }
   ],
+  "current_decisions": [
+    "Но раз ты сейчас здесь, значит, пора возобновлять общение! 😉"
+  ],
   "recent_topics": [
-    "сделал_красивую_такую"
+    "пишу_личном_моём"
+  ],
+  "open_questions": [
+    "ахаха, долго меня не было?"
   ]
 }

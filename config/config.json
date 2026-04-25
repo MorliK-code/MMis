@@ -256,7 +256,8 @@
     "memory_dir": "{dir_path}\\data\\memory_core",
     "cache_dir": "{dir_path}\\data\\cache",
     "log_dir": "{dir_path}\\data\\logs",
-    "db_path": "{dir_path}\\data\\memory_core\\memory.db"
+    "db_path": "{dir_path}\\data\\memory_core\\memory.db",
+    "enabled": true
   },
   "dialog": {
     "new_session_after_min": 360,

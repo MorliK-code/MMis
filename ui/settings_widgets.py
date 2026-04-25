@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Signal, Qt, QSize, QRect, QRectF
-from PySide6.QtGui import QCursor, QFontMetricsF, QIcon, QPainter, QPainterPath, QPen, QRegion
+from PySide6.QtCore import Signal, Qt, QSize, QRect, QRectF, QTimer, QEvent
+from PySide6.QtGui import QCursor, QFont, QFontMetricsF, QIcon, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -38,11 +38,13 @@ QFrame#settings_text_editor_popup {
 }
 QLabel#settings_text_editor_title {
     color: #c4b5fd;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 700;
 }
 QLabel#settings_text_editor_description {
     color: #eef0f6;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
 }
 QLabel#restart_badge {
@@ -51,6 +53,7 @@ QLabel#restart_badge {
     border: 1px solid rgba(251, 191, 36, 48);
     border-radius: 5px;
     padding: 1px 5px;
+    font-family: Cascadia Code, Consolas, monospace;
     font-size: 9px;
 }
 QPlainTextEdit#settings_text_editor_body {
@@ -204,15 +207,35 @@ class RightAlignedSelectorContainer(QWidget):
 class SettingsResizeGrip(QSizeGrip):
     def __init__(self, parent: QWidget):
         super().__init__(parent)
-        self.setFixedSize(16, 16)
+        self.setFixedSize(10, 10)
         self.setCursor(Qt.CursorShape.SizeFDiagCursor)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(QPen(_to_qcolor("rgba(196,181,253,.85)"), 1.25))
-        for offset in (4, 8, 12):
+        for offset in (3, 6, 9):
             painter.drawLine(self.width() - offset, self.height() - 2, self.width() - 2, self.height() - offset)
+
+
+class RestartBadge(QLabel):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__("restart required", parent)
+        self.setObjectName("restart_badge")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        font = _ui_font(pixel_size=9, weight=QFont.Weight.DemiBold)
+        font.setFamily("Cascadia Code")
+        self.setFont(font)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFixedSize(90, 18)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        return QSize(90, 18)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
 
 class TextEditorPopup(QFrame):
@@ -240,8 +263,7 @@ class TextEditorPopup(QFrame):
         badge_layout = QHBoxLayout()
         badge_layout.setContentsMargins(0, 0, 0, 0)
         badge_layout.setSpacing(5)
-        self.restart_badge = QLabel("restart required")
-        self.restart_badge.setObjectName("restart_badge")
+        self.restart_badge = RestartBadge(self)
         self.restart_badge.setVisible(bool(spec.restart_required))
         badge_layout.addWidget(self.restart_badge)
         badge_layout.addStretch()
@@ -276,12 +298,38 @@ class TextEditorPopup(QFrame):
         self.editor.setPlainText(text)
         self.editor.blockSignals(blocked)
 
+    def content_min_height(self, width: int) -> int:
+        layout = self.layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        left = margins.left() if margins is not None else 12
+        top = margins.top() if margins is not None else 10
+        right = margins.right() if margins is not None else 12
+        bottom = margins.bottom() if margins is not None else 14
+        spacing = layout.spacing() if layout is not None else 6
+        body_width = max(80, width - left - right)
+
+        self.body_label.setFixedWidth(body_width)
+        description_height = self.body_label.heightForWidth(body_width)
+        if description_height < 0:
+            description_height = self.body_label.sizeHint().height()
+        self.body_label.setMinimumHeight(description_height)
+
+        badge_height = self.restart_badge.sizeHint().height() if self.restart_badge.isVisible() else 0
+        parts = [
+            self.title_label.sizeHint().height(),
+            description_height,
+            badge_height,
+            self.editor.minimumHeight(),
+        ]
+        visible_parts = [height for height in parts if height > 0]
+        return top + bottom + sum(visible_parts) + spacing * max(0, len(visible_parts) - 1) + 6
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), 12.0, 12.0)
         self.setMask(QRegion(path.toFillPolygon().toPolygon()))
-        self.resize_grip.move(self.width() - self.resize_grip.width() - 4, self.height() - self.resize_grip.height() - 4)
+        self.resize_grip.move(self.width() - self.resize_grip.width() - 2, self.height() - self.resize_grip.height() - 2)
         self.resize_grip.raise_()
 
 
@@ -318,9 +366,39 @@ class TextValueEditor(QWidget):
         self.edit_button.setIconSize(QSize(13, 13))
         self.edit_button.setToolTip("Edit")
         self.edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.edit_button.clicked.connect(self._show_editor)
+        self.edit_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.preview.pressed.connect(self._ensure_popup)
+        self.edit_button.pressed.connect(self._ensure_popup)
+        self.preview.clicked.connect(self._request_editor)
+        self.edit_button.clicked.connect(self._request_editor)
         layout.addWidget(self.edit_button)
         self._refresh_preview()
+
+    def _ensure_popup(self) -> None:
+        if self._popup is not None:
+            return
+
+        self._popup = TextEditorPopup(self.spec, self.as_json, self.window())
+        self._popup.textChanged.connect(self.set_text)
+        self._popup.set_text(self._text)
+        self._popup.ensurePolished()
+        self._prepare_popup_geometry(*self._initial_popup_size())
+
+
+    def _request_editor(self) -> None:
+        self._ensure_popup()
+        QTimer.singleShot(0, self._show_editor)
+
+    def eventFilter(self, wathched, event) -> bool:
+        if wathched in (self.preview, self.edit_button):
+            if event.type() in (
+                QEvent.Type.Enter,
+                QEvent.Type.HoverEnter,
+                QEvent.Type.MouseButtonPress,
+            ):
+                self._ensure_popup()
+
+            return super().eventFilter(wathched, event)
 
     def sizeHint(self) -> QSize:
         text_width = self.preview.fontMetrics().horizontalAdvance(self.preview.text())
@@ -355,29 +433,20 @@ class TextValueEditor(QWidget):
         return json.loads(text)
 
     def _show_editor(self) -> None:
+        self._ensure_popup()
+
         if self._popup is None:
-            self._popup = TextEditorPopup(self.spec, self.as_json, self.window())
-            self._popup.textChanged.connect(self.set_text)
+            return
+
+        if self._popup.isVisible():
+            self._popup.raise_()
+            self._popup.activateWindow()
+            self._popup.editor.setFocus(Qt.FocusReason.MouseFocusReason)
+            return
+
         self._popup.set_text(self._text)
         width, height = self._initial_popup_size()
-        editor = self._popup.editor
-        old_policy = editor.sizePolicy()
-        old_min = editor.minimumHeight()
-        editor.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        editor.setFixedHeight(old_min)
-        
-        layout = self._popup.layout()
-        min_height = layout.heightForWidth(width) if layout.hasHeightForWidth() else layout.minimumSize().height()
-        
-        editor.setSizePolicy(old_policy)
-        editor.setMinimumHeight(old_min)
-        editor.setMaximumHeight(16777215)
-        
-        self._popup.setMinimumWidth(190)
-        self._popup.setMaximumWidth(16777215)
-        self._popup.setMinimumHeight(min_height)
-        
-        self._popup.resize(width, max(height, min_height))
+        width, height = self._prepare_popup_geometry(width, height)
 
         pos = self.mapToGlobal(self.rect().bottomLeft())
         screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
@@ -391,6 +460,28 @@ class TextValueEditor(QWidget):
         self._popup.show()
         self._popup.raise_()
         self._popup.editor.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def _prepare_popup_geometry(self, width: int, height: int) -> tuple[int, int]:
+        if self._popup is None:
+            return width, height
+
+        self._popup.setFixedWidth(width)
+        content_min_height = self._popup.content_min_height(width)
+        layout = self._popup.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+            min_height = max(layout.minimumSize().height(), content_min_height)
+        else:
+            min_height = max(self._popup.minimumSizeHint().height(), content_min_height)
+
+        height = max(height, min_height + (12 if not self.as_json else 8))
+        self._popup.setMinimumWidth(190)
+        self._popup.setMaximumWidth(16777215)
+        self._popup.setMinimumHeight(min_height)
+        self._popup.resize(width, height)
+        self._popup.setMinimumWidth(190)
+        return width, height
 
     def _initial_popup_size(self) -> tuple[int, int]:
         text = self._text or ""
@@ -438,6 +529,103 @@ class TextValueEditor(QWidget):
         self.updateGeometry()
 
 
+class NumericValueEditor(QWidget):
+    valueChanged = Signal()
+
+    def __init__(self, value: Any, *, is_float: bool, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.is_float = is_float
+        self._minimum = -1_000_000_000.0 if is_float else -2_147_483_648
+        self._maximum = 1_000_000_000.0 if is_float else 2_147_483_647
+        self.setProperty("compact_value_control", True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(24)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.input = QLineEdit(self)
+        self.input.setObjectName("settings_numeric_input")
+        self.input.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.input.editingFinished.connect(self._commit_text)
+        self.input.returnPressed.connect(self._commit_text)
+
+        buttons = QWidget(self)
+        buttons.setObjectName("settings_numeric_stepper")
+        buttons.setFixedSize(24, 24)
+        button_layout = QVBoxLayout(buttons)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(0)
+
+        self.plus_button = QToolButton(self)
+        self.plus_button.setObjectName("settings_numeric_step_button_up")
+        self.plus_button.setText("▲")
+        self.plus_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.plus_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.plus_button.clicked.connect(lambda: self._step(1))
+
+        self.minus_button = QToolButton(self)
+        self.minus_button.setObjectName("settings_numeric_step_button_down")
+        self.minus_button.setText("▼")
+        self.minus_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.minus_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.minus_button.clicked.connect(lambda: self._step(-1))
+
+        button_layout.addWidget(self.plus_button)
+        button_layout.addWidget(self.minus_button)
+        layout.addWidget(self.input)
+        layout.addWidget(buttons)
+        self.set_value(value)
+
+    def value(self) -> int | float:
+        text = self.input.text().strip()
+        return float(text or 0.0) if self.is_float else int(float(text or 0))
+
+    def set_value(self, value: Any) -> None:
+        number = float(value or 0.0) if self.is_float else int(value or 0)
+        number = max(self._minimum, min(self._maximum, number))
+        text = self._format(number)
+        if self.input.text() != text:
+            self.input.setText(text)
+        self.setMaximumWidth(self.sizeHint().width())
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:
+        width = self.input.fontMetrics().horizontalAdvance(self.input.text() or "0") + 46
+        return QSize(min(190, max(72, width)), 24)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(72, 24)
+
+    def _step(self, direction: int) -> None:
+        step = 0.1 if self.is_float else 1
+        self.set_value(self.value() + direction * step)
+        self.valueChanged.emit()
+
+    def wheelEvent(self, event) -> None:
+        delta = event.angleDelta().y()
+        if delta == 0:
+            event.ignore()
+            return
+        self._step(1 if delta > 0 else -1)
+        event.accept()
+
+    def _commit_text(self) -> None:
+        try:
+            value = self.value()
+        except ValueError:
+            value = 0.0 if self.is_float else 0
+        self.set_value(value)
+        self.valueChanged.emit()
+
+    def _format(self, value: int | float) -> str:
+        if not self.is_float:
+            return str(int(value))
+        text = f"{float(value):.3f}".rstrip("0").rstrip(".")
+        return text or "0"
+
+
 class SettingEditor(QWidget):
     valueChanged = Signal(object)
 
@@ -463,6 +651,8 @@ class SettingEditor(QWidget):
             return bool(switch.isChecked())
         if isinstance(widget, QCheckBox):
             return bool(widget.isChecked())
+        if isinstance(widget, NumericValueEditor):
+            return widget.value()
         if isinstance(widget, QSpinBox):
             return int(widget.value())
         if isinstance(widget, QDoubleSpinBox):
@@ -492,6 +682,8 @@ class SettingEditor(QWidget):
             switch.setChecked(bool(value))
         elif isinstance(widget, QCheckBox):
             widget.setChecked(bool(value))
+        elif isinstance(widget, NumericValueEditor):
+            widget.set_value(value)
         elif isinstance(widget, QSpinBox):
             widget.setValue(int(value or 0))
         elif isinstance(widget, QDoubleSpinBox):
@@ -544,19 +736,12 @@ class SettingEditor(QWidget):
             layout.addWidget(switch, 0, Qt.AlignmentFlag.AlignVCenter)
             return container
         if kind == "int":
-            widget = QSpinBox()
-            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            widget.setRange(-2_147_483_648, 2_147_483_647)
-            widget.setValue(int(value or 0))
-            widget.valueChanged.connect(lambda _value: self._emit_changed())
+            widget = NumericValueEditor(value, is_float=False)
+            widget.valueChanged.connect(self._emit_changed)
             return widget
         if kind == "float":
-            widget = QDoubleSpinBox()
-            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            widget.setRange(-1_000_000_000.0, 1_000_000_000.0)
-            widget.setDecimals(3)
-            widget.setValue(float(value or 0.0))
-            widget.valueChanged.connect(lambda _value: self._emit_changed())
+            widget = NumericValueEditor(value, is_float=True)
+            widget.valueChanged.connect(self._emit_changed)
             return widget
         if kind == "select":
             choices = [str(option) for option in self.spec.options]

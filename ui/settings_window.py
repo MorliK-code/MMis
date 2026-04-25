@@ -4,7 +4,8 @@ import copy
 import json
 from typing import Any
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, Signal
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from config.settings import get_config_payload, update_config_values
-from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _ui_font
+from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor, _ui_font
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE
 from ui.settings_widgets import SettingEditor
@@ -64,12 +65,94 @@ class SettingsHintPopup(QFrame):
         self.hide()
 
     def set_spec(self, spec: SettingSpec, updated: bool = False) -> None:
+        for label in (self.title_label, self.body_label, self.example_label):
+            label.setMinimumHeight(0)
+            label.setMaximumHeight(16777215)
+            label.setMinimumWidth(0)
+            label.setMaximumWidth(16777215)
         self.title_label.setText(_hint_title(spec))
         self.body_label.setText(_hint_description(spec))
         self.example_label.setText(_hint_example(spec))
         self.example_label.setVisible(bool(self.example_label.text().strip()))
         self.restart_badge.setVisible(bool(spec.restart_required))
         self.updated_badge.setVisible(bool(updated))
+
+    def prepare_for_width(self, width: int) -> int:
+        for label in (self.title_label, self.body_label, self.example_label):
+            label.setMinimumHeight(0)
+            label.setMaximumHeight(16777215)
+            label.setMinimumWidth(0)
+            label.setMaximumWidth(16777215)
+        self.setFixedWidth(width)
+        layout = self.layout()
+        margins = layout.contentsMargins()
+        body_width = max(80, width - margins.left() - margins.right())
+        total = margins.top() + margins.bottom()
+        spacing = layout.spacing()
+
+        visible_heights: list[int] = []
+        for label in (self.title_label, self.body_label, self.example_label):
+            if label.isHidden():
+                continue
+            label.setFixedWidth(body_width)
+            height = label.heightForWidth(body_width) if label.wordWrap() else label.sizeHint().height()
+            if height < 0:
+                height = label.sizeHint().height()
+            if label.wordWrap():
+                height += 6
+            label.setMinimumHeight(height)
+            visible_heights.append(height)
+
+        badge_height = 0
+        if not self.restart_badge.isHidden() or not self.updated_badge.isHidden():
+            badge_height = max(self.restart_badge.sizeHint().height(), self.updated_badge.sizeHint().height())
+            visible_heights.insert(2, badge_height)
+
+        total += sum(visible_heights)
+        total += spacing * max(0, len(visible_heights) - 1)
+        total += 8
+        self.resize(width, total)
+        return total
+
+
+class HintButton(QWidget):
+    activated = Signal(object)
+    hovered = Signal(object)
+    unhovered = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setFixedSize(18, 18)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+
+    def enterEvent(self, event) -> None:
+        self.hovered.emit(self)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.unhovered.emit(self)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.activated.emit(self)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = QRectF(0.5, 0.5, 17.0, 17.0)
+        painter.setPen(QPen(_to_qcolor("rgba(139,92,246,.40)"), 1))
+        painter.setBrush(_to_qcolor("rgba(139,92,246,.16)"))
+        painter.drawEllipse(rect)
+        painter.setPen(_to_qcolor("#9f8bff"))
+        font = _ui_font(pixel_size=10)
+        font.setFamily("Segoe UI")
+        painter.setFont(font)
+        painter.drawText(QRectF(0.0, -0.5, 18.0, 18.0), int(Qt.AlignmentFlag.AlignCenter), "?")
 
 
 class SettingsWindow(QDialog):
@@ -382,6 +465,9 @@ class SettingsWindow(QDialog):
             title_lbl.setObjectName("danger_title" if card.dangerous else "card_title")
             tag_lbl = QLabel(card.tag)
             tag_lbl.setObjectName("card_tag")
+            tag_lbl.ensurePolished()
+            tag_width = tag_lbl.fontMetrics().horizontalAdvance(tag_lbl.text()) + 14
+            tag_lbl.setFixedSize(tag_width, 20)
             header_layout.addWidget(title_lbl)
             header_layout.addStretch()
             header_layout.addWidget(tag_lbl, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -409,23 +495,26 @@ class SettingsWindow(QDialog):
 
         label = QLabel(_setting_title(spec))
         label.setObjectName("setting_label")
-        label.setFont(_ui_font(pixel_size=11))
+        label_font = _ui_font(pixel_size=11)
+        label_font.setFamily("Cascadia Code")
+        label.setFont(label_font)
         label.ensurePolished()
-        label_width = max(44, label.sizeHint().width() + 24)
+        label_width = max(44, label.fontMetrics().horizontalAdvance(label.text()) + 17)
         label.setFixedWidth(label_width)
         label.setFixedHeight(18)
         label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
-        hint = QToolButton()
-        hint.setText("?")
+        hint = HintButton()
         hint.setObjectName("hint_button")
-        hint.setFixedSize(18, 18)
-        hint.installEventFilter(self)
+        hint.hovered.connect(lambda _button, button=hint: self._show_hint_popup(button, self._hint_targets[button]))
+        hint.activated.connect(lambda _button, button=hint: self._show_hint_popup(button, self._hint_targets[button]))
+        hint.unhovered.connect(lambda _button: self._hide_hint_popup())
         self._hint_targets[hint] = spec
 
         layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.setSpacing(2)
         layout.addStretch(1)
 
         value = self._changed.get(spec.path, dotted_get(self._payload, spec.path))
@@ -454,16 +543,10 @@ class SettingsWindow(QDialog):
         if self._hint_popup is None:
             return
         self._hint_popup.set_spec(spec, updated=spec.path in self._changed)
-        self._hint_popup.setFixedWidth(314)
-        layout = self._hint_popup.layout()
-        layout.invalidate()
-        layout.activate()
-        height = layout.minimumSize().height()
-        self._hint_popup.resize(314, height)
+        width = _hint_popup_width(spec)
+        height = self._hint_popup.prepare_for_width(width)
         preferred = anchor.mapTo(self, QPoint(-12, anchor.height() + 7))
         panel_rect = self._panel.geometry() if self._panel is not None else self.rect()
-        width = self._hint_popup.width()
-        height = self._hint_popup.height()
         x = max(panel_rect.left() + 12, min(preferred.x(), panel_rect.right() - width - 12))
         y = preferred.y()
         if y + height > panel_rect.bottom() - 12:
@@ -625,6 +708,27 @@ def _hint_example(spec: SettingSpec) -> str:
     if spec.options:
         return " / ".join(str(option) for option in spec.options)
     return ""
+
+
+def _hint_popup_width(spec: SettingSpec) -> int:
+    from PySide6.QtGui import QFontMetrics
+
+    font = _ui_font(pixel_size=11)
+    font.setFamily("Cascadia Code")
+    metrics = QFontMetrics(font)
+    description = _hint_description(spec)
+    example = _hint_example(spec)
+    words = description.replace("\n", " ").split()
+    longest_word_width = max((metrics.horizontalAdvance(word) for word in words), default=0)
+    example_width = max((metrics.horizontalAdvance(line) for line in example.splitlines()), default=0)
+    title_width = metrics.horizontalAdvance(spec.path)
+
+    target = max(252, title_width + 58, longest_word_width + 90, min(example_width + 58, 360))
+    if len(description) > 220 or len(example) > 90:
+        target = max(target, 334)
+    elif len(description) > 150 or len(example) > 60:
+        target = max(target, 314)
+    return min(360, target)
 
 
 _TITLE_BY_PATH: dict[str, str] = {
