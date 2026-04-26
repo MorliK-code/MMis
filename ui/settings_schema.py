@@ -123,6 +123,14 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                 title="Ollama",
                 tag="providers.ollama",
                 settings=(
+                    SettingSpec(
+                        "ui.console.auto_start_ollama",
+                        "Auto start Ollama",
+                        kind="bool",
+                        description="Automatically start `ollama serve` from the desktop UI when Ollama is unavailable.",
+                        example="true",
+                        live=True,
+                    ),
                     SettingSpec("llm.providers.ollama.base_url", "Base URL", example="http://127.0.0.1:11434", restart_required=True),
                     SettingSpec("llm.providers.ollama.timeout_sec", "Timeout sec", kind="float", example="120.0"),
                     SettingSpec("llm.providers.ollama.retries", "Retries", kind="int", example="1"),
@@ -282,7 +290,6 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                     SettingSpec("ui.console.show_thinking", "Show thinking", kind="bool", example="true", live=True),
                     SettingSpec("ui.console.thinking_first", "Thinking first", kind="bool", example="false", live=True),
                     SettingSpec("ui.console.auto_start_api", "Auto start API", kind="bool", example="true", restart_required=True),
-                    SettingSpec("ui.console.auto_start_ollama", "Auto start Ollama", kind="bool", example="false", restart_required=True),
                 ),
             ),
         ),

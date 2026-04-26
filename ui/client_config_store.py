@@ -132,6 +132,7 @@ DEFAULT_UI_STATE: dict[str, Any] = {
     "web_mode": "auto",
     "active_topic_title": "",
     "last_persona_name": "Default",
+    "ollama_models_cache": [],
 }
 
 
@@ -188,3 +189,31 @@ def set_last_persona_name(name: str) -> None:
     if not clean:
         return
     merge_ui_state({"last_persona_name": clean})
+
+
+def get_ollama_models_cache() -> list[str]:
+    """Returns last known Ollama model list from portable UI state."""
+    state = load_ui_state()
+    raw = state.get("ollama_models_cache") or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def set_ollama_models_cache(models: list[str]) -> None:
+    """Persists last known Ollama model list to portable UI state."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in models or []:
+        name = str(item or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    merge_ui_state({"ollama_models_cache": out})

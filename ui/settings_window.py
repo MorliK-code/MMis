@@ -29,6 +29,7 @@ from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor,
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE
 from ui.settings_widgets import SettingEditor
+from ui.ollama_runtime import ensure_ollama_started
 
 
 class SettingsHintPopup(QFrame):
@@ -106,13 +107,69 @@ class SettingsHintPopup(QFrame):
         badge_height = 0
         if not self.restart_badge.isHidden() or not self.updated_badge.isHidden():
             badge_height = max(self.restart_badge.sizeHint().height(), self.updated_badge.sizeHint().height())
-            visible_heights.insert(2, badge_height)
+            # Usually badges go after title (index 0) and body (index 1)
+            # So insert at index 2 or just append if others are missing
+            idx = min(2, len(visible_heights))
+            visible_heights.insert(idx, badge_height)
 
         total += sum(visible_heights)
         total += spacing * max(0, len(visible_heights) - 1)
         total += 8
-        self.resize(width, total)
+        self.setFixedHeight(total)
+        self.setFixedWidth(width)
         return total
+
+
+class SettingsMessageBox(QDialog):
+    def __init__(self, parent: QWidget | None, title: str, text: str, *, kind: str = "info"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setObjectName("settings_message_box")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setMinimumWidth(420)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(10)
+
+        icon = QLabel("i" if kind == "info" else "!")
+        icon.setObjectName("settings_message_icon")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setFixedSize(30, 30)
+        header.addWidget(icon)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("settings_message_title")
+        header.addWidget(title_label, 1)
+        root.addLayout(header)
+
+        body = QLabel(text)
+        body.setObjectName("settings_message_body")
+        body.setWordWrap(True)
+        root.addWidget(body)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.addStretch()
+
+        ok_btn = QPushButton("OK")
+        ok_btn.setObjectName("primary_button")
+        ok_btn.clicked.connect(self.accept)
+        buttons.addWidget(ok_btn)
+        root.addLayout(buttons)
+
+    @staticmethod
+    def information(parent: QWidget | None, title: str, text: str) -> None:
+        SettingsMessageBox(parent, title, text, kind="info").exec()
+
+    @staticmethod
+    def warning(parent: QWidget | None, title: str, text: str) -> None:
+        SettingsMessageBox(parent, title, text, kind="warning").exec()
 
 
 class HintButton(QWidget):
@@ -645,7 +702,7 @@ class SettingsWindow(QDialog):
             if path not in updates and path not in self._editors:
                 updates[path] = value
         if errors:
-            QMessageBox.warning(self, "Settings validation", "\n".join(errors))
+            SettingsMessageBox.warning(self, "Settings validation", "\n".join(errors))
             return
         if not updates:
             return
@@ -663,12 +720,37 @@ class SettingsWindow(QDialog):
         self._refresh_preview()
         self.saved.emit(copy.deepcopy(updates))
         
+        self._maybe_start_ollama_after_save(updates)
+        
         if not online:
-            QMessageBox.information(
+            SettingsMessageBox.information(
                 self,
                 "Offline settings",
                 f"API сейчас недоступен ({message}).\n"
                 "Изменения сохранены локально и будут отправлены после подключения."
+            )
+
+    def _maybe_start_ollama_after_save(self, updates: dict[str, Any]) -> None:
+        enabled = updates.get("ui.console.auto_start_ollama")
+        if enabled is None:
+            return
+        if not bool(enabled):
+            return
+
+        base_url = str(dotted_get(self._payload, "llm.providers.ollama.base_url", "http://127.0.0.1:11434") or "http://127.0.0.1:11434")
+        ok, message = ensure_ollama_started(base_url=base_url, wait_sec=8.0)
+
+        if ok:
+            SettingsMessageBox.information(
+                self,
+                "Ollama",
+                "Ollama запущена или уже была активна.",
+            )
+        else:
+            SettingsMessageBox.warning(
+                self,
+                "Ollama",
+                f"Не удалось запустить Ollama.\n{message}",
             )
 
     def _on_search(self, text: str) -> None:
@@ -833,7 +915,7 @@ _TITLE_BY_PATH: dict[str, str] = {
     "ui.console.show_thinking": "Показывать thinking",
     "ui.console.thinking_first": "Thinking первым",
     "ui.console.auto_start_api": "Автостарт API",
-    "ui.console.auto_start_ollama": "Автостарт Ollama",
+    "ui.console.auto_start_ollama": "Автозапуск Ollama",
     "debug.memory_inspector_enabled": "Memory Inspector",
     "debug.show_raw_scores": "Raw scores",
     "debug.show_filtered_items": "Filtered items",
@@ -927,7 +1009,7 @@ _DESCRIPTION_BY_PATH: dict[str, str] = {
     "ui.console.show_thinking": "Показывать блок thinking в интерфейсе.",
     "ui.console.thinking_first": "Показывать thinking перед финальным ответом.",
     "ui.console.auto_start_api": "Автоматически стартовать API при запуске UI/console.",
-    "ui.console.auto_start_ollama": "Автоматически стартовать Ollama при запуске UI/console.",
+    "ui.console.auto_start_ollama": "Если включено, desktop UI попробует запустить `ollama serve`, когда Ollama недоступна.",
     "debug.memory_inspector_enabled": "Включает Memory Inspector в интерфейсе.",
     "debug.show_raw_scores": "Показывает сырые оценки retrieval/scoring.",
     "debug.show_filtered_items": "Показывает элементы, отфильтрованные из memory retrieval.",

@@ -52,6 +52,8 @@ from ui.chat_sessions import load_sessions as load_chat_sessions
 from ui.chat_sessions import make_new_chat_payload, now_iso as chat_now_iso
 from ui.chat_sessions import save_sessions as save_chat_sessions
 from ui.settings_window import SettingsWindow
+from ui.settings_schema import dotted_get
+from ui.ollama_runtime import ensure_ollama_started
 try:
     from modules.voice.voice_manager import VoiceState
 except ImportError:
@@ -262,6 +264,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._metrics_timer.timeout.connect(self._refresh_persona_label)
         if self.api is None:
             self.api = ApiClient()
+        self._ensure_ollama_autostart_on_ui_boot()
         self._audio_output = QAudioOutput(self)
         self._media_player = QMediaPlayer(self)
         self._media_player.setAudioOutput(self._audio_output)
@@ -2612,6 +2615,22 @@ class ChatWindow(proto.ExactChatWindow):
             QMessageBox.critical(self, "Озвучка", f"Не удалось озвучить ответ:\n{exc}")
         finally:
             QApplication.restoreOverrideCursor()
+
+    def _ensure_ollama_autostart_on_ui_boot(self) -> None:
+        try:
+            payload, _ = load_settings_payload()
+            enabled = dotted_get(payload, "ui.console.auto_start_ollama", False)
+            if not bool(enabled):
+                return
+            
+            provider = str(dotted_get(payload, "llm.provider", "ollama") or "ollama").lower()
+            if provider not in {"ollama", "auto"}:
+                return
+            
+            base_url = str(dotted_get(payload, "llm.providers.ollama.base_url", "http://127.0.0.1:11434") or "http://127.0.0.1:11434")
+            QTimer.singleShot(300, lambda: ensure_ollama_started(base_url=base_url, wait_sec=1.0))
+        except Exception:
+            pass
 
     def closeEvent(self, event) -> None:
         metrics_timer = getattr(self, "_metrics_timer", None)

@@ -419,12 +419,42 @@ QScrollArea, QScrollArea#settings_scroll, QScrollArea#settings_scroll > QWidget 
     border: 0;
     background: transparent;
 }
-QPlainTextEdit#json_preview {
+QFrame#json_preview {
     color: #c4b5fd;
     background: rgba(139, 92, 246, 16);
     border: 1px solid rgba(139, 92, 246, 45);
     border-radius: 8px;
     font-family: Consolas, Cascadia Code, monospace;
     font-size: 10px;
+}
+
+QDialog#settings_message_box {
+    background: rgba(15, 16, 24, 248);
+    border: 1px solid rgba(139, 92, 246, 82);
+    border-radius: 14px;
+}
+
+QLabel#settings_message_icon {
+    color: #ede9fe;
+    background: rgba(139, 92, 246, 58);
+    border: 1px solid rgba(139, 92, 246, 92);
+    border-radius: 15px;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 17px;
+    font-weight: 800;
+}
+
+QLabel#settings_message_title {
+    color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+QLabel#settings_message_body {
+    color: #cbd5e1;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.35;
 }
 """.replace("__CHEVRON_DOWN__", _CHEVRON_DOWN)

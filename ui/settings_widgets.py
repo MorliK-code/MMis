@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Signal, Qt, QSize, QRect, QRectF, QTimer, QEvent
+from PySide6.QtCore import Signal, Qt, QSize, QRect, QRectF, QTimer, QEvent, QThread
 from PySide6.QtGui import QCursor, QFont, QFontMetricsF, QIcon, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,9 +26,20 @@ from PySide6.QtWidgets import (
 )
 
 from ui.settings_schema import SettingSpec
-from ui.chat_shell import ToggleSwitch, _ui_font, _to_qcolor, TEXT, MUTED, PlainTextScrollOverlay
+from ui.chat_shell import (
+    ToggleSwitch,
+    PaintedButton,
+    _ui_font,
+    _to_qcolor,
+    TEXT,
+    MUTED,
+    LINE,
+    PlainTextScrollOverlay,
+)
+from ui.api_client import ApiClient
 
 _PENCIL_ICON = Path(__file__).resolve().parent / "assets" / "settings_pencil.svg"
+_CHEVRON_ICON = Path(__file__).resolve().parent / "assets" / "settings_chevron_down.svg"
 
 _TEXT_EDITOR_POPUP_STYLE = """
 QFrame#settings_text_editor_popup {
@@ -529,6 +540,301 @@ class TextValueEditor(QWidget):
         self.updateGeometry()
 
 
+def _extract_model_names(raw_models: Any) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for item in list(raw_models or []):
+        if isinstance(item, str):
+            name = item.strip()
+        elif isinstance(item, dict):
+            name = str(item.get("name") or item.get("model") or item.get("id") or "").strip()
+        else:
+            name = str(
+                getattr(item, "name", "")
+                or getattr(item, "model", "")
+                or getattr(item, "id", "")
+                or ""
+            ).strip()
+
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+
+    return out
+
+
+class ModelListWorker(QThread):
+    loaded = Signal(str, list)
+    failed = Signal(str)
+
+    def __init__(self, current: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.current = str(current or "").strip()
+
+    def run(self) -> None:
+        try:
+            from ui.api_client import ApiClient
+
+            payload = ApiClient().list_models(timeout=2.5)
+            runtime = str(payload.get("runtime_model") or self.current or "").strip()
+            models = _extract_model_names(payload.get("models"))
+
+            if runtime and runtime not in models:
+                models.insert(0, runtime)
+            if self.current and self.current not in models:
+                models.insert(0, self.current)
+
+            self.loaded.emit(runtime or self.current, models)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ModelPickerPopup(QFrame):
+    modelSelected = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("settings_text_editor_popup")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(_TEXT_EDITOR_POPUP_STYLE)
+        self.setFixedWidth(240)
+
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(10, 10, 10, 10)
+        self._layout.setSpacing(8)
+
+        self.title_label = QLabel("Модели")
+        self.title_label.setObjectName("settings_text_editor_title")
+        self._layout.addWidget(self.title_label)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("settings_text_editor_description")
+        self.status_label.setVisible(False)
+        self._layout.addWidget(self.status_label)
+
+        self.list_wrap = QWidget(self)
+        self.list_layout = QVBoxLayout(self.list_wrap)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(8)
+        self._layout.addWidget(self.list_wrap)
+
+    def set_status(self, text: str) -> None:
+        text = str(text or "").strip()
+        self.status_label.setText(text)
+        self.status_label.setVisible(bool(text))
+
+    def set_models(self, current: str, models: list[str]) -> None:
+        current = str(current or "").strip()
+        models = _extract_model_names(models)
+        if current and current not in models:
+            models.insert(0, current)
+        
+        self._populate(current, models)
+
+    def _populate(self, active: str, models: list[str]) -> None:
+        while self.list_layout.count():
+            item = self.list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if not models:
+            models = [active or "qwen3:8b"]
+
+        for model in models:
+            button = PaintedButton()
+            button.set_button_font(_ui_font(pixel_size=12))
+            button.set_button_padding(8, 6, 8, 6)
+            button.set_button_radius(8)
+            button.set_text_alignment(Qt.AlignmentFlag.AlignLeft)
+            button.configure_colors(
+                normal_bg="rgba(16,18,22,.28)",
+                normal_border=LINE,
+                normal_text=MUTED,
+                hover_bg="rgba(139,92,246,.10)",
+                hover_border="rgba(139,92,246,.18)",
+                hover_text=TEXT,
+                active_bg="rgba(139,92,246,.14)",
+                active_border="rgba(139,92,246,.22)",
+                active_text=TEXT,
+            )
+            button.set_active(model == active)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            button.setText(f"{model}{'    ✓' if model == active else ''}")
+            button.clicked.connect(lambda _checked=False, name=model: self._select_model(name))
+            self.list_layout.addWidget(button)
+
+        self.adjustSize()
+
+    def _select_model(self, model: str) -> None:
+        self.modelSelected.emit(str(model or ""))
+        self.close()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 12.0, 12.0)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
+class ModelNameEditor(QWidget):
+    valueChanged = Signal()
+
+    def __init__(self, value: Any, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._value = str(value or "").strip()
+        self._models_cache: list[str] = [self._value] if self._value else []
+        self._popup: ModelPickerPopup | None = None
+        self._worker: ModelListWorker | None = None
+        self._loading = False
+        self.setProperty("compact_value_control", True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(24)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.preview = QPushButton(self)
+        self.preview.setObjectName("settings_value_preview")
+        self.preview.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.preview.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.preview.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.preview.setFixedHeight(24)
+        self.preview.clicked.connect(self._request_popup)
+        layout.addWidget(self.preview)
+
+        self.arrow_button = QToolButton(self)
+        self.arrow_button.setObjectName("settings_value_edit_button")
+        self.arrow_button.setIcon(QIcon(str(_CHEVRON_ICON)))
+        self.arrow_button.setFixedSize(28, 24)
+        self.arrow_button.setIconSize(QSize(13, 13))
+        self.arrow_button.setToolTip("Выбрать модель")
+        self.arrow_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.arrow_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.arrow_button.clicked.connect(self._request_popup)
+        layout.addWidget(self.arrow_button)
+
+        self._refresh_preview()
+        QTimer.singleShot(0, self.refresh_models_async)
+
+    def value(self) -> str:
+        return self._value
+
+    def set_value(self, value: Any) -> None:
+        value = str(value or "").strip()
+        if value == self._value:
+            return
+        self._value = value
+        if value and value not in self._models_cache:
+            self._models_cache.insert(0, value)
+        self._refresh_preview()
+        if self._popup is not None:
+            self._popup.set_models(self._value, self._models_cache)
+        self.valueChanged.emit()
+
+    def sizeHint(self) -> QSize:
+        text_width = self.preview.fontMetrics().horizontalAdvance(self.preview.text())
+        width = min(420, max(120, text_width + 52))
+        return QSize(width, 22)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(110, 22)
+
+    def refresh_models_async(self) -> None:
+        if self._loading:
+            return
+        self._loading = True
+        if self._popup is not None:
+            self._popup.set_status("обновляю список...")
+
+        self._worker = ModelListWorker(self._value, self)
+        self._worker.loaded.connect(self._on_models_loaded)
+        self._worker.failed.connect(self._on_models_failed)
+        self._worker.finished.connect(self._on_worker_finished)
+        self._worker.start()
+
+    def _ensure_popup(self) -> None:
+        if self._popup is not None:
+            return
+        self._popup = ModelPickerPopup(self.window())
+        self._popup.modelSelected.connect(self.set_value)
+        self._popup.set_models(self._value, self._models_cache)
+
+    def _request_popup(self) -> None:
+        self._ensure_popup()
+        self._show_popup()
+        if len(self._models_cache) <= 1:
+            self.refresh_models_async()
+
+    def _show_popup(self) -> None:
+        self._ensure_popup()
+        if self._popup is None:
+            return
+
+        if self._popup.isVisible():
+            self._popup.raise_()
+            self._popup.activateWindow()
+            return
+
+        self._popup.set_models(self._value, self._models_cache)
+        self._popup.adjustSize()
+
+        width = max(240, self.width())
+        height = min(360, max(96, self._popup.sizeHint().height()))
+        self._popup.setFixedWidth(width)
+        self._popup.resize(width, height)
+
+        pos = self.mapToGlobal(self.rect().bottomLeft())
+        screen = QApplication.screenAt(pos) or QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            if pos.x() + width > available.right():
+                pos.setX(max(available.left(), available.right() - width))
+            if pos.y() + height > available.bottom():
+                pos.setY(max(available.top(), self.mapToGlobal(self.rect().topLeft()).y() - height - 6))
+
+        self._popup.move(pos)
+        self._popup.show()
+        self._popup.raise_()
+
+    def _on_models_loaded(self, runtime: str, models: list[str]) -> None:
+        runtime = str(runtime or "").strip()
+        models = _extract_model_names(models)
+        if runtime:
+            self._value = runtime
+        if self._value and self._value not in models:
+            models.insert(0, self._value)
+        self._models_cache = models
+        self._refresh_preview()
+        if self._popup is not None:
+            self._popup.set_status("")
+            self._popup.set_models(self._value, self._models_cache)
+
+    def _on_models_failed(self, error_text: str) -> None:
+        if self._value and self._value not in self._models_cache:
+            self._models_cache.insert(0, self._value)
+        if self._popup is not None:
+            self._popup.set_status("API недоступно, показан кеш")
+            self._popup.set_models(self._value, self._models_cache)
+
+    def _on_worker_finished(self) -> None:
+        self._loading = False
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _refresh_preview(self) -> None:
+        text = self._value or "empty"
+        self.preview.setText(text)
+        self.preview.setToolTip(self._value)
+        self.setMaximumWidth(self.sizeHint().width())
+        self.updateGeometry()
+
+
 class NumericValueEditor(QWidget):
     valueChanged = Signal()
 
@@ -664,6 +970,8 @@ class SettingEditor(QWidget):
             return str(widget._current)
         if isinstance(widget, QComboBox):
             return str(widget.currentText())
+        if isinstance(widget, ModelNameEditor):
+            return widget.value()
         if isinstance(widget, TextValueEditor):
             return widget.parsed_value()
         if isinstance(widget, QPlainTextEdit):
@@ -700,6 +1008,8 @@ class SettingEditor(QWidget):
                 widget.addItem(text)
                 idx = widget.findText(text)
             widget.setCurrentIndex(max(0, idx))
+        elif isinstance(widget, ModelNameEditor):
+            widget.set_value(value)
         elif isinstance(widget, TextValueEditor):
             widget.set_value(value)
         elif isinstance(widget, QPlainTextEdit):
@@ -721,6 +1031,11 @@ class SettingEditor(QWidget):
             self.valueChanged.emit(None)
 
     def _build_widget(self, value: Any) -> QWidget:
+        if self.spec.path == "llm.model_name":
+            widget = ModelNameEditor(value)
+            widget.valueChanged.connect(self._emit_changed)
+            return widget
+
         kind = self.spec.kind
         if kind == "bool":
             container = QWidget()
