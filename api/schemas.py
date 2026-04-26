@@ -53,6 +53,7 @@ class HealthResponse(BaseModel):
     profile_parameters: dict
     model_status: dict = Field(default_factory=dict)
     memory_status: dict = Field(default_factory=dict)
+    server_resources: dict = Field(default_factory=dict)
 
 
 class ModelsResponse(BaseModel):

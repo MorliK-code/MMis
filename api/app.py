@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import queue
 import re
+import socket
 import threading
 import time
+import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
@@ -27,6 +29,7 @@ from api.schemas import (
     ThinkingRequest,
     VerboseRequest,
     WebModeRequest,
+    JsonModeRequest,
 )
 from config.settings import get_profile, load_config
 from core.brain import Brain
@@ -36,9 +39,45 @@ from memory_core.adapter import get_memory_core_adapter
 from memory_core.utils.text_sanitizer import is_internal_error_reply
 from utils.logger import get_logger, log_json
 
+try:
+    import psutil  # type: ignore
+except Exception:  # pragma: no cover
+    psutil = None
+
+try:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"The pynvml package is deprecated\..*",
+            category=FutureWarning,
+        )
+        import pynvml  # type: ignore
+except Exception:  # pragma: no cover
+    pynvml = None
+
 
 # Инициализируем memory_core_adapter в lifespan для контроля запуска worker
 memory_core_adapter = None
+_nvml_ready = False
+_nvml_checked = False
+
+
+def _init_nvml_once() -> bool:
+    global _nvml_checked, _nvml_ready
+    if _nvml_ready:
+        return True
+    if _nvml_checked:
+        return False
+    if pynvml is None:
+        _nvml_checked = True
+        return False
+    try:
+        pynvml.nvmlInit()
+        _nvml_ready = True
+    except Exception:
+        _nvml_ready = False
+    _nvml_checked = True
+    return _nvml_ready
 
 
 def _shutdown_memory_core_worker() -> None:
@@ -566,6 +605,42 @@ def _build_model_status() -> dict[str, Any]:
     return status
 
 
+def _build_server_resources() -> dict[str, Any]:
+    resources: dict[str, Any] = {
+        "host": socket.gethostname(),
+        "cpu": None,
+        "ram": None,
+        "gpu": None,
+        "vram": None,
+    }
+    if psutil is not None:
+        try:
+            mem = psutil.virtual_memory()
+            resources["cpu"] = {"percent": float(psutil.cpu_percent(interval=None))}
+            resources["ram"] = {
+                "used_bytes": int(mem.used),
+                "total_bytes": int(mem.total),
+                "percent": float(mem.percent),
+            }
+        except Exception as exc:
+            resources["error"] = str(exc)
+
+    if _init_nvml_once() and pynvml is not None:
+        try:
+            handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            resources["gpu"] = {"percent": float(util.gpu)}
+            resources["vram"] = {
+                "used_bytes": int(meminfo.used),
+                "total_bytes": int(meminfo.total),
+            }
+        except Exception:
+            resources["gpu"] = None
+            resources["vram"] = None
+    return resources
+
+
 def _build_health_response() -> HealthResponse:
     active_profile, quality_profile = _resolve_effective_profiles()
     _profile, profile_payload = _resolved_profile_payload()
@@ -583,6 +658,7 @@ def _build_health_response() -> HealthResponse:
         profile_parameters=profile_payload,
         model_status=model_status,
         memory_status=memory_status,
+        server_resources=_build_server_resources(),
     )
 
 
