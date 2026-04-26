@@ -56,32 +56,40 @@ class ReplyWorker(QThread):
         signal.emit(text)
 
     def run(self):
+        payload = {
+            "api_ok": False,
+            "model": "",
+            "model_status": {},
+            "memory_status": {},
+            "server_resources": {},
+            "error": "",
+        }
         try:
-            reply = self.api.stream_chat(
-                text=self.user_text,
-                store_turn=self.store_turn,
-                think=self.think,
-                verbose=self.verbose,
-                json_mode=self.json_mode,
-                attachments=self.attachments,
-                on_chunk=lambda piece: self._emit_stream_piece(piece, self.chunk),
-                on_thinking_chunk=lambda piece: self._emit_stream_piece(piece, self.thinking_chunk),
-                on_debug_event=self.debug_event.emit,
-                cancel_requested=lambda: self._cancel_requested,
-            )
-            if self._cancel_requested:
-                return
-            self.finished.emit(
-                ReplyResult(
-                    text=reply.answer,
-                    stats=reply.stats,
-                    thinking=reply.thinking,
-                    thinking_generated=bool(reply.thinking_generated),
-                    model=reply.model,
-                    debug_trace=reply.debug_trace,
-                    memory_debug_snapshot=reply.memory_debug_snapshot,
-                )
-            )
+            health = None
+            try:
+                ping_resp = self.api.ping(timeout=1.2)
+                payload["api_ok"] = str(ping_resp.get("status") or "").strip().lower() == "ok"
+            except Exception:
+                # fallback for older server versions without /ping
+                health = self.api.health(timeout=5.0)
+                payload["api_ok"] = str(health.get("status") or "").strip().lower() == "ok"
+
+            if payload["api_ok"]:
+                try:
+                    if health is None:
+                        health = self.api.health(timeout=8.0)
+                    
+                    payload["model"] = str(health.get("model") or self.api.get_runtime_model() or "")
+                    payload["thinking_enabled"] = bool(health.get("thinking_enabled", False))
+                    payload["verbose_enabled"] = bool(health.get("verbose_enabled", False))
+                    payload["json_mode_enabled"] = bool(health.get("json_mode_enabled", False))
+                    payload["web_mode"] = str(health.get("web_mode") or "")
+                    payload["persona_name"] = str(health.get("persona_name") or "").strip()
+                    payload["model_status"] = dict(health.get("model_status") or {})
+                    payload["memory_status"] = dict(health.get("memory_status") or {})
+                    payload["server_resources"] = dict(health.get("server_resources") or {})
+                except Exception as exc:
+                    payload["error"] = f"health details unavailable: {exc}"
         except ApiClientError as exc:
             self.errored.emit(str(exc))
         except Exception as exc:
@@ -106,16 +114,31 @@ class StatusPollWorker(QThread):
             "error": "",
         }
         try:
-            health = self.api.health(timeout=2.5)
-            payload["api_ok"] = str(health.get("status") or "").strip().lower() == "ok"
-            payload["model"] = str(health.get("model") or self.api.get_runtime_model() or "")
-            payload["thinking_enabled"] = bool(health.get("thinking_enabled", False))
-            payload["verbose_enabled"] = bool(health.get("verbose_enabled", False))
-            payload["json_mode_enabled"] = bool(health.get("json_mode_enabled", False))
-            payload["web_mode"] = str(health.get("web_mode") or "")
-            payload["model_status"] = dict(health.get("model_status") or {})
-            payload["memory_status"] = dict(health.get("memory_status") or {})
-            payload["server_resources"] = dict(health.get("server_resources") or {})
+            health = None
+            try:
+                ping_resp = self.api.ping(timeout=1.2)
+                payload["api_ok"] = str(ping_resp.get("status") or "").strip().lower() == "ok"
+            except Exception:
+                # fallback for older server versions without /ping
+                health = self.api.health(timeout=5.0)
+                payload["api_ok"] = str(health.get("status") or "").strip().lower() == "ok"
+
+            if payload["api_ok"]:
+                try:
+                    if health is None:
+                        health = self.api.health(timeout=8.0)
+                    
+                    payload["model"] = str(health.get("model") or self.api.get_runtime_model() or "")
+                    payload["thinking_enabled"] = bool(health.get("thinking_enabled", False))
+                    payload["verbose_enabled"] = bool(health.get("verbose_enabled", False))
+                    payload["json_mode_enabled"] = bool(health.get("json_mode_enabled", False))
+                    payload["web_mode"] = str(health.get("web_mode") or "")
+                    payload["persona_name"] = str(health.get("persona_name") or "").strip()
+                    payload["model_status"] = dict(health.get("model_status") or {})
+                    payload["memory_status"] = dict(health.get("memory_status") or {})
+                    payload["server_resources"] = dict(health.get("server_resources") or {})
+                except Exception as exc:
+                    payload["error"] = f"health details unavailable: {exc}"
         except ApiClientError as exc:
             payload["error"] = str(exc)
         except Exception as exc:

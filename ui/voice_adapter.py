@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from config.settings import get_config_payload
+from ui.settings_sync_service import load_settings_payload
 from modules.voice.stt import STTConfig, STTService
 from modules.voice.tts import TTSConfig, TTSService
 from modules.voice.voice_manager import VoiceManager
@@ -107,7 +107,8 @@ def build_tts_config(*, tts_voice: str = "", tts_rate: str = "") -> TTSConfig:
 
 def _voice_runtime_config() -> dict:
     try:
-        voice = dict((get_config_payload(force_reload=False) or {}).get("voice") or {})
+        payload, _ = load_settings_payload()
+        voice = dict(payload.get("voice") or {})
     except Exception:
         voice = {}
     return voice

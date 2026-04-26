@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 **/__pycache__/
 *.py[cod]
@@ -46,3 +46,6 @@ node_modules/
 **/node_modules/
 *.tmp
 *.temp
+
+# MMis Client
+ui/.mmis_client/

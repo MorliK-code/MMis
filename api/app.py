@@ -31,7 +31,7 @@ from api.schemas import (
     WebModeRequest,
     JsonModeRequest,
 )
-from config.settings import get_profile, load_config
+from config.settings import get_config_payload, get_profile, load_config, update_config_values
 from core.brain import Brain
 from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
@@ -641,11 +641,51 @@ def _build_server_resources() -> dict[str, Any]:
     return resources
 
 
+@app.get("/ping")
+def ping() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 def _build_health_response() -> HealthResponse:
     active_profile, quality_profile = _resolve_effective_profiles()
     _profile, profile_payload = _resolved_profile_payload()
     memory_status = _build_memory_llm_status()
     model_status = _build_model_status()
+    state_mgr = _runtime.brain.state_manager
+    
+    character_id = ""
+    try:
+        if hasattr(state_mgr, "get_active_character_id"):
+            character_id = str(state_mgr.get_active_character_id() or "").strip().lower()
+    except Exception:
+        character_id = ""
+
+    if not character_id:
+        try:
+            character_id = str(
+                state_mgr.get("active_character_id")
+                or state_mgr.get("active_personality_id")
+                or "default"
+            ).strip().lower()
+        except Exception:
+            character_id = "default"
+
+    character_id = character_id or "default"
+
+    char_info = {}
+    try:
+        if hasattr(state_mgr, "storage") and hasattr(state_mgr.storage, "load_character"):
+            char_info = state_mgr.storage.load_character(character_id) or {}
+    except Exception:
+        char_info = {}
+
+    persona_name = str(
+        char_info.get("name")
+        or char_info.get("display_name")
+        or char_info.get("title")
+        or "Default"
+    ).strip() or "Default"
+
     return HealthResponse(
         status="ok",
         model=_runtime.model,
@@ -653,6 +693,7 @@ def _build_health_response() -> HealthResponse:
         verbose_enabled=bool(_runtime.verbose_enabled),
         json_mode_enabled=bool(_runtime.json_mode_enabled),
         web_mode=str(_runtime.web_mode),
+        persona_name=persona_name,
         active_profile=str(active_profile or "BALANCED"),
         quality_profile=str(quality_profile or "BALANCED"),
         profile_parameters=profile_payload,
@@ -1138,6 +1179,31 @@ def feedback(req: FeedbackRequest) -> dict:
             penalty=penalty,
         )
     return {"status": "ok", "character_id": character_id, "feedback": score}
+    
+
+@app.get("/config")
+def get_config() -> dict:
+    """Returns the full nested configuration payload."""
+    with _runtime.lock:
+        return get_config_payload(force_reload=True)
+
+
+@app.patch("/config")
+def patch_config(updates: dict[str, Any]) -> dict:
+    """Updates configuration values using a flat dotted-path dictionary."""
+    with _runtime.lock:
+        try:
+            update_config_values(updates)
+            # Re-sync local runtime state with new config if needed
+            new_cfg = load_config(force_reload=True)
+            _runtime.settings = new_cfg
+            _runtime.model = str(new_cfg.model_name or _runtime.model).strip()
+            _runtime.thinking_enabled = bool(new_cfg.thinking_enabled)
+            _runtime.web_mode = new_cfg.web_mode if bool(new_cfg.internet_enabled) else "off"
+            _runtime.json_mode_enabled = bool(new_cfg.json_mode_enabled)
+            return {"status": "ok", "message": f"Updated {len(updates)} values"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/unload-llm")

@@ -199,7 +199,7 @@ class AppSettings:
     active_profile: str = "BALANCED"
     llm_default_provider: str = "ollama"
     model_name: str = "qcwind/qwen3-8b-instruct-Q4-K-M"
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 8027
     thinking_enabled: bool = True
     web_mode: str = "auto"

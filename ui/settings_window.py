@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config.settings import get_config_payload, update_config_values
+from ui.settings_sync_service import load_settings_payload, save_settings_updates
 from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor, _ui_font
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE
@@ -182,12 +182,18 @@ class SettingsWindow(QDialog):
         self._invalid: dict[str, str] = {}
         self._labels: dict[str, QLabel] = {}
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._sync_meta: dict[str, Any] = {}
         self._search_text = ""
         self._build_ui()
         self.reload()
 
     def reload(self) -> None:
-        self._payload = get_config_payload(force_reload=True)
+        try:
+            self._payload, self._sync_meta = load_settings_payload()
+        except Exception as exc:
+            # Fallback for "offline" or broken state
+            self._payload = {}
+            self._sync_meta = {"status": "error", "message": str(exc), "offline": True}
         self._changed.clear()
         self._invalid.clear()
         self._render_category()
@@ -596,12 +602,17 @@ class SettingsWindow(QDialog):
         local_api = dotted_get(self._payload, "ui.api.local_base_url", "")
         public_api = dotted_get(self._payload, "ui.api.public_base_url", "")
         selected_api = public_api if str(active_api).lower() == "public" else local_api
+        online = bool(self._sync_meta.get("online"))
+        source = self._sync_meta.get("source", "schema")
+        pending = self._sync_meta.get("pending_count", 0)
+        
         self.state_label.setText(
             f"API                                      {selected_api or f'{api_host}:{api_port}'}\n"
             f"Profile: {profile}\n"
             f"Memory: enabled\n"
             f"Web: {web_mode}\n"
-            f"Voice: qwen/faster-whisper\n"
+            f"Sync: {'Online' if online else 'Offline'} ({source})\n"
+            f"Pending: {pending}\n"
             f"Changed: {len(self._changed)}"
         )
         self.diff_box.setPlainText(json.dumps(self._changed, ensure_ascii=False, indent=2, sort_keys=True))
@@ -638,9 +649,17 @@ class SettingsWindow(QDialog):
             return
         if not updates:
             return
-        update_config_values(updates)
+        online, message = save_settings_updates(updates)
         self.saved.emit(copy.deepcopy(updates))
         self.reload()
+        
+        if not online:
+            QMessageBox.information(
+                self,
+                "Offline settings",
+                f"API сейчас недоступен ({message}).\n"
+                "Изменения сохранены локально и будут отправлены после подключения."
+            )
 
     def _on_search(self, text: str) -> None:
         self._search_text = str(text or "").strip().lower()
@@ -654,7 +673,7 @@ class SettingsWindow(QDialog):
         self._render_category()
 
     def _filtered_cards(self, category: SettingCategory):
-        if not self._search_text:
+        if not getattr(self, "_search_text", ""):
             return category.cards
         cards = []
         for card in category.cards:
@@ -663,7 +682,7 @@ class SettingsWindow(QDialog):
         return tuple(cards)
 
     def _matches_search(self, spec: SettingSpec, category_title: str, card_title: str) -> bool:
-        needle = self._search_text
+        needle = getattr(self, "_search_text", "")
         if not needle:
             return True
         haystack = " ".join(

@@ -12,7 +12,7 @@ from modules.character.trait_policy import clamp_trait_map, clamp_trait_scalar, 
 from utils.datetime_local import now_local_iso, now_local_ts
 
 DEFAULT_CHARACTER_ID = "default"
-DEFAULT_CHARACTER_NAME = "Default"
+DEFAULT_CHARACTER_NAME = "Assistant"
 RESERVED_CHARACTER_DIRS: set[str] = set()
 
 
@@ -825,7 +825,10 @@ def _ensure_json(path: Path, payload) -> None:
 
 
 def _character_name(cid: str) -> str:
-    cleaned = str(cid or "").strip().replace("_", " ").replace("-", " ")
+    cleaned = str(cid or "").strip().lower()
+    if cleaned == "asya":
+        return "Ассистент"
+    cleaned = cleaned.replace("_", " ").replace("-", " ")
     if not cleaned:
         return DEFAULT_CHARACTER_NAME
     parts = [x for x in cleaned.split(" ") if x]

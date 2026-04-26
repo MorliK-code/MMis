@@ -10,10 +10,12 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from config.settings import load_config
-from utils.logger import get_logger, log_json
+import logging
 
-LOGGER = get_logger(__name__)
+from ui.client_config_store import get_selected_base_url
+
+LOGGER = logging.getLogger(__name__)
+
 
 class ApiClientError(RuntimeError):
     pass
@@ -33,13 +35,24 @@ class ApiReply:
 
 
 class ApiClient:
-    def __init__(self, base_url: str | None = None, timeout_sec: float = 2.5, stream_timeout_sec: float = 600.0):
-        cfg = load_config(force_reload=True)
-        env_url = cfg.api_url
-        self.base_url = (base_url or env_url).rstrip("/")
+    def _normalize_url(self, url: str) -> str:
+        if not url:
+            return ""
+        url = url.strip().rstrip("/")
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = "http://" + url
+        return url
+
+    def __init__(self, base_url: str | None = None, timeout_sec: float = 5.0, stream_timeout_sec: float = 600.0):
+        selected_url = get_selected_base_url()
+        self.base_url = self._normalize_url(base_url or selected_url or "http://127.0.0.1:8027")
         self.timeout_sec = float(timeout_sec)
         self.stream_timeout_sec = float(stream_timeout_sec)
-        self._runtime_model_cache = str(cfg.model_name).strip()
+        self._runtime_model_cache = ""
+
+    def set_base_url(self, base_url: str) -> None:
+        """Updates the base URL at runtime."""
+        self.base_url = self._normalize_url(base_url)
 
     def _url(self, path: str) -> str:
         if not path.startswith("/"):
@@ -60,24 +73,13 @@ class ApiClient:
             headers["Content-Type"] = "application/json"
 
         req = urllib_request.Request(self._url(path), data=data, headers=headers, method=method.upper())
-        log_json(
-            LOGGER,
-            "ui_api_request",
-            method=str(method or "").upper(),
-            path=str(path or ""),
-            has_payload=bool(payload),
-        )
+        LOGGER.debug("ui_api_request method=%s path=%s has_payload=%s", method, path, bool(payload))
+
         try:
             with urllib_request.urlopen(req, timeout=timeout or self.timeout_sec) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 out = self._parse_json(raw)
-                log_json(
-                    LOGGER,
-                    "ui_api_response",
-                    method=str(method or "").upper(),
-                    path=str(path or ""),
-                    status="ok",
-                )
+                LOGGER.debug("ui_api_response method=%s path=%s status=ok", method, path)
                 return out
         except urllib_error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
@@ -90,8 +92,8 @@ class ApiClient:
             LOGGER.warning("ui api http error method=%s path=%s code=%s detail=%s", method, path, exc.code, detail)
             raise ApiClientError(f"HTTP {exc.code}: {detail}") from exc
         except urllib_error.URLError as exc:
-            LOGGER.warning("ui api connection error method=%s path=%s reason=%s", method, path, exc.reason)
-            raise ApiClientError(f"API connection failed: {exc.reason}") from exc
+            LOGGER.warning("ui api connection error method=%s path=%s url=%s reason=%s", method, path, self._url(path), exc.reason)
+            raise ApiClientError(f"API connection failed ({self._url(path)}): {exc.reason}") from exc
         except (TimeoutError, socket.timeout) as exc:
             LOGGER.debug("ui api timeout method=%s path=%s timeout=%s", method, path, timeout or self.timeout_sec)
             raise ApiClientError(f"API request timed out: {path}") from exc
@@ -103,6 +105,9 @@ class ApiClient:
         payload = self._request_json("GET", "/health", timeout=timeout)
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)
         return payload
+
+    def ping(self, timeout: float | None = None) -> dict:
+        return self._request_json("GET", "/ping", timeout=timeout or 1.2)
 
     def list_models(self, timeout: float | None = None) -> dict:
         payload = self._request_json("GET", "/models", timeout=timeout)
@@ -213,16 +218,14 @@ class ApiClient:
         memory_debug_snapshot: dict | None = None
         chunk_count = 0
         thinking_chunk_count = 0
-        log_json(
-            LOGGER,
-            "ui_stream_start",
-            path="/chat/stream",
-            store_turn=bool(store_turn),
-            think=think if think is not None else "runtime",
-            verbose=verbose if verbose is not None else "runtime",
-            json_mode=json_mode if json_mode is not None else "runtime",
-            text_chars=len(str(text or "")),
-            attachments=len(payload.get("attachments") or []),
+        LOGGER.debug(
+            "ui_stream_start path=/chat/stream store_turn=%s think=%s verbose=%s json_mode=%s text_chars=%d attachments=%d",
+            bool(store_turn),
+            think if think is not None else "runtime",
+            verbose if verbose is not None else "runtime",
+            json_mode if json_mode is not None else "runtime",
+            len(str(text or "")),
+            len(payload.get("attachments") or []),
         )
 
         try:
@@ -253,8 +256,8 @@ class ApiClient:
                         # Live memory-debug event
                         if on_debug_event:
                             try:
-                                payload = self._parse_json(str(data or "{}"))
-                                on_debug_event(payload)
+                                payload_debug = self._parse_json(str(data or "{}"))
+                                on_debug_event(payload_debug)
                             except Exception:
                                 pass
                     elif kind == "error":
@@ -277,14 +280,13 @@ class ApiClient:
                             else None
                         )
                         self._runtime_model_cache = model or self._runtime_model_cache
-                        log_json(
-                            LOGGER,
-                            "ui_stream_done",
-                            model=model,
-                            chunks=chunk_count,
-                            thinking_chunks=thinking_chunk_count,
-                            answer_chars=len(answer),
-                            thinking_chars=len(thinking),
+                        LOGGER.debug(
+                            "ui_stream_done model=%s chunks=%d thinking_chunks=%d answer_chars=%d thinking_chars=%d",
+                            model,
+                            chunk_count,
+                            thinking_chunk_count,
+                            len(answer),
+                            len(thinking),
                         )
                         return ApiReply(
                             answer=answer,
@@ -301,8 +303,8 @@ class ApiClient:
             raw = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
             detail = raw
             try:
-                payload = self._parse_json(raw)
-                detail = str(payload.get("detail") or raw or exc)
+                payload_err = self._parse_json(raw)
+                detail = str(payload_err.get("detail") or raw or exc)
             except Exception:
                 detail = raw or str(exc)
             LOGGER.warning("ui stream http error code=%s detail=%s", exc.code, detail)
@@ -316,14 +318,13 @@ class ApiClient:
             LOGGER.exception("ui stream unexpected error")
             raise ApiClientError(str(exc)) from exc
 
-        log_json(
-            LOGGER,
-            "ui_stream_incomplete",
-            model=model,
-            chunks=chunk_count,
-            thinking_chunks=thinking_chunk_count,
-            answer_chars=len("".join(answer_parts)),
-            thinking_chars=len("".join(thinking_parts)),
+        LOGGER.debug(
+            "ui_stream_incomplete model=%s chunks=%d thinking_chunks=%d answer_chars=%d thinking_chars=%d",
+            model,
+            chunk_count,
+            thinking_chunk_count,
+            len("".join(answer_parts)),
+            len("".join(thinking_parts)),
         )
         return ApiReply(
             answer="".join(answer_parts),

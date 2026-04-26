@@ -28,8 +28,17 @@ from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl, Slot
 from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession, QMediaFormat, QMediaPlayer, QMediaRecorder
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
-from config.settings import DATA_DIR, load_config
-from llm.tokenizer import estimate_tokens
+from ui.settings_sync_service import load_settings_payload
+from ui.client_config_store import CLIENT_DATA_DIR
+try:
+    from llm.tokenizer import estimate_tokens
+except ImportError:
+    def estimate_tokens(text: str) -> int:
+        """Simple fallback token estimator when llm module is missing."""
+        if not text:
+            return 0
+        # Rough estimate: ~4 chars per token for English, ~2 for Russian/Cyrillic
+        return len(text) // 3 + 1
 import ui.chat_shell as proto
 from ui.api_client import ApiClient, ApiClientError
 from ui.chat_sessions import SINGLE_VISIBLE_CHAT_ID, SINGLE_VISIBLE_CHAT_TITLE
@@ -38,21 +47,60 @@ from ui.chat_sessions import load_sessions as load_chat_sessions
 from ui.chat_sessions import make_new_chat_payload, now_iso as chat_now_iso
 from ui.chat_sessions import save_sessions as save_chat_sessions
 from ui.settings_window import SettingsWindow
-from modules.voice.voice_manager import VoiceState
-from ui.voice_adapter import build_stt_config, build_stt_engine, build_tts_config, build_tts_engine, build_voice_manager
+try:
+    from modules.voice.voice_manager import VoiceState
+except ImportError:
+    class VoiceState:
+        IDLE = "idle"
+        LISTENING = "listening"
+        PROCESSING = "processing"
+        SPEAKING = "speaking"
+        ERROR = "error"
+try:
+    from ui.voice_adapter import build_stt_config, build_stt_engine, build_tts_config, build_tts_engine, build_voice_manager
+except ImportError:
+    # Fallback for voice manager if modules.voice is missing
+    def build_voice_manager():
+        class DummyVoiceManager:
+            def set_callbacks(self, **kwargs): pass
+            def get_state(self): return "idle"
+        return DummyVoiceManager()
 from ui.voice_panel import VoicePanel
 from ui.widgets.memory_inspector_panel import MemoryInspectorPanel
 from ui.workers import ReplyResult, ReplyWorker
 
 
-_cfg = load_config()
-MemoryStorageDir = Path(_cfg.memory_dir).expanduser().resolve()
-MMIS_VOICE_INPUT_DIR = Path(_cfg.voice_input_dir or (MemoryStorageDir / "voice" / "input")).expanduser().resolve()
-MMIS_VOICE_OUTPUT_DIR = Path(_cfg.voice_output_dir or (MemoryStorageDir / "voice" / "output")).expanduser().resolve()
-MMIS_VOICE_TTS_VOICE = str(_cfg.voice_tts_voice or "ru-RU-DmitryNeural")
-MMIS_VOICE_TTS_RATE = str(_cfg.voice_tts_rate or "+0%")
-MMIS_VOICE_TTS_VOLUME = str(_cfg.voice_tts_volume or "+0%")
-MMIS_VOICE_AUTO_SPEAK = bool(getattr(_cfg, "voice_auto_speak_replies", True))
+def _get_portable_config():
+    """Helper to get config values without depending on config.settings."""
+    try:
+        payload, _ = load_settings_payload()
+        return {
+            "memory_dir": payload.get("memory", {}).get("memory_dir") or "data/memory_core",
+            "voice_input_dir": payload.get("voice", {}).get("paths", {}).get("input_dir"),
+            "voice_output_dir": payload.get("voice", {}).get("paths", {}).get("output_dir"),
+            "voice_tts_voice": payload.get("voice", {}).get("tts", {}).get("voice") or "ru-RU-DmitryNeural",
+            "voice_tts_rate": payload.get("voice", {}).get("tts", {}).get("rate") or "+0%",
+            "voice_tts_volume": payload.get("voice", {}).get("tts", {}).get("volume") or "+0%",
+            "voice_auto_speak_replies": payload.get("voice", {}).get("auto_speak_replies", True),
+            "data_dir": payload.get("paths", {}).get("data_dir") or "data"
+        }
+    except Exception:
+        return {
+            "memory_dir": "data/memory_core",
+            "voice_tts_voice": "ru-RU-DmitryNeural",
+            "voice_auto_speak_replies": True,
+            "data_dir": "data"
+        }
+
+_cfg_dict = _get_portable_config()
+MemoryStorageDir = Path(_cfg_dict["memory_dir"]).expanduser().resolve()
+DATA_DIR = Path(_cfg_dict["data_dir"]).expanduser().resolve()
+MMIS_VOICE_INPUT_DIR = Path(_cfg_dict["voice_input_dir"] or (MemoryStorageDir / "voice" / "input")).expanduser().resolve()
+MMIS_VOICE_OUTPUT_DIR = Path(_cfg_dict["voice_output_dir"] or (MemoryStorageDir / "voice" / "output")).expanduser().resolve()
+MMIS_VOICE_TTS_VOICE = str(_cfg_dict["voice_tts_voice"])
+MMIS_VOICE_TTS_RATE = str(_cfg_dict["voice_tts_rate"])
+MMIS_VOICE_TTS_VOLUME = str(_cfg_dict["voice_tts_volume"])
+MMIS_VOICE_AUTO_SPEAK = bool(_cfg_dict["voice_auto_speak_replies"])
 
 HistoryRow = tuple[str, str, str | None, int | None, str | None]
 STAT_THINKING_PREFIX = "__thinking_ms__="
@@ -127,10 +175,22 @@ def _trim_title(text: str, limit: int = 40) -> str:
 
 class ChatWindow(proto.ExactChatWindow):
     def __init__(self):
-        self._sessions_dir = MemoryStorageDir / "ui_chats"
+        self._sessions_dir = CLIENT_DATA_DIR / "ui_chats"
         self._sessions_index_path = self._sessions_dir / "index.json"
-        self._legacy_sessions_path = MemoryStorageDir / "ui_chats.json"
-        self._ui_state_path = MemoryStorageDir / "ui_state.json"
+        self._legacy_sessions_path = CLIENT_DATA_DIR / "ui_chats.json"
+        self._ui_state_path = CLIENT_DATA_DIR / "ui_state.json"
+        
+        self._project_root = Path(__file__).resolve().parents[1]
+        self._legacy_sessions_dirs = [
+            self._project_root / "data" / "memory_core" / "ui_chats",
+            self._project_root / "data" / "ui_chats",
+            self._project_root / "tasks",
+        ]
+        self._legacy_ui_state_paths = [
+            self._project_root / "data" / "memory_core" / "ui_state.json",
+            self._project_root / "data" / "ui_state.json",
+        ]
+        
         self._legacy_visible_chat_backup_path = self._sessions_dir / "_legacy_multi_chat_backup.json"
         self._chat_sessions: list[dict] = []
         self._active_chat_id: str | None = None
@@ -154,6 +214,9 @@ class ChatWindow(proto.ExactChatWindow):
         self._queued_scroll_follow_only = False
         self._regenerate_scroll_spacer: QWidget | None = None
         self._last_memory_debug_snapshot: dict = {}
+        self._last_active_topic_title: str = ""
+        self._last_persona_name: str = "Default"
+        self._api_persona_name: str = ""
         self._voice_stt = None
         self._voice_tts_voice = MMIS_VOICE_TTS_VOICE
         self._voice_rate_percent = self._percent_to_int(MMIS_VOICE_TTS_RATE, default=0)
@@ -287,11 +350,12 @@ class ChatWindow(proto.ExactChatWindow):
 
     @staticmethod
     def _fallback_character_name(character_id: str) -> str:
-        cleaned = str(character_id or "").strip().replace("_", " ").replace("-", " ")
-        parts = [part for part in cleaned.split(" ") if part]
-        if not parts:
-            return ""
-        return " ".join(part[:1].upper() + part[1:] for part in parts)
+        cleaned = str(character_id or "").strip().lower()
+        if cleaned in {"", "default", "assistant", "none", "null"}:
+            return "Default"
+        if cleaned in {"asya", "асья", "ася"}:
+            return "Ася"
+        return str(character_id or "Default").strip() or "Default"
 
     @staticmethod
     def _payload_character_name(payload: dict) -> str:
@@ -322,28 +386,43 @@ class ChatWindow(proto.ExactChatWindow):
             cid = self._payload_character_id(row)
             if cid:
                 return cid
-        return "asya"
+        return "default"
 
     def _resolve_persona_display_name(self) -> str:
+        if self._api_persona_name:
+            self._last_persona_name = self._api_persona_name
+            return self._api_persona_name
+
         character_id = self._resolve_active_character_id()
         manifest = self._read_json_payload(MemoryStorageDir / "characters_runtime" / "manifest.json")
         character_paths = [
             MemoryStorageDir / "characters_runtime" / character_id / "character.json",
             DATA_DIR / "specs" / "characters" / character_id / "character.json",
         ]
+        
+        name = ""
         for path in character_paths:
             name = self._payload_character_name(self._read_json_payload(path))
             if name:
-                return name
-        for row in list(manifest.get("characters") or []):
-            if not isinstance(row, dict):
-                continue
-            if self._safe_character_id(row.get("id")) != character_id:
-                continue
-            name = self._payload_character_name(row)
-            if name:
-                return name
-        return self._fallback_character_name(character_id)
+                break
+        
+        if not name:
+            for row in list(manifest.get("characters") or []):
+                if not isinstance(row, dict):
+                    continue
+                if self._safe_character_id(row.get("id")) != character_id:
+                    continue
+                name = self._payload_character_name(row)
+                if name:
+                    break
+        
+        if not name:
+            name = self._fallback_character_name(character_id)
+
+        if name:
+            self._last_persona_name = name
+        
+        return self._last_persona_name or "Default"
 
     def _refresh_persona_label(self) -> None:
         label = getattr(self, "persona_label", None)
@@ -353,6 +432,7 @@ class ChatWindow(proto.ExactChatWindow):
         if name and label.text() != name:
             label.setText(name)
             label.adjustSize()
+            self._save_ui_state()
 
     def _build_models_popup(self, anchor: QWidget) -> proto.PopupFrame:
         return super()._build_models_popup(anchor)
@@ -735,8 +815,75 @@ class ChatWindow(proto.ExactChatWindow):
         perf, _stat_line = self._perf_from_stats(stats, fallback_elapsed_ms=elapsed_ms)
         return self._compose_stat_line(perf, resolved_thinking_ms or None)
 
+    def _load_legacy_project_sessions(self) -> tuple[list[dict], str | None]:
+        best_chats: list[dict] = []
+        best_active_id: str | None = None
+        best_history_len = 0
+
+        for sessions_dir in getattr(self, "_legacy_sessions_dirs", []):
+            index_path = sessions_dir / "index.json"
+            legacy_path = sessions_dir.parent / "ui_chats.json"
+            backup_path = sessions_dir / "_legacy_multi_chat_backup.json"
+            standalone_chat_path = sessions_dir / "chat.json"
+            
+            # Try main paths
+            try:
+                chats, active_id = load_chat_sessions(sessions_dir, index_path, legacy_path)
+                history_len = sum(len(chat.get("history") or []) for chat in chats if isinstance(chat, dict))
+                if history_len > best_history_len:
+                    best_chats = chats
+                    best_active_id = active_id
+                    best_history_len = history_len
+            except Exception:
+                pass
+
+            # Try standalone chat.json (often found in task backups)
+            if standalone_chat_path.exists():
+                try:
+                    chat_payload = json.loads(standalone_chat_path.read_text(encoding="utf-8-sig"))
+                    if isinstance(chat_payload, dict):
+                        # Convert single chat to list
+                        chat_payload["history"] = history_from_serializable(chat_payload.get("history"))
+                        chats = [chat_payload]
+                        history_len = len(chat_payload["history"])
+                        if history_len > best_history_len:
+                            best_chats = chats
+                            best_active_id = str(chat_payload.get("id"))
+                            best_history_len = history_len
+                except Exception:
+                    pass
+
+            # Try backup path specifically
+            if backup_path.exists():
+                try:
+                    # load_chat_sessions can take any file as legacy_path if others don't exist
+                    chats, active_id = load_chat_sessions(sessions_dir, sessions_dir / "non-existent.json", backup_path)
+                    history_len = sum(len(chat.get("history") or []) for chat in chats if isinstance(chat, dict))
+                    if history_len > best_history_len:
+                        best_chats = chats
+                        best_active_id = active_id
+                        best_history_len = history_len
+                except Exception:
+                    pass
+
+        return best_chats, best_active_id
+
     def _load_or_init_chat_sessions(self) -> None:
-        loaded, active_id = load_chat_sessions(self._sessions_dir, self._sessions_index_path, self._legacy_sessions_path)
+        loaded, active_id = load_chat_sessions(
+            self._sessions_dir,
+            self._sessions_index_path,
+            self._legacy_sessions_path,
+        )
+
+        current_history_len = sum(len(chat.get("history") or []) for chat in loaded if isinstance(chat, dict))
+
+        if current_history_len <= 0:
+            legacy_loaded, legacy_active_id = self._load_legacy_project_sessions()
+            legacy_history_len = sum(len(chat.get("history") or []) for chat in legacy_loaded if isinstance(chat, dict))
+            if legacy_history_len > 0:
+                loaded = legacy_loaded
+                active_id = legacy_active_id
+
         self._backup_legacy_visible_chats(loaded, active_id)
         chosen = collapse_to_single_visible_chat(loaded, active_id)
         self._chat_sessions = [chosen]
@@ -925,19 +1072,23 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot()
     def _open_settings_window(self) -> None:
-        if self._settings_window is None:
+        first_open = self._settings_window is None
+        if first_open:
             self._settings_window = SettingsWindow(self)
             self._settings_window.saved.connect(self._on_settings_saved)
             self._settings_window.finished.connect(lambda _code: setattr(self, "_settings_window", None))
-        self._settings_window.reload()
+        else:
+            try:
+                self._settings_window.reload()
+            except Exception as exc:
+                QMessageBox.warning(self, "Настройки", f"Не удалось обновить настройки:\n{exc}")
+
         self._settings_window.show()
         self._settings_window.raise_()
         self._settings_window.activateWindow()
 
     @Slot(object)
     def _on_settings_saved(self, _updates: object) -> None:
-        global _cfg
-        _cfg = load_config(force_reload=True)
         self.api = ApiClient()
         self._sync_runtime_controls()
         self._apply_context_chips()
@@ -1070,12 +1221,19 @@ class ChatWindow(proto.ExactChatWindow):
     def _sync_runtime_controls(self) -> None:
         if self.api:
             try:
-                payload = self.api.health(timeout=2.5)
+                payload = self.api.health(timeout=5.0)
                 if str(payload.get("status") or "").strip().lower() == "ok":
                     self._thinking_enabled = bool(payload.get("thinking_enabled", self._thinking_enabled))
                     self._verbose_enabled = bool(payload.get("verbose_enabled", self._verbose_enabled))
                     self._json_mode_enabled = bool(payload.get("json_mode_enabled", self._json_mode_enabled))
                     self._web_mode = str(payload.get("web_mode") or self._web_mode)
+                    persona_name = str(payload.get("persona_name") or "Default").strip() or "Default"
+                    self._api_persona_name = persona_name
+                    self._last_persona_name = persona_name
+                    self._refresh_persona_label()
+                    active_topic = str(payload.get("active_topic_title") or "").strip()
+                    if active_topic:
+                        self._last_active_topic_title = active_topic
                     model = str(payload.get("model") or "").strip()
                     if model:
                         self._active_model = model
@@ -1088,7 +1246,6 @@ class ChatWindow(proto.ExactChatWindow):
                 pass
         self._sync_controls_to_state()
         self._save_ui_state()
-        self._render_history()
 
     @Slot(object)
     def _on_backend_status_result(self, payload: object) -> None:
@@ -1102,6 +1259,11 @@ class ChatWindow(proto.ExactChatWindow):
             if model not in self._available_models:
                 self._available_models.append(model)
             self._populate_models(self._active_model, self._available_models)
+        
+        persona_name = str(row.get("persona_name") or "Default").strip() or "Default"
+        self._api_persona_name = persona_name
+        self._last_persona_name = persona_name
+        self._refresh_persona_label()
         for attr, key in (
             ("_thinking_enabled", "thinking_enabled"),
             ("_verbose_enabled", "verbose_enabled"),
@@ -1136,6 +1298,15 @@ class ChatWindow(proto.ExactChatWindow):
             self.web_mode_selector.blockSignals(False)
         self._apply_context_chips()
 
+    def _check_api_status(self) -> None:
+        """Background health check and status synchronization."""
+        if hasattr(self, "api") and self.api:
+            try:
+                # We reuse the sync logic to update UI state from backend health
+                self._sync_runtime_controls()
+            except Exception:
+                pass
+
     def _load_ui_state(self) -> None:
         try:
             if not self._ui_state_path.exists():
@@ -1148,6 +1319,12 @@ class ChatWindow(proto.ExactChatWindow):
         self._json_mode_enabled = bool(payload.get("json_mode_enabled", self._json_mode_enabled))
         self._screen_enabled = bool(payload.get("screen_enabled", self._screen_enabled))
         self._web_mode = str(payload.get("web_mode") or self._web_mode)
+        self._last_active_topic_title = str(payload.get("active_topic_title") or "")
+        saved_persona = str(payload.get("last_persona_name") or "").strip()
+        if saved_persona in {"", "Asya", "Ася", "asya"}:
+            self._last_persona_name = "Default"
+        else:
+            self._last_persona_name = saved_persona
 
     def _save_ui_state(self) -> None:
         payload = {
@@ -1156,6 +1333,8 @@ class ChatWindow(proto.ExactChatWindow):
             "json_mode_enabled": bool(self._json_mode_enabled),
             "screen_enabled": bool(self._screen_enabled),
             "web_mode": str(self._web_mode),
+            "active_topic_title": str(getattr(self, "_last_active_topic_title", "")),
+            "last_persona_name": str(getattr(self, "_last_persona_name", "Default") or "Default"),
         }
         try:
             self._ui_state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1317,6 +1496,11 @@ class ChatWindow(proto.ExactChatWindow):
             text = str(candidate or "").strip()
             if text:
                 return _trim_title(text, limit=40)
+        
+        cached = str(getattr(self, "_last_active_topic_title", "") or "").strip()
+        if cached:
+            return _trim_title(cached, limit=40)
+            
         return SINGLE_VISIBLE_CHAT_TITLE
 
     @staticmethod
@@ -1970,7 +2154,7 @@ class ChatWindow(proto.ExactChatWindow):
 
     @staticmethod
     def _perf_from_stats(stats: dict, fallback_elapsed_ms: int = 0) -> tuple[list[str], str | None]:
-        verbose_enabled = bool(stats.get("verbose_enabled"))
+        verbose_enabled = True
         elapsed = int(float(stats.get("display_elapsed_ms") or 0) or 0)
         if elapsed <= 0:
             elapsed = int(float(

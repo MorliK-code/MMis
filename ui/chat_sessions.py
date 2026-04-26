@@ -39,6 +39,8 @@ def history_from_serializable(rows: list[dict] | None) -> list[HistoryRow]:
         if not isinstance(row, dict):
             continue
         role = str(row.get("role") or "")
+        if role == "assistant":
+            role = "ai"
         if role not in {"system", "user", "ai"}:
             continue
         text = str(row.get("text") or "")
@@ -74,13 +76,7 @@ def make_new_chat_payload(existing_count: int, title: str | None = None, incogni
 
 def collapse_to_single_visible_chat(chats: list[dict] | None, active_chat_id: str | None = None) -> dict:
     rows = [dict(chat or {}) for chat in list(chats or []) if isinstance(chat, dict) and not bool(chat.get("incognito", False))]
-    chosen: dict | None = None
-    target_id = str(active_chat_id or "").strip()
-    if target_id:
-        chosen = next((row for row in rows if str(row.get("id") or "").strip() == target_id), None)
-    if chosen is None and rows:
-        chosen = max(rows, key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""))
-    if chosen is None:
+    if not rows:
         ts = now_iso()
         return {
             "id": SINGLE_VISIBLE_CHAT_ID,
@@ -90,13 +86,24 @@ def collapse_to_single_visible_chat(chats: list[dict] | None, active_chat_id: st
             "updated_at": ts,
             "history": [],
         }
+
+    # Sort rows by updated_at to maintain some chronological order during merge
+    rows.sort(key=lambda r: str(r.get("updated_at") or r.get("created_at") or ""))
+    
+    merged_history = []
+    for row in rows:
+        merged_history.extend(list(row.get("history") or []))
+    
+    # We take the latest metadata for the container
+    latest = rows[-1]
+    
     return {
         "id": SINGLE_VISIBLE_CHAT_ID,
         "title": SINGLE_VISIBLE_CHAT_TITLE,
         "incognito": False,
-        "created_at": str(chosen.get("created_at") or now_iso()),
-        "updated_at": str(chosen.get("updated_at") or now_iso()),
-        "history": list(chosen.get("history") or []),
+        "created_at": str(latest.get("created_at") or now_iso()),
+        "updated_at": str(latest.get("updated_at") or now_iso()),
+        "history": merged_history,
     }
 
 

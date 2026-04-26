@@ -2849,6 +2849,7 @@ class ExactChatWindow(QMainWindow):
         self.chat_scroll_overlay = ChatScrollOverlay(self.scroll)
         chat_lay.addWidget(self.scroll)
 
+        chat_lay.addStretch(1)
         composer_wrap = QFrame()
         composer_wrap.setObjectName("composer_wrap")
         composer_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -2884,7 +2885,6 @@ class ExactChatWindow(QMainWindow):
         composer_lay.addLayout(actions)
         composer_wrap_lay.addWidget(composer)
         chat_lay.addWidget(composer_wrap)
-        chat_lay.addStretch(1)
 
         self.functions_popup = self._build_functions_popup(self.functions_btn)
         self.models_popup = self._build_models_popup(self.models_button)
@@ -3271,7 +3271,7 @@ class ExactChatWindow(QMainWindow):
     def _start_metrics_timer(self) -> None:
         self._metrics_timer = QTimer(self)
         self._metrics_timer.timeout.connect(self._refresh_backend_status)
-        self._metrics_timer.start(1500)
+        self._metrics_timer.start(3000)
         self._refresh_backend_status()
 
     def _on_about_to_quit(self) -> None:
@@ -3345,10 +3345,10 @@ class ExactChatWindow(QMainWindow):
         api_ok = bool(row.get("api_ok"))
         if not api_ok:
             self._backend_status_failures = int(getattr(self, "_backend_status_failures", 0)) + 1
-            if bool(getattr(self, "_backend_status_seen_ok", False)) and self._backend_status_failures < 3:
+            if self._backend_status_failures < 3:
                 return
             self._apply_backend_status(api_ok=False, error=str(row.get("error") or ""))
-            self._apply_server_resources({})
+            # self._apply_server_resources({})
             return
         self._backend_status_seen_ok = True
         self._backend_status_failures = 0
@@ -3372,7 +3372,9 @@ class ExactChatWindow(QMainWindow):
             model_state=model_state,
             memory_state=memory_state,
         )
-        self._apply_server_resources(dict(row.get("server_resources") or {}))
+        resources = dict(row.get("server_resources") or {})
+        if resources:
+            self._apply_server_resources(resources)
 
     def _apply_server_resources(self, resources: dict) -> None:
         cpu = dict(resources.get("cpu") or {})

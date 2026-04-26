@@ -1,3 +1,0 @@
-pyside6
-pyside6_addons
-pyside6_essentials
