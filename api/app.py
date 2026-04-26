@@ -29,6 +29,7 @@ from api.schemas import (
     ThinkingRequest,
     VerboseRequest,
     WebModeRequest,
+    JsonModeRequest,
 )
 from config.settings import get_profile, load_config
 from core.brain import Brain
