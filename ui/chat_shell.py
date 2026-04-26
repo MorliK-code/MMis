@@ -4,7 +4,6 @@ import os
 import re
 import sys
 import time
-import warnings
 from html import escape
 from math import exp
 from dataclasses import dataclass
@@ -33,22 +32,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-try:
-    import psutil  # type: ignore
-except Exception:  # pragma: no cover
-    psutil = None
-
-try:
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=r"The pynvml package is deprecated\..*",
-            category=FutureWarning,
-        )
-        import pynvml  # type: ignore
-except Exception:  # pragma: no cover
-    pynvml = None
 
 try:
     from ui.api_client import ApiClient, ApiClientError
@@ -291,6 +274,21 @@ class CrispLabel(QLabel):
 
 INLINE_CODE_TEXT = "#d8ccff"
 INLINE_CODE_BG = "#211a2f"
+
+
+def _as_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_bytes_pair(used: object, total: object) -> str:
+    used_value = _as_float(used)
+    total_value = _as_float(total)
+    if used_value is None or total_value is None or total_value <= 0:
+        return ""
+    return f"{used_value / (1024**3):.1f} / {total_value / (1024**3):.1f} GB"
 
 
 def _paired_marker_positions(text: str, marker: str) -> set[int]:
@@ -2698,13 +2696,6 @@ class ExactChatWindow(QMainWindow):
         self._backend_status_failures = 0
         self._messages_view_height_sync_queued = False
         self._shutting_down = False
-        self._gpu_ok = False
-        if pynvml is not None:
-            try:
-                pynvml.nvmlInit()
-                self._gpu_ok = True
-            except Exception:
-                self._gpu_ok = False
         self._build_ui()
         self._bind_popups()
         self._load_models()
@@ -3279,10 +3270,8 @@ class ExactChatWindow(QMainWindow):
 
     def _start_metrics_timer(self) -> None:
         self._metrics_timer = QTimer(self)
-        self._metrics_timer.timeout.connect(self._refresh_metrics)
         self._metrics_timer.timeout.connect(self._refresh_backend_status)
         self._metrics_timer.start(1500)
-        self._refresh_metrics()
         self._refresh_backend_status()
 
     def _on_about_to_quit(self) -> None:
@@ -3359,6 +3348,7 @@ class ExactChatWindow(QMainWindow):
             if bool(getattr(self, "_backend_status_seen_ok", False)) and self._backend_status_failures < 3:
                 return
             self._apply_backend_status(api_ok=False, error=str(row.get("error") or ""))
+            self._apply_server_resources({})
             return
         self._backend_status_seen_ok = True
         self._backend_status_failures = 0
@@ -3382,32 +3372,32 @@ class ExactChatWindow(QMainWindow):
             model_state=model_state,
             memory_state=memory_state,
         )
+        self._apply_server_resources(dict(row.get("server_resources") or {}))
 
-    def _refresh_metrics(self) -> None:
-        if self._shutting_down:
-            return
-        if psutil is not None:
-            try:
-                cpu = psutil.cpu_percent(interval=None)
-                mem = psutil.virtual_memory()
-                self.cpu_pill.set_value(f"{cpu:.0f}%")
-                self.ram_pill.set_value(f"{mem.used / (1024**3):.1f} / {mem.total / (1024**3):.1f} GB")
-            except KeyboardInterrupt:
-                return
-            except Exception:
-                pass
-        if self._gpu_ok and pynvml is not None:
-            try:
-                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                self.gpu_pill.set_value(f"{util.gpu}%")
-                self.vram_pill.set_value(f"{meminfo.used / (1024**3):.1f} / {meminfo.total / (1024**3):.1f} GB")
-            except KeyboardInterrupt:
-                return
-            except Exception:
-                self.gpu_pill.set_value("--")
-                self.vram_pill.set_value("--")
+    def _apply_server_resources(self, resources: dict) -> None:
+        cpu = dict(resources.get("cpu") or {})
+        ram = dict(resources.get("ram") or {})
+        gpu = dict(resources.get("gpu") or {})
+        vram = dict(resources.get("vram") or {})
+        host = str(resources.get("host") or "").strip()
+
+        cpu_percent = _as_float(cpu.get("percent"))
+        self.cpu_pill.set_value(f"{cpu_percent:.0f}%" if cpu_percent is not None else "--")
+
+        ram_text = _format_bytes_pair(ram.get("used_bytes"), ram.get("total_bytes"))
+        self.ram_pill.set_value(ram_text or "--")
+
+        gpu_percent = _as_float(gpu.get("percent"))
+        self.gpu_pill.set_value(f"{gpu_percent:.0f}%" if gpu_percent is not None else "--")
+
+        vram_text = _format_bytes_pair(vram.get("used_bytes"), vram.get("total_bytes"))
+        self.vram_pill.set_value(vram_text or "--")
+
+        suffix = f" API server: {host}" if host else " API server"
+        self.cpu_pill.setToolTip(f"CPU{suffix}")
+        self.ram_pill.setToolTip(f"RAM{suffix}")
+        self.gpu_pill.setToolTip(f"GPU{suffix}")
+        self.vram_pill.setToolTip(f"VRAM{suffix}")
 
     def closeEvent(self, event) -> None:
         self._on_about_to_quit()

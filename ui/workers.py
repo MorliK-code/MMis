@@ -102,6 +102,7 @@ class StatusPollWorker(QThread):
             "model": "",
             "model_status": {},
             "memory_status": {},
+            "server_resources": {},
             "error": "",
         }
         try:
@@ -114,6 +115,7 @@ class StatusPollWorker(QThread):
             payload["web_mode"] = str(health.get("web_mode") or "")
             payload["model_status"] = dict(health.get("model_status") or {})
             payload["memory_status"] = dict(health.get("memory_status") or {})
+            payload["server_resources"] = dict(health.get("server_resources") or {})
         except ApiClientError as exc:
             payload["error"] = str(exc)
         except Exception as exc:

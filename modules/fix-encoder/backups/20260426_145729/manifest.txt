@@ -1,0 +1,4 @@
+files=3
+memory_core/inspect/inspector_page.html | mojibake_lines:1 (read:utf-8-sig)
+ui/chat_window.py | mojibake_lines:59 (read:utf-8-sig)
+ui/settings_window.py | mojibake_lines:149 (read:utf-8-sig)
