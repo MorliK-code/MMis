@@ -2750,8 +2750,10 @@ class ExactChatWindow(QMainWindow):
         rr = QHBoxLayout(); rr.setSpacing(6)
         for pill in (self.cpu_pill, self.ram_pill, self.gpu_pill, self.vram_pill):
             rr.addWidget(pill)
-        rw = QWidget(); rw.setLayout(rr)
-        tb.addWidget(rw, 0, Qt.AlignmentFlag.AlignRight)
+        self.resources_widget = QWidget()
+        self.resources_widget.setLayout(rr)
+        self.resources_widget.setVisible(True)
+        tb.addWidget(self.resources_widget, 0, Qt.AlignmentFlag.AlignRight)
         root_lay.addWidget(topbar)
 
         layout = QHBoxLayout()
@@ -3271,8 +3273,8 @@ class ExactChatWindow(QMainWindow):
     def _start_metrics_timer(self) -> None:
         self._metrics_timer = QTimer(self)
         self._metrics_timer.timeout.connect(self._refresh_backend_status)
-        self._metrics_timer.start(3000)
-        self._refresh_backend_status()
+        self._metrics_timer.start(1500)
+        QTimer.singleShot(0, self._refresh_backend_status)
 
     def _on_about_to_quit(self) -> None:
         self._shutting_down = True
@@ -3317,13 +3319,17 @@ class ExactChatWindow(QMainWindow):
         self._set_status_pill("memory", bool(api_ok and memory_ok), memory_tip)
 
     def _refresh_backend_status(self) -> None:
-        if self._shutting_down:
+        if getattr(self, "_backend_status_inflight", False):
             return
+        self._backend_status_inflight = True
         if self.api is None or StatusPollWorker is None:
             self._apply_backend_status(api_ok=False, error="ApiClient unavailable")
+            self._clear_server_resources()
+            self._backend_status_inflight = False
             return
         worker = getattr(self, "_status_worker", None)
         if worker is not None and worker.isRunning():
+            self._backend_status_inflight = False
             return
         worker = StatusPollWorker(self.api)
         self._status_worker = worker
@@ -3346,12 +3352,15 @@ class ExactChatWindow(QMainWindow):
         if not api_ok:
             self._backend_status_failures = int(getattr(self, "_backend_status_failures", 0)) + 1
             if self._backend_status_failures < 3:
+                self._backend_status_inflight = False
                 return
             self._apply_backend_status(api_ok=False, error=str(row.get("error") or ""))
-            # self._apply_server_resources({})
+            self._clear_server_resources()
+            self._backend_status_inflight = False
             return
         self._backend_status_seen_ok = True
         self._backend_status_failures = 0
+        self._backend_status_inflight = False
         model = str(row.get("model") or "").strip()
         memory_status = dict(row.get("memory_status") or {})
         model_status = dict(row.get("model_status") or {})
@@ -3375,8 +3384,34 @@ class ExactChatWindow(QMainWindow):
         resources = dict(row.get("server_resources") or {})
         if resources:
             self._apply_server_resources(resources)
+        else:
+            self._clear_server_resources()
+
+    def _clear_server_resources(self) -> None:
+        for attr in ("cpu_pill", "ram_pill", "gpu_pill", "vram_pill"):
+            pill = getattr(self, attr, None)
+            if pill is not None:
+                try:
+                    pill.set_value("--")
+                    pill.setToolTip("")
+                except Exception:
+                    pass
+
+        widget = getattr(self, "resources_widget", None)
+        if widget is not None:
+            widget.setVisible(True)
 
     def _apply_server_resources(self, resources: dict) -> None:
+        resources = dict(resources or {})
+
+        widget = getattr(self, "resources_widget", None)
+        if widget is not None:
+            widget.setVisible(True)
+
+        if not resources:
+            self._clear_server_resources()
+            return
+
         cpu = dict(resources.get("cpu") or {})
         ram = dict(resources.get("ram") or {})
         gpu = dict(resources.get("gpu") or {})

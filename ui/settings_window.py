@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui.settings_sync_service import load_settings_payload, save_settings_updates
+from ui.settings_sync_service import dotted_set, load_settings_payload, save_settings_updates
 from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor, _ui_font
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE
@@ -189,7 +189,7 @@ class SettingsWindow(QDialog):
 
     def reload(self) -> None:
         try:
-            self._payload, self._sync_meta = load_settings_payload()
+            self._payload, self._sync_meta = load_settings_payload(allow_remote=False)
         except Exception as exc:
             # Fallback for "offline" or broken state
             self._payload = {}
@@ -649,9 +649,19 @@ class SettingsWindow(QDialog):
             return
         if not updates:
             return
-        online, message = save_settings_updates(updates)
+        online, message = save_settings_updates(updates, sync_remote=False)
+        
+        for path, value in updates.items():
+            dotted_set(self._payload, path, value)
+        
+        self._changed.clear()
+        self._invalid.clear()
+        
+        for path in updates:
+            self._update_badge(path)
+            
+        self._refresh_preview()
         self.saved.emit(copy.deepcopy(updates))
-        self.reload()
         
         if not online:
             QMessageBox.information(

@@ -80,9 +80,13 @@ def build_payload_from_schema(local_config: dict) -> dict:
                 dotted_set(payload, spec.path, value)
     return payload
 
-def load_settings_payload(api_client: ApiClient | None = None) -> tuple[dict, dict]:
+def load_settings_payload(
+    api_client: ApiClient | None = None,
+    *,
+    allow_remote: bool = False,
+) -> tuple[dict, dict]:
     """
-    Loads the settings payload, trying to sync with the API if available.
+    Loads the settings payload, optionally syncing with the API.
     Returns (payload, meta).
     """
     local_cfg = load_client_config()
@@ -90,11 +94,14 @@ def load_settings_payload(api_client: ApiClient | None = None) -> tuple[dict, di
     
     meta = {
         "online": False,
-        "source": "cache",
+        "source": "cache" if local_cfg.get("server_snapshot") else "schema",
         "pending_count": len(local_cfg.get("pending_updates", {})),
         "last_error": local_cfg.get("last_error")
     }
     
+    if not allow_remote:
+        return payload, meta
+
     client = api_client or ApiClient()
     
     # Try to fetch from server
@@ -108,47 +115,63 @@ def load_settings_payload(api_client: ApiClient | None = None) -> tuple[dict, di
             payload = build_payload_from_schema(local_cfg)
             meta["online"] = True
             meta["source"] = "server"
-            
-            # Note: Pending flush disabled here to prevent UI hang on open.
-            # Use separate sync mechanism if needed.
+            meta["pending_count"] = len(local_cfg.get("pending_updates", {}))
     except Exception as e:
         LOGGER.debug("Server sync failed (offline mode): %s", e)
         meta["online"] = False
         meta["source"] = "cache" if local_cfg.get("server_snapshot") else "schema"
+        meta["last_error"] = str(e)
 
     return payload, meta
 
-def save_settings_updates(updates: dict, api_client: ApiClient | None = None) -> tuple[bool, str]:
+def save_settings_updates(
+    updates: dict, 
+    api_client: ApiClient | None = None,
+    *,
+    sync_remote: bool = False,
+) -> tuple[bool, str]:
     """
-    Saves setting updates locally and tries to sync them with the API.
+    Saves setting updates locally and optionally tries to sync them with the API.
     Returns (online, message).
     """
     if not updates:
         return True, "No changes"
         
-    # Always save locally first
+    # 1. Always save locally first (instantly)
     merge_local_values(updates)
     merge_pending_updates(updates)
     
-    # Handle connection updates immediately
+    # 2. Handle connection updates immediately
     conn_updates = {}
     for path, val in updates.items():
-        if path.startswith("ui.api."):
-            key = path.replace("ui.api.", "")
+        if str(path).startswith("ui.api."):
+            key = str(path).replace("ui.api.", "")
             conn_updates[key] = val
     
     if conn_updates:
         update_connection_config(conn_updates)
         
+    # 3. If no remote sync requested, stop here
+    if not sync_remote:
+        return False, "Saved locally"
+
+    # 4. Filter out UI-only settings before sending to server
+    remote_updates = {
+        path: value
+        for path, value in updates.items()
+        if not str(path).startswith("ui.api.")
+    }
+
+    if not remote_updates:
+        clear_pending_updates(list(updates.keys()))
+        return True, "Local UI settings saved"
+
     client = api_client or ApiClient()
     
     try:
         # Try to send to server
-        client._request_json("PATCH", "/config", payload=updates, timeout=2.0)
-        clear_pending_updates(list(updates.keys()))
-        
-        # After successful PATCH, it's good to refresh the snapshot, 
-        # but for now we just assume success.
+        client._request_json("PATCH", "/config", payload=remote_updates, timeout=1.0)
+        clear_pending_updates(list(remote_updates.keys()))
         return True, "Synced with server"
     except Exception as e:
         LOGGER.warning("Offline save: %s", e)

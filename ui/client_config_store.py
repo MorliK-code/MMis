@@ -116,3 +116,75 @@ def set_last_error(error: str | None) -> None:
     cfg = load_client_config()
     cfg["last_error"] = error
     save_client_config(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Portable UI state (ui/.mmis_client/ui_state.json)
+# ---------------------------------------------------------------------------
+
+UI_STATE_PATH = CLIENT_DATA_DIR / "ui_state.json"
+
+DEFAULT_UI_STATE: dict[str, Any] = {
+    "think_enabled": True,
+    "verbose_enabled": False,
+    "json_mode_enabled": False,
+    "screen_enabled": False,
+    "web_mode": "auto",
+    "active_topic_title": "",
+    "last_persona_name": "Default",
+}
+
+
+def load_ui_state() -> dict[str, Any]:
+    """Loads local portable UI state from ui/.mmis_client/ui_state.json."""
+    if not UI_STATE_PATH.exists():
+        return dict(DEFAULT_UI_STATE)
+
+    try:
+        with UI_STATE_PATH.open("r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return dict(DEFAULT_UI_STATE)
+        out = dict(DEFAULT_UI_STATE)
+        out.update(data)
+        return out
+    except Exception:
+        return dict(DEFAULT_UI_STATE)
+
+
+def save_ui_state(data: dict[str, Any]) -> dict[str, Any]:
+    """Saves local portable UI state to ui/.mmis_client/ui_state.json."""
+    out = dict(DEFAULT_UI_STATE)
+    if isinstance(data, dict):
+        out.update(data)
+
+    try:
+        CLIENT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with UI_STATE_PATH.open("w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return out
+
+
+def merge_ui_state(updates: dict[str, Any]) -> dict[str, Any]:
+    """Merges updates into the current UI state and persists."""
+    state = load_ui_state()
+    if isinstance(updates, dict):
+        state.update(updates)
+    return save_ui_state(state)
+
+
+def get_last_persona_name() -> str:
+    """Returns the last known persona name, defaulting to 'Default'."""
+    state = load_ui_state()
+    name = str(state.get("last_persona_name") or "").strip()
+    return name or "Default"
+
+
+def set_last_persona_name(name: str) -> None:
+    """Persists the last known persona name to the portable UI state."""
+    clean = str(name or "").strip()
+    if not clean:
+        return
+    merge_ui_state({"last_persona_name": clean})

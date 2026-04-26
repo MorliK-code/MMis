@@ -29,7 +29,12 @@ from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
 from ui.settings_sync_service import load_settings_payload
-from ui.client_config_store import CLIENT_DATA_DIR
+from ui.client_config_store import (
+    CLIENT_DATA_DIR,
+    load_ui_state,
+    save_ui_state,
+    set_last_persona_name,
+)
 try:
     from llm.tokenizer import estimate_tokens
 except ImportError:
@@ -388,10 +393,28 @@ class ChatWindow(proto.ExactChatWindow):
                 return cid
         return "default"
 
+    def _cache_persona_name(self, name: str) -> None:
+        clean = str(name or "").strip()
+        if not clean:
+            return
+
+        # Не перетираем уже известное имя пустым/служебным Default,
+        # если раньше уже было нормальное имя.
+        if clean == "Default" and str(getattr(self, "_last_persona_name", "") or "").strip() not in {"", "Default"}:
+            return
+
+        self._api_persona_name = clean
+        self._last_persona_name = clean
+        set_last_persona_name(clean)
+        self._refresh_persona_label()
+
     def _resolve_persona_display_name(self) -> str:
         if self._api_persona_name:
-            self._last_persona_name = self._api_persona_name
             return self._api_persona_name
+
+        cached = str(getattr(self, "_last_persona_name", "") or "").strip()
+        if cached and cached != "Default":
+            return cached
 
         character_id = self._resolve_active_character_id()
         manifest = self._read_json_payload(MemoryStorageDir / "characters_runtime" / "manifest.json")
@@ -422,7 +445,7 @@ class ChatWindow(proto.ExactChatWindow):
         if name:
             self._last_persona_name = name
         
-        return self._last_persona_name or "Default"
+        return str(getattr(self, "_last_persona_name", "") or "Default").strip() or "Default"
 
     def _refresh_persona_label(self) -> None:
         label = getattr(self, "persona_label", None)
@@ -1090,7 +1113,6 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot(object)
     def _on_settings_saved(self, _updates: object) -> None:
         self.api = ApiClient()
-        self._sync_runtime_controls()
         self._apply_context_chips()
 
     def _install_attachment_row(self) -> None:
@@ -1227,10 +1249,8 @@ class ChatWindow(proto.ExactChatWindow):
                     self._verbose_enabled = bool(payload.get("verbose_enabled", self._verbose_enabled))
                     self._json_mode_enabled = bool(payload.get("json_mode_enabled", self._json_mode_enabled))
                     self._web_mode = str(payload.get("web_mode") or self._web_mode)
-                    persona_name = str(payload.get("persona_name") or "Default").strip() or "Default"
-                    self._api_persona_name = persona_name
-                    self._last_persona_name = persona_name
-                    self._refresh_persona_label()
+                    if "persona_name" in payload:
+                        self._cache_persona_name(payload.get("persona_name"))
                     active_topic = str(payload.get("active_topic_title") or "").strip()
                     if active_topic:
                         self._last_active_topic_title = active_topic
@@ -1260,10 +1280,8 @@ class ChatWindow(proto.ExactChatWindow):
                 self._available_models.append(model)
             self._populate_models(self._active_model, self._available_models)
         
-        persona_name = str(row.get("persona_name") or "Default").strip() or "Default"
-        self._api_persona_name = persona_name
-        self._last_persona_name = persona_name
-        self._refresh_persona_label()
+        if row.get("api_ok") and "persona_name" in row:
+            self._cache_persona_name(row.get("persona_name"))
         for attr, key in (
             ("_thinking_enabled", "thinking_enabled"),
             ("_verbose_enabled", "verbose_enabled"),
@@ -1308,12 +1326,7 @@ class ChatWindow(proto.ExactChatWindow):
                 pass
 
     def _load_ui_state(self) -> None:
-        try:
-            if not self._ui_state_path.exists():
-                return
-            payload = json.loads(self._ui_state_path.read_text(encoding="utf-8-sig") or "{}")
-        except Exception:
-            return
+        payload = load_ui_state()
         self._thinking_enabled = bool(payload.get("think_enabled", self._thinking_enabled))
         self._verbose_enabled = bool(payload.get("verbose_enabled", self._verbose_enabled))
         self._json_mode_enabled = bool(payload.get("json_mode_enabled", self._json_mode_enabled))
@@ -1321,10 +1334,7 @@ class ChatWindow(proto.ExactChatWindow):
         self._web_mode = str(payload.get("web_mode") or self._web_mode)
         self._last_active_topic_title = str(payload.get("active_topic_title") or "")
         saved_persona = str(payload.get("last_persona_name") or "").strip()
-        if saved_persona in {"", "Asya", "Ася", "asya"}:
-            self._last_persona_name = "Default"
-        else:
-            self._last_persona_name = saved_persona
+        self._last_persona_name = saved_persona or "Default"
 
     def _save_ui_state(self) -> None:
         payload = {
@@ -1336,11 +1346,7 @@ class ChatWindow(proto.ExactChatWindow):
             "active_topic_title": str(getattr(self, "_last_active_topic_title", "")),
             "last_persona_name": str(getattr(self, "_last_persona_name", "Default") or "Default"),
         }
-        try:
-            self._ui_state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._ui_state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        save_ui_state(payload)
 
     def _load_models(self) -> None:
         runtime = self._active_model or (self.api.get_runtime_model() if self.api else "")

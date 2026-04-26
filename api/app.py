@@ -679,12 +679,32 @@ def _build_health_response() -> HealthResponse:
     except Exception:
         char_info = {}
 
+    if not char_info:
+        try:
+            meta = state_mgr.get_meta(character_id) if hasattr(state_mgr, "get_meta") else {}
+            if isinstance(meta, dict):
+                char_info = meta
+            else:
+                char_info = {
+                    "name": getattr(meta, "name", ""),
+                    "display_name": getattr(meta, "display_name", ""),
+                    "title": getattr(meta, "title", ""),
+                }
+        except Exception:
+            char_info = {}
+
     persona_name = str(
         char_info.get("name")
         or char_info.get("display_name")
         or char_info.get("title")
-        or "Default"
-    ).strip() or "Default"
+        or ""
+    ).strip()
+
+    if not persona_name:
+        if character_id in {"asya", "ася", "асья"}:
+            persona_name = "Ася"
+        else:
+            persona_name = "Default"
 
     return HealthResponse(
         status="ok",

@@ -84,7 +84,8 @@ class ReplyWorker(QThread):
                     payload["verbose_enabled"] = bool(health.get("verbose_enabled", False))
                     payload["json_mode_enabled"] = bool(health.get("json_mode_enabled", False))
                     payload["web_mode"] = str(health.get("web_mode") or "")
-                    payload["persona_name"] = str(health.get("persona_name") or "").strip()
+                    if "persona_name" in health:
+                        payload["persona_name"] = str(health.get("persona_name") or "").strip()
                     payload["model_status"] = dict(health.get("model_status") or {})
                     payload["memory_status"] = dict(health.get("memory_status") or {})
                     payload["server_resources"] = dict(health.get("server_resources") or {})
@@ -133,7 +134,8 @@ class StatusPollWorker(QThread):
                     payload["verbose_enabled"] = bool(health.get("verbose_enabled", False))
                     payload["json_mode_enabled"] = bool(health.get("json_mode_enabled", False))
                     payload["web_mode"] = str(health.get("web_mode") or "")
-                    payload["persona_name"] = str(health.get("persona_name") or "").strip()
+                    if "persona_name" in health:
+                        payload["persona_name"] = str(health.get("persona_name") or "").strip()
                     payload["model_status"] = dict(health.get("model_status") or {})
                     payload["memory_status"] = dict(health.get("memory_status") or {})
                     payload["server_resources"] = dict(health.get("server_resources") or {})
