@@ -4,8 +4,8 @@ import copy
 import json
 from typing import Any
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, Signal
-from PySide6.QtGui import QPainter, QPen
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -29,7 +29,48 @@ from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor,
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE
 from ui.settings_widgets import SettingEditor
-from ui.ollama_runtime import ensure_ollama_started
+
+CARD_TAG_HEIGHT = 18
+CARD_TAG_HPAD = 9
+CARD_TAG_RADIUS = 9
+
+
+class CardTagBadge(QWidget):
+    def __init__(self, text: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._text = str(text or "")
+        self.setFont(_ui_font(pixel_size=10))
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setFixedSize(self.sizeHint())
+
+    def text(self) -> str:
+        return self._text
+
+    def setText(self, text: str) -> None:
+        self._text = str(text or "")
+        self.setFixedSize(self.sizeHint())
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        width = self.fontMetrics().horizontalAdvance(self._text) + CARD_TAG_HPAD * 2
+        return QSize(max(width, CARD_TAG_HEIGHT), CARD_TAG_HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        painter.setPen(QPen(_to_qcolor("rgba(139, 92, 246, 40)"), 1))
+        painter.setBrush(_to_qcolor("rgba(139, 92, 246, 20)"))
+        painter.drawRoundedRect(rect, CARD_TAG_RADIUS, CARD_TAG_RADIUS)
+
+        painter.setPen(_to_qcolor("#c4b5fd"))
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
+
+
 
 
 class SettingsHintPopup(QFrame):
@@ -127,11 +168,25 @@ class SettingsMessageBox(QDialog):
         self.setModal(True)
         self.setObjectName("settings_message_box")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setMinimumWidth(420)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setMinimumWidth(430)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        panel = QFrame(self)
+        panel.setObjectName("settings_message_panel")
+        root.addWidget(panel)
+
+        body_root = QVBoxLayout(panel)
+        body_root.setContentsMargins(16, 14, 16, 14)
+        body_root.setSpacing(12)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -146,12 +201,19 @@ class SettingsMessageBox(QDialog):
         title_label = QLabel(title)
         title_label.setObjectName("settings_message_title")
         header.addWidget(title_label, 1)
-        root.addLayout(header)
+
+        close_btn = QToolButton()
+        close_btn.setObjectName("settings_message_close")
+        close_btn.setText("×")
+        close_btn.clicked.connect(self.reject)
+        header.addWidget(close_btn)
+
+        body_root.addLayout(header)
 
         body = QLabel(text)
         body.setObjectName("settings_message_body")
         body.setWordWrap(True)
-        root.addWidget(body)
+        body_root.addWidget(body)
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -161,7 +223,7 @@ class SettingsMessageBox(QDialog):
         ok_btn.setObjectName("primary_button")
         ok_btn.clicked.connect(self.accept)
         buttons.addWidget(ok_btn)
-        root.addLayout(buttons)
+        body_root.addLayout(buttons)
 
     @staticmethod
     def information(parent: QWidget | None, title: str, text: str) -> None:
@@ -246,7 +308,7 @@ class SettingsWindow(QDialog):
 
     def reload(self) -> None:
         try:
-            self._payload, self._sync_meta = load_settings_payload(allow_remote=False)
+            self._payload, self._sync_meta = load_settings_payload(allow_remote=True)
         except Exception as exc:
             # Fallback for "offline" or broken state
             self._payload = {}
@@ -409,8 +471,22 @@ class SettingsWindow(QDialog):
         super().hideEvent(event)
 
     def closeEvent(self, event) -> None:
+        self._dispose_editors()
         self._clear_parent_blur()
         super().closeEvent(event)
+
+    def _dispose_editors(self) -> None:
+        for editor in list(self._editors.values()):
+            control = editor.control()
+            dispose = getattr(control, "dispose", None)
+            if callable(dispose):
+                try:
+                    dispose()
+                except Exception:
+                    pass
+
+        self._editors.clear()
+        self._labels.clear()
 
     def _fit_to_parent(self) -> None:
         parent = self.parentWidget()
@@ -493,10 +569,11 @@ class SettingsWindow(QDialog):
     def _render_category(self) -> None:
         self._hide_hint_popup()
         self._hint_targets.clear()
+        self._dispose_editors()
+
         for button_key, button in self._nav_buttons.items():
             button.setChecked(button_key == self._category_key)
-        self._editors.clear()
-        self._labels.clear()
+
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             widget = item.widget()
@@ -526,11 +603,7 @@ class SettingsWindow(QDialog):
             header_layout.setContentsMargins(0, 0, 0, 2)
             title_lbl = QLabel(card.title)
             title_lbl.setObjectName("danger_title" if card.dangerous else "card_title")
-            tag_lbl = QLabel(card.tag)
-            tag_lbl.setObjectName("card_tag")
-            tag_lbl.ensurePolished()
-            tag_width = tag_lbl.fontMetrics().horizontalAdvance(tag_lbl.text()) + 14
-            tag_lbl.setFixedSize(tag_width, 20)
+            tag_lbl = CardTagBadge(card.tag, frame)
             header_layout.addWidget(title_lbl)
             header_layout.addStretch()
             header_layout.addWidget(tag_lbl, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -706,7 +779,9 @@ class SettingsWindow(QDialog):
             return
         if not updates:
             return
-        online, message = save_settings_updates(updates, sync_remote=False)
+        online, message = save_settings_updates(updates, sync_remote=True)
+        self._sync_meta["online"] = bool(online)
+        self._sync_meta["source"] = "server" if online else "cache"
         
         for path, value in updates.items():
             dotted_set(self._payload, path, value)
@@ -720,38 +795,21 @@ class SettingsWindow(QDialog):
         self._refresh_preview()
         self.saved.emit(copy.deepcopy(updates))
         
-        self._maybe_start_ollama_after_save(updates)
-        
         if not online:
-            SettingsMessageBox.information(
-                self,
-                "Offline settings",
-                f"API сейчас недоступен ({message}).\n"
-                "Изменения сохранены локально и будут отправлены после подключения."
-            )
+            try:
+                from ui.api_client import ApiClient
+                ApiClient().ping(timeout=1.5)
+                api_reachable = True
+            except Exception:
+                api_reachable = False
 
-    def _maybe_start_ollama_after_save(self, updates: dict[str, Any]) -> None:
-        enabled = updates.get("ui.console.auto_start_ollama")
-        if enabled is None:
-            return
-        if not bool(enabled):
-            return
+            if not api_reachable:
+                SettingsMessageBox.warning(
+                    self,
+                    "Settings sync",
+                    f"Настройки сохранены локально, но не отправлены в MMis API.\n\nПричина: {message}"
+                )
 
-        base_url = str(dotted_get(self._payload, "llm.providers.ollama.base_url", "http://127.0.0.1:11434") or "http://127.0.0.1:11434")
-        ok, message = ensure_ollama_started(base_url=base_url, wait_sec=8.0)
-
-        if ok:
-            SettingsMessageBox.information(
-                self,
-                "Ollama",
-                "Ollama запущена или уже была активна.",
-            )
-        else:
-            SettingsMessageBox.warning(
-                self,
-                "Ollama",
-                f"Не удалось запустить Ollama.\n{message}",
-            )
 
     def _on_search(self, text: str) -> None:
         self._search_text = str(text or "").strip().lower()

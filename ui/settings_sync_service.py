@@ -31,6 +31,12 @@ def default_value_for_path(path: str, kind: str):
         return "http://127.0.0.1:8027"
     if path == "ui.api.public_base_url":
         return ""
+    if path == "ui.ollama.start_mode":
+        return "serve"
+    if path == "ui.ollama.serve_exe":
+        return ""
+    if path == "ui.ollama.models_dir":
+        return ""
     
     if kind in {"text", "select", "json"}:
         return ""
@@ -159,7 +165,10 @@ def save_settings_updates(
     remote_updates = {
         path: value
         for path, value in updates.items()
-        if not str(path).startswith("ui.api.")
+        if not (
+            str(path).startswith("ui.api.")
+            or str(path).startswith("ui.ollama.")
+        )
     }
 
     if not remote_updates:
@@ -169,10 +178,10 @@ def save_settings_updates(
     client = api_client or ApiClient()
     
     try:
-        # Try to send to server
-        client._request_json("PATCH", "/config", payload=remote_updates, timeout=1.0)
+        LOGGER.info("settings sync target=%s updates=%s", client.base_url, list(remote_updates.keys()))
+        client._request_json("PATCH", "/config", payload=remote_updates, timeout=5.0)
         clear_pending_updates(list(remote_updates.keys()))
         return True, "Synced with server"
     except Exception as e:
-        LOGGER.warning("Offline save: %s", e)
+        LOGGER.warning("Settings sync failed: %s", e)
         return False, str(e)

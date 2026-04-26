@@ -376,6 +376,7 @@ class OllamaProvider(LLMProviderBase):
         self._current_model = self.default_model
         self.paused = False
 
+
     @staticmethod
     def _is_reasoning_model(model: str) -> bool:
         """Проверка, является ли модель reasoning моделью."""

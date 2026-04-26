@@ -101,6 +101,7 @@ class ApiClient:
             LOGGER.exception("ui api unexpected error method=%s path=%s", method, path)
             raise ApiClientError(str(exc)) from exc
 
+
     def health(self, timeout: float | None = None) -> dict:
         payload = self._request_json("GET", "/health", timeout=timeout)
         self._runtime_model_cache = str(payload.get("model") or self._runtime_model_cache)

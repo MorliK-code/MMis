@@ -306,6 +306,9 @@ class AppSettings:
     ui_api_active_endpoint: str = "local"
     ui_api_local_base_url: str = "http://127.0.0.1:8027"
     ui_api_public_base_url: str = "http://0.0.0.0:8027"
+    ui_ollama_start_mode: str = "serve"
+    ui_ollama_serve_exe: str = ""
+    ui_ollama_models_dir: str = ""
 
     @property
     def api_url(self) -> str:
@@ -734,6 +737,11 @@ def _default_config_tree() -> dict[str, Any]:
                     "output_summary": False,
                 },
             },
+            "ollama": {
+                "start_mode": "serve",
+                "serve_exe": r"C:\Users\user\AppData\Local\Programs\Ollama\ollama.exe",
+                "models_dir": r"D:\.ollama\models",
+            },
         },
         "paths": {
             "data_dir": _path_to_config_string(DATA_DIR),
@@ -895,6 +903,9 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         ui_api_active_endpoint=_norm_lower(_get_dotted(row, "ui.api.active_endpoint") or "local"),
         ui_api_local_base_url=_norm_str(_get_dotted(row, "ui.api.local_base_url") or "http://127.0.0.1:8027"),
         ui_api_public_base_url=_norm_str(_get_dotted(row, "ui.api.public_base_url") or "http://0.0.0.0:8027"),
+        ui_ollama_start_mode=_norm_lower(_get_dotted(row, "ui.ollama.start_mode") or "serve"),
+        ui_ollama_serve_exe=_norm_str(_get_dotted(row, "ui.ollama.serve_exe") or ""),
+        ui_ollama_models_dir=_norm_str(_get_dotted(row, "ui.ollama.models_dir") or ""),
     )
     return settings
 

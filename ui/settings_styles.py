@@ -173,17 +173,6 @@ QLabel#danger_title {
     font-size: 12px;
     font-weight: 700;
 }
-QLabel#card_tag {
-    min-height: 18px;
-    max-height: 18px;
-    background: rgba(139, 92, 246, 20);
-    border: 1px solid rgba(139, 92, 246, 40);
-    border-radius: 9px;
-    color: #c4b5fd;
-    font-family: Cascadia Code, Consolas, monospace;
-    font-size: 10px;
-    padding: 0 7px;
-}
 QLabel#setting_label {
     color: #f3f4f6;
     font-family: Cascadia Code, Consolas, monospace;
@@ -429,9 +418,32 @@ QFrame#json_preview {
 }
 
 QDialog#settings_message_box {
+    background: transparent;
+}
+
+QFrame#settings_message_panel {
     background: rgba(15, 16, 24, 248);
     border: 1px solid rgba(139, 92, 246, 82);
     border-radius: 14px;
+}
+
+QToolButton#settings_message_close {
+    min-width: 24px;
+    max-width: 24px;
+    min-height: 24px;
+    max-height: 24px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 18);
+    background: rgba(255, 255, 255, 8);
+    color: #8f96a3;
+    padding: 0;
+    font-size: 13px;
+}
+
+QToolButton#settings_message_close:hover {
+    background: rgba(139, 92, 246, 28);
+    border-color: rgba(139, 92, 246, 54);
+    color: #f3f4f6;
 }
 
 QLabel#settings_message_icon {

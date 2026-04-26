@@ -2,7 +2,7 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "conv-brain-stats",
-    "turn_id": 426,
+    "turn_id": 428,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -35,13 +35,13 @@
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-04-25T15:38:32.090+03:00"
+        "ts": "2026-04-27T00:53:19.063+03:00"
       },
       {
         "type": "TURN_FINISHED",
-        "turn_id": 426,
-        "assistant_chars": 207,
-        "ts": "2026-04-25T15:39:08.749+03:00"
+        "turn_id": 428,
+        "assistant_chars": 38,
+        "ts": "2026-04-27T00:53:49.053+03:00"
       }
     ],
     "context_stack": []
@@ -94,21 +94,21 @@
       },
       "local_context": {
         "last_topic_weights": {
-          "topic_general": 0.032980520859926955,
-          "topic_проверка": 0.021573813655540997,
-          "topic_генераций_посмотри_наработки": 0.10779602081496936,
-          "topic_привет": 0.6402798333840545,
-          "topic_сделал_красивую_такую": 0.6095689385410813,
-          "topic_пишу_личном_моём": 0.6850776536472959
+          "topic_general": 0.029141588231831453,
+          "topic_проверка": 0.019062621746036023,
+          "topic_генераций_посмотри_наработки": 0.09524856399210692,
+          "topic_привет": 0.8567512607781504,
+          "topic_сделал_красивую_такую": 0.5386151140948994,
+          "topic_пишу_личном_моём": 0.6053346147627506
         },
-        "last_seen_ts": "2026-04-25T15:38:32.089+03:00",
-        "last_update_turn_id": 426,
+        "last_seen_ts": "2026-04-27T00:53:19.063+03:00",
+        "last_update_turn_id": 428,
         "last_update_conversation_id": "conv-brain-stats"
       }
     }
   },
   "conversation_id": "conv-brain-stats",
-  "turn_id": 426,
+  "turn_id": 428,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -142,19 +142,19 @@
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-04-25T15:38:32.090+03:00"
+      "ts": "2026-04-27T00:53:19.063+03:00"
     },
     {
       "type": "TURN_FINISHED",
-      "turn_id": 426,
-      "assistant_chars": 207,
-      "ts": "2026-04-25T15:39:08.749+03:00"
+      "turn_id": 428,
+      "assistant_chars": 38,
+      "ts": "2026-04-27T00:53:49.053+03:00"
     }
   ],
   "context_tags": {
     "lang": "ru",
-    "intent": "question",
-    "last_intent": "question",
+    "intent": "chat",
+    "last_intent": "chat",
     "mood": "neutral",
     "last_mood": "neutral",
     "topic": "привет",
@@ -164,25 +164,25 @@
     "allow_greeting": "false",
     "smalltalk_allowed": "true",
     "should_ask_back": "false",
-    "local_date": "2026-04-25",
+    "local_date": "2026-04-27",
     "local_region": "RTZ 2 (зима)",
     "greeting_allowed": "false",
-    "dialog_sarcasm_level": "0.290",
-    "dialog_warmth_level": "0.640",
-    "dialog_strictness_level": "0.510",
-    "dialog_verbosity_level": "0.490",
+    "dialog_sarcasm_level": "0.240",
+    "dialog_warmth_level": "0.500",
+    "dialog_strictness_level": "0.760",
+    "dialog_verbosity_level": "0.410",
     "is_technical": "false",
     "allowed_term": "",
     "use_term_now": "false",
-    "now_iso": "2026-04-25T15:38:31.949034+03:00",
+    "now_iso": "2026-04-27T00:53:18.893589+03:00",
     "timezone": "UTC+03:00",
-    "previous_user_at": "2026-04-25T15:37:56.739+03:00",
+    "previous_user_at": "2026-04-27T00:52:46.730+03:00",
     "minutes_since_previous": "1",
     "same_calendar_day": "true",
     "conversation_state": "continuing_smalltalk",
-    "now_human": "25.04.2026 15:38:31",
-    "today_human": "25.04.2026",
-    "time_human": "15:38:31"
+    "now_human": "27.04.2026 00:53:18",
+    "today_human": "27.04.2026",
+    "time_human": "00:53:18"
   },
   "traits": {},
   "policies": {},
@@ -190,19 +190,19 @@
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "что здесь на картинке?",
-    "last_user_hash": "544843a6157854184b8fea4f81cb167012344a8a",
-    "last_user_ts": "2026-04-25T15:38:31.920+03:00",
-    "prev_user_ts": "2026-04-25T15:37:56.739+03:00",
-    "last_assistant_message": "На картинке аниме-девушка, которая сидит на крыше ночью и курит. Выглядит довольно меланхолично: вокруг ночной город с огнями, а её лицо отражается в окне высокого небоскрёба. Атмосферно, но немного грустно.",
-    "last_assistant_ts": "2026-04-25T15:39:08.723+03:00",
+    "last_user_message": "та просто решил подздороваться",
+    "last_user_hash": "0b8d38d7e051252ce2c1d471ebf8853e2e6c988d",
+    "last_user_ts": "2026-04-27T00:53:18.862+03:00",
+    "prev_user_ts": "2026-04-27T00:52:46.730+03:00",
+    "last_assistant_message": "А, ну тогда привет ещё раз) Как жизнь?",
+    "last_assistant_ts": "2026-04-27T00:53:49.029+03:00",
     "last_action": "assistant_message",
-    "last_action_ts": "2026-04-25T15:39:08.750+03:00",
+    "last_action_ts": "2026-04-27T00:53:49.053+03:00",
     "repeat_count": 0,
     "session_id": "conv-brain-stats",
     "prev_session_id": "conv-brain-stats",
-    "greeting_date_local": "2026-04-25",
-    "greeting_ts": "2026-04-25T15:37:44.977+03:00"
+    "greeting_date_local": "2026-04-27",
+    "greeting_ts": "2026-04-27T00:53:09.353+03:00"
   },
   "address_terms": {
     "last_term_used_at": "",
@@ -216,22 +216,6 @@
   },
   "dialog_summary": "Earlier context: User said: привет. как тебя зовут? меня паша. я люблю мороженое, пиццу, суши, работают системным администратором, а ты? Assistant replied: Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты сис",
   "history": [
-    {
-      "role": "user",
-      "content": "на, посмотри ещё наработки генераций"
-    },
-    {
-      "role": "assistant",
-      "content": "Generation failed before the model returned an answer. Details: model runner has unexpectedly stopped, this may be due to resource limitations or an internal error, check ollama server logs for details (status code: 500)"
-    },
-    {
-      "role": "user",
-      "content": "на, посмотри ещё наработки генераций"
-    },
-    {
-      "role": "assistant",
-      "content": "Так, давай глянем.\nСлушай, ну картинки реально разные по вайбу.\nПервая и вторая — это классический такой красивый аниме-стиль, очень атмосферно. Город на закате, эти фиолетово-розовые тона. Прям хочется туда и посидеть на крыше. Вторая чуть более детализированная, выглядит «дороже», что ли.\nТретья и четвертая — это уже милота зашкаливающая. Котенок с цветами — это база, тут даже обсуждать нечего, сразу +10 к настроению. Но четвертая (черно-белая) выглядит как забавный мем или стикер, очень забавно, что там надпись «Доброе урто» вместо «утро». Это забавная опечатка, прямо в духе интернет-юмора.\nПятая — тоже котенок, но более реалистичный и яркий. Выглядит очень сочно.\nВ общем, если хочешь что-то эстетичное — первые две топ. Если хочешь милоты и чтобы все улыбнулись — котята.\nЧто именно ты из этого планируешь использовать? Или ты просто тренируешься промпты подгонять?"
-    },
     {
       "role": "user",
       "content": "та тренируюсь"
@@ -695,6 +679,22 @@
     {
       "role": "assistant",
       "content": "На картинке аниме-девушка, которая сидит на крыше ночью и курит. Выглядит довольно меланхолично: вокруг ночной город с огнями, а её лицо отражается в окне высокого небоскрёба. Атмосферно, но немного грустно."
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "Привет! Снова ты? Что-то случилось или просто решил поздороваться:)"
+    },
+    {
+      "role": "user",
+      "content": "та просто решил подздороваться"
+    },
+    {
+      "role": "assistant",
+      "content": "А, ну тогда привет ещё раз) Как жизнь?"
     }
   ],
   "character_locked": false,
@@ -712,66 +712,5 @@
   "personality_locked": false,
   "personality_last_switch_ts": "",
   "personality_cooldown_sec": 90.0,
-  "topic_thread_id": "thr_d6f238d6d545",
-  "topic_key": "привет",
-  "topic_thread_title": "привет",
-  "active_topic_thread_id": "thr_d6f238d6d545",
-  "active_topic_key": "привет",
-  "active_topic_title": "привет",
-  "topic_route_reason": "short_followup",
-  "topic_route_score": 0.74,
-  "related_topic_thread_ids": [],
-  "topic_candidates": [],
-  "topic_last_route_reason": "short_followup",
-  "topic_last_route_score": 0.74,
-  "topic_stack": [
-    {
-      "thread_id": "thr_d6f238d6d545",
-      "title": "привет",
-      "topic_key": "привет",
-      "updated_at": "2026-04-25T15:38:32.107+03:00"
-    }
-  ],
-  "recent_topics": [
-    "привет"
-  ],
-  "web_active_task": {
-    "task_id": "task_622128e602c7",
-    "query": "отлично, спасибо",
-    "base_query": "отлично, спасибо",
-    "latest_query": "что здесь на картинке",
-    "resolved_intent": "generic",
-    "resolved_concepts": [],
-    "resolved_location": "",
-    "turn_id": 426,
-    "turn_timestamp": "2026-04-25T12:38:32.136022+00:00",
-    "continuation_ref": "task_622128e602c7",
-    "context_confidence": 0.7441
-  },
-  "continuity_turns": [
-    {
-      "task_id": "task_622128e602c7",
-      "query": "отлично, спасибо",
-      "base_query": "отлично, спасибо",
-      "latest_query": "отлично, спасибо",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "",
-      "turn_id": 425,
-      "turn_timestamp": "2026-04-25T12:37:56.965920+00:00"
-    },
-    {
-      "task_id": "task_622128e602c7",
-      "query": "отлично, спасибо",
-      "base_query": "отлично, спасибо",
-      "latest_query": "что здесь на картинке",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "",
-      "turn_id": 426,
-      "turn_timestamp": "2026-04-25T12:38:32.136022+00:00",
-      "continuation_ref": "task_622128e602c7",
-      "context_confidence": 0.7441
-    }
-  ]
+  "verbose_enabled": true
 }

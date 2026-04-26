@@ -34,6 +34,8 @@ from ui.client_config_store import (
     load_ui_state,
     save_ui_state,
     set_last_persona_name,
+    get_ollama_models_cache,
+    set_ollama_models_cache,
 )
 try:
     from llm.tokenizer import estimate_tokens
@@ -53,7 +55,6 @@ from ui.chat_sessions import make_new_chat_payload, now_iso as chat_now_iso
 from ui.chat_sessions import save_sessions as save_chat_sessions
 from ui.settings_window import SettingsWindow
 from ui.settings_schema import dotted_get
-from ui.ollama_runtime import ensure_ollama_started
 try:
     from modules.voice.voice_manager import VoiceState
 except ImportError:
@@ -264,7 +265,6 @@ class ChatWindow(proto.ExactChatWindow):
             self._metrics_timer.timeout.connect(self._refresh_persona_label)
         if self.api is None:
             self.api = ApiClient()
-        self._ensure_ollama_autostart_on_ui_boot()
         self._audio_output = QAudioOutput(self)
         self._media_player = QMediaPlayer(self)
         self._media_player.setAudioOutput(self._audio_output)
@@ -1319,6 +1319,7 @@ class ChatWindow(proto.ExactChatWindow):
             self.web_mode_selector.blockSignals(False)
         self._apply_context_chips()
 
+
     def _check_api_status(self) -> None:
         """Background health check and status synchronization."""
         if hasattr(self, "api") and self.api:
@@ -1353,15 +1354,20 @@ class ChatWindow(proto.ExactChatWindow):
 
     def _load_models(self) -> None:
         runtime = self._active_model or (self.api.get_runtime_model() if self.api else "")
-        models = list(self._available_models)
+        models = list(self._available_models) or get_ollama_models_cache()
+
         if self.api:
             try:
-                payload = self.api.list_models(timeout=2.5)
+                payload = self.api.list_models(timeout=5.0)
                 runtime = str(payload.get("runtime_model") or self.api.get_runtime_model() or runtime)
                 available = payload.get("available_models") or payload.get("models") or []
-                models = [str(x) for x in available if str(x).strip()]
+                fresh_models = [str(x).strip() for x in available if str(x).strip()]
+                if fresh_models:
+                    models = fresh_models
+                    set_ollama_models_cache(models)
             except Exception:
-                pass
+                models = models or get_ollama_models_cache()
+
         if not models and runtime:
             models = [runtime]
         if not models:
@@ -1401,6 +1407,7 @@ class ChatWindow(proto.ExactChatWindow):
                 return
         self._sync_controls_to_state()
         self._save_ui_state()
+        self._render_history()
 
     @Slot(bool)
     def _on_verbose_toggled(self, checked: bool) -> None:
@@ -1456,8 +1463,6 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot()
     def _on_new_chat_clicked(self) -> None:
-        self._clear_messages()
-        return
         if self._worker and self._worker.isRunning():
             QMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
             return
@@ -1471,10 +1476,6 @@ class ChatWindow(proto.ExactChatWindow):
 
     def _update_active_chat_title(self, user_text: str) -> None:
         chat = self._active_chat()
-        if chat is not None:
-            chat["title"] = SINGLE_VISIBLE_CHAT_TITLE
-            chat["updated_at"] = chat_now_iso()
-        return
         if chat is None:
             return
         current = str(chat.get("title") or "").strip()
@@ -2616,21 +2617,6 @@ class ChatWindow(proto.ExactChatWindow):
         finally:
             QApplication.restoreOverrideCursor()
 
-    def _ensure_ollama_autostart_on_ui_boot(self) -> None:
-        try:
-            payload, _ = load_settings_payload()
-            enabled = dotted_get(payload, "ui.console.auto_start_ollama", False)
-            if not bool(enabled):
-                return
-            
-            provider = str(dotted_get(payload, "llm.provider", "ollama") or "ollama").lower()
-            if provider not in {"ollama", "auto"}:
-                return
-            
-            base_url = str(dotted_get(payload, "llm.providers.ollama.base_url", "http://127.0.0.1:11434") or "http://127.0.0.1:11434")
-            QTimer.singleShot(300, lambda: ensure_ollama_started(base_url=base_url, wait_sec=1.0))
-        except Exception:
-            pass
 
     def closeEvent(self, event) -> None:
         metrics_timer = getattr(self, "_metrics_timer", None)

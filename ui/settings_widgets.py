@@ -37,6 +37,11 @@ from ui.chat_shell import (
     PlainTextScrollOverlay,
 )
 from ui.api_client import ApiClient
+from ui.client_config_store import get_ollama_models_cache, set_ollama_models_cache
+from ui.settings_sync_service import load_settings_payload, dotted_get
+from utils.ollama_runtime import ensure_ollama_started
+
+_ACTIVE_MODEL_LIST_WORKERS: set[QThread] = set()
 
 _PENCIL_ICON = Path(__file__).resolve().parent / "assets" / "settings_pencil.svg"
 _CHEVRON_ICON = Path(__file__).resolve().parent / "assets" / "settings_chevron_down.svg"
@@ -86,6 +91,9 @@ QPlainTextEdit#settings_text_editor_body:focus {
 class SegmentedSelector(QWidget):
     valueChanged = Signal(str)
     _segment_padding = 20.0
+    _frame_padding = 6.0
+    _segment_gap = 1.0
+    _min_segment_width = 24.0
 
     def __init__(self, choices: list[str], current: str, parent: QWidget | None = None):
         super().__init__(parent)
@@ -96,19 +104,28 @@ class SegmentedSelector(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        self.setMinimumWidth(84)
+        self.setMinimumWidth(self.minimumSizeHint().width())
         self.setFixedHeight(24)
 
-    def sizeHint(self) -> QSize:
+    def _natural_width(self) -> int:
+        if not self._choices:
+            return 48
+
         fm = QFontMetricsF(self._font)
-        width = 0
+        width = self._frame_padding
+
         for choice in self._choices:
-            width += int(fm.horizontalAdvance(choice) + self._segment_padding + 0.999)
-        width += 6 + max(0, len(self._choices) - 1)
-        return QSize(max(width, 84), 24)
+            segment_width = fm.horizontalAdvance(choice) + self._segment_padding
+            width += max(self._min_segment_width, segment_width)
+
+        width += max(0, len(self._choices) - 1) * self._segment_gap
+        return int(width + 0.999)
+
+    def sizeHint(self) -> QSize:
+        return QSize(self._natural_width(), 24)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(84, 24)
+        return QSize(self._natural_width(), 24)
 
     def _segment_rects(self) -> dict[str, QRectF]:
         from PySide6.QtCore import QRectF
@@ -118,20 +135,24 @@ class SegmentedSelector(QWidget):
         rects: dict[str, QRectF] = {}
         if not self._choices:
             return rects
-        available = max(1.0, self.width() - 6.0 - max(0, len(self._choices) - 1))
-        natural = [float(fm.horizontalAdvance(choice) + self._segment_padding) for choice in self._choices]
+        gap_total = max(0, len(self._choices) - 1) * self._segment_gap
+        available = max(1.0, self.width() - self._frame_padding - gap_total)
+        natural = [
+            float(max(self._min_segment_width, fm.horizontalAdvance(choice) + self._segment_padding))
+            for choice in self._choices
+        ]
         natural_total = sum(natural)
         if natural_total <= available:
             widths = natural
-            content_width = natural_total + max(0, len(self._choices) - 1)
+            content_width = natural_total + gap_total
             x = max(3.0, (self.width() - content_width) / 2.0)
         else:
             natural_total = max(1.0, natural_total)
-            widths = [max(22.0, width * (available / natural_total)) for width in natural]
+            widths = [max(self._min_segment_width, width * (available / natural_total)) for width in natural]
             x = 3.0
         for choice, width in zip(self._choices, widths):
             rects[choice] = QRectF(x, y, width, height)
-            x += width + 1.0
+            x += width + self._segment_gap
         return rects
 
     def paintEvent(self, _event) -> None:
@@ -576,15 +597,41 @@ class ModelListWorker(QThread):
     def run(self) -> None:
         try:
             from ui.api_client import ApiClient
+            from ui.settings_sync_service import load_settings_payload
+            from ui.settings_schema import dotted_get
+            from utils.ollama_runtime import ensure_ollama_started
 
-            payload = ApiClient().list_models(timeout=2.5)
+            try:
+                cfg, _ = load_settings_payload()
+            except Exception:
+                cfg = {}
+
+            base_url = str(dotted_get(cfg, "llm.providers.ollama.base_url", "http://127.0.0.1:11434") or "http://127.0.0.1:11434")
+            enabled = bool(dotted_get(cfg, "ui.console.auto_start_ollama", True))
+            start_mode = str(dotted_get(cfg, "ui.ollama.start_mode", "serve") or "serve")
+            serve_exe = str(dotted_get(cfg, "ui.ollama.serve_exe", "") or "")
+            models_dir = str(dotted_get(cfg, "ui.ollama.models_dir", "") or "")
+
+            ensure_ollama_started(
+                base_url=base_url,
+                wait_sec=8.0,
+                enabled=enabled,
+                start_mode=start_mode,
+                serve_exe=serve_exe,
+                models_dir=models_dir,
+            )
+
+            payload = ApiClient().list_models(timeout=8.0)
             runtime = str(payload.get("runtime_model") or self.current or "").strip()
-            models = _extract_model_names(payload.get("models"))
+            models = _extract_model_names(payload.get("models") or payload.get("available_models"))
 
             if runtime and runtime not in models:
                 models.insert(0, runtime)
             if self.current and self.current not in models:
                 models.insert(0, self.current)
+
+            if models:
+                set_ollama_models_cache(models)
 
             self.loaded.emit(runtime or self.current, models)
         except Exception as exc:
@@ -685,7 +732,10 @@ class ModelNameEditor(QWidget):
     def __init__(self, value: Any, parent: QWidget | None = None):
         super().__init__(parent)
         self._value = str(value or "").strip()
-        self._models_cache: list[str] = [self._value] if self._value else []
+        cached_models = get_ollama_models_cache()
+        self._models_cache: list[str] = cached_models or ([self._value] if self._value else [])
+        if self._value and self._value not in self._models_cache:
+            self._models_cache.insert(0, self._value)
         self._popup: ModelPickerPopup | None = None
         self._worker: ModelListWorker | None = None
         self._loading = False
@@ -718,7 +768,7 @@ class ModelNameEditor(QWidget):
         layout.addWidget(self.arrow_button)
 
         self._refresh_preview()
-        QTimer.singleShot(0, self.refresh_models_async)
+        self.destroyed.connect(lambda *_: self.dispose())
 
     def value(self) -> str:
         return self._value
@@ -750,11 +800,14 @@ class ModelNameEditor(QWidget):
         if self._popup is not None:
             self._popup.set_status("обновляю список...")
 
-        self._worker = ModelListWorker(self._value, self)
-        self._worker.loaded.connect(self._on_models_loaded)
-        self._worker.failed.connect(self._on_models_failed)
-        self._worker.finished.connect(self._on_worker_finished)
-        self._worker.start()
+        worker = ModelListWorker(self._value, None)
+        self._worker = worker
+        _ACTIVE_MODEL_LIST_WORKERS.add(worker)
+
+        worker.loaded.connect(self._on_models_loaded)
+        worker.failed.connect(self._on_models_failed)
+        worker.finished.connect(lambda w=worker: self._finish_model_worker(w))
+        worker.start()
 
     def _ensure_popup(self) -> None:
         if self._popup is not None:
@@ -766,7 +819,8 @@ class ModelNameEditor(QWidget):
     def _request_popup(self) -> None:
         self._ensure_popup()
         self._show_popup()
-        if len(self._models_cache) <= 1:
+
+        if not self._loading:
             self.refresh_models_async()
 
     def _show_popup(self) -> None:
@@ -803,11 +857,16 @@ class ModelNameEditor(QWidget):
     def _on_models_loaded(self, runtime: str, models: list[str]) -> None:
         runtime = str(runtime or "").strip()
         models = _extract_model_names(models)
-        if runtime:
-            self._value = runtime
+
+        if runtime and runtime not in models:
+            models.insert(0, runtime)
         if self._value and self._value not in models:
             models.insert(0, self._value)
+
         self._models_cache = models
+        if models:
+            set_ollama_models_cache(models)
+
         self._refresh_preview()
         if self._popup is not None:
             self._popup.set_status("")
@@ -820,12 +879,35 @@ class ModelNameEditor(QWidget):
             self._popup.set_status("API недоступно, показан кеш")
             self._popup.set_models(self._value, self._models_cache)
 
-    def _on_worker_finished(self) -> None:
-        self._loading = False
+    def _finish_model_worker(self, worker: ModelListWorker) -> None:
+        _ACTIVE_MODEL_LIST_WORKERS.discard(worker)
+
+        if self._worker is worker:
+            self._loading = False
+            self._worker = None
+
+        worker.deleteLater()
+
+    def dispose(self) -> None:
+        popup = self._popup
+        self._popup = None
+        if popup is not None:
+            popup.close()
+            popup.deleteLater()
+
         worker = self._worker
         self._worker = None
+        self._loading = False
+
         if worker is not None:
-            worker.deleteLater()
+            try:
+                worker.loaded.disconnect(self._on_models_loaded)
+            except Exception:
+                pass
+            try:
+                worker.failed.disconnect(self._on_models_failed)
+            except Exception:
+                pass
 
     def _refresh_preview(self) -> None:
         text = self._value or "empty"
