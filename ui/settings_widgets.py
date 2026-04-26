@@ -90,7 +90,7 @@ QPlainTextEdit#settings_text_editor_body:focus {
 
 class SegmentedSelector(QWidget):
     valueChanged = Signal(str)
-    _segment_padding = 20.0
+    _segment_padding = 12.0
     _frame_padding = 6.0
     _segment_gap = 1.0
     _min_segment_width = 24.0
@@ -938,6 +938,7 @@ class NumericValueEditor(QWidget):
         self.input.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.input.editingFinished.connect(self._commit_text)
         self.input.returnPressed.connect(self._commit_text)
+        self.input.setMinimumWidth(20)
 
         buttons = QWidget(self)
         buttons.setObjectName("settings_numeric_stepper")

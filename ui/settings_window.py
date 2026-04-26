@@ -234,16 +234,31 @@ class SettingsMessageBox(QDialog):
         SettingsMessageBox(parent, title, text, kind="warning").exec()
 
 
-class HintButton(QWidget):
+class HintButton(QToolButton):
     activated = Signal(object)
     hovered = Signal(object)
     unhovered = Signal(object)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setObjectName("hint_button")
         self.setFixedSize(18, 18)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setText("")
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.setAutoRaise(True)
+
+        # Важно: QToolButton не должен рисовать свой стандартный фон.
+        self.setStyleSheet(
+            "QToolButton#hint_button {"
+            "border: 0;"
+            "background: transparent;"
+            "padding: 0px;"
+            "margin: 0px;"
+            "}"
+        )
 
     def enterEvent(self, event) -> None:
         self.hovered.emit(self)
@@ -263,15 +278,22 @@ class HintButton(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+
         rect = QRectF(0.5, 0.5, 17.0, 17.0)
         painter.setPen(QPen(_to_qcolor("rgba(139,92,246,.40)"), 1))
         painter.setBrush(_to_qcolor("rgba(139,92,246,.16)"))
         painter.drawEllipse(rect)
+
         painter.setPen(_to_qcolor("#9f8bff"))
         font = _ui_font(pixel_size=10)
         font.setFamily("Segoe UI")
         painter.setFont(font)
-        painter.drawText(QRectF(0.0, -0.5, 18.0, 18.0), int(Qt.AlignmentFlag.AlignCenter), "?")
+        painter.drawText(
+            QRectF(0.0, -0.5, 18.0, 18.0),
+            int(Qt.AlignmentFlag.AlignCenter),
+            "?",
+        )
 
 
 class SettingsWindow(QDialog):
@@ -305,6 +327,7 @@ class SettingsWindow(QDialog):
         self._search_text = ""
         self._build_ui()
         self.reload()
+        _validate_hint_coverage()
 
     def reload(self) -> None:
         try:
@@ -553,9 +576,10 @@ class SettingsWindow(QDialog):
         frame.setObjectName("settings_card")
         frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(12, 10, 12, 0)
+        layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(8)
         label = QLabel(title)
+        label.setStyleSheet("padding: 0 10px;")
         label.setObjectName("card_title")
         layout.addWidget(label)
         layout.addWidget(widget, 1)
@@ -597,10 +621,10 @@ class SettingsWindow(QDialog):
             frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             frame.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
             layout = QVBoxLayout(frame)
-            layout.setContentsMargins(10, 8, 10, 10)
+            layout.setContentsMargins(0, 8, 0, 10)
             layout.setSpacing(4)
             header_layout = QHBoxLayout()
-            header_layout.setContentsMargins(0, 0, 0, 2)
+            header_layout.setContentsMargins(10, 0, 10, 2)
             title_lbl = QLabel(card.title)
             title_lbl.setObjectName("danger_title" if card.dangerous else "card_title")
             tag_lbl = CardTagBadge(card.tag, frame)
@@ -626,8 +650,8 @@ class SettingsWindow(QDialog):
         row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         row.setFixedHeight(30)
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 4, 0, 2)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 4, 10, 2)
+        layout.setSpacing(8)
 
         label = QLabel(_setting_title(spec))
         label.setObjectName("setting_label")
@@ -635,33 +659,46 @@ class SettingsWindow(QDialog):
         label_font.setFamily("Cascadia Code")
         label.setFont(label_font)
         label.ensurePolished()
-        label_width = max(44, label.fontMetrics().horizontalAdvance(label.text()) + 17)
-        label.setFixedWidth(label_width)
         label.setFixedHeight(18)
         label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-
-        hint = HintButton()
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        
+        # Создаем контейнер для заголовка с фиксированной шириной, чтобы выровнять редакторы
+        title_width = 150
+        label.setFixedWidth(title_width)
+        # Отступ справа в стиле, чтобы текст не заходил под иконку, если он слишком длинный
+        label.setStyleSheet("QLabel { padding-right: 20px; background: transparent; border: none; color: #f3f4f6; }")
+        
+        # Создаем знак вопроса как дочерний элемент строки (row), чтобы он был сиблингом метки
+        hint = HintButton(row)
         hint.setObjectName("hint_button")
+        
+        # Отступ слева в строке 6px + позиция после текста (с запасом 14px)
+        text_w = label.fontMetrics().horizontalAdvance(label.text())
+        hint_x = min(text_w + 14, title_width - 18)
+        # 6px - это левый margin строки
+        hint.move(6 + hint_x, 6) # 6px сверху для центрирования (row height 30, label 18 -> (30-18)/2 = 6)
+        
         hint.hovered.connect(lambda _button, button=hint: self._show_hint_popup(button, self._hint_targets[button]))
         hint.activated.connect(lambda _button, button=hint: self._show_hint_popup(button, self._hint_targets[button]))
         hint.unhovered.connect(lambda _button: self._hide_hint_popup())
         self._hint_targets[hint] = spec
+        
 
         layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.setSpacing(2)
-        layout.addStretch(1)
+        layout.addStretch(1) # Pushes editor to the right
 
         value = self._changed.get(spec.path, dotted_get(self._payload, spec.path))
         editor = SettingEditor(spec, value, row)
         editor.valueChanged.connect(lambda value, path=spec.path: self._on_editor_changed(path, value))
         control = editor.control()
-        control.setMinimumWidth(0)
+        control.setMinimumWidth(44)
         layout.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
         self._editors[spec.path] = editor
         self._labels[spec.path] = label
         self._update_badge(spec.path)
+        hint.raise_() # Всегда в самом конце, чтобы быть поверх всего
         return row
 
     def eventFilter(self, watched, event) -> bool:
@@ -864,10 +901,16 @@ def _setting_title(spec: SettingSpec) -> str:
 
 def _hint_description(spec: SettingSpec) -> str:
     text = str(_DESCRIPTION_BY_PATH.get(spec.path) or spec.description or "").strip()
+
     if not text:
-        text = f"Управляет параметром {spec.path}. Значение применяется при сохранении настроек."
+        text = (
+            f"Описание для {spec.path} ещё не задано. "
+            "Добавь его в _DESCRIPTION_BY_PATH или в SettingSpec.description."
+        )
+
     if spec.dangerous:
         text = f"{text}\n\nОпасный параметр: меняй только если понимаешь последствия."
+
     return text
 
 
@@ -974,6 +1017,9 @@ _TITLE_BY_PATH: dict[str, str] = {
     "ui.console.thinking_first": "Thinking первым",
     "ui.console.auto_start_api": "Автостарт API",
     "ui.console.auto_start_ollama": "Автозапуск Ollama",
+    "ui.ollama.start_mode": "Режим запуска Ollama",
+    "ui.ollama.serve_exe": "Путь к Ollama serve",
+    "ui.ollama.models_dir": "Папка моделей Ollama",
     "debug.memory_inspector_enabled": "Memory Inspector",
     "debug.show_raw_scores": "Raw scores",
     "debug.show_filtered_items": "Filtered items",
@@ -1030,6 +1076,20 @@ _DESCRIPTION_BY_PATH: dict[str, str] = {
     "memory_core.enabled": "Включает новый Memory Core runtime.",
     "memory_core.worker_enabled": "Разрешает фоновую обработку событий памяти.",
     "memory_core.worker_poll_interval": "Интервал в секундах, с которым воркер проверяет очередь задач памяти.",
+    "ui.ollama.start_mode": (
+        "Выбирает способ автозапуска Ollama, если её API сейчас недоступен. "
+        "serve запускает указанный ollama.exe с аргументом serve. "
+        "ui выполняет команду ollama list, чтобы Ollama сама подняла API-контур."
+    ),
+    "ui.ollama.serve_exe": (
+        "Путь к ollama.exe, который будет использоваться в режиме serve. "
+        "MMis запустит его как '<ollama.exe> serve'. "
+        "Оставь пустым, если ollama доступна из PATH."
+    ),
+    "ui.ollama.models_dir": (
+        "Папка, где Ollama должна искать и хранить модели. "
+        "При запуске MMis передаёт этот путь через переменную окружения OLLAMA_MODELS."
+    ),
     "internet.enabled": "Разрешает интернет-модуль и web-поиск.",
     "internet.web_mode": "Определяет агрессивность web-поиска: off, auto, on или aggressive.",
     "internet.search.provider": "Выбирает поисковый backend, например локальный SearXNG.",
@@ -1133,3 +1193,29 @@ def _spec_for(path: str) -> SettingSpec | None:
                 if spec.path == path:
                     return spec
     return None
+
+
+def _validate_hint_coverage() -> None:
+    missing_titles: list[str] = []
+    missing_descriptions: list[str] = []
+
+    for category in SETTINGS_CATEGORIES:
+        for card in category.cards:
+            for spec in card.settings:
+                title = str(_TITLE_BY_PATH.get(spec.path) or spec.title or "").strip()
+                description = str(_DESCRIPTION_BY_PATH.get(spec.path) or spec.description or "").strip()
+
+                if not title:
+                    missing_titles.append(spec.path)
+
+                if not description:
+                    missing_descriptions.append(spec.path)
+
+    if missing_titles or missing_descriptions:
+        lines: list[str] = []
+        if missing_titles:
+            lines.append("Нет title для: " + ", ".join(missing_titles))
+        if missing_descriptions:
+            lines.append("Нет description для: " + ", ".join(missing_descriptions))
+
+        print("[settings hints] " + " | ".join(lines))

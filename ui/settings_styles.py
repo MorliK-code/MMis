@@ -87,6 +87,7 @@ QToolButton#hint_button {
     border: 0;
     background: transparent;
     padding: 0;
+    margin: 0;
 }
 QFrame#settings_hint_popup {
     background: rgba(15, 16, 24, 248);

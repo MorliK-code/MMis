@@ -338,7 +338,7 @@
       "show_thinking": true,
       "thinking_first": true,
       "auto_start_api": true,
-      "auto_start_ollama": true,
+      "auto_start_ollama": false,
       "runtime": {
         "mode_lock": false,
         "active_mode": "",

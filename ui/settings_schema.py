@@ -135,21 +135,29 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                         "Ollama start mode",
                         kind="select",
                         options=("serve", "ui"),
-                        description="serve = запуск Ollama API через <ollama.exe> serve; ui = запуск через команду ollama list.",
+                        description=(
+                            "serve запускает Ollama API через '<ollama.exe> serve'. "
+                            "ui запускает через 'ollama list'."
+                        ),
                         example="serve",
                         live=True,
                     ),
                     SettingSpec(
                         "ui.ollama.serve_exe",
                         "Ollama serve exe",
-                        description="Путь к ollama.exe для serve-режима.",
+                        description=(
+                            "Путь к ollama.exe для режима serve. "
+                            "Если оставить пустым, будет использоваться команда ollama из PATH."
+                        ),
                         example=r"C:\Users\user\AppData\Local\Programs\Ollama\ollama.exe",
                         live=True,
                     ),
                     SettingSpec(
                         "ui.ollama.models_dir",
                         "Ollama models dir",
-                        description="Папка моделей Ollama. Передаётся в env как OLLAMA_MODELS.",
+                        description=(
+                            "Папка моделей Ollama. Передаётся в окружение как OLLAMA_MODELS."
+                        ),
                         example=r"D:\.ollama\models",
                         live=True,
                     ),
