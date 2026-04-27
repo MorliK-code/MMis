@@ -554,9 +554,9 @@ class TextValueEditor(QWidget):
         return width, height
 
     def _refresh_preview(self) -> None:
-        preview = _preview_text(self._text)
-        self.preview.setText(preview or "empty")
-        self.preview.setToolTip(self._text)
+        self.preview.setText(_preview_text(self._text))
+        self.preview.setToolTip(_tooltip_preview_text(self._text))
+        self.edit_button.setToolTip("Изменить значение")
         self.setMaximumWidth(self.sizeHint().width())
         self.updateGeometry()
 
@@ -910,9 +910,9 @@ class ModelNameEditor(QWidget):
                 pass
 
     def _refresh_preview(self) -> None:
-        text = self._value or "empty"
-        self.preview.setText(text)
-        self.preview.setToolTip(self._value)
+        self.preview.setText(_preview_text(self._value))
+        self.preview.setToolTip(_tooltip_preview_text(self._value, max_chars=120, max_lines=2))
+        self.arrow_button.setToolTip("Модели")
         self.setMaximumWidth(self.sizeHint().width())
         self.updateGeometry()
 
@@ -1187,6 +1187,31 @@ def _preview_text(text: str) -> str:
     if len(compact) <= 54:
         return compact
     return f"{compact[:54]}..."
+
+
+def _tooltip_preview_text(text: str, *, max_chars: int = 420, max_lines: int = 10) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+
+    lines = raw.replace("\r", "\n").splitlines()
+    clipped_lines: list[str] = []
+
+    for line in lines[:max_lines]:
+        line = line.rstrip()
+        if len(line) > 120:
+            line = line[:117].rstrip() + "..."
+        clipped_lines.append(line)
+
+    result = "\n".join(clipped_lines).strip()
+
+    if len(lines) > max_lines:
+        result += "\n..."
+
+    if len(result) > max_chars:
+        result = result[:max_chars].rstrip() + "..."
+
+    return result
 
 
 def _editor_description(spec: SettingSpec) -> str:

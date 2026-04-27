@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from ui.settings_sync_service import dotted_set, load_settings_payload, save_settings_updates
 from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor, _ui_font
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
-from ui.settings_styles import SETTINGS_STYLE
+from ui.settings_styles import SETTINGS_STYLE, apply_settings_tooltip_style
 from ui.settings_widgets import SettingEditor
 
 CARD_TAG_HEIGHT = 18
@@ -78,10 +78,10 @@ class SettingsHintPopup(QFrame):
         super().__init__(parent)
         self.setObjectName("settings_hint_popup")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedWidth(314)
+        self.setFixedWidth(286)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(7)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
         self.title_label = QLabel("")
         self.title_label.setObjectName("hint_popup_title")
         self.body_label = QLabel("")
@@ -368,6 +368,7 @@ class SettingsWindow(QDialog):
 
     def _build_ui(self) -> None:
         self.setStyleSheet(SETTINGS_STYLE)
+        apply_settings_tooltip_style()
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -1029,12 +1030,12 @@ def _hint_popup_width(spec: SettingSpec) -> int:
     example_width = max((metrics.horizontalAdvance(line) for line in example.splitlines()), default=0)
     title_width = metrics.horizontalAdvance(spec.path)
 
-    target = max(252, title_width + 58, longest_word_width + 90, min(example_width + 58, 360))
+    target = max(236, title_width + 42, longest_word_width + 62, min(example_width + 42, 300))
     if len(description) > 220 or len(example) > 90:
-        target = max(target, 334)
+        target = max(target, 300)
     elif len(description) > 150 or len(example) > 60:
-        target = max(target, 314)
-    return min(360, target)
+        target = max(target, 286)
+    return min(320, target)
 
 
 _TITLE_BY_PATH: dict[str, str] = {

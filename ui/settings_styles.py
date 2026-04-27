@@ -5,6 +5,39 @@ from pathlib import Path
 _CHEVRON_DOWN = (Path(__file__).resolve().parent / "assets" / "settings_chevron_down.svg").as_posix()
 
 
+SETTINGS_TOOLTIP_STYLE = """
+/* MMIS_SETTINGS_TOOLTIP_STYLE */
+QToolTip {
+    color: #eef0f6;
+    background-color: rgba(15, 16, 24, 248);
+    border: 1px solid rgba(139, 92, 246, 82);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 10px;
+}
+"""
+
+
+def apply_settings_tooltip_style() -> None:
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        current = app.styleSheet() or ""
+        marker = "/* MMIS_SETTINGS_TOOLTIP_STYLE */"
+
+        if marker in current:
+            return
+
+        app.setStyleSheet(current + "\n" + SETTINGS_TOOLTIP_STYLE)
+    except Exception:
+        pass
+
+
 SETTINGS_STYLE = """
 QDialog#settings_window {
     background: transparent;
@@ -90,30 +123,30 @@ QToolButton#hint_button {
     margin: 0;
 }
 QFrame#settings_hint_popup {
-    background: rgba(15, 16, 24, 248);
-    border: 1px solid rgba(139, 92, 246, 82);
-    border-radius: 12px;
+    background: rgba(15, 16, 24, 242);
+    border: 1px solid rgba(139, 92, 246, 70);
+    border-radius: 10px;
 }
 QLabel#hint_popup_title {
     color: #c4b5fd;
     font-family: Cascadia Code, Consolas, monospace;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
 }
 QLabel#hint_popup_body {
-    color: #eef0f6;
+    color: #d8dee9;
     font-family: Cascadia Code, Consolas, monospace;
-    font-size: 11px;
-    line-height: 145%;
+    font-size: 10px;
+    line-height: 130%;
 }
 QLabel#hint_popup_example {
     color: #f3f4f6;
-    background: rgba(139, 92, 246, 34);
-    border-top: 1px solid rgba(139, 92, 246, 44);
-    border-radius: 8px;
-    padding: 7px 9px;
+    background: rgba(139, 92, 246, 24);
+    border-top: 1px solid rgba(139, 92, 246, 34);
+    border-radius: 7px;
+    padding: 5px 7px;
     font-family: Consolas, Cascadia Code, monospace;
-    font-size: 10px;
+    font-size: 9px;
 }
 QPushButton:hover, QToolButton:hover {
     background: rgba(139, 92, 246, 28);
