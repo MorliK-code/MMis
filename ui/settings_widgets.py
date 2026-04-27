@@ -260,11 +260,12 @@ class RestartBadge(QLabel):
         font.setFamily("Cascadia Code")
         self.setFont(font)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(90, 18)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(18)
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
 
     def sizeHint(self) -> QSize:
-        return QSize(90, 18)
+        sh = super().sizeHint()
+        return QSize(sh.width() + 10, 18) # Add some safety margin
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()

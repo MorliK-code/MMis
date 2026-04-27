@@ -213,9 +213,8 @@ QFrame#settings_nav {
     border-right: 1px solid rgba(255, 255, 255, 18);
     background: rgba(8, 10, 14, 58);
 }
-QFrame#right_panel {
-    border-left: 1px solid rgba(255, 255, 255, 18);
-    background: rgba(8, 10, 14, 54);
+QScrollArea#settings_nav_scroll, QWidget#settings_nav_content {
+    background: transparent;
 }
 QFrame#settings_card {
     background: rgba(255, 255, 255, 14);

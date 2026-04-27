@@ -439,10 +439,47 @@ class SettingsWindow(QDialog):
 
         self.nav = QFrame(panel)
         self.nav.setObjectName("settings_nav")
-        self.nav.setFixedWidth(196)
-        self.nav_layout = QVBoxLayout(self.nav)
-        self.nav_layout.setContentsMargins(14, 14, 10, 14)
+        self.nav.setFixedWidth(240)
+        nav_root_layout = QVBoxLayout(self.nav)
+        nav_root_layout.setContentsMargins(0, 0, 0, 0)
+        nav_root_layout.setSpacing(0)
+
+        self.nav_scroll = QScrollArea(self.nav)
+        self.nav_scroll.setObjectName("settings_nav_scroll")
+        self.nav_scroll.setWidgetResizable(True)
+        self.nav_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.nav_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        nav_root_layout.addWidget(self.nav_scroll)
+
+        self.nav_content = QWidget()
+        self.nav_content.setObjectName("settings_nav_content")
+        self.nav_content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.nav_layout = QVBoxLayout(self.nav_content)
+        self.nav_layout.setContentsMargins(14, 14, 22, 14) # Increased right margin
         self.nav_layout.setSpacing(4)
+        self.nav_scroll.setWidget(self.nav_content)
+
+        self._nav_scroll_overlay = ChatScrollOverlay(self.nav_scroll)
+
+        # Создаем виджеты заранее (v46_fix), так как они нужны в _build_nav
+        self.state_label = QLabel("")
+        self.state_label.setObjectName("settings_muted")
+        self.state_label.setWordWrap(True)
+
+        self.diff_box = QPlainTextEdit()
+        self.diff_box.setObjectName("json_preview")
+        self.diff_box.setReadOnly(True)
+        self.diff_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.diff_box.setFixedHeight(180)
+        self.diff_box.setViewportMargins(6, 4, 12, 4)
+        self._diff_scroll_overlay = PlainTextScrollOverlay(self.diff_box)
+
+        self.warning_label = QLabel("")
+        self.warning_label.setObjectName("settings_muted")
+        self.warning_label.setWordWrap(True)
+
         self._build_nav()
         body.addWidget(self.nav)
 
@@ -495,33 +532,6 @@ class SettingsWindow(QDialog):
         center_layout.addWidget(self.scroll, 1)
         body.addWidget(center, 1)
 
-        self.preview_panel = QFrame(panel)
-        self.preview_panel.setObjectName("right_panel")
-        self.preview_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.preview_panel.setFixedWidth(220)
-        preview_layout = QVBoxLayout(self.preview_panel)
-        preview_layout.setContentsMargins(10, 12, 10, 12)
-        preview_layout.setSpacing(10)
-        self.state_label = QLabel("")
-        self.state_label.setObjectName("settings_muted")
-        self.state_label.setWordWrap(True)
-        preview_layout.addWidget(self._preview_card("Живое состояние", self.state_label))
-        self.diff_box = QPlainTextEdit()
-        self.diff_box.setObjectName("json_preview")
-        self.diff_box.setReadOnly(True)
-        self.diff_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.diff_box.setViewportMargins(4, 4, 16, 4)
-        self._diff_scroll_overlay = PlainTextScrollOverlay(self.diff_box)
-        preview_layout.addWidget(self._preview_card("Предпросмотр JSON", self.diff_box), 1)
-        self.warning_label = QLabel("")
-        self.warning_label.setObjectName("settings_muted")
-        self.warning_label.setWordWrap(True)
-        preview_layout.addWidget(self._preview_card("Warnings", self.warning_label))
-        ux_label = QLabel("ЛКМ по ?                         подсказка\nИзменённые поля           фиолетовая метка\nОпасные поля                    красная зона\nСохранение              update_config_values()")
-        ux_label.setObjectName("settings_muted")
-        ux_label.setWordWrap(True)
-        preview_layout.addWidget(self._preview_card("Идея UX", ux_label))
-        body.addWidget(self.preview_panel)
         self._hint_popup = SettingsHintPopup(self)
 
     def showEvent(self, event) -> None:
@@ -617,6 +627,46 @@ class SettingsWindow(QDialog):
             self.nav_layout.addWidget(button)
             self._nav_buttons[category.key] = button
         self.nav_layout.addStretch(1)
+
+        # Секция системной информации в боковой панели (v46)
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background: rgba(255, 255, 255, 12); margin: 10px 0;")
+        self.nav_layout.addWidget(sep)
+
+        info_header = QLabel("ИНФОРМАЦИЯ")
+        info_header.setObjectName("settings_muted")
+        info_header.setStyleSheet("margin-bottom: 4px;")
+        self.nav_layout.addWidget(info_header)
+
+        self.state_label.setMinimumWidth(0)
+        self.state_label.setMaximumWidth(204)
+        self.nav_layout.addWidget(self.state_label)
+
+        # Фрейм для варнингов, если они есть
+        self.sidebar_warn_frame = QFrame()
+        self.sidebar_warn_frame.setObjectName("danger_card")
+        self.sidebar_warn_frame.setStyleSheet("background: rgba(127, 29, 29, 20); border: 1px solid rgba(252, 165, 165, 30); margin: 4px 8px;")
+        warn_layout = QVBoxLayout(self.sidebar_warn_frame)
+        warn_layout.setContentsMargins(6, 6, 6, 6)
+        warn_layout.addWidget(self.warning_label)
+        self.sidebar_warn_frame.setMinimumWidth(0)
+        self.sidebar_warn_frame.setMaximumWidth(204)
+        self.sidebar_warn_frame.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Minimum)
+        self.nav_layout.addWidget(self.sidebar_warn_frame)
+        self.sidebar_warn_frame.hide()
+
+        json_label = QLabel("CHANGES (JSON)")
+        json_label.setObjectName("settings_muted")
+        json_label.setStyleSheet("font-size: 9px; margin-top: 6px;")
+        self.nav_layout.addWidget(json_label)
+
+        self.diff_box.setFixedHeight(180) 
+        self.diff_box.setMinimumWidth(0)
+        self.diff_box.setMaximumWidth(204)
+        self.diff_box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.diff_box.setViewportMargins(8, 4, 16, 4)
+        self.nav_layout.addWidget(self.diff_box)
 
     def _preview_card(self, title: str, widget: QWidget) -> QFrame:
         frame = QFrame(self)
@@ -901,7 +951,12 @@ class SettingsWindow(QDialog):
                 warnings.append(f"{path}: restart required")
             if spec and spec.dangerous:
                 warnings.append(f"{path}: dangerous setting")
-        self.warning_label.setText("\n".join(warnings) if warnings else "No warnings.")
+
+        warn_text = "\n".join(warnings) if warnings else ""
+        self.warning_label.setText(warn_text)
+        if hasattr(self, "sidebar_warn_frame"):
+            self.sidebar_warn_frame.setVisible(bool(warn_text))
+            
         self.save_btn.setEnabled(bool(self._changed) and not bool(self._invalid))
 
     def _save(self) -> None:
