@@ -252,6 +252,7 @@ class HintButton(QToolButton):
         self.setText("")
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.setAutoRaise(True)
+        self._forced_hover = False
 
         self.setStyleSheet(
             "QToolButton#hint_button {"
@@ -282,18 +283,32 @@ class HintButton(QToolButton):
             return
         super().mousePressEvent(event)
 
+    def set_forced_hover(self, value: bool) -> None:
+        value = bool(value)
+        if getattr(self, "_forced_hover", False) == value:
+            return
+        self._forced_hover = value
+        self.setCursor(Qt.CursorShape.PointingHandCursor if value else Qt.CursorShape.ArrowCursor)
+        self.update()
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
+        is_hover = self.underMouse() or bool(getattr(self, "_forced_hover", False))
+
         # Центрируем круг 18x18 внутри 22x22 (2.5, 2.5) (v36)
         rect = QRectF(2.5, 2.5, 17.0, 17.0)
-        painter.setPen(QPen(_to_qcolor("rgba(139,92,246,.40)"), 1))
-        painter.setBrush(_to_qcolor("rgba(139,92,246,.16)"))
+        border = "rgba(139,92,246,.62)" if is_hover else "rgba(139,92,246,.40)"
+        bg = "rgba(139,92,246,.24)" if is_hover else "rgba(139,92,246,.16)"
+        text_color = "#c4b5fd" if is_hover else "#9f8bff"
+
+        painter.setPen(QPen(_to_qcolor(border), 1))
+        painter.setBrush(_to_qcolor(bg))
         painter.drawEllipse(rect)
 
-        painter.setPen(_to_qcolor("#9f8bff"))
+        painter.setPen(_to_qcolor(text_color))
         font = _ui_font(pixel_size=10)
         font.setFamily("Segoe UI")
         painter.setFont(font)
@@ -685,11 +700,10 @@ class SettingsWindow(QDialog):
         label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        label.setStyleSheet("QLabel { background: transparent; border: none; color: #f3f4f6; padding: 0px; }")
 
-        # Полный текст, без max-width и без elide.
+        # Полный текст, без max-width и без elide. (v37_fix2)
         text_width = label.fontMetrics().horizontalAdvance(label.text())
-        label.setFixedWidth(text_width + 2)
+        label.setFixedWidth(text_width + 16) # 8px padding + 8px safety/border
 
         hint = HintButton(row)
         hint.setObjectName("hint_button")
@@ -703,8 +717,9 @@ class SettingsWindow(QDialog):
         hint.unhovered.connect(lambda _button: self._hide_hint_popup())
         self._hint_targets[hint] = spec
 
-        # Страховка (v37): ловим движение мыши на уровне всей строки.
+        # Страховка (v37/v38): ловим движение мыши на уровне всей строки.
         row.setMouseTracking(True)
+        row.setCursor(Qt.CursorShape.ArrowCursor)
         row.installEventFilter(self)
         self._hint_rows[row] = (hint, spec)
 
@@ -745,22 +760,38 @@ class SettingsWindow(QDialog):
                         pos = None
 
                     if pos is not None:
-                        # Переводим геометрию hint в координаты row. (v37)
-                        # adjusted(-6, -4, 6, 4) дает запас вокруг иконки.
+                        # Расширенная зона вокруг видимого `?`.
                         hint_rect = hint.geometry().adjusted(-6, -4, 6, 4)
+                        inside = hint_rect.contains(pos)
 
-                        if hint_rect.contains(pos):
+                        if inside:
+                            watched.setCursor(Qt.CursorShape.PointingHandCursor)
+
+                            if hasattr(hint, "set_forced_hover"):
+                                hint.set_forced_hover(True)
+
                             self._show_hint_popup(hint, spec)
 
                             if event.type() == QEvent.Type.MouseButtonPress:
                                 event.accept()
                                 return True
                         else:
+                            watched.setCursor(Qt.CursorShape.ArrowCursor)
+
+                            if hasattr(hint, "set_forced_hover"):
+                                hint.set_forced_hover(False)
+
                             self._hide_hint_popup()
+
                 except Exception:
                     pass
 
             elif event.type() in {QEvent.Type.Leave, QEvent.Type.Hide}:
+                watched.setCursor(Qt.CursorShape.ArrowCursor)
+
+                if hasattr(hint, "set_forced_hover"):
+                    hint.set_forced_hover(False)
+
                 self._hide_hint_popup()
 
         return super().eventFilter(watched, event)
@@ -783,6 +814,10 @@ class SettingsWindow(QDialog):
         self._hint_popup.raise_()
 
     def _hide_hint_popup(self) -> None:
+        for hint, _spec in list(getattr(self, "_hint_rows", {}).values()):
+            if hasattr(hint, "set_forced_hover"):
+                hint.set_forced_hover(False)
+
         if self._hint_popup is not None:
             self._hint_popup.hide()
 
@@ -812,9 +847,11 @@ class SettingsWindow(QDialog):
             label.style().polish(label)
 
             # После смены objectName QSS может поменять padding/border.
-            # Возвращаем точную ширину полного текста (v34).
+            # Возвращаем точную ширину полного текста + запас для padding (v37_fix2).
             text_width = label.fontMetrics().horizontalAdvance(label.text())
-            label.setFixedWidth(text_width + 2)
+            label.setFixedWidth(text_width + 16)
+            label.update()
+            label.repaint()
 
     def _refresh_preview(self) -> None:
         api_host = dotted_get(self._payload, "api.host", "")

@@ -179,7 +179,7 @@ QLabel#setting_label {
     font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 600;
-    padding: 0px;
+    padding: 0 4px;
     border: 1px solid transparent;
     border-radius: 6px;
 }
@@ -188,7 +188,7 @@ QLabel#setting_label_changed {
     background: rgba(139, 92, 246, 28);
     border: 1px solid rgba(139, 92, 246, 52);
     border-radius: 6px;
-    padding: 0px;
+    padding: 0 4px;
     font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 600;
