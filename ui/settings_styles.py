@@ -57,8 +57,11 @@ QFrame#settings_top {
 QLabel#settings_title {
     color: #f3f4f6;
     font-family: Cascadia Code, Consolas, monospace;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 700;
+    min-height: 22px;
+    padding: 0px;
+    margin: 0px;
 }
 QLabel#settings_gear {
     min-width: 32px;
@@ -72,7 +75,15 @@ QLabel#settings_gear {
     font-size: 16px;
     font-weight: 700;
 }
-QLabel#settings_subtitle, QLabel#settings_muted {
+QLabel#settings_subtitle {
+    color: #8f96a3;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 10px;
+    min-height: 17px;
+    padding: 0px;
+    margin: 0px;
+}
+QLabel#settings_muted {
     color: #8f96a3;
     font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
@@ -153,10 +164,34 @@ QPushButton:hover, QToolButton:hover {
     border-color: rgba(139, 92, 246, 54);
     color: #f3f4f6;
 }
+QPushButton:pressed, QToolButton:pressed {
+    background: rgba(139, 92, 246, 44);
+    border-color: rgba(139, 92, 246, 82);
+    color: #ffffff;
+    padding-top: 1px;
+    padding-bottom: 0px;
+}
 QPushButton#primary_button {
-    background: rgba(139, 92, 246, 46);
-    border-color: rgba(139, 92, 246, 76);
+    background: rgba(139, 92, 246, 42);
+    border: 1px solid rgba(139, 92, 246, 70);
     color: #ede9fe;
+}
+QPushButton#primary_button:hover {
+    background: rgba(139, 92, 246, 70);
+    border: 1px solid rgba(167, 139, 250, 112);
+    color: #ffffff;
+}
+QPushButton#primary_button:pressed {
+    background: rgba(109, 40, 217, 95);
+    border: 1px solid rgba(196, 181, 253, 140);
+    color: #f5f3ff;
+    padding-top: 1px;
+    padding-bottom: 0px;
+}
+QPushButton#primary_button:disabled {
+    background: rgba(139, 92, 246, 18);
+    border: 1px solid rgba(139, 92, 246, 34);
+    color: rgba(237, 233, 254, 90);
 }
 QPushButton#nav_button {
     min-height: 28px;
