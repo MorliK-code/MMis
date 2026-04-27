@@ -80,10 +80,10 @@ QToolButton#close_button {
     padding: 0;
 }
 QToolButton#hint_button {
-    min-width: 18px;
-    max-width: 18px;
-    min-height: 18px;
-    max-height: 18px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
     border: 0;
     background: transparent;
     padding: 0;
@@ -179,7 +179,7 @@ QLabel#setting_label {
     font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 600;
-    padding: 0px 1px 0px 6px;
+    padding: 0px;
     border: 1px solid transparent;
     border-radius: 6px;
 }
@@ -188,7 +188,7 @@ QLabel#setting_label_changed {
     background: rgba(139, 92, 246, 28);
     border: 1px solid rgba(139, 92, 246, 52);
     border-radius: 6px;
-    padding: 2px 1px 2px 6px;
+    padding: 0px;
     font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
     font-weight: 600;

@@ -123,22 +123,33 @@ async def lifespan(app: FastAPI):
     """Lifespan manager для корректного запуска и остановки API."""
     global memory_core_adapter
     
-    # Startup - инициализируем memory_core_adapter
-    memory_core_adapter = get_memory_core_adapter()
-    
+    # Startup - инициализируем memory_core_adapter из актуальных settings
     cfg = load_config(force_reload=True)
     validate_no_txt_paths(cfg)
     LOGGER = get_logger(__name__)
     LOGGER.info("MMis API starting...")
+
+    from memory_core.adapter import init_memory_core
+    memory_core_adapter = init_memory_core(
+        db_path=cfg.memory_core_db_path,
+        vector_path=cfg.memory_core_vector_path,
+        default_workspace=cfg.memory_core_default_workspace,
+        default_namespace=cfg.memory_core_default_namespace,
+        top_k=int(cfg.memory_core_top_k),
+        enable_background_worker=bool(cfg.memory_core_enable_background_worker),
+        worker_poll_interval=float(cfg.memory_core_worker_poll_interval),
+    )
     
-    # Явно запускаем worker после инициализации
+    # Явно запускаем worker только если он реально включён
     memory_core = getattr(memory_core_adapter, "service", None)
-    if memory_core is not None:
+    if memory_core is not None and bool(cfg.memory_core_enable_background_worker):
         worker = getattr(memory_core, "worker", None)
         if worker is not None and not worker.is_running():
             LOGGER.info("Starting memory_core worker...")
             worker.start()
             LOGGER.info("Memory_core worker started")
+    else:
+        LOGGER.info("Memory_core worker disabled by config")
     
     # Регистрируем Memory Inspector UI после инициализации adapter
     from api.memory_inspector_router import create_memory_inspector_router

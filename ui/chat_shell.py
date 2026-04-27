@@ -2680,6 +2680,56 @@ def _merge_streamed_and_final_text(streamed: str, final: str) -> str:
     return streamed_text.strip()
 
 
+class RuntimeFlagSyncWorker(QThread):
+    done = Signal(bool, str)
+
+    def __init__(self, api: ApiClient, payload: dict):
+        super().__init__()
+        self.api = api
+        self.payload = dict(payload or {})
+
+    def run(self) -> None:
+        try:
+            # Важно: никаких долгих timeout.
+            timeout = 1.5
+
+            if "think" in self.payload:
+                self.api._request_json(
+                    "POST",
+                    "/thinking",
+                    payload={"enabled": bool(self.payload["think"])},
+                    timeout=timeout,
+                )
+
+            if "verbose" in self.payload:
+                self.api._request_json(
+                    "POST",
+                    "/verbose",
+                    payload={"enabled": bool(self.payload["verbose"])},
+                    timeout=timeout,
+                )
+
+            if "json" in self.payload:
+                self.api._request_json(
+                    "POST",
+                    "/json-mode",
+                    payload={"enabled": bool(self.payload["json"])},
+                    timeout=timeout,
+                )
+
+            if "web_mode" in self.payload:
+                self.api._request_json(
+                    "POST",
+                    "/web-mode",
+                    payload={"mode": str(self.payload["web_mode"])},
+                    timeout=timeout,
+                )
+
+            self.done.emit(True, "ok")
+        except Exception as exc:
+            self.done.emit(False, str(exc))
+
+
 class ExactChatWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -2696,6 +2746,16 @@ class ExactChatWindow(QMainWindow):
         self._backend_status_failures = 0
         self._messages_view_height_sync_queued = False
         self._shutting_down = False
+        self._runtime_flags = {
+            "think": True,
+            "verbose": True,
+            "json": False,
+            "web_mode": "auto",
+        }
+        self._runtime_sync_timer = QTimer(self)
+        self._runtime_sync_timer.setSingleShot(True)
+        self._runtime_sync_timer.timeout.connect(self._sync_runtime_flags_async)
+        self._runtime_sync_worker: RuntimeFlagSyncWorker | None = None
         self._build_ui()
         self._bind_popups()
         self._load_models()
@@ -3022,14 +3082,67 @@ class ExactChatWindow(QMainWindow):
         )
         lay.addWidget(commands)
         screen = function_row("screen", icon_text="▣")
-        screen.layout().addWidget(ToggleSwitch(False))
+        self.screen_switch = ToggleSwitch(False)
+        screen.layout().addWidget(self.screen_switch)
         lay.addWidget(screen)
+        self.screen_switch.toggled.connect(lambda checked: self._on_runtime_flag_changed("screen", bool(checked), sync=False))
         web = function_row("web", icon_text="🌐")
         web.layout().setContentsMargins(10, 5, 8, 7)
-        web.layout().addWidget(WebModeSelector("auto"), 0, Qt.AlignmentFlag.AlignVCenter)
+        self.web_mode_selector = WebModeSelector(str(self._runtime_flags.get("web_mode") or "auto"))
+        self.web_mode_selector.modeChanged.connect(lambda mode: self._on_runtime_flag_changed("web_mode", str(mode)))
+        web.layout().addWidget(self.web_mode_selector, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addWidget(web)
+
         self._commands_row = commands
+        think_switch = commands.controls.get("think")
+        verbose_switch = commands.controls.get("verbose")
+        json_switch = commands.controls.get("json")
+
+        if think_switch is not None:
+            think_switch.setChecked(bool(self._runtime_flags["think"]))
+            think_switch.toggled.connect(lambda checked: self._on_runtime_flag_changed("think", bool(checked)))
+
+        if verbose_switch is not None:
+            verbose_switch.setChecked(bool(self._runtime_flags["verbose"]))
+            verbose_switch.toggled.connect(lambda checked: self._on_runtime_flag_changed("verbose", bool(checked)))
+
+        if json_switch is not None:
+            json_switch.setChecked(bool(self._runtime_flags["json"]))
+            json_switch.toggled.connect(lambda checked: self._on_runtime_flag_changed("json", bool(checked)))
+
         return popup
+
+    def _on_runtime_flag_changed(self, key: str, value, *, sync: bool = True) -> None:
+        self._runtime_flags[str(key)] = value
+        # Никаких модальных окон и ожидания API в UI-потоке.
+        if sync:
+            self._runtime_sync_timer.start(250)
+
+    def _sync_runtime_flags_async(self) -> None:
+        if self._runtime_sync_worker is not None and self._runtime_sync_worker.isRunning():
+            # Если прошлый sync ещё идёт, попробуем позже.
+            self._runtime_sync_timer.start(500)
+            return
+
+        payload = {
+            "think": bool(self._runtime_flags.get("think", True)),
+            "verbose": bool(self._runtime_flags.get("verbose", True)),
+            "json": bool(self._runtime_flags.get("json", False)),
+            "web_mode": str(self._runtime_flags.get("web_mode", "auto") or "auto"),
+        }
+
+        self._runtime_sync_worker = RuntimeFlagSyncWorker(self.api, payload)
+        self._runtime_sync_worker.done.connect(self._on_runtime_flags_synced)
+        self._runtime_sync_worker.finished.connect(self._runtime_sync_worker.deleteLater)
+        self._runtime_sync_worker.start()
+
+    def _on_runtime_flags_synced(self, ok: bool, message: str) -> None:
+        if ok:
+            return
+        try:
+            print(f"[runtime flags sync] {message}")
+        except Exception:
+            pass
 
     def _bind_popups(self) -> None:
         self.functions_btn.clicked.connect(self._toggle_functions)
@@ -3149,7 +3262,14 @@ class ExactChatWindow(QMainWindow):
             bubble=self._append_message("assistant", "", thinking="", thinking_ms="0 ms", perf=[]),
             started_at=time.perf_counter(),
         )
-        self._worker = ReplyWorker(self.api, text, store_turn=store_turn, think=True)
+        self._worker = ReplyWorker(
+            self.api,
+            text,
+            store_turn=store_turn,
+            think=bool(self._runtime_flags.get("think")),
+            verbose=bool(self._runtime_flags.get("verbose")),
+            json_mode=bool(self._runtime_flags.get("json")),
+        )
         self._worker.chunk.connect(self._on_answer_chunk)
         self._worker.thinking_chunk.connect(self._on_thinking_chunk)
         self._worker.finished.connect(self._on_reply_finished)

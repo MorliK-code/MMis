@@ -23,6 +23,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -443,7 +444,7 @@ class BackgroundWorker:
                 self.job_queue.fail(job.job_id, "", retry=True)
                 self.stats.requeue_count += 1
             self.stats.jobs_retried += 1
-            return True
+            return False  # FIXED: Stop burst on interruption
         except Exception as e:
             print(f"[WORKER] {self.config.worker_id}: Job failed: {e}", flush=True)
             sys.stdout.flush()
@@ -805,6 +806,10 @@ class BackgroundWorker:
 
                     LOGGER.info(f"Worker {self.config.worker_id}: No jobs, sleeping for {self.config.poll_interval_sec}s...")
                     self._wait_or_wake(self.config.poll_interval_sec)
+                else:
+                    # Были задачи — спим небольшое время перед следующим циклом
+                    # чтобы не перегружать CPU если задач очень много
+                    self._wait_or_wake(0.05)
         except Exception as exc:
             self.stats.last_error = str(exc)
             LOGGER.exception(f"Worker {self.config.worker_id}: Run loop crashed: {exc}")

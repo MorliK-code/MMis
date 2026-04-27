@@ -90,7 +90,7 @@ QPlainTextEdit#settings_text_editor_body:focus {
 
 class SegmentedSelector(QWidget):
     valueChanged = Signal(str)
-    _segment_padding = 12.0
+    _segment_padding = 8.0
     _frame_padding = 6.0
     _segment_gap = 1.0
     _min_segment_width = 24.0
@@ -178,7 +178,7 @@ class SegmentedSelector(QWidget):
 
             text_rect = rect
             painter.setPen(_to_qcolor(TEXT if (is_active or is_hover) else MUTED))
-            elided = painter.fontMetrics().elidedText(choice, Qt.TextElideMode.ElideRight, max(8, int(text_rect.width()) - 2))
+            elided = painter.fontMetrics().elidedText(choice, Qt.TextElideMode.ElideRight, max(8, int(text_rect.width())))
             painter.drawText(text_rect, int(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter), elided)
 
     def mouseMoveEvent(self, event) -> None:

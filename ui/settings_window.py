@@ -4,8 +4,8 @@ import copy
 import json
 from typing import Any
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QFontMetrics, QPainter, QPen
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QFontMetrics, QPainter, QPen, QMouseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -242,15 +242,17 @@ class HintButton(QToolButton):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("hint_button")
-        self.setFixedSize(18, 18)
+
+        # 22x22 — это hitbox (v36), сам круг рисуем 18x18.
+        self.setFixedSize(22, 22)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setText("")
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.setAutoRaise(True)
 
-        # Важно: QToolButton не должен рисовать свой стандартный фон.
         self.setStyleSheet(
             "QToolButton#hint_button {"
             "border: 0;"
@@ -259,6 +261,11 @@ class HintButton(QToolButton):
             "margin: 0px;"
             "}"
         )
+
+    def event(self, event) -> bool:
+        if event.type() in {QEvent.Type.HoverEnter, QEvent.Type.HoverMove}:
+            self.hovered.emit(self)
+        return super().event(event)
 
     def enterEvent(self, event) -> None:
         self.hovered.emit(self)
@@ -280,7 +287,8 @@ class HintButton(QToolButton):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
-        rect = QRectF(0.5, 0.5, 17.0, 17.0)
+        # Центрируем круг 18x18 внутри 22x22 (2.5, 2.5) (v36)
+        rect = QRectF(2.5, 2.5, 17.0, 17.0)
         painter.setPen(QPen(_to_qcolor("rgba(139,92,246,.40)"), 1))
         painter.setBrush(_to_qcolor("rgba(139,92,246,.16)"))
         painter.drawEllipse(rect)
@@ -289,8 +297,9 @@ class HintButton(QToolButton):
         font = _ui_font(pixel_size=10)
         font.setFamily("Segoe UI")
         painter.setFont(font)
+        # Центрируем текст внутри круга
         painter.drawText(
-            QRectF(0.0, -0.5, 18.0, 18.0),
+            QRectF(2.0, 1.5, 18.0, 18.0),
             int(Qt.AlignmentFlag.AlignCenter),
             "?",
         )
@@ -317,6 +326,7 @@ class SettingsWindow(QDialog):
         self._scroll_overlay: ChatScrollOverlay | None = None
         self._hint_popup: SettingsHintPopup | None = None
         self._hint_targets: dict[QWidget, SettingSpec] = {}
+        self._hint_rows: dict[QWidget, tuple[QWidget, SettingSpec]] = {}
         self._category_key = SETTINGS_CATEGORIES[0].key
         self._editors: dict[str, SettingEditor] = {}
         self._changed: dict[str, Any] = {}
@@ -508,6 +518,13 @@ class SettingsWindow(QDialog):
                 except Exception:
                     pass
 
+        for row_widget in list(self._hint_rows.keys()):
+            try:
+                row_widget.removeEventFilter(self)
+            except Exception:
+                pass
+
+        self._hint_rows.clear()
         self._editors.clear()
         self._labels.clear()
 
@@ -593,6 +610,7 @@ class SettingsWindow(QDialog):
     def _render_category(self) -> None:
         self._hide_hint_popup()
         self._hint_targets.clear()
+        self._hint_rows.clear()
         self._dispose_editors()
 
         for button_key, button in self._nav_buttons.items():
@@ -649,44 +667,49 @@ class SettingsWindow(QDialog):
         row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         row.setFixedHeight(30)
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(6, 4, 10, 2)
-        layout.setSpacing(8)
 
-        label = QLabel(_setting_title(spec))
+        layout = QHBoxLayout(row)
+        # Было 6 слева. Нужно +6px вправо для пары [название + ?] (v34/v36)
+        layout.setContentsMargins(12, 4, 10, 2)
+        layout.setSpacing(4)
+
+        label = QLabel(_setting_title(spec), row)
         label.setObjectName("setting_label")
         label_font = _ui_font(pixel_size=11)
         label_font.setFamily("Cascadia Code")
         label.setFont(label_font)
-        label.ensurePolished()
+
         label.setFixedHeight(18)
+        label.setWordWrap(False)
         label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        
-        # Создаем контейнер для заголовка с фиксированной шириной, чтобы выровнять редакторы
-        title_width = 150
-        label.setFixedWidth(title_width)
-        # Отступ справа в стиле, чтобы текст не заходил под иконку, если он слишком длинный
-        label.setStyleSheet("QLabel { padding-right: 20px; background: transparent; border: none; color: #f3f4f6; }")
-        
-        # Создаем знак вопроса как дочерний элемент строки (row), чтобы он был сиблингом метки
+        label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        label.setStyleSheet("QLabel { background: transparent; border: none; color: #f3f4f6; padding: 0px; }")
+
+        # Полный текст, без max-width и без elide.
+        text_width = label.fontMetrics().horizontalAdvance(label.text())
+        label.setFixedWidth(text_width + 2)
+
         hint = HintButton(row)
         hint.setObjectName("hint_button")
-        
-        # Отступ слева в строке 6px + позиция после текста (с запасом 14px)
-        text_w = label.fontMetrics().horizontalAdvance(label.text())
-        hint_x = min(text_w + 14, title_width - 18)
-        # 6px - это левый margin строки
-        hint.move(6 + hint_x, 6) # 6px сверху для центрирования (row height 30, label 18 -> (30-18)/2 = 6)
-        
+        hint.setFixedSize(22, 22) # (v36)
+        hint.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        hint.setMouseTracking(True)
+        hint.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
         hint.hovered.connect(lambda _button, button=hint: self._show_hint_popup(button, self._hint_targets[button]))
         hint.activated.connect(lambda _button, button=hint: self._show_hint_popup(button, self._hint_targets[button]))
         hint.unhovered.connect(lambda _button: self._hide_hint_popup())
         self._hint_targets[hint] = spec
-        
+
+        # Страховка (v37): ловим движение мыши на уровне всей строки.
+        row.setMouseTracking(True)
+        row.installEventFilter(self)
+        self._hint_rows[row] = (hint, spec)
 
         layout.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addStretch(1) # Pushes editor to the right
 
         value = self._changed.get(spec.path, dotted_get(self._payload, spec.path))
@@ -698,18 +721,48 @@ class SettingsWindow(QDialog):
         self._editors[spec.path] = editor
         self._labels[spec.path] = label
         self._update_badge(spec.path)
-        hint.raise_() # Всегда в самом конце, чтобы быть поверх всего
         return row
 
     def eventFilter(self, watched, event) -> bool:
         if watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
             self._fit_to_parent()
 
-        if isinstance(watched, QWidget) and watched in self._hint_targets:
-            if event.type() in {QEvent.Type.Enter, QEvent.Type.MouseButtonPress}:
-                self._show_hint_popup(watched, self._hint_targets[watched])
+        if isinstance(watched, QWidget) and watched in self._hint_rows:
+            hint, spec = self._hint_rows[watched]
+
+            if event.type() in {
+                QEvent.Type.MouseMove,
+                QEvent.Type.HoverMove,
+                QEvent.Type.Enter,
+                QEvent.Type.MouseButtonPress,
+            }:
+                try:
+                    if hasattr(event, "position"):
+                        pos = event.position().toPoint()
+                    elif hasattr(event, "pos"):
+                        pos = event.pos()
+                    else:
+                        pos = None
+
+                    if pos is not None:
+                        # Переводим геометрию hint в координаты row. (v37)
+                        # adjusted(-6, -4, 6, 4) дает запас вокруг иконки.
+                        hint_rect = hint.geometry().adjusted(-6, -4, 6, 4)
+
+                        if hint_rect.contains(pos):
+                            self._show_hint_popup(hint, spec)
+
+                            if event.type() == QEvent.Type.MouseButtonPress:
+                                event.accept()
+                                return True
+                        else:
+                            self._hide_hint_popup()
+                except Exception:
+                    pass
+
             elif event.type() in {QEvent.Type.Leave, QEvent.Type.Hide}:
                 self._hide_hint_popup()
+
         return super().eventFilter(watched, event)
 
     def _show_hint_popup(self, anchor: QWidget, spec: SettingSpec) -> None:
@@ -751,13 +804,17 @@ class SettingsWindow(QDialog):
 
     def _update_badge(self, path: str) -> None:
         label = self._labels.get(path)
-        spec = _spec_for(path)
         changed = path in self._changed
-        
+
         if label:
             label.setObjectName("setting_label_changed" if changed else "setting_label")
             label.style().unpolish(label)
             label.style().polish(label)
+
+            # После смены objectName QSS может поменять padding/border.
+            # Возвращаем точную ширину полного текста (v34).
+            text_width = label.fontMetrics().horizontalAdvance(label.text())
+            label.setFixedWidth(text_width + 2)
 
     def _refresh_preview(self) -> None:
         api_host = dotted_get(self._payload, "api.host", "")
@@ -977,8 +1034,8 @@ _TITLE_BY_PATH: dict[str, str] = {
     "memory.chat_proofread": "Proofread памяти",
     "memory.chat_proofread_strict": "Строгий proofread",
     "memory_core.enabled": "Memory Core",
-    "memory_core.worker_enabled": "Фоновый воркер",
-    "memory_core.worker_poll_interval": "Интервал воркера",
+    "memory_core.enable_background_worker": "Background worker",
+    "memory_core.worker_poll_interval": "Worker poll interval",
     "internet.enabled": "Интернет",
     "internet.web_mode": "Web mode",
     "internet.search.provider": "Search provider",
@@ -1074,8 +1131,8 @@ _DESCRIPTION_BY_PATH: dict[str, str] = {
     "memory.chat_proofread": "Включает дополнительную проверку памяти перед использованием в ответе.",
     "memory.chat_proofread_strict": "Делает проверку памяти строже, снижая риск мусорного контекста.",
     "memory_core.enabled": "Включает новый Memory Core runtime.",
-    "memory_core.worker_enabled": "Разрешает фоновую обработку событий памяти.",
-    "memory_core.worker_poll_interval": "Интервал в секундах, с которым воркер проверяет очередь задач памяти.",
+    "memory_core.enable_background_worker": "Разрешает фоновый Memory Core worker, который обрабатывает очередь событий памяти.",
+    "memory_core.worker_poll_interval": "Интервал в секундах, с которым Memory Core worker проверяет очередь задач.",
     "ui.ollama.start_mode": (
         "Выбирает способ автозапуска Ollama, если её API сейчас недоступен. "
         "serve запускает указанный ollama.exe с аргументом serve. "

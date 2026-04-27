@@ -46,7 +46,17 @@ def default_value_for_path(path: str, kind: str):
         return False
     return ""
 
-def resolve_value(spec, local_config: dict) -> Any:
+def _load_project_config_snapshot() -> dict:
+    """Loads the actual config snapshot from the project's config manager."""
+    try:
+        from config.settings import get_config_payload
+        payload = get_config_payload(force_reload=True)
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        LOGGER.debug("Failed to load local project config snapshot: %s", exc)
+        return {}
+
+def resolve_value(spec, local_config: dict, project_snapshot: dict | None = None) -> Any:
     """Resolves the value for a specific setting based on priority."""
     path = spec.path
     pending = local_config.get("pending_updates", {})
@@ -72,17 +82,22 @@ def resolve_value(spec, local_config: dict) -> Any:
     val = dotted_get(snapshot, path)
     if val is not None:
         return val
+
+    # 5. Local project config/defaults (REAL SOURCE OF TRUTH)
+    val = dotted_get(project_snapshot or {}, path)
+    if val is not None:
+        return val
         
-    # 5. Default UI values for connection
+    # 6. Fallback (schema defaults)
     return default_value_for_path(path, spec.kind)
 
-def build_payload_from_schema(local_config: dict) -> dict:
+def build_payload_from_schema(local_config: dict, project_snapshot: dict | None = None) -> dict:
     """Constructs the full settings payload using the schema and local config."""
     payload = {}
     for category in SETTINGS_CATEGORIES:
         for card in category.cards:
             for spec in card.settings:
-                value = resolve_value(spec, local_config)
+                value = resolve_value(spec, local_config, project_snapshot)
                 dotted_set(payload, spec.path, value)
     return payload
 
@@ -96,11 +111,12 @@ def load_settings_payload(
     Returns (payload, meta).
     """
     local_cfg = load_client_config()
-    payload = build_payload_from_schema(local_cfg)
+    project_snapshot = _load_project_config_snapshot()
+    payload = build_payload_from_schema(local_cfg, project_snapshot)
     
     meta = {
         "online": False,
-        "source": "cache" if local_cfg.get("server_snapshot") else "schema",
+        "source": "cache" if local_cfg.get("server_snapshot") else "project",
         "pending_count": len(local_cfg.get("pending_updates", {})),
         "last_error": local_cfg.get("last_error")
     }
@@ -118,14 +134,14 @@ def load_settings_payload(
             save_server_snapshot(server_config)
             # Re-build payload with new snapshot
             local_cfg = load_client_config()
-            payload = build_payload_from_schema(local_cfg)
+            payload = build_payload_from_schema(local_cfg, project_snapshot)
             meta["online"] = True
             meta["source"] = "server"
             meta["pending_count"] = len(local_cfg.get("pending_updates", {}))
     except Exception as e:
         LOGGER.debug("Server sync failed (offline mode): %s", e)
         meta["online"] = False
-        meta["source"] = "cache" if local_cfg.get("server_snapshot") else "schema"
+        meta["source"] = "cache" if local_cfg.get("server_snapshot") else "project"
         meta["last_error"] = str(e)
 
     return payload, meta

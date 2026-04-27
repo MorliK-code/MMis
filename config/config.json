@@ -257,7 +257,21 @@
     "cache_dir": "{dir_path}\\data\\cache",
     "log_dir": "{dir_path}\\data\\logs",
     "db_path": "{dir_path}\\data\\memory_core\\memory.db",
+    "chat_recall_results": 3,
+    "chat_events_limit": 10,
+    "chat_proofread": false,
+    "chat_proofread_strict": false,
     "enabled": true
+  },
+  "memory_core": {
+    "enabled": true,
+    "db_path": "data/memory_core/memory.db",
+    "vector_path": "data/memory_core/vector",
+    "default_workspace": "global",
+    "default_namespace": "default",
+    "top_k": 8,
+    "enable_background_worker": true,
+    "worker_poll_interval": 2.0
   },
   "dialog": {
     "new_session_after_min": 360,

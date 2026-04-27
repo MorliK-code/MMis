@@ -74,6 +74,8 @@ def build_container(settings: AppSettings) -> AppContainer:
         default_workspace=settings.memory_core_default_workspace,
         default_namespace=settings.memory_core_default_namespace,
         top_k=int(settings.memory_core_top_k),
+        enable_background_worker=bool(settings.memory_core_enable_background_worker),
+        worker_poll_interval=float(settings.memory_core_worker_poll_interval),
     )
 
     response_pipeline = ResponsePipeline(
