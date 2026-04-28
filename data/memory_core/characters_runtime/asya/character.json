@@ -1,7 +1,7 @@
 {
   "id": "asya",
   "name": "Ася",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "default_mood": "neutral",
   "llm_profile": "ASYA",
   "schema_version": 1,

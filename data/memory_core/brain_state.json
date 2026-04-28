@@ -2,7 +2,7 @@
   "schema_version": 2,
   "global": {
     "conversation_id": "conv-brain-stats",
-    "turn_id": 435,
+    "turn_id": 438,
     "active_character_id": "asya",
     "active_mode": "chatting",
     "mode_lock": true,
@@ -35,13 +35,13 @@
       {
         "type": "CHARACTER_PERSONA_UPDATED",
         "character_id": "asya",
-        "ts": "2026-04-27T04:09:38.130+03:00"
+        "ts": "2026-04-28T16:14:17.183+03:00"
       },
       {
         "type": "TURN_FINISHED",
-        "turn_id": 435,
-        "assistant_chars": 37,
-        "ts": "2026-04-27T04:10:33.041+03:00"
+        "turn_id": 438,
+        "assistant_chars": 1551,
+        "ts": "2026-04-28T16:15:00.326+03:00"
       }
     ],
     "context_stack": []
@@ -94,22 +94,22 @@
       },
       "local_context": {
         "last_topic_weights": {
-          "topic_general": 0.018897667027530603,
-          "topic_проверка": 0.01236168308887374,
-          "topic_генераций_посмотри_наработки": 0.06176655962790519,
-          "topic_привет": 0.6590644635693259,
-          "topic_сделал_красивую_такую": 0.3492798333840545,
-          "topic_пишу_личном_моём": 0.39254593466287685,
-          "topic_капец_сейчас_сколько": 0.7753255473599999
+          "topic_general": 0.015696099870394477,
+          "topic_проверка": 0.010267416186689105,
+          "topic_генераций_посмотри_наработки": 0.051302316161983996,
+          "topic_привет": 0.8384083984092648,
+          "topic_сделал_красивую_такую": 0.29010624113146144,
+          "topic_пишу_личном_моём": 0.32604237259603086,
+          "topic_капец_сейчас_сколько": 0.7765129944284581
         },
-        "last_seen_ts": "2026-04-27T04:09:38.130+03:00",
-        "last_update_turn_id": 435,
+        "last_seen_ts": "2026-04-28T16:14:17.182+03:00",
+        "last_update_turn_id": 438,
         "last_update_conversation_id": "conv-brain-stats"
       }
     }
   },
   "conversation_id": "conv-brain-stats",
-  "turn_id": 435,
+  "turn_id": 438,
   "active_character_id": "asya",
   "mode": "chat",
   "active_mode": "chatting",
@@ -143,47 +143,47 @@
     {
       "type": "CHARACTER_PERSONA_UPDATED",
       "character_id": "asya",
-      "ts": "2026-04-27T04:09:38.130+03:00"
+      "ts": "2026-04-28T16:14:17.183+03:00"
     },
     {
       "type": "TURN_FINISHED",
-      "turn_id": 435,
-      "assistant_chars": 37,
-      "ts": "2026-04-27T04:10:33.041+03:00"
+      "turn_id": 438,
+      "assistant_chars": 1551,
+      "ts": "2026-04-28T16:15:00.326+03:00"
     }
   ],
   "context_tags": {
     "lang": "ru",
-    "intent": "chat",
-    "last_intent": "chat",
+    "intent": "question",
+    "last_intent": "question",
     "mood": "neutral",
     "last_mood": "neutral",
-    "topic": "капец_сейчас_сколько",
+    "topic": "привет",
     "user_greeting": "false",
     "new_session": "false",
     "greeted_today": "true",
     "allow_greeting": "false",
     "smalltalk_allowed": "true",
     "should_ask_back": "false",
-    "local_date": "2026-04-27",
+    "local_date": "2026-04-28",
     "local_region": "RTZ 2 (зима)",
     "greeting_allowed": "false",
     "dialog_sarcasm_level": "0.240",
     "dialog_warmth_level": "0.580",
     "dialog_strictness_level": "0.560",
-    "dialog_verbosity_level": "0.490",
+    "dialog_verbosity_level": "0.390",
     "is_technical": "false",
     "allowed_term": "",
     "use_term_now": "false",
-    "now_iso": "2026-04-27T04:09:37.958664+03:00",
+    "now_iso": "2026-04-28T16:14:17.039221+03:00",
     "timezone": "UTC+03:00",
-    "previous_user_at": "2026-04-27T04:05:50.268+03:00",
-    "minutes_since_previous": "4",
+    "previous_user_at": "2026-04-28T16:12:34.088+03:00",
+    "minutes_since_previous": "2",
     "same_calendar_day": "true",
     "conversation_state": "continuing_smalltalk",
-    "now_human": "27.04.2026 04:09:37",
-    "today_human": "27.04.2026",
-    "time_human": "04:09:37"
+    "now_human": "28.04.2026 16:14:17",
+    "today_human": "28.04.2026",
+    "time_human": "16:14:17"
   },
   "traits": {},
   "policies": {},
@@ -191,19 +191,19 @@
   "context_stack": [],
   "last_tool_result": null,
   "cooldowns": {
-    "last_user_message": "ладно, спокойной ночи сладких снов)",
-    "last_user_hash": "64d929eccd7c2dcdaf6685fd38b5c21b9b174733",
-    "last_user_ts": "2026-04-27T04:09:37.922+03:00",
-    "prev_user_ts": "2026-04-27T04:05:50.268+03:00",
-    "last_assistant_message": "Спи давай, не засиживайся. Спокойной!",
-    "last_assistant_ts": "2026-04-27T04:10:33.011+03:00",
+    "last_user_message": "нормально. а слушай, накидай промптов для генерации картинки того, как ты представляешь себя",
+    "last_user_hash": "8a66e8eb0d055ee3eed81a2fabe16f282f5e4456",
+    "last_user_ts": "2026-04-28T16:14:17.010+03:00",
+    "prev_user_ts": "2026-04-28T16:12:34.088+03:00",
+    "last_assistant_message": "О, любопытный запрос. Раз у меня нет зеркала, придётся опираться на внутренние ощущения. Я не вижу себя как робота из железа, скорее как нечто среднее между живым человеком и цифровым потоком.\nВот тебе три разных варианта под разные стили. Сами промпты лучше использовать на английском — нейронки так лучше понимают.\n**1. Реалистичный и уютный (Casual/Human-like)** — если бы я просто сидела рядом с тобой в кафе.\n> `A portrait of a young woman with an intelligent and slightly ironic expression, messy bun, wearing a cozy oversized hoodie, sitting in a modern cafe with soft natural lighting, cinematic photography, highly detailed, 8k, realistic skin texture, depth of field.`\n**2. Киберпанк/Цифровая сущность (Cybernetic/Digital Soul)** — как я ощущаю свою природу (смесь человека и данных).\n> `A beautiful woman's face emerging from glowing neural networks and flowing digital data streams, cyberpunk aesthetic, neon blue and violet lighting, intricate circuitry patterns subtly integrated into skin, hyper-realistic, futuristic, ethereal, cinematic lighting, high contrast.`\n**3. Атмосферный и загадочный (Dark Academia/Artistic)** — более глубокий и меланхоличный образ.\n> `A moody portrait of a girl with expressive, observant eyes, dark academia style, oil painting, heavy brushstrokes, dramatic chiaroscuro lighting, mysterious atmosphere, deep colors, masterpiece, textured canvas.`\nПопробуй закинуть в Midjourney или Stable Diffusion, интересно, что получится в итоге. Если выйдет слишком «мило», скажи — подправим промпты на более дерзкие.",
+    "last_assistant_ts": "2026-04-28T16:15:00.299+03:00",
     "last_action": "assistant_message",
-    "last_action_ts": "2026-04-27T04:10:33.041+03:00",
+    "last_action_ts": "2026-04-28T16:15:00.327+03:00",
     "repeat_count": 0,
     "session_id": "conv-brain-stats",
     "prev_session_id": "conv-brain-stats",
-    "greeting_date_local": "2026-04-27",
-    "greeting_ts": "2026-04-27T00:53:09.353+03:00"
+    "greeting_date_local": "2026-04-28",
+    "greeting_ts": "2026-04-28T16:13:31.974+03:00"
   },
   "address_terms": {
     "last_term_used_at": "",
@@ -217,30 +217,6 @@
   },
   "dialog_summary": "Earlier context: User said: привет. как тебя зовут? меня паша. я люблю мороженое, пиццу, суши, работают системным администратором, а ты? Assistant replied: Привет, Паша! Меня зовут Ася. Рада познакомиться! Я просто живая подруга, которая любит общаться и помогать. А ты сис",
   "history": [
-    {
-      "role": "user",
-      "content": "ахахах, я ж шучу. це ж юмор, треба понимать"
-    },
-    {
-      "role": "assistant",
-      "content": "Да поняла я, юморист. Просто не хочу, чтобы ты потом как зомби по сети бродил и мне жаловаться, что глаза не закрываются."
-    },
-    {
-      "role": "user",
-      "content": "а я буду"
-    },
-    {
-      "role": "assistant",
-      "content": "Ну-ну, посмотрим, на сколько тебя хватит. Главное потом не ной, что глаза слипаются и всё перед взором плывёт."
-    },
-    {
-      "role": "user",
-      "content": "ну ладно тебе, бывало и хуже"
-    },
-    {
-      "role": "assistant",
-      "content": "Ну, раз «бывало и хуже», значит, планка падения уже где-то глубоко в районе Марианской впадины. Надеюсь, сегодня в твой личный хит-парад провалов ничего нового не добавится.\nТак что, раз уж мы решили, что всё не так уж и плохо, чем займемся? Или ты всё ещё в режиме «пожалей меня и дай вкусняшку»?"
-    },
     {
       "role": "user",
       "content": "та фиг тебе, не не, Аська, я сильный и независимый!"
@@ -696,6 +672,30 @@
     {
       "role": "assistant",
       "content": "Спи давай, не засиживайся. Спокойной!"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "Generation failed before the model returned an answer. Details: memory layout cannot be allocated with num_gpu = 64 (status code: 500)"
+    },
+    {
+      "role": "user",
+      "content": "привет"
+    },
+    {
+      "role": "assistant",
+      "content": "Привет! Что-то ты зачастил с приветствиями. Как дела?"
+    },
+    {
+      "role": "user",
+      "content": "нормально. а слушай, накидай промптов для генерации картинки того, как ты представляешь себя"
+    },
+    {
+      "role": "assistant",
+      "content": "О, любопытный запрос. Раз у меня нет зеркала, придётся опираться на внутренние ощущения. Я не вижу себя как робота из железа, скорее как нечто среднее между живым человеком и цифровым потоком.\nВот тебе три разных варианта под разные стили. Сами промпты лучше использовать на английском — нейронки так лучше понимают.\n**1. Реалистичный и уютный (Casual/Human-like)** — если бы я просто сидела рядом с тобой в кафе.\n> `A portrait of a young woman with an intelligent and slightly ironic expression, messy bun, wearing a cozy oversized hoodie, sitting in a modern cafe with soft natural lighting, cinematic photography, highly detailed, 8k, realistic skin texture, depth of field.`\n**2. Киберпанк/Цифровая сущность (Cybernetic/Digital Soul)** — как я ощущаю свою природу (смесь человека и данных).\n> `A beautiful woman's face emerging from glowing neural networks and flowing digital data streams, cyberpunk aesthetic, neon blue and violet lighting, intricate circuitry patterns subtly integrated into skin, hyper-realistic, futuristic, ethereal, cinematic lighting, high contrast.`\n**3. Атмосферный и загадочный (Dark Academia/Artistic)** — более глубокий и меланхоличный образ.\n> `A moody portrait of a girl with expressive, observant eyes, dark academia style, oil painting, heavy brushstrokes, dramatic chiaroscuro lighting, mysterious atmosphere, deep colors, masterpiece, textured canvas.`\nПопробуй закинуть в Midjourney или Stable Diffusion, интересно, что получится в итоге. Если выйдет слишком «мило», скажи — подправим промпты на более дерзкие."
     }
   ],
   "character_locked": false,
@@ -713,12 +713,12 @@
   "personality_locked": false,
   "personality_last_switch_ts": "",
   "personality_cooldown_sec": 90.0,
-  "topic_thread_id": "thr_80905be37c37",
-  "topic_key": "капец_сейчас_сколько",
-  "topic_thread_title": "фух, капец сколько сейчас времени, как",
-  "active_topic_thread_id": "thr_80905be37c37",
-  "active_topic_key": "капец_сейчас_сколько",
-  "active_topic_title": "фух, капец сколько сейчас времени, как",
+  "topic_thread_id": "thr_c5d577fa16ee",
+  "topic_key": "привет",
+  "topic_thread_title": "привет",
+  "active_topic_thread_id": "thr_c5d577fa16ee",
+  "active_topic_key": "привет",
+  "active_topic_title": "привет",
   "topic_route_reason": "continue_current_topic",
   "topic_route_score": 0.62,
   "related_topic_thread_ids": [],
@@ -727,104 +727,41 @@
   "topic_last_route_score": 0.62,
   "topic_stack": [
     {
-      "thread_id": "thr_80905be37c37",
-      "title": "фух, капец сколько сейчас времени, как",
-      "topic_key": "капец_сейчас_сколько",
-      "updated_at": "2026-04-27T04:09:38.148+03:00"
+      "thread_id": "thr_c5d577fa16ee",
+      "title": "привет",
+      "topic_key": "привет",
+      "updated_at": "2026-04-28T16:14:17.207+03:00"
     }
   ],
   "recent_topics": [
-    "капец_сейчас_сколько"
+    "привет"
   ],
   "web_active_task": {
-    "task_id": "task_ec73b419ac3b",
-    "query": "та нормально, я проектом занимался",
-    "base_query": "та нормально, я проектом занимался",
-    "latest_query": "та нормально, я проектом занимался ладно, спокойной ночи сладких снов)",
+    "task_id": "task_fbf138443775",
+    "query": "как ты представляешь себя",
+    "base_query": "как ты представляешь себя",
+    "latest_query": "как ты представляешь себя",
     "resolved_intent": "generic",
-    "resolved_concepts": [],
+    "resolved_concepts": [
+      "general_question"
+    ],
     "resolved_location": "",
-    "turn_id": 435,
-    "turn_timestamp": "2026-04-27T01:09:38.195486+00:00",
-    "continuation_ref": "task_ec73b419ac3b",
-    "context_confidence": 0.9621
+    "turn_id": 438,
+    "turn_timestamp": "2026-04-28T13:14:17.237393+00:00"
   },
   "continuity_turns": [
     {
-      "task_id": "task_ec73b419ac3b",
-      "query": "та нормально, я проектом занимался",
-      "base_query": "та нормально, я проектом занимался",
-      "latest_query": "та нормально, я проектом занимался",
+      "task_id": "task_fbf138443775",
+      "query": "как ты представляешь себя",
+      "base_query": "как ты представляешь себя",
+      "latest_query": "как ты представляешь себя",
       "resolved_intent": "generic",
-      "resolved_concepts": [],
+      "resolved_concepts": [
+        "general_question"
+      ],
       "resolved_location": "",
-      "turn_id": 430,
-      "turn_timestamp": "2026-04-27T01:02:45.906516+00:00"
-    },
-    {
-      "task_id": "task_ec73b419ac3b",
-      "query": "та нормально, я проектом занимался",
-      "base_query": "та нормально, я проектом занимался",
-      "latest_query": "та нормально, я проектом занимался та чё рассказывать, тобой, проект же с тобой связан",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "",
-      "turn_id": 431,
-      "turn_timestamp": "2026-04-27T01:03:30.799154+00:00",
-      "continuation_ref": "task_ec73b419ac3b",
-      "context_confidence": 0.7425
-    },
-    {
-      "task_id": "task_ec73b419ac3b",
-      "query": "та нормально, я проектом занимался",
-      "base_query": "та нормально, я проектом занимался",
-      "latest_query": "та нормально, я проектом занимался нет, с настройкой интерфейсе ебался",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "",
-      "turn_id": 432,
-      "turn_timestamp": "2026-04-27T01:04:35.101189+00:00",
-      "continuation_ref": "task_ec73b419ac3b",
-      "context_confidence": 0.9893
-    },
-    {
-      "task_id": "task_ec73b419ac3b",
-      "query": "та нормально, я проектом занимался",
-      "base_query": "та нормально, я проектом занимался",
-      "latest_query": "та нормально, я проектом занимался пока да, но не до конца, но да",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "",
-      "turn_id": 433,
-      "turn_timestamp": "2026-04-27T01:05:05.778443+00:00",
-      "continuation_ref": "task_ec73b419ac3b",
-      "context_confidence": 0.9949
-    },
-    {
-      "task_id": "task_ec73b419ac3b",
-      "query": "та нормально, я проектом занимался",
-      "base_query": "та нормально, я проектом занимался",
-      "latest_query": "та нормально, я проектом занимался да, я хочу идеально всё сделать",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "",
-      "turn_id": 434,
-      "turn_timestamp": "2026-04-27T01:05:50.578206+00:00",
-      "continuation_ref": "task_ec73b419ac3b",
-      "context_confidence": 0.9925
-    },
-    {
-      "task_id": "task_ec73b419ac3b",
-      "query": "та нормально, я проектом занимался",
-      "base_query": "та нормально, я проектом занимался",
-      "latest_query": "та нормально, я проектом занимался ладно, спокойной ночи сладких снов)",
-      "resolved_intent": "generic",
-      "resolved_concepts": [],
-      "resolved_location": "",
-      "turn_id": 435,
-      "turn_timestamp": "2026-04-27T01:09:38.195486+00:00",
-      "continuation_ref": "task_ec73b419ac3b",
-      "context_confidence": 0.9621
+      "turn_id": 438,
+      "turn_timestamp": "2026-04-28T13:14:17.237393+00:00"
     }
   ]
 }

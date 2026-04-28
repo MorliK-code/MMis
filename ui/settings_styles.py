@@ -366,6 +366,28 @@ QLineEdit#settings_numeric_input:focus {
     border-color: rgba(139, 92, 246, 96);
     background: rgba(8, 10, 14, 168);
 }
+QLineEdit#settings_search:focus {
+    border: 1px solid rgba(139, 92, 246, 82);
+    background: rgba(139, 92, 246, 12);
+}
+
+/* Character Manager Styles */
+QFrame#character_item, QFrame#character_item_active {
+    background: rgba(255, 255, 255, 6);
+    border: 1px solid rgba(255, 255, 255, 10);
+    border-radius: 8px;
+}
+QFrame#character_item:hover {
+    background: rgba(255, 255, 255, 12);
+    border: 1px solid rgba(139, 92, 246, 40);
+}
+QFrame#character_item_active {
+    background: rgba(139, 92, 246, 20);
+    border: 1px solid rgba(139, 92, 246, 60);
+}
+QFrame#character_item_active:hover {
+    background: rgba(139, 92, 246, 30);
+}
 QWidget#settings_numeric_stepper {
     background: rgba(139, 92, 246, 20);
     border: 1px solid rgba(139, 92, 246, 46);
@@ -489,39 +511,55 @@ QDialog#settings_message_box {
     background: transparent;
 }
 
-QFrame#settings_message_panel {
-    background: rgba(15, 16, 24, 248);
-    border: 1px solid rgba(139, 92, 246, 82);
+QFrame#settings_message_panel, QFrame#mmis_message_panel {
+    background: rgba(15, 17, 24, 252);
+    border: 1px solid rgba(139, 92, 246, 50);
     border-radius: 14px;
 }
-
-QToolButton#settings_message_close {
-    min-width: 24px;
-    max-width: 24px;
-    min-height: 24px;
-    max-height: 24px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 18);
-    background: rgba(255, 255, 255, 8);
-    color: #8f96a3;
-    padding: 0;
-    font-size: 13px;
-}
-
-QToolButton#settings_message_close:hover {
-    background: rgba(139, 92, 246, 28);
-    border-color: rgba(139, 92, 246, 54);
+QLabel#settings_message_title, QLabel#mmis_message_title {
     color: #f3f4f6;
+    font-size: 14px;
+    font-weight: 700;
 }
-
-QLabel#settings_message_icon {
-    color: #ede9fe;
-    background: rgba(139, 92, 246, 58);
-    border: 1px solid rgba(139, 92, 246, 92);
+QLabel#settings_message_body, QLabel#mmis_message_body {
+    color: #d1d5db;
+    font-size: 12px;
+}
+QLabel#settings_message_icon, QLabel#mmis_message_icon_info {
+    background: rgba(139, 92, 246, 30);
+    color: #c4b5fd;
+    border: 1px solid rgba(139, 92, 246, 50);
     border-radius: 15px;
-    font-family: Cascadia Code, Consolas, monospace;
-    font-size: 17px;
     font-weight: 800;
+    font-size: 14px;
+}
+QLabel#mmis_message_icon_warning {
+    background: rgba(245, 158, 11, 20);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 40);
+    border-radius: 15px;
+    font-weight: 800;
+    font-size: 14px;
+}
+QLabel#mmis_message_icon_critical {
+    background: rgba(239, 68, 68, 20);
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 40);
+    border-radius: 15px;
+    font-weight: 800;
+    font-size: 14px;
+}
+QLabel#mmis_message_icon_question {
+    background: rgba(16, 185, 129, 20);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 40);
+    border-radius: 15px;
+    font-weight: 800;
+    font-size: 14px;
+}
+QToolButton#settings_message_close, QToolButton#mmis_message_close {
+    background: transparent;
+    color: #8f96a3;
 }
 
 QLabel#settings_message_title {

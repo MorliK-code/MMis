@@ -26,7 +26,8 @@ if __package__ in {None, ""}:
 
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl, Slot
 from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession, QMediaFormat, QMediaPlayer, QMediaRecorder
-from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QStackedWidget, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QToolButton, QVBoxLayout, QWidget
+from ui.widgets.message_box import MmisMessageBox
 
 from ui.settings_sync_service import load_settings_payload
 from ui.client_config_store import (
@@ -691,19 +692,19 @@ class ChatWindow(proto.ExactChatWindow):
 
     def _clear_messages(self) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
+            MmisMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
             return
         chat = self._active_chat()
         if not chat or not self._history:
             return
-        answer = QMessageBox.question(
+        answer = MmisMessageBox.question(
             self,
             "Очистить чат",
             "Удалить историю текущего чата?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            MmisMessageBox.Yes | MmisMessageBox.No,
+            MmisMessageBox.No,
         )
-        if answer != QMessageBox.Yes:
+        if answer != MmisMessageBox.Yes:
             return
         self._history = []
         chat["history"] = []
@@ -1107,7 +1108,7 @@ class ChatWindow(proto.ExactChatWindow):
             try:
                 self._settings_window.reload()
             except Exception as exc:
-                QMessageBox.warning(self, "Настройки", f"Не удалось обновить настройки:\n{exc}")
+                MmisMessageBox.warning(self, "Настройки", f"Не удалось обновить настройки:\n{exc}")
 
         self._settings_window.show()
         self._settings_window.raise_()
@@ -1125,7 +1126,7 @@ class ChatWindow(proto.ExactChatWindow):
         composer_layout = composer.layout() if composer is not None else None
         if composer_layout is None:
             return
-        from .chat_shell import FlowWrap, FlowLayout
+        from ui.chat_shell import FlowWrap, FlowLayout
         row = FlowWrap(composer)
         row.expand_width_hint = False
         row.setObjectName("attachment_row")
@@ -1384,7 +1385,7 @@ class ChatWindow(proto.ExactChatWindow):
                 self.api.set_model(actual)
                 actual = str(self.api.get_runtime_model() or actual)
             except ApiClientError as exc:
-                QMessageBox.warning(self, "Модель", str(exc))
+                MmisMessageBox.warning(self, "Модель", str(exc))
                 return
         if actual and actual not in self._available_models:
             self._available_models.append(actual)
@@ -1403,7 +1404,7 @@ class ChatWindow(proto.ExactChatWindow):
             except ApiClientError as exc:
                 self._thinking_enabled = previous
                 self._sync_controls_to_state()
-                QMessageBox.warning(self, "Функции", str(exc))
+                MmisMessageBox.warning(self, "Функции", str(exc))
                 return
         self._sync_controls_to_state()
         self._save_ui_state()
@@ -1419,7 +1420,7 @@ class ChatWindow(proto.ExactChatWindow):
             except ApiClientError as exc:
                 self._verbose_enabled = previous
                 self._sync_controls_to_state()
-                QMessageBox.warning(self, "Функции", str(exc))
+                MmisMessageBox.warning(self, "Функции", str(exc))
                 return
         self._sync_controls_to_state()
         self._save_ui_state()
@@ -1435,7 +1436,7 @@ class ChatWindow(proto.ExactChatWindow):
             except ApiClientError as exc:
                 self._json_mode_enabled = previous
                 self._sync_controls_to_state()
-                QMessageBox.warning(self, "Функции", str(exc))
+                MmisMessageBox.warning(self, "Функции", str(exc))
                 return
         self._sync_controls_to_state()
         self._save_ui_state()
@@ -1456,7 +1457,7 @@ class ChatWindow(proto.ExactChatWindow):
             except ApiClientError as exc:
                 self._web_mode = previous
                 self._sync_controls_to_state()
-                QMessageBox.warning(self, "Функции", str(exc))
+                MmisMessageBox.warning(self, "Функции", str(exc))
                 return
         self._sync_controls_to_state()
         self._save_ui_state()
@@ -1464,7 +1465,7 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot()
     def _on_new_chat_clicked(self) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
+            MmisMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
             return
         self._sync_active_chat_from_history()
         chat = self._new_chat_payload()
@@ -1617,7 +1618,7 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot(object)
     def _on_regenerate_requested(self, bubble: object) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
+            MmisMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
             return
         if not isinstance(bubble, proto.MessageBubble):
             return
@@ -1758,7 +1759,7 @@ class ChatWindow(proto.ExactChatWindow):
         text = typed_text or ATTACHMENT_EMPTY_PROMPT
         display_text = self._display_text_for_message(text, attachments)
         if self._worker and self._worker.isRunning():
-            QMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
+            MmisMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
             return
 
         self._capture_stream_scroll_mode()
@@ -1946,7 +1947,7 @@ class ChatWindow(proto.ExactChatWindow):
             perf=[],
             stat_line=None,
         )
-        QMessageBox.warning(self, "Ошибка", str(error_text or "Не удалось получить ответ"))
+        MmisMessageBox.warning(self, "Ошибка", str(error_text or "Не удалось получить ответ"))
 
     def _finalize_pending(self, *, text: str, thinking: str, thinking_ms: str | None, perf: list[str], stat_line: str | None) -> None:
         pending_bubble = self._pending.bubble if self._pending else None
@@ -2253,7 +2254,7 @@ class ChatWindow(proto.ExactChatWindow):
 
     def _attach_file(self) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
+            MmisMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
             return
         selected, _flt = QFileDialog.getOpenFileNames(
             self,
@@ -2282,7 +2283,7 @@ class ChatWindow(proto.ExactChatWindow):
         self._sync_attachment_row()
         self.input.setFocus()
         if errors:
-            QMessageBox.warning(self, "Вложения", "\n".join(errors[:4]))
+            MmisMessageBox.warning(self, "Вложения", "\n".join(errors[:4]))
 
     def _attachment_from_path(self, path: Path) -> dict:
         if not path.exists() or not path.is_file():
@@ -2463,7 +2464,7 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot()
     def _start_voice_recording(self) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.information(self, "Voice", "Wait until the current reply is finished.")
+            MmisMessageBox.information(self, "Voice", "Wait until the current reply is finished.")
             return
         if self._voice_manager.get_state() == VoiceState.SPEAKING:
             self._voice_manager.barge_in()
@@ -2484,7 +2485,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._voice_recorder.record()
         except Exception as exc:
             self._voice_manager.stop_listening()
-            QMessageBox.critical(self, "Voice", f"Could not start recording:\n{exc}")
+            MmisMessageBox.critical(self, "Voice", f"Could not start recording:\n{exc}")
 
     @Slot()
     def _stop_voice_recording(self) -> None:
@@ -2503,15 +2504,15 @@ class ChatWindow(proto.ExactChatWindow):
     def _process_voice_audio_file(self, path: Path) -> None:
         try:
             if not path.exists() or path.stat().st_size <= 0:
-                QMessageBox.warning(self, "Voice", "Recording is empty.")
+                MmisMessageBox.warning(self, "Voice", "Recording is empty.")
                 return
             result = self._voice_manager.transcribe(str(path), config=build_stt_config())
             text = str(result.text or "").strip()
         except Exception as exc:
-            QMessageBox.critical(self, "Voice", f"Could not recognize audio:\n{exc}")
+            MmisMessageBox.critical(self, "Voice", f"Could not recognize audio:\n{exc}")
             return
         if not text:
-            QMessageBox.warning(self, "Voice", "Recognition returned empty text.")
+            MmisMessageBox.warning(self, "Voice", "Recognition returned empty text.")
             return
 
     def _on_voice_final_text(self, text: str) -> None:
@@ -2539,10 +2540,10 @@ class ChatWindow(proto.ExactChatWindow):
             result = self._voice_manager.transcribe(str(source_path), config=build_stt_config())
             text = str(result.text or "").strip()
         except Exception as exc:
-            QMessageBox.critical(self, "Voice", f"Could not recognize file:\n{exc}")
+            MmisMessageBox.critical(self, "Voice", f"Could not recognize file:\n{exc}")
             return
         if not text:
-            QMessageBox.warning(self, "Voice", "Recognition returned empty text.")
+            MmisMessageBox.warning(self, "Voice", "Recognition returned empty text.")
             return
 
     @Slot()
@@ -2558,7 +2559,7 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot(object, str)
     def _on_media_error(self, _error, error_text: str) -> None:
         if error_text:
-            QMessageBox.warning(self, "Плеер", f"Ошибка воспроизведения:\n{error_text}")
+            MmisMessageBox.warning(self, "Плеер", f"Ошибка воспроизведения:\n{error_text}")
 
     def _speak_text_in_app(self, text: str) -> bool:
         if not text.strip():
@@ -2573,7 +2574,7 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot()
     def on_voice_input_file(self) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
+            MmisMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
             return
         selected, _flt = QFileDialog.getOpenFileName(
             self,
@@ -2589,12 +2590,12 @@ class ChatWindow(proto.ExactChatWindow):
             QApplication.processEvents()
             recognized = (self._get_voice_stt().transcribe_file(source_path) or "").strip()
         except Exception as exc:
-            QMessageBox.critical(self, "Голос", f"Не удалось распознать файл:\n{exc}")
+            MmisMessageBox.critical(self, "Голос", f"Не удалось распознать файл:\n{exc}")
             return
         finally:
             QApplication.restoreOverrideCursor()
         if not recognized:
-            QMessageBox.warning(self, "Голос", "Распознавание вернуло пустой текст.")
+            MmisMessageBox.warning(self, "Голос", "Распознавание вернуло пустой текст.")
             return
         current = self.input.toPlainText().rstrip()
         if current:
@@ -2606,14 +2607,14 @@ class ChatWindow(proto.ExactChatWindow):
     def on_voice_speak_last_ai(self) -> None:
         text = self._latest_ai_text()
         if not text:
-            QMessageBox.information(self, "Озвучка", "Пока нет ответа AI для озвучки.")
+            MmisMessageBox.information(self, "Озвучка", "Пока нет ответа AI для озвучки.")
             return
         try:
             QApplication.setOverrideCursor(Qt.WaitCursor)
             QApplication.processEvents()
             self._speak_text_in_app(text)
         except Exception as exc:
-            QMessageBox.critical(self, "Озвучка", f"Не удалось озвучить ответ:\n{exc}")
+            MmisMessageBox.critical(self, "Озвучка", f"Не удалось озвучить ответ:\n{exc}")
         finally:
             QApplication.restoreOverrideCursor()
 
@@ -2638,11 +2639,14 @@ class ChatWindow(proto.ExactChatWindow):
             pass
         if self._worker is not None:
             try:
+                self._worker.disconnect()
                 self._worker.request_cancel()
+                if self._worker.isRunning():
+                    self._worker.terminate()
+                    self._worker.wait(1500)
             except Exception:
                 pass
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(1500)
+        self._worker = None
         if self._inspector_window is not None:
             self._inspector_window.close()
         super().closeEvent(event)

@@ -5,5 +5,8 @@
   "default_mood": "neutral",
   "default_mode": "chatting",
   "llm_profile": "ASYA",
-  "custom_from_spec": "enabled"
+  "custom_from_spec": "enabled",
+  "version": "1.0.1",
+  "id": "asya",
+  "model_profile": "ASYA"
 }

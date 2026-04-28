@@ -40,6 +40,13 @@ class SettingCategory:
 
 SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
     SettingCategory(
+        key="characters",
+        title="Персонажи",
+        group="Core",
+        description="Управление личностями, выбор активного персонажа и настройка их поведения.",
+        cards=(),
+    ),
+    SettingCategory(
         key="main",
         title="Main config",
         group="Core",

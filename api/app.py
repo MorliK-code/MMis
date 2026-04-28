@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from api.memory_core_api import register_memory_core_api
+from api.character_router import create_character_router
 from api.schemas import (
     ChatRequest,
     ChatResponse,
@@ -242,6 +243,9 @@ class _Runtime:
 
 
 _runtime = _Runtime()
+
+# Регистрируем Character API
+app.include_router(create_character_router(_runtime.brain.state_manager))
 
 
 def _normalize_profile_name(value: Any, default: str = "BALANCED") -> str:

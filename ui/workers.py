@@ -153,3 +153,59 @@ class StatusPollWorker(QThread):
         except Exception as exc:
             payload["error"] = str(exc or "").strip() or traceback.format_exc()
         self.status_ready.emit(payload)
+
+
+class CharacterListWorker(QThread):
+    """Фоновый поток для получения списка персонажей."""
+    finished = Signal(object)
+    errored = Signal(str)
+
+    def __init__(self, api: ApiClient):
+        super().__init__()
+        self.api = api
+
+    def run(self):
+        try:
+            manifest = self.api.list_characters()
+            active = self.api.get_active_character()
+            self.finished.emit({
+                "manifest": manifest,
+                "active": active
+            })
+        except Exception as e:
+            self.errored.emit(str(e))
+
+
+class CharacterActionWorker(QThread):
+    """Фоновый поток для выполнения действий с персонажами (создание, удаление, смена активного)."""
+    finished = Signal(object)
+    errored = Signal(str)
+
+    def __init__(self, api: ApiClient, action: str, **kwargs):
+        super().__init__()
+        self.api = api
+        self.action = action
+        self.kwargs = kwargs
+
+    def run(self):
+        try:
+            result = None
+            if self.action == "get":
+                result = self.api.get_character(self.kwargs.get("id"))
+            elif self.action == "set_active":
+                result = self.api.set_active_character(self.kwargs.get("id"))
+            elif self.action == "create":
+                result = self.api.create_character(
+                    self.kwargs.get("id"), 
+                    self.kwargs.get("name"),
+                    llm_profile=self.kwargs.get("llm_profile"),
+                    default_mood=self.kwargs.get("default_mood")
+                )
+            elif self.action == "update":
+                result = self.api.update_character(self.kwargs.get("id"), self.kwargs.get("updates"))
+            elif self.action == "delete":
+                result = self.api.delete_character(self.kwargs.get("id"))
+            
+            self.finished.emit(result)
+        except Exception as e:
+            self.errored.emit(str(e))

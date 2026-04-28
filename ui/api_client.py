@@ -162,6 +162,41 @@ class ApiClient:
             path = f"{path}?{query}"
         return self._request_json("GET", path)
 
+    def list_characters(self, timeout: float | None = None) -> dict:
+        return self._request_json("GET", "/characters", timeout=timeout or 3.0)
+
+    def get_active_character(self, timeout: float | None = None) -> dict:
+        return self._request_json("GET", "/characters/active", timeout=timeout or 3.0)
+
+    def get_character(self, character_id: str, timeout: float | None = None) -> dict:
+        return self._request_json("GET", f"/characters/{character_id}", timeout=timeout or 3.0)
+
+    def set_active_character(self, character_id: str, timeout: float | None = None) -> dict:
+        return self._request_json("POST", "/characters/active", {"id": str(character_id)}, timeout=timeout or 3.0)
+
+    def create_character(
+        self,
+        character_id: str,
+        name: str,
+        *,
+        llm_profile: str | None = None,
+        default_mood: str | None = None,
+        timeout: float | None = None,
+    ) -> dict:
+        payload = {
+            "id": str(character_id or "").strip().lower(),
+            "name": str(name or "").strip(),
+            "llm_profile": str(llm_profile or "BALANCED").strip().upper(),
+            "default_mood": str(default_mood or "thoughtful").strip(),
+        }
+        return self._request_json("POST", "/characters", payload, timeout=timeout or 5.0)
+
+    def update_character(self, character_id: str, updates: dict, timeout: float | None = None) -> dict:
+        return self._request_json("PUT", f"/characters/{character_id}", dict(updates or {}), timeout=timeout or 5.0)
+
+    def delete_character(self, character_id: str, timeout: float | None = None) -> dict:
+        return self._request_json("DELETE", f"/characters/{character_id}", timeout=timeout or 5.0)
+
     def register_feedback(self, user_text: str, assistant_text: str, feedback: int, penalty: float = 0.2) -> None:
         self._request_json(
             "POST",

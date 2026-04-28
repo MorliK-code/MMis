@@ -308,21 +308,48 @@ class CharacterStorage:
             out = [DEFAULT_CHARACTER_ID]
         return out
 
-    def load_character(self, character_id: str) -> dict[str, Any]:
+        return payload
+
+    def update_character(self, character_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Обновить настройки персонажа."""
         cid = _safe_id(character_id)
         self.ensure_character_structure(cid)
-        payload = self._sync_runtime_character_from_specs(cid)
-        if not isinstance(payload, dict):
-            payload = {}
-        payload["id"] = _safe_id(payload.get("id") or payload.get("character_id") or cid)
-        payload["character_id"] = str(payload.get("character_id") or payload.get("id") or cid)
-        payload.setdefault("name", _character_name(cid))
-        payload.setdefault("version", "1.0.0")
-        payload.setdefault("default_mood", "thoughtful")
-        llm_profile = str(payload.get("llm_profile") or payload.get("model_profile") or "BALANCED").strip().upper() or "BALANCED"
-        payload["llm_profile"] = llm_profile
-        payload["model_profile"] = str(payload.get("model_profile") or llm_profile).strip().upper() or llm_profile
-        return payload
+        
+        # Обновляем runtime конфиг
+        runtime_path = self.character_dir(cid) / "character.json"
+        payload = _read_json(runtime_path) or {}
+        payload.update(updates)
+        normalized = self._normalize_character_payload(payload, fallback_id=cid)
+        _write_json(runtime_path, normalized)
+        
+        # Синхронизируем со спеками если нужно
+        spec_path = self.character_spec_dir(cid) / "character.json"
+        if spec_path.exists():
+            spec_payload = _read_json(spec_path) or {}
+            spec_payload.update(updates)
+            _write_json(spec_path, self._normalize_character_payload(spec_payload, fallback_id=cid))
+            
+        self._sync_manifest_with_directories()
+        return normalized
+
+    def delete_character(self, character_id: str) -> bool:
+        """Удалить персонажа."""
+        cid = _safe_id(character_id)
+        if cid in {DEFAULT_CHARACTER_ID, "asya", "default"}:
+            return False
+            
+        # Удаляем данные рантайма
+        runtime_dir = self.root / cid
+        if runtime_dir.exists() and runtime_dir.is_dir():
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+            
+        # Удаляем спеки
+        spec_dir = self.spec_root / cid
+        if spec_dir.exists() and spec_dir.is_dir():
+            shutil.rmtree(spec_dir, ignore_errors=True)
+            
+        self._sync_manifest_with_directories()
+        return True
 
     def _sync_runtime_character_from_specs(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
@@ -345,6 +372,21 @@ class CharacterStorage:
         if not runtime_payload or merged != runtime_payload:
             _write_json(runtime_path, merged)
         return merged
+
+    def load_character(self, character_id: str) -> dict[str, Any]:
+        """Загрузить основные данные персонажа (character.json)."""
+        cid = _safe_id(character_id)
+        path = self.character_dir(cid) / "character.json"
+        payload = _read_json(path)
+        if not isinstance(payload, dict):
+            return {
+                "id": cid,
+                "name": _character_name(cid),
+                "version": "1.0.0",
+                "default_mood": "thoughtful",
+                "llm_profile": "BALANCED",
+            }
+        return self._normalize_character_payload(payload, fallback_id=cid)
 
     @staticmethod
     def _normalize_character_payload(payload: dict[str, Any], *, fallback_id: str) -> dict[str, Any]:
@@ -448,6 +490,13 @@ class CharacterStorage:
         if traits != dict(payload.get("traits") or {}):
             _write_json(self.character_dir(cid) / "traits" / "builtin.json", {"traits": traits})
         return traits
+
+    def save_builtin_traits(self, character_id: str, traits: dict[str, Any]) -> None:
+        """Сохранить встроенные черты персонажа."""
+        cid = _safe_id(character_id)
+        path = self.character_dir(cid) / "traits" / "builtin.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(path, {"traits": _normalize_trait_payload_map(traits)})
 
     def load_learned_traits(self, character_id: str) -> dict[str, Any]:
         cid = _safe_id(character_id)
@@ -605,6 +654,8 @@ class CharacterStorage:
 
         chars: list[dict[str, Any]] = []
         for cid in all_ids:
+            if cid not in discovered:
+                continue
             row = dict(by_id.get(cid) or {})
             row["id"] = cid
             row.setdefault("name", _character_name(cid))

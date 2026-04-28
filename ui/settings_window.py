@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -29,6 +28,9 @@ from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor,
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE, apply_settings_tooltip_style
 from ui.settings_widgets import SettingEditor
+from ui.api_client import ApiClient
+from ui.widgets.character_manager import CharacterManager
+from ui.widgets.message_box import MmisMessageBox
 
 CARD_TAG_HEIGHT = 18
 CARD_TAG_HPAD = 9
@@ -161,77 +163,6 @@ class SettingsHintPopup(QFrame):
         return total
 
 
-class SettingsMessageBox(QDialog):
-    def __init__(self, parent: QWidget | None, title: str, text: str, *, kind: str = "info"):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setModal(True)
-        self.setObjectName("settings_message_box")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setMinimumWidth(430)
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        panel = QFrame(self)
-        panel.setObjectName("settings_message_panel")
-        root.addWidget(panel)
-
-        body_root = QVBoxLayout(panel)
-        body_root.setContentsMargins(16, 14, 16, 14)
-        body_root.setSpacing(12)
-
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(10)
-
-        icon = QLabel("i" if kind == "info" else "!")
-        icon.setObjectName("settings_message_icon")
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setFixedSize(30, 30)
-        header.addWidget(icon)
-
-        title_label = QLabel(title)
-        title_label.setObjectName("settings_message_title")
-        header.addWidget(title_label, 1)
-
-        close_btn = QToolButton()
-        close_btn.setObjectName("settings_message_close")
-        close_btn.setText("×")
-        close_btn.clicked.connect(self.reject)
-        header.addWidget(close_btn)
-
-        body_root.addLayout(header)
-
-        body = QLabel(text)
-        body.setObjectName("settings_message_body")
-        body.setWordWrap(True)
-        body_root.addWidget(body)
-
-        buttons = QHBoxLayout()
-        buttons.setContentsMargins(0, 0, 0, 0)
-        buttons.addStretch()
-
-        ok_btn = QPushButton("OK")
-        ok_btn.setObjectName("primary_button")
-        ok_btn.clicked.connect(self.accept)
-        buttons.addWidget(ok_btn)
-        body_root.addLayout(buttons)
-
-    @staticmethod
-    def information(parent: QWidget | None, title: str, text: str) -> None:
-        SettingsMessageBox(parent, title, text, kind="info").exec()
-
-    @staticmethod
-    def warning(parent: QWidget | None, title: str, text: str) -> None:
-        SettingsMessageBox(parent, title, text, kind="warning").exec()
 
 
 class HintButton(QToolButton):
@@ -350,6 +281,7 @@ class SettingsWindow(QDialog):
         self._nav_buttons: dict[str, QPushButton] = {}
         self._sync_meta: dict[str, Any] = {}
         self._search_text = ""
+        self.api = ApiClient()
         self._build_ui()
         self.reload()
         _validate_hint_coverage()
@@ -701,19 +633,28 @@ class SettingsWindow(QDialog):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        for row in range(self.content_layout.rowCount()):
+            self.content_layout.setRowStretch(row, 0)
         category = get_category(self._category_key)
         self.category_title.setText(category.title)
         self.category_desc.setText(_category_description(category))
+
+        if self._category_key == "characters":
+            self._render_character_manager()
+            return
+        
         cards = self._filtered_cards(category)
         if not cards:
             empty = QLabel("No settings match the search.")
             empty.setObjectName("settings_muted")
             self.content_layout.addWidget(empty, 0, 0)
             return
+        last_row = 0
         for index, card in enumerate(cards):
             two_column = index < 2 and len(cards) > 1
-            row = index // 2 if two_column else 1 + max(0, index - 2)
+            row = index // 2 if two_column else (index - 1 if len(cards) > 1 else 0)
             col = index % 2 if two_column else 0
+            last_row = max(last_row, row)
             frame = QFrame(self.content)
             frame.setObjectName("danger_card" if card.dangerous else "settings_card")
             frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -739,6 +680,7 @@ class SettingsWindow(QDialog):
             self.content_layout.addWidget(frame, row, col, 1, colspan)
         self.content_layout.setColumnStretch(0, 1)
         self.content_layout.setColumnStretch(1, 1)
+        self.content_layout.setRowStretch(last_row + 1, 1)
         self._refresh_preview()
 
     def _setting_row(self, spec: SettingSpec) -> QWidget:
@@ -802,6 +744,15 @@ class SettingsWindow(QDialog):
         self._labels[spec.path] = label
         self._update_badge(spec.path)
         return row
+
+    def _render_character_manager(self) -> None:
+        """Рендерит специальный интерфейс управления персонажами."""
+        manager = CharacterManager(self.api, self.content)
+        self.content_layout.addWidget(manager, 0, 0, 1, 2)
+        self.content_layout.setRowStretch(0, 1)
+        self.content_layout.setColumnStretch(0, 1)
+        self.content_layout.setColumnStretch(1, 1)
+        self._refresh_preview()
 
     def eventFilter(self, watched, event) -> bool:
         if watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
@@ -976,7 +927,7 @@ class SettingsWindow(QDialog):
             if path not in updates and path not in self._editors:
                 updates[path] = value
         if errors:
-            SettingsMessageBox.warning(self, "Settings validation", "\n".join(errors))
+            MmisMessageBox.warning(self, "Settings validation", "\n".join(errors))
             return
         if not updates:
             return
@@ -1332,6 +1283,7 @@ def _category_icon(key: str) -> str:
         "debug": "⚙",
         "logging": "□",
         "safety": "!",
+        "characters": "👤",
     }.get(str(key or ""), "•")
 
 
@@ -1346,6 +1298,7 @@ def _category_description(category: SettingCategory) -> str:
         "debug": "Inspector, prompt blocks и диагностические панели.",
         "logging": "Логи, ротация, каналы и web trace.",
         "safety": "Опасные переключатели автоматизации и safety-фильтров.",
+        "characters": "Управление списком персонажей, их именами, ролями и активным состоянием.",
     }
     return descriptions.get(category.key, category.description)
 

@@ -3407,9 +3407,13 @@ class ExactChatWindow(QMainWindow):
         worker = getattr(self, "_status_worker", None)
         if worker is not None:
             try:
-                worker.wait(3000)
+                worker.disconnect()
+                if worker.isRunning():
+                    worker.terminate()
+                    worker.wait(2000)
             except Exception:
                 pass
+        self._status_worker = None
 
     def _set_status_pill(self, name: str, active: bool, tooltip: str = "") -> None:
         pill = getattr(self, "status_pills", {}).get(str(name or ""))

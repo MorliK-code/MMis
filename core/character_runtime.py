@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+
 import hashlib
 import json
 import time
@@ -1645,6 +1646,11 @@ class CharacterRuntime:
     # CHARACTER META & PROFILES
     # -------------------------------------------------------------------------
 
+    def get_active_character(self) -> str:
+        """Получить ID текущего активного персонажа из состояния."""
+        with self._lock:
+            return str(self._state.get("active_character_id") or "").strip().lower()
+
     def list_ids(self) -> list[str]:
         """Список доступных персонажей."""
         return self.storage.list_character_ids(include_disabled=False)
@@ -1654,11 +1660,12 @@ class CharacterRuntime:
         return self.storage.sync_manifest()
 
     def get_active_character_id(self, state: dict[str, Any] | None = None) -> str:
-        """Получить ID активного персонажа."""
+        """Получить ID активного персонажа с учетом внешнего состояния."""
         state_map = dict(state or {})
         from_state = str(state_map.get("active_character_id") or "").strip().lower()
         if from_state:
             return from_state
+        
         from_internal = self.get_active_character()
         if from_internal:
             return from_internal
@@ -1669,7 +1676,39 @@ class CharacterRuntime:
         ids = self.list_ids()
         return ids[0] if ids else "asya"
 
+    def create_character(self, character_id: str, name: str, **kwargs) -> str:
+        """Создать нового персонажа."""
+        # ensure_character_structure возвращает None, но мы знаем что cid безопасный
+        self.storage.ensure_character_structure(character_id)
+        from modules.character.storage import _safe_id
+        safe_cid = _safe_id(character_id)
+        self.storage.update_character(safe_cid, {"name": name, **kwargs})
+        return safe_cid
+
+    def update_character(self, character_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Обновить настройки персонажа."""
+        result = self.storage.update_character(character_id, updates)
+        # Сброс кеша
+        cid = str(character_id).strip().lower()
+        if cid in self._meta_cache:
+            del self._meta_cache[cid]
+        return result
+
+    def delete_character(self, character_id: str) -> bool:
+        """Удалить персонажа."""
+        # Нельзя удалять активного
+        if character_id == self.get_active_character_id():
+            raise ValueError("Cannot delete active character")
+        
+        result = self.storage.delete_character(character_id)
+        # Сброс кеша
+        cid = str(character_id).strip().lower()
+        if cid in self._meta_cache:
+            del self._meta_cache[cid]
+        return result
+
     def set_active_character(
+
         self,
         character_id: str,
         *,
@@ -1706,6 +1745,37 @@ class CharacterRuntime:
             self._state["active_personality_id"] = target
         self._autosave()
         return target
+
+    def create_character(self, character_id: str, name: str, **kwargs) -> str:
+        """Создать нового персонажа."""
+        cid = str(character_id or "").strip().lower()
+        if not cid:
+            raise ValueError("empty character id")
+        self.storage.ensure_character_structure(cid)
+        updates = {"name": name}
+        if "llm_profile" in kwargs:
+            updates["llm_profile"] = kwargs["llm_profile"]
+        if "default_mood" in kwargs:
+            updates["default_mood"] = kwargs["default_mood"]
+        self.storage.update_character(cid, updates)
+        self.storage.sync_manifest()
+        return cid
+
+    def update_character(self, character_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        """Обновить настройки персонажа."""
+        cid = self._validate_character(character_id)
+        # Очищаем кэш перед обновлением
+        self._meta_cache.pop(cid, None)
+        self._meta_cache_revision.pop(cid, None)
+        return self.storage.update_character(cid, updates)
+
+    def delete_character(self, character_id: str) -> bool:
+        """Удалить персонажа."""
+        cid = str(character_id or "").strip().lower()
+        if cid == self.get_active_character_id():
+            raise ValueError("cannot delete active character")
+        return self.storage.delete_character(cid)
+
 
     def get_meta(self, character_id: str | None = None) -> CharacterMeta:
         """Получить метаданные персонажа."""
