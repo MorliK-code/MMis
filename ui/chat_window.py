@@ -1976,15 +1976,13 @@ class ChatWindow(proto.ExactChatWindow):
     def _on_answer_chunk(self, piece: str) -> None:
         if not self._pending:
             return
-        self._mark_api_online()
         now = time.perf_counter()
         if self._pending.first_answer_at is None:
             self._pending.first_answer_at = now
         self._pending.last_chunk_at = now
         self._pending.answer_text += piece or ""
         self._pending.bubble.update_text(self._pending.answer_text)
-        is_visible = getattr(self._pending.bubble, "isVisible", lambda: True)
-        if not is_visible():
+        if not self._pending.bubble.isVisible():
             self._pending.bubble.show()
         self._schedule_scroll_bottom(follow_stream_only=True)
 
@@ -2011,8 +2009,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._pending.thinking_text,
             self._format_duration_label(elapsed_ms),
         )
-        is_visible = getattr(self._pending.bubble, "isVisible", lambda: True)
-        if not is_visible():
+        if not self._pending.bubble.isVisible():
             self._pending.bubble.show()
         self._schedule_scroll_bottom(follow_stream_only=True)
 

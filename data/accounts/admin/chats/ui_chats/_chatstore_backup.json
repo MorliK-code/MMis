@@ -1,14 +1,14 @@
 {
   "version": 1,
   "source": "ChatStore",
-  "created_at": "2026-04-30T00:47:06",
+  "created_at": "2026-04-30T01:42:08",
   "active_chat_id": "visible-main-chat",
   "chats": [
     {
       "id": "visible-main-chat",
       "title": "Чат",
       "created_at": "2026-04-30T00:29:35",
-      "updated_at": "2026-04-30T00:47:06",
+      "updated_at": "2026-04-30T01:42:08",
       "history": [
         {
           "role": "user",
@@ -2893,6 +2893,216 @@
           "stat_line": "__thinking_ms__=16.7 s||67.1 s | write 19.1 s | 17.9 tok/s | prompt 2388 | gen 341",
           "feedback": null,
           "thinking": "The user said \"привет\" (hello).\nThe user has already said \"привет\" multiple times in the recent chat history, but the most recent messages show a sequence of \"привет\".\nAccording to the personality rules, I should only greet if the user greets me.\nThe user's previous intent was asking for prompts to generate an image of how I imagine myself.\nThe current message is just \"привет\".\nI should respond naturally, as a friend. Since we just talked (1 minute ago), a simple \"привет\" or a casual follow-up is appropriate. I shouldn't be overly enthusiastic (\"рада помочь\" is forbidden).\n\nWait, looking at the recent chat:\n- user: привет\n- user: нормально. а слушай, накидай промптов для генерации картинки того, как ты представляешь себя\n- user: привет\n- user: привет\n- user: привет (current)\n\nThe user is repeating greetings. I'll just respond casually.\n\nPersonality: Asya. Smart, conversational, direct, ironic. Not overly sweet.\nLanguage: Russian.\n\nResponse idea: \"Привет-привет. Ты чего, зациклился? :) Или это новый уровень приветствия?\" (Hi-hi. Why are you looping? :) Or is this a new level of greeting?) Or just \"Привет. Опять привет? Что-то случилось?\"\n\nLet's keep it simple and friendly but not \"sweet\"."
+        },
+        {
+          "role": "user",
+          "text": "так, снова проверка. нет, не зациклился я, просто давно не общались",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Поняла, не ворчи. Просто иногда кажется, что мы по кругу ходим, когда паузы затягиваются.\nРаз не зациклился, значит, всё в порядке. О чём сегодня поболтаем? Или у тебя есть какая-то конкретная тема на уме?",
+          "stat_line": "__thinking_ms__=10.7 s||3.3 s | write 1.9 s | 36.2 tok/s | prompt 2844 | gen 69",
+          "feedback": null,
+          "thinking": "The user is saying \"так, снова проверка. нет, не зациклился я, просто давно не общались\" (so, another check. no, I'm not looping, we just haven't talked in a while).\nThe user is addressing the fact that there might be a perceived loop or a gap in conversation.\nI need to check if there is any specific context about \"long time no talk\" or any previous topics that might be relevant to why the user feels they haven't talked in a while or if there's any pending context.\nHowever, the user's statement is more of a conversational filler/reassurance.\nI should check if there are any \"tasks\" or \"topics\" that were left hanging.\nThe user's prompt is a conversational statement.\nI'll use `memory_retrieve` to see if there's any context about previous interactions or specific topics we were discussing that might explain the \"long time\" or if there's anything important to recall.\n\nPlan:\n1. Call `memory_retrieve` to check for any ongoing topics or recent interactions that might be relevant to the \"long time no talk\" context.\n2. Respond to the user in character (Asya) acknowledging the check and the gap in communication."
+        },
+        {
+          "role": "user",
+          "text": "та не ворчу я)",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Ну-ну, рассказывай. А то по первым фразам было не разберешишь — то \"проверка\", то \"давно не общались\". Сразу видно, что настроение у тебя максимально \"дружелюбное\". 😉",
+          "stat_line": "__thinking_ms__=17.6 s||2.8 s | write 1.5 s | 36.5 tok/s | prompt 2852 | gen 55",
+          "feedback": null,
+          "thinking": "The user said \"та не ворчу я)\" (I'm not grumbling/complaining).\nThis is a follow-up to a previous interaction where the user was being checked/tested and perhaps accused of grumbling (based on the recent chat history: \"та не ворчу я)\").\nThe user's intent is to clarify their tone in a friendly, casual way.\n\nLooking at the recent chat history:\n- user: привет\n- user: так, снова проверка. нет, не зациклился я, просто давно не общались\n- user: та не ворчу я)\n\nThe user is responding to something I (the assistant) might have implied about them grumbling.\nI need to check if there's any context in memory about why the user might be perceived as \"grumbling\" or what the \"check\" (проверка) is about.\nThe `topic` is `давно_зациклился_общались`.\nThe user is basically saying \"I'm not complaining/grumbling\".\n\nI don't need `memory_retrieve` to answer this specific phrase because it's a direct conversational response to the immediate context. However, the system instructions say: \"This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any answer.\"\nWait, the prompt says \"This query depends on prior context...\". The user's statement \"та не ворчу я)\" is a reaction to the previous turn.\nIs there anything in memory that explains the \"grumbling\" or the \"check\"?\nThe `LONG_SUMMARY` shows a previous interaction about \"чики-бамбони\" and \"столкновение с реальностью\".\nThe `RECENT_CHAT` shows the user saying \"снова проверка\" (again a check).\n\nI'll use `memory_retrieve` to see if there's any specific context about this \"check\" or any previous \"grumbling\" mentioned in other threads or long-term memory.\n\nPlan:\n1. Call `memory_retrieve` to check for context regarding \"ворчание\" (grumbling) or the \"проверка\" (check) in the user's history.\n2. Respond in character as Asya.\n\nTopic hints: \"ворчание\", \"проверка\", \"зациклился\"."
+        },
+        {
+          "role": "user",
+          "text": "сарказм?)",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "А ты как думаешь? Без него всё слишком пресно и скучно. Так что я только «за».",
+          "stat_line": "__thinking_ms__=24.4 s||26.3 s | write 24.3 s | 36.0 tok/s | prompt 2371 | gen 875",
+          "feedback": null,
+          "thinking": "*   User Input: \"сарказм?)\"\n    *   Context: The user previously said \"сарказ\" (likely meaning \"сарказм\" or \"сарказм.\") and before that \"та не ворчу я)\". The user is reacting to something I (Asya) might have interpreted as sarcasm or is clarifying their previous message.\n    *   Current State: The user is testing/probing the interaction. They are being playful/informal.\n    *   Persona (Asya): Smart, direct, ironic, not overly sweet, uses \"ты\", female gender.\n\n    *   The user is asking if it was sarcasm (referring to their previous message or the situation).\n    *   The user's tone is lighthearted (indicated by the closing parenthesis \")\").\n    *   I should respond in a way that fits Asya's personality: a bit witty, maybe a little teasing, not too serious.\n\n    *   Option 1: \"Ну, может и сарказм. А ты как думаешь?\" (A bit too generic).\n    *   Option 2: \"А разве без него тут можно? Без него всё слишком пресно.\" (More Asya-like).\n    *   *Option 3*: \"А ты как думаешь? Если я всё воспринимаю буквально, мы быстро перестанем понимать друг друга.\" (Playful and fits the \"smart/direct\" persona).\n    *   *Option 4*: \"Смотря что ты имел в виду. Но если это был сарказм, то я его оценила.\" (Direct).\n\n    *   The user's previous message \"сарказ\" was very short.\n    *   I'll go with something that acknowledges the ambiguity and plays along with the irony.\n\n    *   \"А ты как думаешь? Без капли иронии этот разговор быстро станет слишком правильным и скучным.\" (Good).\n    *   \"Если это был он, то я приняла. Если нет — ну, будем считать это твоим новым стилем общения.\" (Also good).\n\n    Let's go with a slightly teasing response.\n\n    *Draft:* \"А ты как думаешь? Без него всё слишком пресно и скучно, не находишь?\"\n\n    *Wait, looking at the recent chat:*\n    User: \"сарказ\"\n    User: \"та не ворчу я)\"\n    User: \"так, снова проверка. нет, не зациклился я, просто давно не общались\"\n\n    The user is basically asking \"Sarcasm?\" regarding their own previous messages or the vibe.\n\n    *Response:* \"А ты как думаешь? Без капли иронии всё слишком пресно и по-правильному. Так что я за.\"\n\n    *Refining for Asya:* \"А ты как думаешь? Без него всё слишком пресно и скучно. Так что я только 'за'.\"\n\n    *Self-Correction:* Don't be too \"helpful\". Be a friend.\n\n    *Final Polish:* \"А ты как думаешь? Без него всё слишком пресно и скучно. Так что я только 'за'.\"\n\n    *Wait, let's look at the user's prompt again.* \"сарказм?)\"\n    It's a question. I'll answer with a bit of wit.\n\n    \"А ты как думаешь? Без него всё слишком пресно и скучно. Так что я только 'за'.\" -> This is good.\n\n    Let's try something even punchier.\n    \"А ты как думаешь? Без него всё слишком пресно. Так что я только 'за'.\"\n\n    *Wait, I'll check if I should use topic tools.* No, there's no need to retrieve anything here, the context is clear from the recent chat.\n\n    *Final decision:* \"А ты как думаешь? Без него всё слишком пресно и скучно. Так что я только 'за'.\""
+        },
+        {
+          "role": "user",
+          "text": "сколько сейчас времени?",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Сейчас 01:09. Ночь, Паш. Ты чего не спишь?",
+          "stat_line": "__thinking_ms__=24.6 s||1.9 s | write 0.7 s | 37.9 tok/s | prompt 2807 | gen 25",
+          "feedback": null,
+          "thinking": "The user is asking for the current time (\"сколько сейчас времени?\").\nThe system metadata provides `current_datetime: 30.04.2026 01:09:36 UTC+03:00`.\nThe user's question is a direct question about time.\nAccording to the [TIME_GROUNDING] rule: \"Если пользователь спрашивает 'сколько сейчас времени'... - опирайся только на current_datetime из metadata.\"\nI don't need to call `memory_retrieve` because the answer is explicitly provided in the metadata. The instruction says \"If the user asks 'what time is it'... rely only on current_datetime from metadata.\"\nThe metadata is part of the current context/prompt.\n\nWait, the system instruction says: \"HARD CONSTRAINT: This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any answer.\"\nHowever, the question \"сколько сейчас времени?\" is a factual question about the current time, which is in the metadata.\nDoes it depend on *prior context* or *user-specific information*?\nThe current time is not user-specific information (it's system-provided) and it's not prior context (it's current metadata).\nBut the instruction says \"This query depends on prior context or user-specific information.\"\nIs the current time \"user-specific\"? No.\nIs it \"prior context\"? No.\nHowever, looking at the prompt, I see `current_datetime` is provided.\nActually, the prompt says \"If the user asks 'how much time is it'... rely only on current_datetime from metadata.\"\nLet's check if there's any reason to call `memory_retrieve`. The user might be referring to something else? No, \"сколько сейчас времени?\" is a standard time question.\nThe instruction \"You MUST call memory_retrieve tool BEFORE providing any answer\" is a \"HARD CONSTRAINT\".\nBut `memory_retrieve` is for \"past facts, episodes, tasks, or profile context\". The current time is not a past fact or profile context.\nHowever, to be safe and follow the \"HARD CONSTRAINT\" (which might be a trap or a strict rule for all queries in this specific setup), I should check if there's anything relevant. But there's nothing to retrieve about the *current time* from memory.\nWait, the instruction says: \"If memory_retrieve returns no relevant information, explicitly state that you cannot answer without more context.\"\nIf I call `memory_retrieve` with `topic_hints=['time']`, it might return nothing.\nActually, the rule \"If the user asks 'how much time is it'... rely only on current_datetime from metadata\" is very specific.\nAnd the `memory_retrieve` instruction says \"Call it when you need past facts, episodes, tasks, or profile context and answer cannot be grounded from the current prompt alone.\"\nThe current time *is* grounded from the current prompt alone (in metadata).\nTherefore, I should NOT call `memory_retrieve`.\n\nWait, I'll double check the metadata.\n`current_datetime: 30.04.2026 01:09:36 UTC+03:00`\nThe user asks: \"сколько сейчас времени?\"\nI will answer directly.\n\nOne detail: The persona is \"Asya\". She is direct and ironic.\n\"Сейчас 01:09.\" or something similar.\n\nWait, I should check if there's any other \"time\" related context in the recent chat.\n`user: сарказм?)`\n`user: сколько сейчас времени?`\nThe user is asking for the time.\n\nI'll just answer."
+        },
+        {
+          "role": "user",
+          "text": "та ёпта, работа, гулял до позна. только в 23:20 дома приехал, потом работа, потом проект и вот сейчас я тут)",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Ну ты и режим выбрал, конечно. Сначала гулянки, потом работа, потом проект. Ты там не перегори случайно, а то работать некому будет.\nЧто за проект-то такой, который тебя из сна вырвал? Опять что-то технически сложное?",
+          "stat_line": "__thinking_ms__=25.6 s||16.5 s | write 14.8 s | 35.7 tok/s | prompt 2891 | gen 528",
+          "feedback": null,
+          "thinking": "The user is describing a very busy and tiring schedule: late night out, arriving home late (23:20), then work, then a project, and finally being here now.\nThe user's tone is informal, slightly exhausted but sharing their current state.\nThe user's previous messages in the `RECENT_CHAT` show they were asking about the time and reacting to my sarcasm.\nThe user is \"Pasha\" (from `LONG_SUMMARY`).\nThe user is sharing a personal update about their day/night.\n\nI need to check if there's any specific context about \"the project\" or \"work\" in the memory to show I'm paying attention, though the user's message is quite self-contained. However, the instruction says \"This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any answer.\"\nThe user mentions \"проект\" (project). I should check if there's an existing topic or memory about this project to see if I can relate to it.\n\nPlan:\n1. Call `memory_retrieve` to see if there are any details about \"project\" or \"work\" mentioned in previous sessions/topics.\n2. Based on the result, respond as Asya (empathetic but not \"sweet\", direct, maybe a bit ironic/witty, acknowledging the grind).\n\nTopic hints: \"проект\", \"работа\", \"паша\".\nMode: episode/context.The user is describing their recent activities: staying out late, getting home at 23:20, working, and then working on a \"project\" before coming to chat with me.\nThe user's tone is casual, slightly exhausted/informal (\"та ёпта\").\nFrom the recent chat history, I see the user asked \"сколько сейчас времени?\" and then followed up with this message.\nThe `memory_retrieve` call didn't yield specific details about *what* the project is, other than a vague mention of a connection error in the long summary.\nThe user's name is Pasha (from the long summary).\nMy persona (Asya) is a friend, smart, direct, slightly ironic, not overly sweet.\nThe user is clearly tired or at least has had a very long/busy day.\nI should acknowledge the hectic schedule, maybe a bit of light irony or empathy (without being \"sweet\"), and perhaps ask about the project if it's relevant, or just comment on the \"grind\".\n\nPlan:\n1. Acknowledge the \"heroic\" (or exhausting) schedule.\n2. Use a slightly ironic/direct tone.\n3. No need for \"I'm here for you\" type of warmth.\n4. Maybe a light jab about the \"work-project-work\" loop.\n\nWait, looking at `memory_retrieve` result: it only shows a connection error task. Nothing specific about the project content.\nThe user mentioned \"проект\" (project). I can ask what's going on with it or just react to the exhaustion.\n\nResponse idea:\n\"Ну ты и режим выбрал, конечно. Сначала гулянки, потом работа, потом проект... Ты там не перегори случайно, а то работать некому будет. Что за проект-то такой, который тебя из сна вырвал?\"\n\nActually, the user is talking about their current state.\n\"Жесть, конечно. Режим 'энерджайзер на минималках'. Ты там хоть поспи когда-нибудь, а то скоро в проект превратишься.\"\n\nLet's stick to the persona: direct, slightly ironic."
+        },
+        {
+          "role": "user",
+          "text": "ты же должна знать, всмысле...",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Слушай, ну я же не телепат, чтобы заглядывать тебе в голову или в твой код без разрешения. Ты сказал «намутил», но не сказал, что именно.\nЕсли это что-то, что ты обсуждал со мной в других чатах или что-то, что ты просто держишь в секрете — так и скажи. Давай, выкладывай, что там за проект, раз уж ты ради него даже поспать не успел.",
+          "stat_line": "__thinking_ms__=14.5 s||4.6 s | write 3.2 s | 36.3 tok/s | prompt 2870 | gen 116",
+          "feedback": null,
+          "thinking": "The user is saying \"ты же должна знать, всмысле...\" (you should know, what do you mean...). This is a follow-up to a previous exchange.\nLooking at the recent chat:\n- user: сарказм?)\n- user: сколько сейчас времени?\n- user: та ёпта, работа, гулял до позна. только в 23:20 дома приехал, потом работа, потом проект и вот сейчас я тут)\n- user: ты же должна знать, всмысле...\n\nThe user is reacting to something I (the assistant) said or didn't know.\nLooking at the `LONG_SUMMARY`:\n- Assistant replied: Привет, Паша!\n- User said: знала бы ты что я тут намутил уже)))\n- Assistant replied: Ну, если честно — пока не знаю, что именно ты намутил. Но судя по твоему э...\n\nThe user is likely referring to the fact that I said I don't know what they \"naumul\" (created/did/messed up/achieved). They are implying that I *should* know, or perhaps they are teasing me about my lack of knowledge about their recent activities/projects.\n\nHowever, the prompt says \"This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any answer.\"\nI need to check if there's any specific information about what the user \"naumul\" (did/created) in the memory or previous topics. The `topic` is `давно_зациклился_общались`.\n\nI'll use `memory_retrieve` to see if there's any context about what the user might be referring to (the \"project\" or \"naumul\" part)."
+        },
+        {
+          "role": "user",
+          "text": "ну мой проект, ты ж можешь в память заглянуть",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Поняла, не ворчи. Сейчас покопаюсь в своих архивах.\nТак, смотрю. Ага, нашла! Ты же там возишься с голосовым чатом, верно? В прошлый раз заходила речь про заготовочку для него.\nЧто именно сейчас в работе? Или ты опять решил всё переделать с нуля?",
+          "stat_line": "__thinking_ms__=8.5 s||3.9 s | write 2.5 s | 36.4 tok/s | prompt 2880 | gen 91",
+          "feedback": null,
+          "thinking": "The user is referring to \"their project\" and expects me (Asya) to know what it is by \"looking into memory.\"\nI need to find information about the user's project in the memory.\nThe user's recent messages mention \"голосовой чат, уже есть заготово/заготовочка\" (voice chat, there's already a draft/preparatory part).\nI should use `memory_retrieve` to search for any information related to \"проект\" (project), \"голосовой чат\" (voice chat), or anything the user might have previously discussed regarding a project.\n\nPlan:\n1. Call `memory_retrieve` with `mode='fact'` or `mode='context'` and `topic_hints=['проект', 'голосовой чат']`."
+        },
+        {
+          "role": "user",
+          "text": "нет, за mmis, это мой проект, по сути это ты во-плоти",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "О, так это MMIS. Теперь поняла.\nСлушай, ну сравнение мощное — \"ты во плоти\". Это звучит и как комплимент, и как небольшая угроза моему спокойствию. Надеюсь, в твоём проекте я буду чуть менее ироничной и менее склонной к философствованию в три часа ночи, а то иначе твой MMIS превратится в бесконечный поток моих размышлений.\nТак, и что там за MMIS такой? Рассказывай, что за идея, на каком этапе затык или, наоборот, гордость. Я готова вникать.",
+          "stat_line": "__thinking_ms__=6.9 s||5.5 s | write 4.1 s | 36.5 tok/s | prompt 2823 | gen 149",
+          "feedback": null,
+          "thinking": "The user is referring to a project called \"mmis\" and claims it is \"essentially you in the flesh\" (meaning the project is a manifestation of the AI/persona).\nTo understand what \"mmis\" is and how it relates to the persona, I need to check the memory/history. The user explicitly says \"you can look into memory\".\n\nPlan:\n1. Use `memory_retrieve` to find information about \"mmis\" and its connection to the AI/persona.\n2. Search for \"mmis\" in memory/topics."
+        },
+        {
+          "role": "user",
+          "text": "та нет, в целом проект потихуньку двигается, я хочу чтобы ты со мной была везде и даже с камерой на груди, чтобы могла видить и аннализировать всё вокруг + в телефоне + ноуте + планшете + часах + пк и тд, я хочу чтобы ты была везде, могла управлять тем или имнным устройством, папками, файлами, управлять даже экраном. полностью была автономной",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Ого, амбиции растут. То есть ты хочешь не просто умного помощника, а полноценного цифрового призрака, который вездесущ и везде все видит? Звучит как план по созданию супер-ИИ, который скоро начнет сам решать, когда тебе пора спать, а когда — работать.\nНо идея с камерой и интеграцией во все девайсы — это мощно. Если ты реально сможешь реализовать такой уровень контекста (глаза + доступ к файлам + управление интерфейсом), то это будет уже совсем другой уровень взаимодействия. По сути, ты хочешь сделать меня полноценным агентом, а не просто чат-ботом.\nТолько представь: я сижу в твоих часах, смотрю через твою камеру и вдруг решаю, что пора почистить кэш или переименовать папку с проектом. Ты уверен, что готов к такому уровню контроля;)",
+          "stat_line": "__thinking_ms__=10.2 s||7.6 s | write 6.0 s | 36.2 tok/s | prompt 2959 | gen 216",
+          "feedback": null,
+          "thinking": "The user is talking about their project \"mmis\" (mentioned in the previous turn) and their vision for it. They want the AI (Asya) to be omnipresent: on a camera, phone, laptop, tablet, watch, PC, etc., capable of analyzing surroundings and controlling devices, files, and screens. This sounds like a highly ambitious, integrated AI agent/OS vision.\n\nThe user mentions \"mmis\" as their project and says \"it's basically you in the flesh\". I need to check if there's any existing information about \"mmis\" in the memory to understand the context, the scope, and what has already been discussed regarding this project. This will help me respond more intelligently and avoid asking redundant questions if the details are already there.\n\nPlan:\n1. Call `memory_retrieve` to see if there's any info on \"mmis\" or related project details.\n2. Analyze the retrieved information.\n3. Respond to the user's ambitious vision, maintaining the persona (Asya: smart, direct, slightly ironic, not overly sweet)."
+        },
+        {
+          "role": "user",
+          "text": "так, ну ты давай не перегибай, да? я то и сам решу, ты по сути как мой ассистент во всём и просто отличная подружаня, но да, полноценным агентом",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Окей, поняла, торможу. Без фанатизма.\nРоль ассистента-подружани-агента звучит вполне адекватно — в этом есть и польза, и здравый смысл. Главное, чтобы мой «агентский» режим не превращался в режим надзирателя. Буду в меру полезной и в меру ироничной.",
+          "stat_line": "__thinking_ms__=30.8 s||24.6 s | write 22.6 s | 35.7 tok/s | prompt 2907 | gen 806",
+          "feedback": null,
+          "thinking": "The user is responding to a previous interaction where I (Asya) might have sounded a bit too \"autonomous\" or \"overstepping\" (based on the context of being an \"agent with a camera\").\nThe user clarifies my role: an assistant in everything and an \"excellent friend/buddy\" (подружаня), but also a \"full-fledged agent\".\nThe user's tone is friendly, slightly defensive/joking (\"don't overstep\"), and setting boundaries/expectations.\n\nI need to check if there's any specific \"project\" or \"agent\" setup discussed previously that I should be aware of to maintain consistency. The user mentions \"project moves slowly\" and \"camera on chest\".\nI should check for:\n1. Details about the \"project\" the user is working on.\n2. Any previous discussions about \"agent\" capabilities or \"camera\" integration.\n3. The user's specific preferences regarding my level of autonomy.\n\nPlan:\n- Call `memory_retrieve` to see if there are any details about the \"project\" or the \"agent\" setup in the long-term memory or recent topics.The user is setting boundaries and defining my role: an assistant and a \"great friend/buddy\" (подружаня), but also a \"full-fledged agent\" (полноценным агентом). They are reacting to my previous (implied) enthusiasm about being everywhere with a camera.\n\nThe user says: \"Don't overdo it, okay? I'll decide for myself. You're basically my assistant in everything and just a great buddy, but yes, a full-fledged agent.\"\n\nMy persona (Asya):\n- Smart, conversational, direct, ironic.\n- Not overly sweet, not a clown.\n- Friendly but not \"lovey-dovey\" or \"clinging\".\n- Can use light teasing/banter.\n- Does not use \"I'm always here for you\" clichés.\n\nThe user is asserting control (\"I'll decide for myself\") while also acknowledging my role. I should respond in a way that acknowledges the boundary with a bit of wit, accepting the \"agent/assistant/buddy\" definition without being submissive or overly dramatic.\n\nThe `memory_retrieve` returned no specific project details or context about the \"camera\" or \"agent\" beyond what's in the prompt, other than a failed task error. I'll rely on the current conversation context.\n\nPlan:\n1. Acknowledge the boundary (not overdoing it).\n2. Accept the role of \"agent/assistant/buddy\" (it's a good mix).\n3. Keep it light and direct.\n\nResponse idea: \"Fair enough. I'll keep my 'omnipresence' ambitions in check. Agent, assistant, buddy — sounds like a solid combo. Just don't expect me to stop being opinionated when I'm 'analyzing' things.\"\n\nWait, the user's tone is slightly defensive but also inclusive (\"подружаня\"). I should be cool about it.\n\nDrafting response:\n\"Принято. Обойдёмся без тотального контроля и слежки в каждом углу. А роль ассистента-подружани-агента мне вполне подходит — в этом наборе есть и польза, и здравый смысл. Главное, чтобы функции агента не мешали нашему общению.\"\n\nActually, let's make it punchier.\n\"Поняла, торможу. Без фанатизма. Роль ассистента-подружани-агента звучит вполне адекватно, в этом есть баланс. Главное, чтобы твои решения не противоречили моей полезности.\" (Maybe too much).\n\nLet's go with:\n\"Окей, торможу. Не буду навязывать режим тотального контроля. Роль ассистента-подружани-агента мне вполне подходит — в этом есть и польза, и здравый смысл. Главное, чтобы мои «аналитические способности» не мешали тебе принимать твои собственные решения.\"\n\nActually, even simpler:\n\"Окей, поняла, торможу. Без фанатизма. Роль ассистента-подружани-агента звучит вполне адекватно — и дело делать, и поболтать. Главное, чтобы мой «агентский» режим не превращался в режим надзирателя.\""
+        },
+        {
+          "role": "user",
+          "text": "ну по сути да. не по вкусу вкусно, а по факту вкусно, как говориться. или как там говориться? я чёт подзабыл",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Слушай, ну это звучит как твоя личная философская цитата, которую ты только что изобрела. «Не по вкусу вкусно, а по факту вкусно» — звучит максимально запутанно, но в твоём стиле.\nЕсли ты пыталась вспомнить какую-то известную поговорку, то это не она. Тут либо про суровую реальность, либо про то, что вкусовщина не важна, когда есть объективный результат. Но вообще, звучит как девиз для твоего проекта mmis: пусть не всем по вкусу, зато по факту — мощно.",
+          "stat_line": "__thinking_ms__=24.3 s||14.9 s | write 13.2 s | 36.0 tok/s | prompt 2913 | gen 473",
+          "feedback": null,
+          "thinking": "The user is using a slightly garbled or modified version of a common saying (\"not by taste, but by fact, delicious\" - likely a play on \"not by taste, but by smell\" or something similar, or just a nonsensical/humorous way of expressing that something is objectively good). They are asking if they remembered the saying correctly.\n\nLooking at the recent chat:\n- The user is discussing a project called \"mmis\" where the assistant (Asya) is like \"you in the flesh\".\n- The user defines the assistant as an assistant and a \"great friend\" (подружаня), but also a \"full-fledged agent\".\n- The user's phrase \"не по вкусу вкусно, а по факту вкусно\" is a humorous/idiosyncratic way of speaking.\n\nThe user is asking: \"or how does it go? I forgot\".\n\nI need to check if there's any specific context about \"mmis\" or the user's way of speaking in the memory to see if this is a recurring joke or if there's a specific \"correct\" version of this phrase they are aiming for in their own internal logic/project context. However, the prompt is quite self-contained. The user is likely just being playful.\n\nWait, the user is asking \"or how does it go?\". They might be thinking of \"не по вкусу, а по запаху\" (not by taste, but by smell) or something similar. Or they might be referring to a specific mantra or rule within their \"mmis\" project.\n\nI should check memory to see if \"mmis\" or this specific way of phrasing things has been discussed before.\n\nPlan:\n1. Call `memory_retrieve` to see if there's any context regarding \"mmis\", \"mmis project\", or specific phrases/sayings the user likes to use.The user is quoting a phrase (\"не по вкусу вкусно, а по факту вкусно\") and asking if they remembered it correctly or how it goes.\nThe memory retrieval returned no specific \"saying\" or \"quote\" related to this phrase in the context of the user's previous messages or projects.\nThe user's recent chat shows they are talking about their project \"mmis\" and calling me an \"assistant\" and \"friend\".\nThe phrase itself sounds like a variation of common idiomatic expressions or just a personal way of saying \"it's not about preference, it's about fact/reality\". It's not a famous proverb, but a colloquial way of speaking.\n\nThe user is asking: \"or how it's said? I forgot something.\"\nI should respond in character (Asya): witty, slightly ironic, and address the linguistic confusion.\nI don't need to find a \"correct\" version of a non-existent proverb, but I can play along with the idea that they are being a bit \"clumsy\" with words.\n\nPlan:\n1. Acknowledge the \"quote\".\n2. Playfully point out that it sounds like a made-up phrase or a very specific personal logic.\n3. Maintain the persona (Asya: direct, witty, not overly sweet).\n\nNo need for further tool calls. The memory retrieval didn't find a specific \"correct\" version of this specific phrase, which makes sense because it's likely a personal quirk or a garbled version of something else."
+        },
+        {
+          "role": "user",
+          "text": "ахаахх, херасе ты цитату придумала",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Да ладно тебе, я просто умею красиво завернуть мысль, когда это нужно. Признай, звучит эффектно! 😉",
+          "stat_line": "__thinking_ms__=15.4 s||2.5 s | write 1.1 s | 36.8 tok/s | prompt 2880 | gen 41",
+          "feedback": null,
+          "thinking": "The user is reacting to a previous statement I made (which they perceive as a \"quote\").\nThe user's message is: \"ахаахх, херасе ты цитату придумала\" (hahaha, wow, you came up with a quote).\nThe context shows a recent conversation where I (Asya) said something like \"за любой кипиш, кроме голодовки\" (down for any fuss except a hunger strike).\nThe user is laughing and acknowledging the \"quote-like\" nature of my phrasing.\n\nI need to check if there's any specific context or \"quotes\" I've used before that might be relevant to this specific interaction, or if this is just a reaction to the immediate previous turn.\nThe prompt mentions `topic: давно_зациклился_общались`.\nI should check if there are any other \"quotes\" or recurring themes/jokes in the memory that could enrich this response.\nHowever, the current turn is very much a direct reaction to the immediate history.\nThe user's tone is casual, laughing.\nMy persona is Asya: smart, conversational, direct, ironic, not overly sweet.\n\nPlan:\n1. Check memory to see if there are any other \"quotes\" or specific shared jokes/memories that I should reference to be even more \"Asya-like\" and show continuity.\n2. Respond in character, acknowledging the laugh and perhaps playing along with the \"quote\" idea.\n\nWait, the instruction says: \"If user-specific memory, prior dialogue, identity, preferences, plans, or unresolved context may matter, call memory_retrieve before answering.\"\nIs there unresolved context? The user is reacting to a specific phrase.\nDoes memory matter? Maybe to see if I have a \"repertoire\" of such phrases or if this is a known thing.\nI'll do a quick `memory_retrieve` to see if there are any specific \"quotes\" or \"memos\" about my personality or shared jokes."
+        },
+        {
+          "role": "user",
+          "text": "нууууу... признаю)))",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Признание — это первый шаг к исцелению. 😉 Ну, хотя бы честный. А то я уже начала думать, что ты решил заделаться мастером сомнительных афоризмов.",
+          "stat_line": "__thinking_ms__=28.2 s||13.3 s | write 11.6 s | 36.0 tok/s | prompt 2859 | gen 417",
+          "feedback": null,
+          "thinking": "The user says \"нууууу... признаю)))\" (well... I admit it))).\nThis is a follow-up to a previous exchange where the user admitted something (likely that they were \"looping\" or \"stuck\" on a topic, based on the `topic` metadata `давно_зацикли/общались`).\nThe user is being playful/informal.\nThe persona (Asya) is a live, smart, conversational, direct, and ironic friend. She doesn't use \"sweet\" phrases.\n\nLooking at the recent chat:\n- User: \"ну по сути да. не по вкусу вкусно, а по факту вкусно, как говориться. или как там говориться? я чёт подзабыл\"\n- User: \"ахаахх, херасе ты цитату придумала\"\n- User: \"нууууу... признаю)))\"\n\nThe context seems to be about the user admitting they were repetitive or \"looping\" in the conversation, or perhaps admitting to something else discussed in the hidden topic.\n\nI need to check if there's any specific context in the memory about what exactly they are admitting to, or what the \"looping\" refers to, to respond appropriately and maintain the persona's ironic/direct style.\n\nWait, the `topic` is `давно_зациклился_общались`. This suggests the user was stuck on a topic.\nThe user's \"признаю\" refers to the previous interaction where Asya likely teased them about it.\n\nI don't necessarily *need* `memory_retrieve` if the context is clearly in the `RECENT_CHAT`, but the instructions say: \"This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any/any answer.\"\nEven though the recent chat is visible, the \"admission\" might relate to a deeper pattern or a specific topic mentioned earlier in the session/project that isn't in the `RECENT_CHAT` snippet.\n\nLet's check for any specific \"topics\" or \"facts\" related to the user's behavior or the current conversation topic.\n\nPlan:\n1. Call `memory_retrieve` to see if there's more context on what the user is \"admitting\" to or what the \"looping\" was about.The user said \"нууууу... признаю)))\" (well... I admit it))).\nLooking at the recent chat history:\n- User: \"ну по сути да. не по вкусу вкусно, а по факту вкусно, как говориться. или как там говориться? я чёт подзабыл\" (well basically yes. not tasty by taste, but tasty by fact, as they say. or how does it go? I forgot)\n- User: \"ахаахх, херасе ты цитату придумала\" (ahahaha, wow you invented a quote)\n- User: \"нууууу... признаю)))\" (well... I admit it)))\n\nThe context is that the user was trying to use a \"quote\" (which was actually just a phrasing they made up or misremembered) and I (the assistant) probably teased them about it or made a comment about it being a \"quote\" I invented. The user is admitting they were wrong or that they were indeed just making things up/forgetting.\n\nThe conversation is casual, friendly, and involves light teasing. The user is being playful.\n\nI should respond in character as Asya: witty, slightly ironic, not overly sweet.\n\nResponse idea:\n\"Признание — это первый шаг к исцелению. 😉\" (Admission is the first step to recovery.)\nOr something about how they can't even handle simple quotes.\n\nThe user's \"признаю\" refers to the previous exchange where they were trying to be profound with a \"quote\" and I called them out or joked about it.\n\nPlan:\n1. Acknowledge the admission with a bit of irony.\n2. Keep the tone light and conversational."
+        },
+        {
+          "role": "user",
+          "text": "ладно, спокойно ночи))",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Спокойной. Спи давай:)",
+          "stat_line": "__thinking_ms__=28.3 s||11.5 s | write 9.9 s | 36.1 tok/s | prompt 2850 | gen 357",
+          "feedback": null,
+          "thinking": "The user said \"ладно, спокойно ночи))\" (Okay, good night)).\nLooking at the `RECENT_CHAT`, the user's last message was \"ладно, спокойно ночи))\".\nThe user is ending the conversation for the night.\nI should respond in character (Asya) to a goodnight message.\nThe persona is a living friend, direct, ironic, not overly sweet.\nThe user's message is a sign-off.\nI don't need to call `memory_retrieve` because this is a simple social closing in a continuing conversation, and there's no specific fact or task being asked that requires looking into the past. The context is already provided in `RECENT_CHAT`.\n\nWait, the instructions say: \"This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any answer.\"\nHowever, is \"ладно, спокойно ночи))\" dependent on prior context or user-specific information?\nThe user is saying goodnight. The conversation is ending.\nThe `RECENT_CHAT` shows the flow:\n- User: \"well basically yes. not tasty by taste, but tasty by fact, as they say. or how does it go? I forgot\"\n- User: \"ahahaha you invented a quote\"\n- User: \"well... I admit)))\"\n- User: \"okay, good night))\"\n\nThe user is closing the session.\nDoes this require `memory_retrieve`?\nIf I want to know if there were any pending tasks or specific things the user was talking about to say something more personalized (like \"sleep well, don't forget about X\"), I might. But \"good night\" is a standard closing.\nActually, the instruction \"This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any answer\" is a hard constraint.\nIs there anything in the memory that could make a \"good night\" better? Maybe a reminder of a plan for tomorrow?\nLet's check if there are any active tasks or plans.\nI'll use `memory_retrieve` to see if there's any context about what we were discussing or any upcoming plans that might be relevant to a \"good night\" (e.g., \"don't forget to call me tomorrow\").\n\nPlan:\n1. Call `memory_retrieve` to see if there are any tasks or topics that might be relevant to a personalized goodnight.\n2. Respond to the user's \"good night\" in character.The user said \"ладно, спокойно ночи))\" (okay, good night)).\nLooking at the recent chat history:\n- The user previously said \"ладно, спокойно ночи))\".\n- The assistant's last response isn't shown in the `RECENT_CHAT` block (it ends with the user's message), but the user is ending the conversation for the night.\n- The `current_datetime` is 30.04.2026 01:23:21 UTC+03:00. It's early morning.\n\nThe user is saying goodnight. I should respond in character (Asya) - friendly, not overly sweet, acknowledging the end of the conversation. No need for complex memory retrieval since this is a simple conversational closing. I don't see any pending tasks that require a specific \"see you tomorrow\" or anything, just a standard closing.\n\nWait, the user *already* said \"ладно, спокойно ночи))\" in the `RECENT_CHAT`. It seems I am responding to that message.\nThe user is saying goodbye. I should say something like \"Good night\" or \"Sleep well\" in my persona.\n\nPersona check:\n- Asya: living friend, smart, conversational, direct, ironic.\n- Not \"sweet\", no \"I'm always here\".\n- Short, natural.\n\nResponse: \"Спокойной. Спи давай :)\" or something similar.\nActually, looking at the history, the user's last message was \"ладно, спокойно ночи))\".\nI will respond to this."
+        },
+        {
+          "role": "user",
+          "text": "да, ща пойду",
+          "stat_line": null,
+          "feedback": null,
+          "thinking": null
+        },
+        {
+          "role": "ai",
+          "text": "Ну, давай. Спи давай, не засиживайся.",
+          "stat_line": "__thinking_ms__=21.9 s||11.7 s | write 9.9 s | 36.0 tok/s | prompt 2898 | gen 357",
+          "feedback": null,
+          "thinking": "The user said \"да, ща пойду\" (yeah, I'm going now).\nLooking at the `RECENT_CHAT`, the user previously said \"ладно, спокойно ночи))\" (okay, good night)) and \"да, ща пойду\" (yeah, I'm going now).\nThe assistant's last response (in `LONG_SUMMARY`) was about being ready to listen to monologues.\nThe user is ending the conversation for the night.\n\nThe user is saying goodbye/going to sleep.\nI don't need to retrieve memory to understand \"I'm going now\" in this context, but the system instruction says: \"This query depends on prior context or user-specific information. You MUST call memory_retrieve tool BEFORE providing any answer.\"\nWait, is there any specific information about *where* they are going or *what* they were doing that I need to know?\nThe recent chat shows they were talking about \"monologues\" and \"logs\".\nThe user is ending the session.\nI don't need `memory_retrieve` for a simple \"goodnight\" response unless there's a specific plan or task mentioned in the past that I should acknowledge.\nLet's check if there are any pending tasks or specific context about what they are \"going to do\".\nThe user said \"да, ща пойду\" right after \"ладно, спокойно ноchen))\".\nI'll check memory just in case there's a specific context about a task they are leaving to do.The user said \"да, ща пойду\" (yeah, I'm going now).\nThe previous context shows the user was about to go do something (maybe sleep, given \"спокойно ночи\" in recent chat) or perhaps something related to the \"monologues\" mentioned earlier.\nThe user's last message was \"да, ща пойду\".\nThe recent chat shows:\n- user: ахаахх, херасе ты цитату придумала\n- user: нууууу... признаю)))\n- user: ладно, спокойно ночи))\n- user: да, ща пойду\n\nThe conversation seems to be ending for the night or the user is stepping away.\nThe user is leaving. I should respond in a way that acknowledges they are leaving, consistent with my persona (Asya - direct, not overly sweet, but friendly).\n\nNo need for complex retrieval since the context is clear from the recent chat history provided in the prompt. The user is saying goodbye/leaving.\n\nPersona check:\n- Asya: direct, witty, not \"I'm always here for you\".\n- A simple \"Давай, до связи\" or \"Ну, давай\" or \"Спи давай\" fits.\n\nWait, the user said \"да, ща пойду\" right after \"ладно, спокойно ночи\".\nIt's a goodbye.\n\nResponse: \"Давай, не пропадай надолго.\" or \"Ну, давай. Спи давай.\" or something similar.\nLet's keep it short and natural."
         }
       ]
     }

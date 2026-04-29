@@ -1133,6 +1133,16 @@ class MemoryCoreAdapter:
             self._unload_memory_llm()
         else:
             self._pause_memory_llm()
+        # Если есть активный таймер выгрузки — сохраняем его состояние (пауза)
+        remaining = self._main_sleep_remaining_sec()
+        if remaining > 0:
+            self._main_sleep_remaining_at_pause = remaining
+            self._main_sleep_paused_at = time.monotonic()
+            LOGGER.debug("MemoryCoreAdapter: paused main LLM lease timer (%.1fs left)", remaining)
+
+
+    def _auto_resume_worker(self) -> None:
+        """Автоматически возобновляет worker после таймаута."""
         LOGGER.info("MemoryCoreAdapter: Auto-resume timer triggered, resuming worker...")
         self.resume_worker()
 
@@ -1161,6 +1171,11 @@ class MemoryCoreAdapter:
         if not self._enable_pause:
             return  # Пауза отключена в конфиге
         
+        # Отменяем таймер если ещё активен
+        self._cancel_auto_resume_timer()
+        resume_epoch = self._bump_resume_epoch()
+        self._reset_memory_drain_epoch()
+
         # Снимаем таймер с паузы если он был
         if self._main_sleep_remaining_at_pause is not None:
             remaining = self._main_sleep_remaining_at_pause

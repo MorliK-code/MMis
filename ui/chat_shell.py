@@ -135,29 +135,50 @@ def _configure_qt_startup() -> None:
         pass
 
 
-def _ui_font(*, pixel_size: int | None = None, weight: int = QFont.Weight.Medium) -> QFont:
+def _ui_font(*, pixel_size: int | None = None, weight: int | None = None, bold: bool = False) -> QFont:
     font = QFont("Segoe UI")
     if pixel_size is not None:
         font.setPixelSize(int(pixel_size))
-    font.setWeight(weight)
+    
+    if weight is not None:
+        font.setWeight(weight)
+    elif bold:
+        font.setWeight(QFont.Weight.Bold)
+    else:
+        font.setWeight(QFont.Weight.Medium)
+        
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.NoSubpixelAntialias)
     font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
     return font
 
-def _button_font(*, pixel_size: int | None = None, weight: int = QFont.Weight.Medium) -> QFont:
+def _button_font(*, pixel_size: int | None = None, weight: int | None = None, bold: bool = False) -> QFont:
     font = QFont("Cascadia Code")
     if pixel_size is not None:
         font.setPixelSize(int(pixel_size))
-    font.setWeight(weight)
+        
+    if weight is not None:
+        font.setWeight(weight)
+    elif bold:
+        font.setWeight(QFont.Weight.Bold)
+    else:
+        font.setWeight(QFont.Weight.Medium)
+        
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.NoSubpixelAntialias)
     font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
     return font
 
-def _topbar_font(*, pixel_size: int | None = None, weight: int = QFont.Weight.Medium) -> QFont:
+def _topbar_font(*, pixel_size: int | None = None, weight: int | None = None, bold: bool = False) -> QFont:
     font = QFont("Segoe UI")
     if pixel_size is not None:
         font.setPixelSize(int(pixel_size))
-    font.setWeight(weight)
+        
+    if weight is not None:
+        font.setWeight(weight)
+    elif bold:
+        font.setWeight(QFont.Weight.Bold)
+    else:
+        font.setWeight(QFont.Weight.Medium)
+        
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.NoSubpixelAntialias)
     font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
     return font
