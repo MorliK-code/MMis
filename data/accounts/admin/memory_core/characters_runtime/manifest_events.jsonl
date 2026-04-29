@@ -1,0 +1,2 @@
+{"type": "manifest_sync", "active_before": "default", "active_after": "default", "added": ["asya", "default"], "removed": [], "total": 2, "ts": "2026-04-30T00:31:27.927+03:00", "at": "2026-04-30T00:31:27.927+03:00"}
+{"type": "active_character_changed", "from": "default", "to": "asya", "source": "manual", "ts": "2026-04-30T00:32:34.230+03:00", "at": "2026-04-30T00:32:34.230+03:00"}

@@ -1,0 +1,65 @@
+{
+  "mood": "neutral",
+  "last_update_ts": "2026-04-28T16:14:17.126+03:00",
+  "active_traits": [
+    "directness",
+    "empathy",
+    "energy",
+    "humor",
+    "patience",
+    "playfulness",
+    "romance",
+    "sarcasm",
+    "teasing",
+    "thoughtfulness",
+    "warmth"
+  ],
+  "disabled_traits": [],
+  "counters": {
+    "banter_hits": 0,
+    "comfort_hits": 0
+  },
+  "last_signals": {
+    "lang": "ru",
+    "intent": "question",
+    "emotion": "neutral",
+    "emotion_intensity": 0.35,
+    "emotion_arousal": 0.2,
+    "mode": "chatting",
+    "topics": [
+      "topic_привет"
+    ],
+    "tags": [
+      "lang_ru"
+    ],
+    "user_feedback": []
+  },
+  "applied_rules": [
+    {
+      "rule": "rule_6",
+      "action_count": 2
+    }
+  ],
+  "emotional_state_before": {
+    "schema_version": 1,
+    "mood": "teasing",
+    "valence": 0.015240629109958234,
+    "arousal": 0.02590413746624054,
+    "intensity": 0.0,
+    "trigger": "",
+    "last_update_ts": "2026-04-28T16:12:34.203+03:00",
+    "cooldown_until_ts": ""
+  },
+  "emotional_state_after": {
+    "schema_version": 1,
+    "mood": "neutral",
+    "valence": 0.013167903551003913,
+    "arousal": 0.023805174770831827,
+    "intensity": 0.0,
+    "trigger": "",
+    "last_update_ts": "2026-04-28T16:14:17.125+03:00",
+    "cooldown_until_ts": ""
+  },
+  "persona_feedback_applied": [],
+  "emotion": "neutral"
+}

@@ -116,6 +116,7 @@ class Brain:
                     self._remember(signature, now, result)
                     return result
 
+        cfg = load_config()
         state_snapshot = self.state_manager.snapshot()
         conversation_id = str(meta_map.get("conversation_id") or "").strip()
         if not conversation_id:
@@ -168,6 +169,7 @@ class Brain:
         state_map.setdefault("web_mode", state_snapshot.web_mode)
         state_map.setdefault("thinking_enabled", state_snapshot.thinking_enabled)
         state_map.setdefault("output_format", state_snapshot.output_format)
+        state_map.setdefault("account_id", str(meta_map.get("account_id") or getattr(cfg, "account_id", "") or ""))
         character_quality_profile = self._character_quality_profile(state_snapshot=state_snapshot, state_map=state_map)
         if character_quality_profile:
             state_map["quality_profile"] = character_quality_profile
@@ -190,8 +192,12 @@ class Brain:
         meta_for_pipeline.setdefault("track_state", track_state)
         meta_for_pipeline.setdefault("non_persistent_turn", non_persistent_turn)
         
-        cfg = load_config()
         meta_for_pipeline.setdefault("safety_mode", cfg.safety_mode)
+        account_id = self._account_id(meta=meta_for_pipeline, state=state_map)
+        if account_id:
+            meta_for_pipeline.setdefault("account_id", account_id)
+            meta_for_pipeline.setdefault("workspace_id", account_id)
+            state_map.setdefault("account_id", account_id)
 
         try:
             pipeline_result = self.pipeline.run(
@@ -413,6 +419,8 @@ class Brain:
                             metadata={
                                 "source_kind": "system_decision",
                                 "source": "rolling_summary",
+                                "account_id": self._account_id(op),
+                                "persona_id": str(self.state_manager.get("active_character_id") or "default"),
                                 "importance": 0.6,
                                 "confidence": 0.7,
                                 "topic_thread_id": str(op.get("topic_thread_id") or ""),
@@ -429,7 +437,7 @@ class Brain:
                                 ),
                             },
                             session_id=str(self.state_manager.get("conversation_id") or "default"),
-                            workspace_id=str(self.state_manager.get("active_character_id") or "global"),
+                            workspace_id=self._memory_workspace_id(op),
                         )
                         self._capture_memory_ingest(
                             summary,
@@ -453,6 +461,8 @@ class Brain:
                     if not text:
                         continue
                     metadata = dict(_as_dict(row.get("metadata")) or {})
+                    metadata.setdefault("account_id", self._account_id(row))
+                    metadata.setdefault("persona_id", str(self.state_manager.get("active_character_id") or "default"))
                     if not str(metadata.get("source") or "").strip():
                         metadata["source"] = "web_v2"
                     metadata.setdefault("source_kind", "tool_result")
@@ -488,7 +498,7 @@ class Brain:
                             payload_type="tool_result",
                             metadata=metadata,
                             session_id=default_namespace,
-                            workspace_id=str(self.state_manager.get("active_character_id") or "global"),
+                            workspace_id=self._memory_workspace_id(row),
                         )
                         written += 1
                         self._capture_memory_ingest(summary, ingest_result, bucket="web_memory_write")
@@ -541,6 +551,24 @@ class Brain:
                 character_engine.set_active_character(active)
         except Exception:
             pass
+
+    def _account_id(self, meta: dict[str, Any] | None = None, state: dict[str, Any] | None = None) -> str:
+        meta_map = _as_dict(meta)
+        state_map = _as_dict(state)
+        for value in (
+            meta_map.get("account_id"),
+            meta_map.get("workspace_id"),
+            state_map.get("account_id"),
+            self.state_manager.get("account_id"),
+            getattr(load_config(), "account_id", ""),
+        ):
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _memory_workspace_id(self, meta: dict[str, Any] | None = None, state: dict[str, Any] | None = None) -> str:
+        return self._account_id(meta=meta, state=state) or "global"
 
     def _update_state_after_success(
         self,
@@ -613,6 +641,8 @@ class Brain:
             or state_map.get("active_personality_id")
             or "default"
         )
+        account_id = self._account_id(meta=meta, state=state_map)
+        workspace_id = account_id or "global"
         persona_snapshot = self._extract_persona_snapshot(
             state_snapshot=state_snapshot,
             state_map=state_map,
@@ -643,11 +673,14 @@ class Brain:
                     "source": source,
                     "model": model,
                     "quality_profile": quality_profile,
+                    "account_id": account_id,
+                    "chat_id": conversation_id or "default",
+                    "persona_id": personality_id,
                     "turn_id": turn_id,
                     "conversation_id": conversation_id or "default",
                 },
                 session_id=conversation_id or "default",
-                workspace_id=str(self.state_manager.get("active_character_id") or "global"),
+                workspace_id=workspace_id,
             )
             self._capture_memory_ingest(summary, ingest_result, bucket="user_turn")
 
@@ -715,11 +748,14 @@ class Brain:
                     "source": source,
                     "model": model,
                     "quality_profile": quality_profile,
+                    "account_id": account_id,
+                    "chat_id": conversation_id or "default",
+                    "persona_id": personality_id,
                     "turn_id": turn_id,
                     "conversation_id": conversation_id or "default",
                 },
                 session_id=conversation_id or "default",
-                workspace_id=str(self.state_manager.get("active_character_id") or "global"),
+                workspace_id=workspace_id,
             )
             self._capture_memory_ingest(summary, ingest_result, bucket="assistant_turn")
         

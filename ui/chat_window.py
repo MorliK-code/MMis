@@ -28,9 +28,11 @@ from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl, Slot
 from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession, QMediaFormat, QMediaPlayer, QMediaRecorder
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 from ui.widgets.message_box import MmisMessageBox
+from core.chat_store import ChatStore
 
 from ui.settings_sync_service import load_settings_payload
 from ui.client_config_store import (
+    ACCOUNT_DATA_DIR,
     CLIENT_DATA_DIR,
     load_ui_state,
     save_ui_state,
@@ -104,6 +106,9 @@ def _get_portable_config():
 _cfg_dict = _get_portable_config()
 MemoryStorageDir = Path(_cfg_dict["memory_dir"]).expanduser().resolve()
 DATA_DIR = Path(_cfg_dict["data_dir"]).expanduser().resolve()
+STATE_DIR = (ACCOUNT_DATA_DIR / "state") if ACCOUNT_DATA_DIR else MemoryStorageDir
+CHARACTERS_RUNTIME_DIR = (ACCOUNT_DATA_DIR / "characters_runtime") if ACCOUNT_DATA_DIR else (MemoryStorageDir / "characters_runtime")
+CHARACTER_SPECS_DIR = (ACCOUNT_DATA_DIR / "specs" / "characters") if ACCOUNT_DATA_DIR else (DATA_DIR / "specs" / "characters")
 MMIS_VOICE_INPUT_DIR = Path(_cfg_dict["voice_input_dir"] or (MemoryStorageDir / "voice" / "input")).expanduser().resolve()
 MMIS_VOICE_OUTPUT_DIR = Path(_cfg_dict["voice_output_dir"] or (MemoryStorageDir / "voice" / "output")).expanduser().resolve()
 MMIS_VOICE_TTS_VOICE = str(_cfg_dict["voice_tts_voice"])
@@ -184,10 +189,11 @@ def _trim_title(text: str, limit: int = 40) -> str:
 
 class ChatWindow(proto.ExactChatWindow):
     def __init__(self):
-        self._sessions_dir = CLIENT_DATA_DIR / "ui_chats"
+        account_root = ACCOUNT_DATA_DIR
+        self._sessions_dir = (account_root / "chats" / "ui_chats") if account_root else CLIENT_DATA_DIR / "ui_chats"
         self._sessions_index_path = self._sessions_dir / "index.json"
         self._legacy_sessions_path = CLIENT_DATA_DIR / "ui_chats.json"
-        self._ui_state_path = CLIENT_DATA_DIR / "ui_state.json"
+        self._ui_state_path = (account_root / "ui_state.json") if account_root else CLIENT_DATA_DIR / "ui_state.json"
         
         self._project_root = Path(__file__).resolve().parents[1]
         self._legacy_sessions_dirs = [
@@ -201,6 +207,10 @@ class ChatWindow(proto.ExactChatWindow):
         ]
         
         self._legacy_visible_chat_backup_path = self._sessions_dir / "_legacy_multi_chat_backup.json"
+        self._chat_store = ChatStore(account_root / "chats" / "chats.db") if account_root else None
+        self._attachments_dir = (account_root / "attachments") if account_root else None
+        if self._attachments_dir is not None:
+            self._attachments_dir.mkdir(parents=True, exist_ok=True)
         self._chat_sessions: list[dict] = []
         self._active_chat_id: str | None = None
         self._history: list[HistoryRow] = []
@@ -360,11 +370,18 @@ class ChatWindow(proto.ExactChatWindow):
     @staticmethod
     def _fallback_character_name(character_id: str) -> str:
         cleaned = str(character_id or "").strip().lower()
+        if cleaned in {"asya", "ася", "асья"}:
+            return "Ася"
         if cleaned in {"", "default", "assistant", "none", "null"}:
             return "Default"
         if cleaned in {"asya", "асья", "ася"}:
             return "Ася"
         return str(character_id or "Default").strip() or "Default"
+
+    @staticmethod
+    def _is_generic_persona_name(name: str) -> bool:
+        cleaned = str(name or "").strip().lower()
+        return cleaned in {"", "default", "assistant", "ассистент", "помощник", "none", "null"}
 
     @staticmethod
     def _payload_character_name(payload: dict) -> str:
@@ -375,7 +392,7 @@ class ChatWindow(proto.ExactChatWindow):
         return ""
 
     def _resolve_active_character_id(self) -> str:
-        state = self._read_json_payload(MemoryStorageDir / "brain_state.json")
+        state = self._read_json_payload(STATE_DIR / "brain_state.json")
         cid = self._payload_character_id(state)
         if cid:
             return cid
@@ -385,7 +402,7 @@ class ChatWindow(proto.ExactChatWindow):
             if cid:
                 return cid
 
-        manifest = self._read_json_payload(MemoryStorageDir / "characters_runtime" / "manifest.json")
+        manifest = self._read_json_payload(CHARACTERS_RUNTIME_DIR / "manifest.json")
         cid = self._payload_character_id(manifest)
         if cid:
             return cid
@@ -404,7 +421,8 @@ class ChatWindow(proto.ExactChatWindow):
 
         # Не перетираем уже известное имя пустым/служебным Default,
         # если раньше уже было нормальное имя.
-        if clean == "Default" and str(getattr(self, "_last_persona_name", "") or "").strip() not in {"", "Default"}:
+        current = str(getattr(self, "_last_persona_name", "") or "").strip()
+        if self._is_generic_persona_name(clean) and not self._is_generic_persona_name(current):
             return
 
         self._api_persona_name = clean
@@ -413,18 +431,18 @@ class ChatWindow(proto.ExactChatWindow):
         self._refresh_persona_label()
 
     def _resolve_persona_display_name(self) -> str:
-        if self._api_persona_name:
+        if self._api_persona_name and not self._is_generic_persona_name(self._api_persona_name):
             return self._api_persona_name
 
         cached = str(getattr(self, "_last_persona_name", "") or "").strip()
-        if cached and cached != "Default":
+        if cached and not self._is_generic_persona_name(cached):
             return cached
 
         character_id = self._resolve_active_character_id()
-        manifest = self._read_json_payload(MemoryStorageDir / "characters_runtime" / "manifest.json")
+        manifest = self._read_json_payload(CHARACTERS_RUNTIME_DIR / "manifest.json")
         character_paths = [
-            MemoryStorageDir / "characters_runtime" / character_id / "character.json",
-            DATA_DIR / "specs" / "characters" / character_id / "character.json",
+            CHARACTERS_RUNTIME_DIR / character_id / "character.json",
+            CHARACTER_SPECS_DIR / character_id / "character.json",
         ]
         
         name = ""
@@ -896,6 +914,10 @@ class ChatWindow(proto.ExactChatWindow):
         return best_chats, best_active_id
 
     def _load_or_init_chat_sessions(self) -> None:
+        if getattr(self, "_chat_store", None) is not None:
+            self._load_or_init_chat_sessions_from_store()
+            return
+
         loaded, active_id = load_chat_sessions(
             self._sessions_dir,
             self._sessions_index_path,
@@ -910,6 +932,8 @@ class ChatWindow(proto.ExactChatWindow):
             if legacy_history_len > 0:
                 loaded = legacy_loaded
                 active_id = legacy_active_id
+        if current_history_len <= 0 and not loaded:
+            loaded, active_id = self._load_chat_store_sessions()
 
         self._backup_legacy_visible_chats(loaded, active_id)
         chosen = collapse_to_single_visible_chat(loaded, active_id)
@@ -918,6 +942,85 @@ class ChatWindow(proto.ExactChatWindow):
         self._history = list(chosen.get("history") or [])
         self._render_history()
         self._save_chat_sessions()
+
+    def _load_or_init_chat_sessions_from_store(self) -> None:
+        json_loaded, json_active_id = load_chat_sessions(
+            self._sessions_dir,
+            self._sessions_index_path,
+            self._legacy_sessions_path,
+        )
+        json_history_len = self._chat_history_len(json_loaded)
+        if json_history_len <= 0:
+            legacy_loaded, legacy_active_id = self._load_legacy_project_sessions()
+            legacy_history_len = self._chat_history_len(legacy_loaded)
+            if legacy_history_len > json_history_len:
+                json_loaded = legacy_loaded
+                json_active_id = legacy_active_id
+                json_history_len = legacy_history_len
+
+        store_loaded, store_active_id = self._load_chat_store_sessions()
+        store_history_len = self._chat_history_len(store_loaded)
+
+        if json_history_len > store_history_len:
+            self._backup_legacy_visible_chats(json_loaded, json_active_id)
+            migrated = collapse_to_single_visible_chat(json_loaded, json_active_id)
+            self._chat_sessions = [migrated]
+            self._active_chat_id = str(migrated.get("id") or SINGLE_VISIBLE_CHAT_ID)
+            self._history = list(migrated.get("history") or [])
+            self._mirror_chat_sessions_to_store()
+            store_loaded, store_active_id = self._load_chat_store_sessions()
+
+        if store_loaded:
+            chosen = collapse_to_single_visible_chat(store_loaded, store_active_id)
+        else:
+            chosen = self._new_chat_payload()
+
+        self._chat_sessions = [chosen]
+        self._active_chat_id = str(chosen.get("id") or SINGLE_VISIBLE_CHAT_ID)
+        self._history = list(chosen.get("history") or [])
+        self._render_history()
+        self._save_chat_sessions()
+
+    def _load_chat_store_sessions(self) -> tuple[list[dict], str | None]:
+        store = getattr(self, "_chat_store", None)
+        if store is None:
+            return [], None
+        try:
+            chats = []
+            for chat in store.list_chats(include_archived=False):
+                messages = []
+                for message in store.list_messages(chat.chat_id):
+                    role = "ai" if message.role == "assistant" else message.role
+                    meta = dict(message.metadata or {})
+                    messages.append((
+                        role,
+                        message.text,
+                        str(meta.get("stat_line") or "") or None,
+                        meta.get("feedback"),
+                        str(meta.get("thinking") or "") or None,
+                    ))
+                chats.append({
+                    "id": chat.chat_id,
+                    "title": chat.title,
+                    "created_at": self._iso_from_epoch(chat.created_at),
+                    "updated_at": self._iso_from_epoch(chat.updated_at),
+                    "history": messages,
+                })
+            active = str(chats[0].get("id") or "") if chats else None
+            return chats, active
+        except Exception:
+            return [], None
+
+    @staticmethod
+    def _chat_history_len(chats: list[dict]) -> int:
+        return sum(len(chat.get("history") or []) for chat in list(chats or []) if isinstance(chat, dict))
+
+    @staticmethod
+    def _iso_from_epoch(value: float | int | str | None) -> str:
+        try:
+            return datetime.fromtimestamp(float(value or 0.0)).isoformat(timespec="seconds")
+        except Exception:
+            return chat_now_iso()
 
     def _new_chat_payload(self) -> dict:
         payload = make_new_chat_payload(existing_count=1, title=SINGLE_VISIBLE_CHAT_TITLE)
@@ -984,7 +1087,73 @@ class ChatWindow(proto.ExactChatWindow):
         if active_chat and not bool(active_chat.get("incognito", False)):
             active_id = str(active_chat.get("id") or "") or None
         try:
-            save_chat_sessions(self._sessions_dir, self._sessions_index_path, self._chat_sessions, active_id)
+            if getattr(self, "_chat_store", None) is not None:
+                self._mirror_chat_sessions_to_store()
+                self._write_chat_store_backup(active_id)
+            else:
+                save_chat_sessions(self._sessions_dir, self._sessions_index_path, self._chat_sessions, active_id)
+        except Exception:
+            pass
+
+    def _mirror_chat_sessions_to_store(self) -> None:
+        store = getattr(self, "_chat_store", None)
+        if store is None:
+            return
+        active_ids: set[str] = set()
+        for chat in list(self._chat_sessions or []):
+            if not isinstance(chat, dict) or bool(chat.get("incognito", False)):
+                continue
+            chat_id = str(chat.get("id") or "").strip()
+            if not chat_id:
+                continue
+            active_ids.add(chat_id)
+            store.upsert_chat(
+                chat_id=chat_id,
+                title=str(chat.get("title") or "Чат"),
+                persona_id=str(chat.get("persona_id") or "default"),
+            )
+            rows = []
+            for index, row in enumerate(list(chat.get("history") or [])):
+                try:
+                    role, text, stat_line, feedback, thinking = row
+                except Exception:
+                    continue
+                rows.append({
+                    "message_id": f"{chat_id}:{index}",
+                    "role": "assistant" if str(role) == "ai" else str(role),
+                    "text": str(text or ""),
+                    "metadata": {
+                        "stat_line": str(stat_line or ""),
+                        "feedback": feedback,
+                        "thinking": str(thinking or ""),
+                    },
+                })
+            store.replace_messages(chat_id, rows)
+        if hasattr(store, "archive_chats_except"):
+            store.archive_chats_except(active_ids)
+
+    def _write_chat_store_backup(self, active_id: str | None) -> None:
+        try:
+            self._sessions_dir.mkdir(parents=True, exist_ok=True)
+            backup_path = self._sessions_dir / "_chatstore_backup.json"
+            payload = {
+                "version": 1,
+                "source": "ChatStore",
+                "created_at": chat_now_iso(),
+                "active_chat_id": active_id,
+                "chats": [
+                    {
+                        "id": str(chat.get("id") or ""),
+                        "title": str(chat.get("title") or ""),
+                        "created_at": str(chat.get("created_at") or ""),
+                        "updated_at": str(chat.get("updated_at") or ""),
+                        "history": history_to_serializable(list(chat.get("history") or [])),
+                    }
+                    for chat in list(self._chat_sessions or [])
+                    if isinstance(chat, dict) and not bool(chat.get("incognito", False))
+                ],
+            }
+            backup_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
 
@@ -2288,6 +2457,7 @@ class ChatWindow(proto.ExactChatWindow):
     def _attachment_from_path(self, path: Path) -> dict:
         if not path.exists() or not path.is_file():
             raise ValueError(f"Не найден файл: {path}")
+        stored_path = self._store_attachment_file(path)
         size = int(path.stat().st_size)
         suffix = path.suffix.lower()
         mime_type = str(mimetypes.guess_type(str(path))[0] or "application/octet-stream")
@@ -2296,7 +2466,8 @@ class ChatWindow(proto.ExactChatWindow):
             "name": path.name,
             "mime_type": mime_type,
             "size": size,
-            "path": str(path),
+            "path": str(stored_path or path),
+            "source_path": str(path),
         }
         is_image = suffix in IMAGE_FILE_SUFFIXES or mime_type.lower().startswith("image/")
         if is_image:
@@ -2311,6 +2482,20 @@ class ChatWindow(proto.ExactChatWindow):
                 attachment["kind"] = "text"
                 attachment["text"] = text
         return attachment
+
+    def _store_attachment_file(self, path: Path) -> Path | None:
+        root = getattr(self, "_attachments_dir", None)
+        if root is None:
+            return None
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            target = root / path.name
+            if target.exists():
+                target = root / f"{path.stem}-{int(time.time() * 1000)}{path.suffix}"
+            shutil.copy2(path, target)
+            return target
+        except Exception:
+            return None
 
     @staticmethod
     def _read_attachment_text(path: Path) -> str:

@@ -804,6 +804,7 @@ class BackgroundWorker:
                             )
                     # Не сбрасываем idle_start_time здесь, чтобы отслеживать общий простой
 
+                    self._notify_memory_queue_idle_if_needed()
                     LOGGER.info(f"Worker {self.config.worker_id}: No jobs, sleeping for {self.config.poll_interval_sec}s...")
                     self._wait_or_wake(self.config.poll_interval_sec)
                 else:

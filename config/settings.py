@@ -87,11 +87,17 @@ def ensure_dirs(memory_dir: str | Path | None = None) -> dict[str, Path]:
     logs_dir = _to_path(cfg.log_dir, LOG_DIR.resolve()) if cfg is not None and cfg.log_dir else LOG_DIR.resolve()
     data_dir = _to_path(cfg.data_dir, DATA_DIR.resolve()) if cfg is not None and cfg.data_dir else DATA_DIR.resolve()
     models_dir = _to_path(cfg.models_dir, MODELS_DIR.resolve()) if cfg is not None and cfg.models_dir else MODELS_DIR.resolve()
+    accounts_dir = (
+        _to_path(cfg.accounts_dir, data_dir / "accounts")
+        if cfg is not None and getattr(cfg, "accounts_dir", None)
+        else data_dir / "accounts"
+    )
     dirs = {
         "base": BASE_DIR,
         "config": CONFIG_DIR,
         "data": data_dir,
         "models": models_dir,
+        "accounts": accounts_dir,
         "memory": mem_dir,
         "logs": logs_dir,
         "cache": cache_dir,
@@ -214,6 +220,10 @@ class AppSettings:
     prompt_response_formatting_enabled: bool = True
     data_dir: Path = DATA_DIR
     models_dir: Path = MODELS_DIR
+    accounts_dir: Path = field(default_factory=lambda: (DATA_DIR / "accounts").resolve())
+    account_id: str = ""
+    character_specs_dir: Path | None = None
+    performance_profiles_file: Path | None = None
     memory_dir: Path = field(default_factory=lambda: MEMORY_DIR.resolve())
     cache_dir: Path = field(default_factory=lambda: CACHE_DIR.resolve())
     log_dir: Path = field(default_factory=lambda: Path("logs").resolve())
@@ -324,6 +334,9 @@ class AppSettings:
         for key in (
             "data_dir",
             "models_dir",
+            "accounts_dir",
+            "character_specs_dir",
+            "performance_profiles_file",
             "memory_dir",
             "cache_dir",
             "log_dir",
@@ -408,10 +421,35 @@ def update_config_values(updates: dict[str, Any]) -> AppSettings:
     return load_config(force_reload=True)
 
 
-def _default_model_profiles_tree() -> dict[str, Any]:
+def _resolve_performance_profiles_file(
+    *,
+    row: dict[str, Any] | None = None,
+    config_file: Path | None = None,
+    memory_dir: Path | None = None,
+) -> Path:
+    cfg = dict(row or {})
+    explicit = _get_dotted(cfg, "paths.performance_profiles_file") or _get_dotted(cfg, "llm.performance_profiles_file")
+    if explicit:
+        return _to_path(explicit, DATA_DIR / "specs" / "performance_profiles.json")
+
+    if memory_dir is not None:
+        account_candidate = Path(memory_dir).expanduser().resolve().parent / "specs" / "performance_profiles.json"
+        if account_candidate.exists():
+            return account_candidate
+
+    if config_file is not None:
+        cfg_path = Path(config_file).expanduser().resolve()
+        account_candidate = cfg_path.parent.parent / "specs" / "performance_profiles.json"
+        if account_candidate.exists():
+            return account_candidate
+
+    return (DATA_DIR / "specs" / "performance_profiles.json").resolve()
+
+
+def _default_model_profiles_tree(performance_profiles_file: str | Path | None = None) -> dict[str, Any]:
     profiles: dict[str, Any] = {}
     
-    specs_file = Path(__file__).parent.parent / "data" / "specs" / "performance_profiles.json"
+    specs_file = Path(performance_profiles_file or (DATA_DIR / "specs" / "performance_profiles.json")).expanduser().resolve()
     if specs_file.exists():
         try:
             import json
@@ -426,7 +464,7 @@ def _default_model_profiles_tree() -> dict[str, Any]:
     # Если файл не найден — это критическая ошибка
     raise FileNotFoundError(
         f"Performance profiles not found at {specs_file}. "
-        "This file MUST exist. Profiles are ONLY loaded from data/specs/performance_profiles.json"
+        "This file MUST exist for the active account or as the global fallback."
     )
 
 
@@ -760,6 +798,11 @@ def _default_config_tree() -> dict[str, Any]:
         "paths": {
             "data_dir": _path_to_config_string(DATA_DIR),
             "models_dir": _path_to_config_string(MODELS_DIR),
+            "accounts_dir": _path_to_config_string(DATA_DIR / "accounts"),
+            "performance_profiles_file": _path_to_config_string(DATA_DIR / "specs" / "performance_profiles.json"),
+        },
+        "account": {
+            "account_id": "",
         },
     }
 
@@ -767,7 +810,10 @@ def _default_config_tree() -> dict[str, Any]:
 def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> AppSettings:
     row = dict(payload or {})
 
-    memory_dir = MEMORY_DIR.expanduser().resolve()
+    memory_dir = _to_path(
+        _get_dotted(row, "memory_core.memory_dir") or _get_dotted(row, "memory.memory_dir"),
+        MEMORY_DIR,
+    )
     dirs = ensure_dirs(memory_dir=memory_dir)
     # Поддержка legacy memory.* keys и новых memory_core.* keys
     cache_dir = _to_path(
@@ -796,9 +842,14 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
     model_name = _norm_str(_get_dotted(row, "llm.model_name") or "qcwind/qwen3-8b-instruct-Q4-K-M")
 
     runtime = _normalize_ui_console_runtime(_as_dict(_get_dotted(row, "ui.console.runtime")))
+    performance_profiles_file = _resolve_performance_profiles_file(
+        row=row,
+        config_file=config_file,
+        memory_dir=memory_dir,
+    )
     
     # config.json llm.profiles больше не используется (legacy, игнорируется)
-    profile_rows = copy.deepcopy(_default_model_profiles_tree())
+    profile_rows = copy.deepcopy(_default_model_profiles_tree(performance_profiles_file))
     profile_rows = _normalize_profile_rows(profile_rows)
     
     # Проверяем есть ли legacy llm.profiles в config.json — только для debug trace
@@ -846,6 +897,10 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         prompt_response_formatting_enabled=_to_bool(_get_dotted(row, "prompt.response_formatting_enabled")),
         data_dir=_to_path(_get_dotted(row, "paths.data_dir"), DATA_DIR),
         models_dir=_to_path(_get_dotted(row, "paths.models_dir"), MODELS_DIR),
+        accounts_dir=_to_path(_get_dotted(row, "paths.accounts_dir"), DATA_DIR / "accounts"),
+        account_id=_norm_str(_get_dotted(row, "account.account_id") or _get_dotted(row, "startup.account_id")),
+        character_specs_dir=_to_path(_get_dotted(row, "paths.character_specs_dir"), memory_dir.parent / "specs" / "characters"),
+        performance_profiles_file=performance_profiles_file,
         memory_dir=memory_dir,
         cache_dir=cache_dir,
         log_dir=log_dir,
@@ -1230,6 +1285,8 @@ def _bootstrap_seed_from_env(*, dotenv_cfg: dict[str, str]) -> dict[str, Any]:
         ("MMIS_VOICE_ENABLED", "voice.enabled", _to_bool),
         ("MMIS_DATA_DIR", "paths.data_dir", _norm_str),
         ("MMIS_MODELS_DIR", "paths.models_dir", _norm_str),
+        ("MMIS_ACCOUNTS_DIR", "paths.accounts_dir", _norm_str),
+        ("MMIS_ACCOUNT_ID", "account.account_id", _norm_str),
         ("MMIS_MEMORY_DIR", "memory_core.memory_dir", _norm_str),
         ("MMIS_CACHE_DIR", "memory_core.cache_dir", _norm_str),
         ("MMIS_LOG_DIR", "memory_core.log_dir", _norm_str),
@@ -1267,6 +1324,18 @@ def _resolve_config_file() -> Path:
     env_raw = str(os.getenv("MMIS_CONFIG_FILE", "")).strip()
     if env_raw:
         return Path(env_raw).expanduser().resolve()
+    account_id = str(os.getenv("MMIS_ACTIVE_ACCOUNT_ID") or os.getenv("MMIS_ACCOUNT_ID") or "").strip()
+    accounts_dir = _resolve_path_value(os.getenv("MMIS_ACCOUNTS_DIR") or DATA_DIR / "accounts", DATA_DIR / "accounts")
+    if not account_id:
+        try:
+            account_id = (accounts_dir / "current_account.txt").read_text(encoding="utf-8").strip()
+        except Exception:
+            account_id = ""
+    if account_id:
+        safe_account = "".join(ch for ch in account_id if ch.isalnum() or ch in {"_", "-"}).strip()
+        account_config = (accounts_dir / safe_account / "config" / "config.json").resolve()
+        if account_config.exists():
+            return account_config
     return (BASE_DIR / "config" / "config.json").resolve()
 
 

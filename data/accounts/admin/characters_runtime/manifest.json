@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "active_character_id": "asya",
+  "characters": [
+    {
+      "id": "asya",
+      "name": "Ася",
+      "enabled": true
+    },
+    {
+      "id": "default",
+      "name": "Default",
+      "enabled": true
+    }
+  ],
+  "updated_at": "2026-04-28T12:37:51.114+03:00"
+}

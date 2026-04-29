@@ -6,7 +6,35 @@ from typing import Any
 # Path to the local config file relative to the ui/ directory
 # It should be inside ui/.mmis_client/
 UI_DIR = Path(__file__).parent
-CLIENT_DATA_DIR = UI_DIR / ".mmis_client"
+PROJECT_ROOT = UI_DIR.parent
+LEGACY_CLIENT_DATA_DIR = UI_DIR / ".mmis_client"
+
+
+def _active_account_data_dir() -> Path | None:
+    account_id = str(os.environ.get("MMIS_ACTIVE_ACCOUNT_ID") or os.environ.get("MMIS_ACCOUNT_ID") or "").strip()
+    accounts_dir = Path(os.environ.get("MMIS_ACCOUNTS_DIR") or (PROJECT_ROOT / "data" / "accounts")).expanduser()
+    if not account_id:
+        try:
+            account_id = (accounts_dir / "current_account.txt").read_text(encoding="utf-8").strip()
+        except Exception:
+            account_id = ""
+    if not account_id:
+        return None
+    safe_account = "".join(ch for ch in account_id if ch.isalnum() or ch in {"_", "-"}).strip()
+    if not safe_account:
+        return None
+    return (accounts_dir / safe_account).resolve()
+
+
+def _client_data_dir() -> Path:
+    account_dir = _active_account_data_dir()
+    if account_dir is None:
+        return LEGACY_CLIENT_DATA_DIR
+    return account_dir / "ui"
+
+
+ACCOUNT_DATA_DIR = _active_account_data_dir()
+CLIENT_DATA_DIR = _client_data_dir()
 CLIENT_CONFIG_PATH = CLIENT_DATA_DIR / "client_config.json"
 
 DEFAULT_CONFIG = {
@@ -122,7 +150,7 @@ def set_last_error(error: str | None) -> None:
 # Portable UI state (ui/.mmis_client/ui_state.json)
 # ---------------------------------------------------------------------------
 
-UI_STATE_PATH = CLIENT_DATA_DIR / "ui_state.json"
+UI_STATE_PATH = (ACCOUNT_DATA_DIR / "ui_state.json") if ACCOUNT_DATA_DIR else CLIENT_DATA_DIR / "ui_state.json"
 
 DEFAULT_UI_STATE: dict[str, Any] = {
     "think_enabled": True,

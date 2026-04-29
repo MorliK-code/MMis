@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from config.settings import AppSettings, BASE_DIR, ModelProfile, ensure_dirs, get_profile, load_config, setup_logging
+from core.account_manager import prepare_local_account
 from core.brain import Brain
 from core.character_runtime import CharacterRuntime
 from core.response_pipeline import ResponsePipeline
@@ -56,12 +57,21 @@ class AppContainer:
 def build_container(settings: AppSettings) -> AppContainer:
     validate_no_txt_paths(settings)
     ensure_dirs(memory_dir=settings.memory_dir)
+    account_context = prepare_local_account(settings)
+    account_memory_dir = account_context.data_dir / "memory_core"
+    account_cache_dir = account_context.data_dir / "cache"
+    account_memory_dir.mkdir(parents=True, exist_ok=True)
+    account_cache_dir.mkdir(parents=True, exist_ok=True)
     profile = get_profile(settings.active_profile)
     provider_name = _resolve_provider_name(settings.llm_default_provider)
     provider = build_provider(provider_name, default_model=settings.model_name)
     tokenizer: Tokenizer = ApproxTokenizer()
 
-    character_runtime = CharacterRuntime()
+    character_runtime = CharacterRuntime(
+        state_path=account_context.data_dir / "state" / "brain_state.json",
+        state_store_dir=account_context.data_dir / "state" / "brain_state_store",
+    )
+    character_runtime.patch({"account_id": account_context.account_id})
     character_runtime.set_quality_profile(
         _character_quality_profile(character_runtime=character_runtime, fallback_profile=settings.active_profile)
     )
@@ -69,9 +79,9 @@ def build_container(settings: AppSettings) -> AppContainer:
 
     # Инициализация memory_core через адаптер
     memory_core = init_memory_core(
-        db_path=settings.memory_core_db_path,
-        vector_path=settings.memory_core_vector_path,
-        default_workspace=settings.memory_core_default_workspace,
+        db_path=str(account_context.memory_db_path),
+        vector_path=str(account_context.memory_vector_path),
+        default_workspace=account_context.account_id,
         default_namespace=settings.memory_core_default_namespace,
         top_k=int(settings.memory_core_top_k),
         enable_background_worker=bool(settings.memory_core_enable_background_worker),

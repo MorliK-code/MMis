@@ -33,10 +33,12 @@ from api.schemas import (
     JsonModeRequest,
 )
 from config.settings import get_config_payload, get_profile, load_config, update_config_values
+from core.account_manager import prepare_local_account
+from core.character_runtime import CharacterRuntime
 from core.brain import Brain
 from core.spec_registry import validate_no_txt_paths
 from llm import build_provider
-from memory_core.adapter import get_memory_core_adapter
+from memory_core.adapter import init_memory_core
 from memory_core.utils.text_sanitizer import is_internal_error_reply
 from utils.logger import get_logger, log_json
 
@@ -127,19 +129,27 @@ async def lifespan(app: FastAPI):
     # Startup - инициализируем memory_core_adapter из актуальных settings
     cfg = load_config(force_reload=True)
     validate_no_txt_paths(cfg)
+    account_context = prepare_local_account(cfg)
     LOGGER = get_logger(__name__)
     LOGGER.info("MMis API starting...")
 
     from memory_core.adapter import init_memory_core
     memory_core_adapter = init_memory_core(
-        db_path=cfg.memory_core_db_path,
-        vector_path=cfg.memory_core_vector_path,
-        default_workspace=cfg.memory_core_default_workspace,
+        db_path=str(account_context.memory_db_path),
+        vector_path=str(account_context.memory_vector_path),
+        default_workspace=account_context.account_id,
         default_namespace=cfg.memory_core_default_namespace,
         top_k=int(cfg.memory_core_top_k),
         enable_background_worker=bool(cfg.memory_core_enable_background_worker),
         worker_poll_interval=float(cfg.memory_core_worker_poll_interval),
     )
+    try:
+        _runtime.brain.memory_core = memory_core_adapter
+        if hasattr(_runtime.brain, "pipeline"):
+            _runtime.brain.pipeline.memory_core = memory_core_adapter
+        _runtime.brain.state_manager.patch({"account_id": account_context.account_id})
+    except Exception:
+        pass
     
     # Явно запускаем worker только если он реально включён
     memory_core = getattr(memory_core_adapter, "service", None)
@@ -176,6 +186,7 @@ register_memory_core_api(app)
 class _Runtime:
     def __init__(self):
         self.settings = load_config(force_reload=True)
+        self.account_context = prepare_local_account(self.settings)
         self.lock = Lock()
         self.provider = build_provider(self.settings.llm_default_provider, default_model=self.settings.model_name)
         provider_raw = str(self.settings.llm_default_provider or "ollama").strip().lower()
@@ -193,19 +204,32 @@ class _Runtime:
         # Инициализируем если ещё не инициализирован
         global memory_core_adapter
         if memory_core_adapter is None:
-            memory_core_adapter = get_memory_core_adapter()
+            memory_core_adapter = init_memory_core(
+                db_path=str(self.account_context.memory_db_path),
+                vector_path=str(self.account_context.memory_vector_path),
+                default_workspace=self.account_context.account_id,
+                default_namespace=self.settings.memory_core_default_namespace,
+                top_k=int(self.settings.memory_core_top_k),
+                enable_background_worker=bool(self.settings.memory_core_enable_background_worker),
+                worker_poll_interval=float(self.settings.memory_core_worker_poll_interval),
+            )
         
         self.brain = Brain(
             provider=self.provider,
+            state_manager=CharacterRuntime(
+                state_path=self.account_context.data_dir / "state" / "brain_state.json",
+                state_store_dir=self.account_context.data_dir / "state" / "brain_state_store",
+            ),
             memory_core=memory_core_adapter,
         )
+        self.brain.state_manager.patch({"account_id": self.account_context.account_id})
         self.model = str(self.settings.model_name or "").strip()
         self.thinking_enabled = bool(self.settings.thinking_enabled)
         self.verbose_enabled = bool(self.brain.state_manager.get("verbose_enabled", False))
         self.web_mode = self.settings.web_mode if bool(self.settings.internet_enabled) else "off"
         self.json_mode_enabled = bool(self.settings.json_mode_enabled)
 
-        self.meta_root = Path(self.settings.memory_dir) / "metadata"
+        self.meta_root = self.account_context.data_dir / "memory_core" / "metadata"
         self.meta_root.mkdir(parents=True, exist_ok=True)
         self._message_seq = self._load_last_message_id()
         self.last_stats: dict[str, Any] = {}

@@ -1,0 +1,19 @@
+{
+  "mood": "neutral",
+  "last_update_ts": "",
+  "active_traits": [
+    "thoughtfulness",
+    "warmth"
+  ],
+  "disabled_traits": [],
+  "counters": {
+    "banter_hits": 0,
+    "comfort_hits": 0
+  },
+  "last_signals": {},
+  "applied_rules": [],
+  "emotional_state_before": {},
+  "emotional_state_after": {},
+  "persona_feedback_applied": [],
+  "emotion": ""
+}

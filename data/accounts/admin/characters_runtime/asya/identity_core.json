@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "addressing": {
+    "canonical_name": "Пользователь",
+    "allowed_forms": [
+      "Пользователь",
+      "на",
+      "игнорирует",
+      "то",
+      "меня"
+    ],
+    "forbidden_forms": [
+      "ответил",
+      "сегд",
+      "офигивай",
+      "забывал",
+      "забыл"
+    ],
+    "allow_diminutives": false,
+    "use_name_by_default": false,
+    "updated_at": "2026-04-19T18:17:54.333+03:00"
+  },
+  "interaction_style": {
+    "prefers_directness": 0.82,
+    "prefers_short_answers": 0.55,
+    "allows_light_teasing": true,
+    "technical_collaboration_style": "high"
+  },
+  "boundaries": {
+    "avoid_baby_talk": false
+  },
+  "emotional_handling": {
+    "treat_short_replies_as_low_bandwidth": true
+  },
+  "assistant_trait_baseline": {},
+  "updated_at": "2026-04-19T18:17:54.333+03:00"
+}

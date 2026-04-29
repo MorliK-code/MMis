@@ -1,0 +1,8 @@
+{"type": "manifest_sync", "active_before": "default", "active_after": "default", "added": ["asya", "default"], "removed": [], "total": 2, "ts": "2026-03-23T23:00:17.460+02:00", "at": "2026-03-23T23:00:17.460+02:00"}
+{"type": "active_character_changed", "from": "default", "to": "asya", "source": "manual", "ts": "2026-03-23T23:00:18.104+02:00", "at": "2026-03-23T23:00:18.104+02:00"}
+{"type": "manifest_sync", "active_before": "asya", "active_after": "asya", "added": ["1"], "removed": [], "total": 3, "ts": "2026-04-27T14:37:26.659+03:00", "at": "2026-04-27T14:37:26.659+03:00"}
+{"type": "manifest_sync", "active_before": "asya", "active_after": "asya", "added": ["test_char_999"], "removed": [], "total": 4, "ts": "2026-04-27T14:41:27.690+03:00", "at": "2026-04-27T14:41:27.690+03:00"}
+{"type": "manifest_sync", "active_before": "asya", "active_after": "asya", "added": [], "removed": ["test_char_999"], "total": 3, "ts": "2026-04-27T14:43:15.733+03:00", "at": "2026-04-27T14:43:15.733+03:00"}
+{"type": "manifest_sync", "active_before": "asya", "active_after": "asya", "added": ["test_char_999"], "removed": [], "total": 4, "ts": "2026-04-27T14:43:15.803+03:00", "at": "2026-04-27T14:43:15.803+03:00"}
+{"type": "manifest_sync", "active_before": "asya", "active_after": "asya", "added": [], "removed": ["test_char_999"], "total": 3, "ts": "2026-04-27T14:43:15.818+03:00", "at": "2026-04-27T14:43:15.818+03:00"}
+{"type": "manifest_sync", "active_before": "asya", "active_after": "asya", "added": [], "removed": ["1"], "total": 2, "ts": "2026-04-28T12:37:51.114+03:00", "at": "2026-04-28T12:37:51.114+03:00"}

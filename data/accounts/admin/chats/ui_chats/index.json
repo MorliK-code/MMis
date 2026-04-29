@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "active_chat_id": "visible-main-chat",
+  "chats": [
+    {
+      "id": "visible-main-chat",
+      "title": "Чат",
+      "created_at": "2026-04-18T21:59:53",
+      "updated_at": "2026-04-28T22:33:06"
+    }
+  ]
+}

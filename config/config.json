@@ -368,6 +368,10 @@
   },
   "paths": {
     "data_dir": "{dir_path}\\data",
-    "models_dir": "{dir_path}\\models"
+    "models_dir": "{dir_path}\\models",
+    "accounts_dir": "{dir_path}\\data\\accounts"
+  },
+  "account": {
+    "account_id": ""
   }
 }

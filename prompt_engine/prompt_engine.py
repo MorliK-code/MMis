@@ -390,6 +390,17 @@ class PromptEngine:
         context = _as_dict(state_map.get("context_tags"))
         lines: list[str] = []
         seen_keys: set[str] = set()
+        hidden_temporal_keys = {
+            "local_date",
+            "now_human",
+            "time_human",
+            "today_human",
+            "timezone",
+            "now_iso",
+            "previous_user_at",
+            "minutes_since_previous",
+            "same_calendar_day",
+        }
 
         def append_key(key: str, value: Any) -> None:
             text = str(value or "").strip()
@@ -409,21 +420,15 @@ class PromptEngine:
                 match = re.match(r"^-\s*([A-Za-z0-9_.-]+)\s*:", line)
                 if match:
                     normalized = match.group(1).strip().lower()
+                    if normalized in hidden_temporal_keys:
+                        continue
                     if normalized in seen_keys:
                         continue
                     seen_keys.add(normalized)
                 lines.append(line)
 
         for key in (
-            "now_human",
-            "time_human",
-            "today_human",
-            "timezone",
-            "now_iso",
-            "local_date",
-            "previous_user_at",
-            "minutes_since_previous",
-            "same_calendar_day",
+            "current_datetime",
         ):
             append_key(key, context.get(key))
 
@@ -443,7 +448,6 @@ class PromptEngine:
             "conversation_state",
             "smalltalk_allowed",
             "should_ask_back",
-            "local_date",
             "local_region",
             "greeting_allowed",
             "dialog_sarcasm_level",
@@ -454,14 +458,7 @@ class PromptEngine:
             "allowed_term",
             "use_term_now",
             "address_terms_policy",
-            "now_iso",
-            "now_human",
-            "today_human",
-            "time_human",
-            "timezone",
-            "previous_user_at",
-            "minutes_since_previous",
-            "same_calendar_day",
+            "current_datetime",
             "continuation_ref",
             "context_confidence",
             "query_effective",

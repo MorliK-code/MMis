@@ -6,6 +6,7 @@ Memory Core Adapter - адаптер для интеграции memory_core в 
 """
 
 from typing import Any
+from core.account_context import AccountContext
 from memory_core.bootstrap.service_factory import build_memory_service, MemoryServiceConfig
 from memory_core.schemas import MemoryEnvelope, MemoryQuery
 from memory_core.facade import MemoryService
@@ -68,6 +69,7 @@ class MemoryCoreAdapter:
             top_k: Количество результатов по умолчанию.
             enable_background_worker: Включить фоновый воркер.
             worker_poll_interval: Интервал опроса очереди (сек).
+
             config_path: Путь к файлу конфигурации.
         """
         # Загружаем конфигурацию из файла
@@ -121,6 +123,8 @@ class MemoryCoreAdapter:
         self._auto_resume_timer: threading.Timer | None = None
         self._main_sleep_timer: threading.Timer | None = None
         self._main_sleep_deadline_at = 0.0
+        self._main_sleep_paused_at: float | None = None
+        self._main_sleep_remaining_at_pause: float | None = None
         self._main_lease_holds_memory = False
         self._auto_resume_delay = self._memory_wake_delay_after_main_sec
         self._resume_epoch = 0
@@ -135,6 +139,18 @@ class MemoryCoreAdapter:
             self._memory_wake_delay_after_main_sec,
             self._unload_memory_llm_before_main_request,
         )
+
+    def switch_account(self, account: AccountContext) -> None:
+        """Rebuild memory service so all memory data is scoped to an account directory."""
+        account.ensure_dirs()
+        self.close()
+        self.config.db_path = str(account.memory_db_path)
+        self.config.vector_path = str(account.memory_vector_path)
+        self.config.default_workspace = str(account.account_id or "global")
+        self.service = build_memory_service(self.config)
+        self._current_workspace = self.config.default_workspace
+        self._current_session = "default"
+        self._install_worker_lifecycle_hooks()
 
     def _install_worker_lifecycle_hooks(self) -> None:
         worker = self._get_worker()
@@ -153,7 +169,7 @@ class MemoryCoreAdapter:
         return self.scheduler_mode() == "strict"
 
     def should_pause_worker_for_api_request(self) -> bool:
-        return self.worker_pause_enabled
+        return self._enable_pause
 
     @staticmethod
     def _duration_to_seconds(value: Any) -> float:
@@ -961,6 +977,33 @@ class MemoryCoreAdapter:
             return
         if self._pending_memory_job_count() > 0:
             return
+        
+        # Если таймер был на паузе — восстанавливаем его
+        if self._main_sleep_remaining_at_pause is not None:
+            remaining = self._main_sleep_remaining_at_pause
+            self._main_sleep_remaining_at_pause = None
+            self._main_sleep_paused_at = None
+            
+            LOGGER.info(
+                "MemoryCoreAdapter: memory jobs drained; restoring paused main LLM lease (%.1fs left)",
+                remaining,
+            )
+            self._main_sleep_deadline_at = time.monotonic() + remaining
+            self._schedule_main_sleep_unload(epoch, remaining)
+            
+            # Если модели одинаковые — ничего не делаем, она уже в VRAM (или Ollama её держит)
+            # Если разные — греем основную
+            main_model = self._runtime_main_model_name()
+            memory_model = self._runtime_memory_model_name()
+            
+            if main_model and memory_model and main_model == memory_model:
+                LOGGER.debug("MemoryCoreAdapter: same model for main and memory, skipping redundant warm/unload")
+            else:
+                self._hold_memory_for_main_lease()
+                self._unload_memory_llm()
+                self._warm_main_model_in_vram(remaining)
+            return
+
         remaining = self._main_sleep_remaining_sec()
         if remaining <= 0:
             LOGGER.info("MemoryCoreAdapter: memory jobs drained after main sleep deadline; main stays unloaded")
@@ -1029,7 +1072,33 @@ class MemoryCoreAdapter:
             return
 
         self._main_lease_holds_memory = False
-        self._unload_main_model_from_vram()
+        
+        # Паузим таймер выгрузки основной модели вместо немедленной выгрузки
+        # если мы хотим "поставить на паузу" его время простоя
+        remaining = self._main_sleep_remaining_sec()
+        if remaining > 0:
+            LOGGER.info(
+                "MemoryCoreAdapter: pausing main LLM offload timer (%.1fs remaining) to process memory jobs",
+                remaining
+            )
+            self._main_sleep_remaining_at_pause = remaining
+            self._main_sleep_paused_at = time.monotonic()
+            if self._main_sleep_timer:
+                self._main_sleep_timer.cancel()
+                self._main_sleep_timer = None
+            self._main_sleep_deadline_at = 0.0
+        
+        # Если модели разные — выгружаем основную для экономии VRAM
+        main_model = self._runtime_main_model_name()
+        memory_model = self._runtime_memory_model_name()
+        if main_model and memory_model and main_model != memory_model:
+            LOGGER.info("MemoryCoreAdapter: different models, unloading main LLM for memory tasks")
+            self._unload_main_model_from_vram()
+        elif main_model and memory_model:
+            LOGGER.info("MemoryCoreAdapter: same model for main and memory, avoiding main unload")
+        else:
+            self._unload_main_model_from_vram()
+
         self._resume_memory_llm()
         self._schedule_memory_drain_monitor(resume_epoch)
         if pending_jobs > 0 and self._schedule_memory_prewarm(resume_epoch):
@@ -1064,13 +1133,6 @@ class MemoryCoreAdapter:
             self._unload_memory_llm()
         else:
             self._pause_memory_llm()
-        
-        # Важно: не используем auto-resume timer во время активного ответа API.
-        # Таймер мог сработать посреди генерации основной LLM и вернуть memory worker
-        # слишком рано, что ломало приоритет основной модели и приводило к гонкам.
-
-    def _auto_resume_worker(self) -> None:
-        """Автоматически возобновляет worker после таймаута."""
         LOGGER.info("MemoryCoreAdapter: Auto-resume timer triggered, resuming worker...")
         self.resume_worker()
 
@@ -1086,6 +1148,8 @@ class MemoryCoreAdapter:
             self._main_sleep_timer = None
             LOGGER.debug("MemoryCoreAdapter: Main sleep timer cancelled")
         self._main_sleep_deadline_at = 0.0
+        self._main_sleep_remaining_at_pause = None
+        self._main_sleep_paused_at = None
         self._main_lease_holds_memory = False
 
     def resume_worker(self) -> None:
@@ -1097,18 +1161,24 @@ class MemoryCoreAdapter:
         if not self._enable_pause:
             return  # Пауза отключена в конфиге
         
-        # Отменяем таймер если ещё активен
-        self._cancel_auto_resume_timer()
-        resume_epoch = self._bump_resume_epoch()
-        self._reset_memory_drain_epoch()
-        main_sleep_delay_sec = self._main_model_keep_alive_delay_sec()
-        if main_sleep_delay_sec > 0:
-            self._main_sleep_deadline_at = time.monotonic() + main_sleep_delay_sec
+        # Снимаем таймер с паузы если он был
+        if self._main_sleep_remaining_at_pause is not None:
+            remaining = self._main_sleep_remaining_at_pause
+            self._main_sleep_remaining_at_pause = None
+            self._main_sleep_paused_at = None
+            LOGGER.info("MemoryCoreAdapter: Resuming worker, restoring paused main lease (%.1fs left)", remaining)
+            self._main_sleep_deadline_at = time.monotonic() + remaining
             self._main_lease_holds_memory = True
-            self._schedule_main_sleep_unload(resume_epoch, main_sleep_delay_sec)
+            self._schedule_main_sleep_unload(resume_epoch, remaining)
         else:
-            self._main_sleep_deadline_at = 0.0
-            self._main_lease_holds_memory = False
+            main_sleep_delay_sec = self._main_model_keep_alive_delay_sec()
+            if main_sleep_delay_sec > 0:
+                self._main_sleep_deadline_at = time.monotonic() + main_sleep_delay_sec
+                self._main_lease_holds_memory = True
+                self._schedule_main_sleep_unload(resume_epoch, main_sleep_delay_sec)
+            else:
+                self._main_sleep_deadline_at = 0.0
+                self._main_lease_holds_memory = False
 
         handoff_delay_sec = self._memory_handoff_delay_sec()
         if handoff_delay_sec > 0:
@@ -1145,6 +1215,36 @@ class MemoryCoreAdapter:
             from config.settings import load_config
 
             return str(getattr(load_config(), "model_name", "") or "").strip()
+        except Exception:
+            return ""
+
+    def _runtime_memory_model_name(self) -> str:
+        try:
+            worker = self._get_worker()
+            if worker is None:
+                return ""
+            processor = getattr(worker, "memory_llm_processor", None)
+            if processor is None:
+                return ""
+            model_profile = str(getattr(processor, "model_profile", "") or "").strip()
+            if model_profile:
+                # Пытаемся разрешить имя модели через TaskRouter
+                router = getattr(processor, "task_router", None)
+                if router:
+                    try:
+                        # Если есть метод разрешения модели
+                        resolve = getattr(router, "resolve_model_name", None)
+                        if callable(resolve):
+                            return str(resolve(processor.TASK_NAME) or "").strip()
+                    except Exception:
+                        pass
+            
+            # Если не удалось — берём имя провайдера
+            provider = getattr(processor, "get_provider", lambda: None)()
+            if provider:
+                return str(getattr(provider, "_current_model", "") or getattr(provider, "default_model", "") or "").strip()
+            
+            return ""
         except Exception:
             return ""
 

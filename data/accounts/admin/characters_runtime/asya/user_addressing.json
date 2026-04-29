@@ -1,0 +1,20 @@
+{
+  "canonical_name": "Пользователь",
+  "allowed_forms": [
+    "Пользователь",
+    "на",
+    "игнорирует",
+    "то",
+    "меня"
+  ],
+  "forbidden_forms": [
+    "ответил",
+    "сегд",
+    "офигивай",
+    "забывал",
+    "забыл"
+  ],
+  "allow_diminutives": false,
+  "use_name_by_default": false,
+  "updated_at": "2026-04-19T18:17:54.333+03:00"
+}

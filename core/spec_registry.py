@@ -7,6 +7,7 @@ from threading import RLock
 from typing import Any
 
 from config.settings import DATA_DIR
+from config.settings import load_config
 
 
 _SPEC_FILES = {
@@ -49,7 +50,7 @@ class SpecRegistry:
     def __init__(self, root: str | Path | None = None):
         default_root = (DATA_DIR / "specs" / "rules_for_all").resolve()
         legacy_root = (DATA_DIR / "specs").resolve()
-        default_character_root = (DATA_DIR / "specs" / "characters").resolve()
+        default_character_root = _default_character_root()
         if root is None:
             self.root = default_root
             self._legacy_root: Path | None = legacy_root
@@ -218,6 +219,18 @@ def get_spec_registry(*, force_reload: bool = False) -> SpecRegistry:
         if _REGISTRY_SINGLETON is None or force_reload:
             _REGISTRY_SINGLETON = SpecRegistry()
         return _REGISTRY_SINGLETON
+
+
+def _default_character_root() -> Path:
+    try:
+        cfg = load_config()
+        configured = getattr(cfg, "character_specs_dir", None)
+        if configured:
+            return Path(configured).expanduser().resolve()
+        memory_dir = Path(getattr(cfg, "memory_dir", DATA_DIR / "memory_core")).expanduser().resolve()
+        return (memory_dir.parent / "specs" / "characters").resolve()
+    except Exception:
+        return (DATA_DIR / "specs" / "characters").resolve()
 
 
 def load_spec(name: str, *, required: bool = True) -> dict[str, Any]:

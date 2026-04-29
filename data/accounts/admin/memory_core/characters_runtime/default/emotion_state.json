@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "mood": "neutral",
+  "valence": 0.0,
+  "arousal": 0.0,
+  "intensity": 0.0,
+  "trigger": "",
+  "last_update_ts": "",
+  "cooldown_until_ts": ""
+}

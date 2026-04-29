@@ -3396,12 +3396,6 @@ class CharacterRuntime:
                 policy_tags.get("greeted_today"),
                 trait_tags.get("greeted_today"),
             ),
-            "local_date": _pick(
-                state_tags.get("local_date"),
-                state.get("local_date"),
-                policy_tags.get("local_date"),
-                trait_tags.get("local_date"),
-            ),
             "is_technical": _pick(
                 state_tags.get("is_technical"),
                 state.get("is_technical"),
@@ -3422,14 +3416,7 @@ class CharacterRuntime:
             ),
         }
         for key in (
-            "now_human",
-            "time_human",
-            "today_human",
-            "timezone",
-            "now_iso",
-            "previous_user_at",
-            "minutes_since_previous",
-            "same_calendar_day",
+            "current_datetime",
         ):
             tags[key] = _pick(
                 state_tags.get(key),

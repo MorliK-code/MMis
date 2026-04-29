@@ -176,7 +176,7 @@ class PreprocessStage(PipelineStage):
             "emotion_arousal": float(metadata.emotion.arousal),
             "metadata_tags": list(metadata.tags),
         }
-        for key in ("now_iso", "timezone", "now_human", "today_human", "time_human", "previous_user_at", "minutes_since_previous", "same_calendar_day"):
+        for key in ("current_datetime",):
             value = ctx.meta.get(key)
             if value is None:
                 continue
@@ -249,9 +249,26 @@ class PreprocessStage(PipelineStage):
             "minutes_since_previous",
             "same_calendar_day",
         ):
+            state_tags.pop(key, None)
+
+        for key in (
+            "current_datetime",
+        ):
             value = str(ctx.tags.get(key) or "").strip()
             if value:
                 state_tags[key] = value
+
+        for key in (
+            "now_iso",
+            "timezone",
+            "now_human",
+            "today_human",
+            "time_human",
+            "previous_user_at",
+            "minutes_since_previous",
+            "same_calendar_day",
+        ):
+            ctx.tags.pop(key, None)
 
         if greeting_flags["conversation_state"]:
             state_tags["conversation_state"] = str(greeting_flags["conversation_state"])
@@ -532,9 +549,7 @@ class TopicRoutingStage(PipelineStage):
         conversation_id = str(
             _pick(ctx.meta.get("conversation_id"), ctx.state.get("conversation_id"), "default")
         ).strip() or "default"
-        workspace_id = str(
-            _pick(ctx.meta.get("workspace_id"), ctx.state.get("active_character_id"), "global")
-        ).strip() or "global"
+        workspace_id = _memory_workspace_id(ctx)
         previous_thread_id = str(
             _pick(ctx.state.get("active_topic_thread_id"), ctx.state.get("topic_thread_id"), "")
         ).strip()
@@ -693,7 +708,7 @@ class MemoryRetrieveStage(PipelineStage):
             return ctx
 
         # Определяем workspace и session
-        workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global")
+        workspace_id = _memory_workspace_id(ctx)
         session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "default")
         
         # Выполняем запрос через memory_core
@@ -829,7 +844,7 @@ class EpisodeContinuityStage(PipelineStage):
         trace = _ensure_debug_trace(ctx)
         memory_core = ctx.meta.get("memory_core") or ctx.meta.get("memory_manager") or self.memory_core
         session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "").strip()
-        workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global").strip()
+        workspace_id = _memory_workspace_id(ctx)
         now_ts = _pick_value(ctx.meta.get("now_ts"), now_local_ts())
         user_text = str(ctx.clean_user_msg or ctx.user_msg or "").strip().lower()
 
@@ -2981,7 +2996,7 @@ class GenerateStage(PipelineStage):
             if memory_core is None:
                 raise RuntimeError("memory_core not available")
 
-            workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global")
+            workspace_id = _memory_workspace_id(ctx)
             session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "")
             topic_thread_id = str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or "")
             related_topic_ids = list(ctx.state.get("related_topic_thread_ids") or [])
@@ -3224,7 +3239,7 @@ class GenerateStage(PipelineStage):
             return _compact_json(payload), True
 
         service = TopicToolService(topic_store)
-        workspace_id = str(ctx.meta.get("workspace_id") or ctx.state.get("active_character_id") or "global")
+        workspace_id = _memory_workspace_id(ctx)
         visible_chat_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "")
         session_id = str(ctx.meta.get("conversation_id") or ctx.state.get("conversation_id") or "")
         default_thread_id = str(ctx.state.get("topic_thread_id") or ctx.meta.get("topic_thread_id") or "").strip()
@@ -7203,6 +7218,18 @@ def _append_policy_rule(policies: dict[str, Any], rule: str) -> None:
 
 def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
     tags = dict(ctx.tags or {})
+    for key in (
+        "local_date",
+        "now_iso",
+        "now_human",
+        "today_human",
+        "time_human",
+        "timezone",
+        "previous_user_at",
+        "minutes_since_previous",
+        "same_calendar_day",
+    ):
+        tags.pop(key, None)
     meta = dict(ctx.meta or {})
     
     # Загружаем performance profile и применяем настройки
@@ -7242,7 +7269,6 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "conversation_state",
         "smalltalk_allowed",
         "should_ask_back",
-        "local_date",
         "local_region",
         "dialog_mode",
         "address_terms_policy",
@@ -7255,14 +7281,7 @@ def _request_metadata(ctx: PipelineContext) -> dict[str, Any]:
         "is_technical",
         "active_mode",
         "mode_lock",
-        "now_iso",
-        "now_human",
-        "today_human",
-        "time_human",
-        "timezone",
-        "previous_user_at",
-        "minutes_since_previous",
-        "same_calendar_day",
+        "current_datetime",
         "continuation_ref",
         "context_confidence",
         "attachments",
@@ -7279,19 +7298,11 @@ def _load_ollama_options_from_performance_profile(profile_name: str) -> dict[str
     Performance profiles хранятся в data/specs/performance_profiles.json
     """
     try:
-        from pathlib import Path
-        import json
-        
-        specs_file = Path(__file__).parent.parent / "data" / "specs" / "performance_profiles.json"
-        if not specs_file.exists():
-            return {}
-        
-        with open(specs_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        profiles = data.get("profiles", {})
-        profile = profiles.get(profile_name, {})
-        ollama = profile.get("ollama", {})
+        cfg = load_config()
+        profiles = _as_dict(getattr(cfg, "llm_profiles", {}))
+        key_name = str(profile_name or "").strip().upper()
+        profile = _as_dict(profiles.get(key_name) or profiles.get(profile_name) or {})
+        ollama = _as_dict(profile.get("ollama"))
         
         # Возвращаем только Ollama настройки
         options = {}
@@ -7338,6 +7349,7 @@ def _inject_temporal_grounding(ctx: PipelineContext) -> None:
     meta["now_human"] = now_dt.strftime("%d.%m.%Y %H:%M:%S")
     meta["today_human"] = now_dt.strftime("%d.%m.%Y")
     meta["time_human"] = now_dt.strftime("%H:%M:%S")
+    meta["current_datetime"] = f"{now_dt.strftime('%d.%m.%Y %H:%M:%S')} {timezone_name}"
     meta["previous_user_at"] = previous_user_at
     meta["minutes_since_previous"] = (
         "" if minutes_since_previous is None else str(max(0, int(minutes_since_previous)))
@@ -7354,7 +7366,8 @@ def _inject_temporal_grounding(ctx: PipelineContext) -> None:
         "minutes_since_previous",
         "same_calendar_day",
     ):
-        context_tags[key] = str(meta.get(key) or "")
+        context_tags.pop(key, None)
+    context_tags["current_datetime"] = str(meta.get("current_datetime") or "")
     state["context_tags"] = context_tags
     ctx.state = state
     ctx.meta = meta
@@ -9562,6 +9575,17 @@ def _pick(*values) -> str:
         if text:
             return text
     return ""
+
+
+def _memory_workspace_id(ctx: PipelineContext) -> str:
+    return str(
+        _pick(
+            ctx.meta.get("account_id"),
+            ctx.meta.get("workspace_id"),
+            ctx.state.get("account_id"),
+            "global",
+        )
+    ).strip() or "global"
 
 
 def _pick_value(*values):

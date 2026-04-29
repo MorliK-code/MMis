@@ -25,7 +25,7 @@ def _safe_id(value: str) -> str:
 class CharacterStorage:
     def __init__(self, root: str | Path | None = None, logs_root: str | Path | None = None):
         cfg = load_config()
-        default_root = Path(cfg.memory_dir) / "characters_runtime"
+        default_root = Path(cfg.memory_dir).expanduser().resolve().parent / "characters_runtime"
         requested_root = (Path(root).expanduser() if root is not None else default_root).resolve()
         legacy_root = (DATA_DIR / "characters").resolve()
         # Hard guard: runtime character storage must not use legacy data/characters root.
@@ -34,9 +34,14 @@ class CharacterStorage:
         self.logs_root = (Path(logs_root).expanduser() if logs_root is not None else Path(cfg.log_dir)).resolve()
         self.character_logs_root = (self.logs_root / "characters").resolve()
         self.character_logs_root.mkdir(parents=True, exist_ok=True)
-        self.spec_root = (DATA_DIR / "specs" / "characters").resolve()
+        account_spec_root = getattr(cfg, "character_specs_dir", None)
+        if account_spec_root is None:
+            account_spec_root = Path(cfg.memory_dir).parent / "specs" / "characters"
+        self.spec_root = Path(account_spec_root).expanduser().resolve()
         self.spec_root.mkdir(parents=True, exist_ok=True)
+        self.global_spec_root = (DATA_DIR / "specs" / "characters").resolve()
         self.legacy_spec_root = (DATA_DIR / "specs" / "rules_for_all" / "characters").resolve()
+        self._seed_default_character_specs()
         self._migrate_legacy_character_specs()
 
     @property
@@ -106,29 +111,45 @@ class CharacterStorage:
         self._sync_manifest_with_directories()
 
     def _migrate_legacy_character_specs(self) -> None:
-        src_root = self.legacy_spec_root
-        dst_root = self.spec_root
-        if not src_root.exists() or src_root == dst_root:
-            return
-        try:
-            for row in src_root.iterdir():
-                if not row.is_dir():
-                    continue
-                if row.name.startswith("_"):
-                    continue
-                src_dir = row.resolve()
-                dst_dir = (dst_root / row.name).resolve()
-                dst_dir.mkdir(parents=True, exist_ok=True)
-                for item in src_dir.iterdir():
-                    if item.is_file():
-                        target = dst_dir / item.name
-                        if not target.exists():
-                            try:
-                                shutil.copy2(item, target)
-                            except Exception:
-                                continue
-        except Exception:
-            return
+        for src_root in (self.legacy_spec_root,):
+            dst_root = self.spec_root
+            if not src_root.exists() or src_root == dst_root:
+                continue
+            try:
+                for row in src_root.iterdir():
+                    if not row.is_dir():
+                        continue
+                    if row.name.startswith("_"):
+                        continue
+                    src_dir = row.resolve()
+                    dst_dir = (dst_root / row.name).resolve()
+                    dst_dir.mkdir(parents=True, exist_ok=True)
+                    for item in src_dir.iterdir():
+                        if item.is_file():
+                            target = dst_dir / item.name
+                            if not target.exists():
+                                try:
+                                    shutil.copy2(item, target)
+                                except Exception:
+                                    continue
+            except Exception:
+                continue
+
+    def _seed_default_character_specs(self) -> None:
+        for cid in (DEFAULT_CHARACTER_ID, "asya"):
+            src_dir = (DATA_DIR / "specs" / "characters" / cid).resolve()
+            dst_dir = (self.spec_root / cid).resolve()
+            if not src_dir.exists() or src_dir == dst_dir:
+                continue
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            for item in src_dir.iterdir():
+                if item.is_file():
+                    target = dst_dir / item.name
+                    if not target.exists():
+                        try:
+                            shutil.copy2(item, target)
+                        except Exception:
+                            pass
 
     def ensure_character_structure(self, character_id: str) -> None:
         cid = _safe_id(character_id)
@@ -376,6 +397,9 @@ class CharacterStorage:
     def load_character(self, character_id: str) -> dict[str, Any]:
         """Загрузить основные данные персонажа (character.json)."""
         cid = _safe_id(character_id)
+        synced = self._sync_runtime_character_from_specs(cid)
+        if synced:
+            return synced
         path = self.character_dir(cid) / "character.json"
         payload = _read_json(path)
         if not isinstance(payload, dict):

@@ -1,0 +1,100 @@
+{
+  "traits": {
+    "sarcasm": {
+      "type": "scalar",
+      "value": 0.33155,
+      "min": 0.0,
+      "max": 0.4,
+      "decay_per_day": 0.01,
+      "confidence": 0.9600000000000001,
+      "tags": [
+        "tone",
+        "humor"
+      ],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-04-30T00:33:05.241+03:00",
+      "last_used_ts": "2026-04-30T00:33:05.241+03:00",
+      "decay_ts": ""
+    },
+    "playfulness": {
+      "type": "scalar",
+      "value": 0.4812152777777778,
+      "min": 0.0,
+      "max": 0.72,
+      "decay_per_day": 0.01,
+      "confidence": 0.76,
+      "tags": [
+        "tone",
+        "humor"
+      ],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-04-30T00:33:05.241+03:00",
+      "last_used_ts": "2026-04-30T00:33:05.241+03:00",
+      "decay_ts": ""
+    },
+    "humor": {
+      "type": "scalar",
+      "value": 0.05884615384615384,
+      "min": 0.0,
+      "max": 0.78,
+      "decay_per_day": 0.0,
+      "confidence": 0.51,
+      "tags": [],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-04-30T00:33:05.241+03:00",
+      "last_used_ts": "2026-04-30T00:33:05.241+03:00",
+      "decay_ts": ""
+    },
+    "energy": {
+      "type": "scalar",
+      "value": 0.039599999999999996,
+      "min": 0.0,
+      "max": 1.0,
+      "decay_per_day": 0.0,
+      "confidence": 0.51,
+      "tags": [],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-04-30T00:33:05.241+03:00",
+      "last_used_ts": "2026-04-30T00:33:05.241+03:00",
+      "decay_ts": ""
+    },
+    "emoji_rate": {
+      "type": "scalar",
+      "value": 0.0,
+      "min": 0.0,
+      "max": 0.3,
+      "decay_per_day": 0.0,
+      "confidence": 0.51,
+      "tags": [],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-04-30T00:33:05.241+03:00",
+      "last_used_ts": "2026-04-30T00:33:05.241+03:00",
+      "decay_ts": ""
+    },
+    "teasing": {
+      "type": "scalar",
+      "value": 0.07578947368421053,
+      "min": 0.0,
+      "max": 0.38,
+      "decay_per_day": 0.0,
+      "confidence": 0.51,
+      "tags": [],
+      "prompt_file": "",
+      "ttl_days": 0.0,
+      "disabled": false,
+      "updated_at": "2026-04-30T00:33:05.241+03:00",
+      "last_used_ts": "2026-04-30T00:33:05.241+03:00",
+      "decay_ts": ""
+    }
+  }
+}
