@@ -34,25 +34,18 @@ class CharacterItemWidget(QFrame):
         layout.setContentsMargins(12, 0, 12, 0)
         
         self.name_label = QLabel(name)
-        self.name_label.setStyleSheet("font-weight: bold; font-size: 12px; color: #f3f4f6;")
+        self.name_label.setObjectName("character_item_name")
         layout.addWidget(self.name_label)
         
         layout.addStretch()
         
         if is_active:
             self.active_badge = QLabel("АКТИВЕН")
-            self.active_badge.setStyleSheet(\
-                "background: rgba(139, 92, 246, 40); "
-                "color: #c4b5fd; "
-                "border-radius: 4px; "
-                "padding: 2px 6px; "
-                "font-size: 9px; "
-                "font-weight: bold;"
-            )
+            self.active_badge.setObjectName("character_active_badge")
             layout.addWidget(self.active_badge)
             
         self.id_label = QLabel(f"@{char_id}")
-        self.id_label.setStyleSheet("color: #8f96a3; font-size: 10px;")
+        self.id_label.setObjectName("character_item_id")
         layout.addWidget(self.id_label)
 
     def mousePressEvent(self, event):
@@ -63,6 +56,7 @@ class CharacterItemWidget(QFrame):
 class CharacterManager(QWidget):
     def __init__(self, api: ApiClient, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setObjectName("character_manager")
         self.api = api
         self._chars = []
         self._active_id = ""
@@ -85,18 +79,22 @@ class CharacterManager(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         
         list_header = QFrame()
+        list_header.setObjectName("character_list_header")
         list_header.setFixedHeight(40)
-        list_header.setStyleSheet("border-bottom: 1px solid rgba(255, 255, 255, 10);")
         h_layout = QHBoxLayout(list_header)
         h_layout.addWidget(QLabel("СПИСОК ПЕРСОНАЖЕЙ"))
         left_layout.addWidget(list_header)
         
         self.scroll = QScrollArea()
+        self.scroll.setObjectName("character_list_scroll")
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setStyleSheet("background: transparent;")
+        self.scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.scroll.viewport().setAutoFillBackground(False)
         
         self.list_container = QWidget()
+        self.list_container.setObjectName("character_list_container")
+        self.list_container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(4, 4, 4, 4)
         self.list_layout.setSpacing(4)
@@ -122,21 +120,24 @@ class CharacterManager(QWidget):
         editor_panel_layout.setSpacing(0)
 
         self.editor_scroll = QScrollArea(self.editor_panel)
+        self.editor_scroll.setObjectName("character_editor_scroll")
         self.editor_scroll.setWidgetResizable(True)
         self.editor_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.editor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.editor_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.editor_scroll.setStyleSheet("background: transparent;")
         self.editor_scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.editor_scroll.viewport().setAutoFillBackground(False)
 
         self.editor_content = QWidget()
+        self.editor_content.setObjectName("character_editor_content")
+        self.editor_content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.editor_layout = QVBoxLayout(self.editor_content)
         self.editor_layout.setContentsMargins(12, 12, 12, 12)
         self.editor_layout.setSpacing(10)
 
         self.empty_label = QLabel("Выберите персонажа для настройки или создайте нового.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color: #8f96a3;")
+        self.empty_label.setObjectName("settings_muted")
         self.editor_layout.addWidget(self.empty_label)
 
         self.editor_scroll.setWidget(self.editor_content)
@@ -251,12 +252,21 @@ class CharacterManager(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         lbl = QLabel(label_text)
+        lbl.setObjectName("character_field_label")
         lbl.setFixedWidth(190)
-        lbl.setStyleSheet("color: #8f96a3;")
         row.addWidget(lbl)
         row.addWidget(widget, 1)
         layout.addLayout(row)
         return widget
+
+    def _tab_page(self) -> tuple[QWidget, QVBoxLayout]:
+        page = QWidget()
+        page.setObjectName("character_tab_page")
+        page.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        return page, layout
 
     def _section(self, title: str) -> QFrame:
         frame = QFrame()
@@ -283,7 +293,10 @@ class CharacterManager(QWidget):
             w = self.list_layout.itemAt(i).widget()
             if isinstance(w, CharacterItemWidget):
                 is_sel = w.char_id == char_id
-                w.setStyleSheet("background: rgba(139, 92, 246, 30); border: 1px solid #8b5cf6;" if is_sel else "")
+                w.setProperty("selected", is_sel)
+                w.style().unpolish(w)
+                w.style().polish(w)
+                w.update()
 
         self._show_editor(char_id)
 
@@ -319,17 +332,19 @@ class CharacterManager(QWidget):
         rules = dict(payload.get("rules") or {})
 
         title = QLabel(f"Настройка: {character.get('name', char_id)}  @{char_id}")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #f3f4f6; margin-bottom: 6px;")
+        title.setObjectName("character_editor_title")
         self.editor_layout.addWidget(title)
 
         tabs = QTabWidget()
+        tabs.setObjectName("character_tabs")
+        tabs.tabBar().setObjectName("character_tab_bar")
+        tabs.setDocumentMode(True)
         self.editor_layout.addWidget(tabs)
 
         self._char_widgets = {}
 
         # TAB 1 — Основное
-        main = QWidget()
-        main_l = QVBoxLayout(main)
+        main, main_l = self._tab_page()
         tabs.addTab(main, "Основное")
 
         sec = self._section("character.json")
@@ -350,8 +365,7 @@ class CharacterManager(QWidget):
         main_l.addStretch()
 
         # TAB 2 — Runtime state
-        runtime = QWidget()
-        runtime_l = QVBoxLayout(runtime)
+        runtime, runtime_l = self._tab_page()
         tabs.addTab(runtime, "Runtime")
 
         sec = self._section("state.json")
@@ -376,8 +390,7 @@ class CharacterManager(QWidget):
         runtime_l.addStretch()
 
         # TAB 3 — Persona
-        persona = QWidget()
-        persona_l = QVBoxLayout(persona)
+        persona, persona_l = self._tab_page()
         tabs.addTab(persona, "Persona")
 
         sec = self._section("persona_state.json")
@@ -404,8 +417,7 @@ class CharacterManager(QWidget):
         persona_l.addStretch()
 
         # TAB 4 — Identity
-        identity = QWidget()
-        identity_l = QVBoxLayout(identity)
+        identity, identity_l = self._tab_page()
         tabs.addTab(identity, "Identity")
 
         sec = self._section("user_addressing.json")
@@ -427,8 +439,7 @@ class CharacterManager(QWidget):
         identity_l.addStretch()
 
         # TAB 5 — Traits & Rules
-        advanced = QWidget()
-        advanced_l = QVBoxLayout(advanced)
+        advanced, advanced_l = self._tab_page()
         tabs.addTab(advanced, "Traits / Rules")
 
         sec = self._section("traits/builtin.json")
@@ -462,8 +473,8 @@ class CharacterManager(QWidget):
 
         if char_id not in {"asya", "default"}:
             delete_btn = QPushButton("Удалить")
+            delete_btn.setObjectName("danger_button")
             delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            delete_btn.setStyleSheet("color: #ef4444;")
             delete_btn.clicked.connect(lambda: self._run_action("delete", id=char_id))
             btn_layout.addWidget(delete_btn)
 

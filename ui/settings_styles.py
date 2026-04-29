@@ -372,6 +372,27 @@ QLineEdit#settings_search:focus {
 }
 
 /* Character Manager Styles */
+QWidget#character_manager {
+    background: transparent;
+}
+QScrollArea#character_list_scroll,
+QScrollArea#character_editor_scroll,
+QScrollArea#character_list_scroll > QWidget,
+QScrollArea#character_editor_scroll > QWidget,
+QWidget#character_list_container,
+QWidget#character_editor_content {
+    background: transparent;
+    border: 0;
+}
+QFrame#character_list_header {
+    border-bottom: 1px solid rgba(255, 255, 255, 14);
+}
+QFrame#character_list_header QLabel {
+    color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 700;
+}
 QFrame#character_item, QFrame#character_item_active {
     background: rgba(255, 255, 255, 6);
     border: 1px solid rgba(255, 255, 255, 10);
@@ -385,8 +406,94 @@ QFrame#character_item_active {
     background: rgba(139, 92, 246, 20);
     border: 1px solid rgba(139, 92, 246, 60);
 }
+QFrame#character_item[selected="true"], QFrame#character_item_active[selected="true"] {
+    background: rgba(139, 92, 246, 30);
+    border: 1px solid rgba(139, 92, 246, 86);
+}
 QFrame#character_item_active:hover {
     background: rgba(139, 92, 246, 30);
+}
+QLabel#character_item_name {
+    color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#character_item_id {
+    color: #8f96a3;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 10px;
+}
+QLabel#character_active_badge {
+    background: rgba(139, 92, 246, 40);
+    color: #c4b5fd;
+    border: 1px solid rgba(139, 92, 246, 60);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 9px;
+    font-weight: 700;
+}
+QLabel#character_editor_title {
+    color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 14px;
+    font-weight: 700;
+    min-height: 24px;
+}
+QLabel#character_field_label {
+    color: #8f96a3;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 11px;
+}
+QTabWidget#character_tabs {
+    background: transparent;
+    border: 0;
+}
+QTabWidget#character_tabs::pane {
+    top: -1px;
+    background: rgba(255, 255, 255, 8);
+    border: 1px solid rgba(255, 255, 255, 24);
+    border-radius: 10px;
+}
+QTabBar#character_tab_bar {
+    background: transparent;
+}
+QTabBar#character_tab_bar::tab {
+    min-height: 27px;
+    padding: 0 13px;
+    margin-right: 3px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 18);
+    border-bottom-color: rgba(255, 255, 255, 24);
+    background: rgba(255, 255, 255, 8);
+    color: #8f96a3;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 11px;
+}
+QTabBar#character_tab_bar::tab:selected {
+    background: rgba(139, 92, 246, 34);
+    border-color: rgba(139, 92, 246, 70);
+    color: #f3f4f6;
+}
+QTabBar#character_tab_bar::tab:hover {
+    background: rgba(139, 92, 246, 22);
+    color: #ede9fe;
+}
+QWidget#character_tab_page {
+    background: rgba(10, 12, 16, 72);
+    border: 0;
+}
+QPushButton#danger_button {
+    color: #fca5a5;
+    border-color: rgba(252, 165, 165, 38);
+    background: rgba(127, 29, 29, 28);
+}
+QPushButton#danger_button:hover {
+    color: #fee2e2;
+    border-color: rgba(252, 165, 165, 72);
+    background: rgba(127, 29, 29, 54);
 }
 QWidget#settings_numeric_stepper {
     background: rgba(139, 92, 246, 20);
