@@ -26,19 +26,28 @@ if __package__ in {None, ""}:
 
 from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl, Slot
 from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession, QMediaFormat, QMediaPlayer, QMediaRecorder
-from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QDialog
 from ui.widgets.message_box import MmisMessageBox
 from core.chat_store import ChatStore
 
 from ui.settings_sync_service import load_settings_payload
 from ui.client_config_store import (
-    ACCOUNT_DATA_DIR,
-    CLIENT_DATA_DIR,
+    get_active_account_data_dir,
+    get_client_data_dir,
+    get_selected_base_url,
     load_ui_state,
     save_ui_state,
     set_last_persona_name,
     get_ollama_models_cache,
     set_ollama_models_cache,
+)
+from ui.auth_client_store import (
+    activate_auth_session,
+    clear_auth_state,
+    get_auth_display_name,
+    get_auth_token,
+    list_auth_sessions,
+    save_auth_state,
 )
 try:
     from llm.tokenizer import estimate_tokens
@@ -106,9 +115,9 @@ def _get_portable_config():
 _cfg_dict = _get_portable_config()
 MemoryStorageDir = Path(_cfg_dict["memory_dir"]).expanduser().resolve()
 DATA_DIR = Path(_cfg_dict["data_dir"]).expanduser().resolve()
-STATE_DIR = (ACCOUNT_DATA_DIR / "state") if ACCOUNT_DATA_DIR else MemoryStorageDir
-CHARACTERS_RUNTIME_DIR = (ACCOUNT_DATA_DIR / "characters_runtime") if ACCOUNT_DATA_DIR else (MemoryStorageDir / "characters_runtime")
-CHARACTER_SPECS_DIR = (ACCOUNT_DATA_DIR / "specs" / "characters") if ACCOUNT_DATA_DIR else (DATA_DIR / "specs" / "characters")
+STATE_DIR = MemoryStorageDir
+CHARACTERS_RUNTIME_DIR = MemoryStorageDir / "characters_runtime"
+CHARACTER_SPECS_DIR = DATA_DIR / "specs" / "characters"
 MMIS_VOICE_INPUT_DIR = Path(_cfg_dict["voice_input_dir"] or (MemoryStorageDir / "voice" / "input")).expanduser().resolve()
 MMIS_VOICE_OUTPUT_DIR = Path(_cfg_dict["voice_output_dir"] or (MemoryStorageDir / "voice" / "output")).expanduser().resolve()
 MMIS_VOICE_TTS_VOICE = str(_cfg_dict["voice_tts_voice"])
@@ -189,12 +198,6 @@ def _trim_title(text: str, limit: int = 40) -> str:
 
 class ChatWindow(proto.ExactChatWindow):
     def __init__(self):
-        account_root = ACCOUNT_DATA_DIR
-        self._sessions_dir = (account_root / "chats" / "ui_chats") if account_root else CLIENT_DATA_DIR / "ui_chats"
-        self._sessions_index_path = self._sessions_dir / "index.json"
-        self._legacy_sessions_path = CLIENT_DATA_DIR / "ui_chats.json"
-        self._ui_state_path = (account_root / "ui_state.json") if account_root else CLIENT_DATA_DIR / "ui_state.json"
-        
         self._project_root = Path(__file__).resolve().parents[1]
         self._legacy_sessions_dirs = [
             self._project_root / "data" / "memory_core" / "ui_chats",
@@ -205,14 +208,12 @@ class ChatWindow(proto.ExactChatWindow):
             self._project_root / "data" / "memory_core" / "ui_state.json",
             self._project_root / "data" / "ui_state.json",
         ]
-        
-        self._legacy_visible_chat_backup_path = self._sessions_dir / "_legacy_multi_chat_backup.json"
-        self._chat_store = ChatStore(account_root / "chats" / "chats.db") if account_root else None
-        self._attachments_dir = (account_root / "attachments") if account_root else None
+        self._refresh_client_paths()
         if self._attachments_dir is not None:
             self._attachments_dir.mkdir(parents=True, exist_ok=True)
         self._chat_sessions: list[dict] = []
         self._active_chat_id: str | None = None
+        self._account_scope_id = self._current_account_scope_id()
         self._history: list[HistoryRow] = []
         self._lazy_history_start_index = 0
         self._lazy_history_button: QWidget | None = None
@@ -297,6 +298,7 @@ class ChatWindow(proto.ExactChatWindow):
         if not self._lazy_history_scroll_connected:
             self.scroll.verticalScrollBar().valueChanged.connect(self._on_history_scroll_value_changed)
             self._lazy_history_scroll_connected = True
+        self._refresh_account_button()
         self._refresh_persona_label()
         self.input.setPlaceholderText("Напиши сообщение")
         self.search_btn.setText("Очистить")
@@ -479,6 +481,334 @@ class ChatWindow(proto.ExactChatWindow):
             label.adjustSize()
             self._save_ui_state()
 
+    def _refresh_account_button(self) -> None:
+        button = getattr(self, "account_btn", None)
+        if button is None:
+            return
+
+        name = get_auth_display_name() or "Войти"
+        button.setText(name)
+        button.setToolTip("Аккаунт MMis" if name != "Войти" else "Войти в аккаунт MMis")
+        button.adjustSize()
+
+    def _reload_account_scope(self) -> None:
+        if getattr(self, "_worker", None) is not None and self._worker.isRunning():
+            MmisMessageBox.information(self, "Подожди", "Сначала дождись завершения генерации.")
+            return
+        self._stop_background_threads(include_reply=False)
+        self._reset_chat_scope_view()
+        self._refresh_client_paths()
+        self._account_scope_id = self._current_account_scope_id()
+        self._apply_account_environment()
+        if self.api is not None:
+            self.api.set_base_url(get_selected_base_url())
+        self._load_ui_state()
+        self._sync_runtime_controls()
+        if getattr(self, "_settings_window", None) is not None:
+            try:
+                self._settings_window.reload()
+            except Exception:
+                pass
+        self._refresh_account_button()
+        self._load_or_init_chat_sessions()
+        self._refresh_persona_label()
+        self._apply_context_chips()
+
+    def _open_account_dialog(self) -> None:
+        self._show_account_menu()
+
+    def _show_account_menu(self) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        button = getattr(self, "account_btn", None)
+        if button is None:
+            return
+        name = get_auth_display_name() or "Аккаунт"
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: rgba(15,18,22,.96); color: #f3f4f6; border: 1px solid rgba(255,255,255,.08); }"
+            "QMenu::item { padding: 7px 18px; }"
+            "QMenu::item:selected { background: rgba(139,92,246,.18); }"
+        )
+        menu.addAction(name).setEnabled(False)
+        menu.addSeparator()
+        logout_action = menu.addAction("Выйти")
+        action = menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+        if action != logout_action:
+            return
+        if self.api:
+            try:
+                self.api.auth_logout()
+            except Exception:
+                clear_auth_state()
+        else:
+            clear_auth_state()
+        self._refresh_account_button()
+
+    def _show_login_dialog(self) -> None:
+        from PySide6.QtWidgets import QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Вход в MMis")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(360)
+        dialog.setStyleSheet(
+            "QDialog { background: rgba(15,18,22,.98); color: #f3f4f6; }"
+            "QLineEdit { background: rgba(255,255,255,.04); color: #f3f4f6; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 7px; }"
+            "QPushButton { background: rgba(139,92,246,.14); color: #f3f4f6; border: 1px solid rgba(139,92,246,.22); border-radius: 8px; padding: 7px 12px; }"
+        )
+
+        root = QVBoxLayout(dialog)
+        title = QLabel("Войти в аккаунт MMis")
+        root.addWidget(title)
+
+        form = QFormLayout()
+        login_edit = QLineEdit()
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Логин", login_edit)
+        form.addRow("Пароль", password_edit)
+        root.addLayout(form)
+
+        error_label = QLabel("")
+        error_label.setStyleSheet("color: #fca5a5;")
+        root.addWidget(error_label)
+
+        buttons = QHBoxLayout()
+        login_btn = QPushButton("Войти")
+        register_btn = QPushButton("Создать")
+        cancel_btn = QPushButton("Отмена")
+        buttons.addWidget(login_btn)
+        buttons.addWidget(register_btn)
+        buttons.addWidget(cancel_btn)
+        root.addLayout(buttons)
+
+        def do_login(register: bool = False) -> None:
+            login = login_edit.text().strip()
+            password = password_edit.text()
+            if not self.api:
+                error_label.setText("API недоступен")
+                return
+            try:
+                self._save_chat_sessions()
+                if register:
+                    payload = self.api.auth_register(login, password, display_name=login)
+                else:
+                    payload = self.api.auth_login(login, password)
+                save_auth_state(payload)
+                self._reload_account_scope()
+                dialog.accept()
+            except Exception as exc:
+                error_label.setText(str(exc))
+
+        login_btn.clicked.connect(lambda: do_login(False))
+        register_btn.clicked.connect(lambda: do_login(True))
+        cancel_btn.clicked.connect(dialog.reject)
+        dialog.exec()
+
+    def _show_account_menu(self) -> None:
+        from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect
+        from PySide6.QtWidgets import QFrame, QPushButton
+
+        button = getattr(self, "account_btn", None)
+        if button is None:
+            return
+
+        existing = getattr(self, "_account_panel", None)
+        if existing is not None and existing.isVisible():
+            self._hide_account_panel()
+            return
+        if existing is not None:
+            existing.deleteLater()
+
+        parent = self.centralWidget() or self
+        panel = QFrame(parent)
+        panel.setObjectName("accountSlidePanel")
+        panel.setStyleSheet(
+            "QFrame#accountSlidePanel { background: rgba(13,16,19,.97); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; }"
+            "QFrame#accountPanelDivider { background: rgba(255,255,255,.08); border: 0; max-height: 1px; min-height: 1px; }"
+            "QLabel { color: #f3f4f6; }"
+            "QLabel#accountPanelSection { color: #8b949e; font-size: 10px; font-weight: 700; letter-spacing: 0px; }"
+            "QPushButton { min-height: 28px; padding: 0 12px; border-radius: 8px; font-weight: 600; }"
+            "QPushButton#accountSwitchButton { text-align: left; border: 1px solid rgba(139,92,246,.16); background: rgba(139,92,246,.07); color: #ddd6fe; }"
+            "QPushButton#accountSwitchButton:hover { background: rgba(139,92,246,.16); border-color: rgba(139,92,246,.32); color: #ffffff; }"
+            "QPushButton#accountCommandButton { border: 1px solid rgba(255,255,255,.07); background: rgba(255,255,255,.035); color: #c4b5fd; }"
+            "QPushButton#accountCommandButton:hover { background: rgba(255,255,255,.07); border-color: rgba(139,92,246,.24); color: #ffffff; }"
+            "QPushButton#dangerButton { border: 1px solid rgba(248,113,113,.18); background: rgba(248,113,113,.06); color: #fca5a5; }"
+            "QPushButton#dangerButton:hover { background: rgba(248,113,113,.12); border-color: rgba(248,113,113,.32); color: #fecaca; }"
+        )
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+        title = QLabel("Аккаунт MMis")
+        title.setStyleSheet("font-weight: 700;")
+        layout.addWidget(title)
+        name = get_auth_display_name()
+        state = QLabel(name or "В аккаунт не выполнен вход")
+        state.setStyleSheet("color: #9ca3af;")
+        layout.addWidget(state)
+
+        sessions = list_auth_sessions()
+        current_id = self._current_account_scope_id()
+        switch_sessions = [
+            session
+            for session in sessions
+            if str(session.get("account_id") or "").strip()
+            and str(session.get("account_id") or "").strip() != current_id
+        ]
+        if switch_sessions:
+            section = QLabel("РђРљРљРђРЈРќРўР«")
+            section.setObjectName("accountPanelSection")
+            layout.addWidget(section)
+        for session in switch_sessions:
+            account_id = str(session.get("account_id") or "").strip()
+            label = str(session.get("display_name") or session.get("login") or account_id).strip()
+            switch_btn = QPushButton(label)
+            switch_btn.setObjectName("accountSwitchButton")
+            switch_btn.setToolTip("Перейти на аккаунт")
+            layout.addWidget(switch_btn)
+            switch_btn.clicked.connect(lambda _checked=False, aid=account_id: self._switch_saved_account(aid))
+
+        add_btn = QPushButton("Добавить")
+        divider = QFrame(panel)
+        divider.setObjectName("accountPanelDivider")
+        layout.addWidget(divider)
+
+        add_btn.setObjectName("accountCommandButton")
+        layout.addWidget(add_btn)
+        logout_btn = None
+        if get_auth_token():
+            logout_btn = QPushButton("Выйти")
+            logout_btn.setObjectName("dangerButton")
+            layout.addWidget(logout_btn)
+
+        panel_width = 230
+        panel_height = 102 + (44 if switch_sessions else 0) + (34 * len(switch_sessions)) + (36 if logout_btn is not None else 0)
+        top_left = parent.mapFromGlobal(button.mapToGlobal(button.rect().bottomLeft()))
+        x = max(8, min(int(top_left.x()), max(8, parent.width() - panel_width - 8)))
+        y = int(top_left.y() + 8)
+        panel.setGeometry(x, y, panel_width, 0)
+        panel.show()
+        panel.raise_()
+
+        animation = QPropertyAnimation(panel, b"geometry", panel)
+        animation.setDuration(150)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setStartValue(QRect(x, y, panel_width, 0))
+        animation.setEndValue(QRect(x, y, panel_width, panel_height))
+        animation.start()
+        self._account_panel = panel
+        self._account_panel_animation = animation
+
+        def open_login() -> None:
+            self._hide_account_panel()
+            self._show_login_dialog()
+
+        def logout() -> None:
+            self._hide_account_panel()
+            self._save_chat_sessions()
+            if self.api:
+                try:
+                    self.api.auth_logout()
+                except Exception:
+                    clear_auth_state(forget_current=True)
+            else:
+                clear_auth_state(forget_current=True)
+            self._reload_account_scope()
+
+        add_btn.clicked.connect(open_login)
+        if logout_btn is not None:
+            logout_btn.clicked.connect(logout)
+
+    def _switch_saved_account(self, account_id: str) -> None:
+        self._hide_account_panel()
+        self._save_chat_sessions()
+        try:
+            activate_auth_session(account_id)
+        except Exception as exc:
+            MmisMessageBox.warning(self, "Аккаунт", f"Не удалось перейти на аккаунт:\n{exc}")
+            return
+        self._reload_account_scope()
+
+    def _hide_account_panel(self) -> None:
+        panel = getattr(self, "_account_panel", None)
+        if panel is None:
+            return
+        panel.hide()
+        panel.deleteLater()
+        self._account_panel = None
+
+    def _on_account_clicked(self) -> None:
+        self._show_account_menu()
+
+    def _show_login_dialog(self) -> None:
+        from PySide6.QtWidgets import QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Вход в MMis")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(390)
+        dialog.setStyleSheet(
+            "QDialog { background: rgba(15,18,22,.98); color: #f3f4f6; }"
+            "QLabel { color: #f3f4f6; }"
+            "QLineEdit { background: rgba(255,255,255,.04); color: #f3f4f6; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 7px; }"
+            "QPushButton { background: rgba(139,92,246,.14); color: #f3f4f6; border: 1px solid rgba(139,92,246,.22); border-radius: 8px; padding: 7px 12px; }"
+            "QPushButton:hover { background: rgba(139,92,246,.22); }"
+        )
+
+        root = QVBoxLayout(dialog)
+        title = QLabel("Войти или добавить аккаунт MMis")
+        root.addWidget(title)
+        hint = QLabel("Для admin нажми «Создать / задать пароль», если пароль ещё не был задан.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #9ca3af;")
+        root.addWidget(hint)
+
+        form = QFormLayout()
+        login_edit = QLineEdit()
+        login_edit.setPlaceholderText("Например: admin")
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Логин", login_edit)
+        form.addRow("Пароль", password_edit)
+        root.addLayout(form)
+
+        error_label = QLabel("")
+        error_label.setStyleSheet("color: #fca5a5;")
+        root.addWidget(error_label)
+
+        buttons = QHBoxLayout()
+        login_btn = QPushButton("Войти")
+        register_btn = QPushButton("Создать / задать пароль")
+        cancel_btn = QPushButton("Отмена")
+        buttons.addWidget(login_btn)
+        buttons.addWidget(register_btn)
+        buttons.addWidget(cancel_btn)
+        root.addLayout(buttons)
+
+        def do_login(register: bool = False) -> None:
+            login = login_edit.text().strip()
+            password = password_edit.text()
+            if not self.api:
+                error_label.setText("API недоступен")
+                return
+            try:
+                self._save_chat_sessions()
+                if register:
+                    payload = self.api.auth_register(login, password, display_name=login)
+                else:
+                    payload = self.api.auth_login(login, password)
+                save_auth_state(payload)
+                self._reload_account_scope()
+                dialog.accept()
+            except Exception as exc:
+                error_label.setText(str(exc))
+
+        login_btn.clicked.connect(lambda: do_login(False))
+        register_btn.clicked.connect(lambda: do_login(True))
+        cancel_btn.clicked.connect(dialog.reject)
+        dialog.exec()
+
     def _build_models_popup(self, anchor: QWidget) -> proto.PopupFrame:
         return super()._build_models_popup(anchor)
 
@@ -538,6 +868,97 @@ class ChatWindow(proto.ExactChatWindow):
         self.clear_btn.clicked.connect(self._toggle_inspector)
         self.plus_btn.clicked.connect(self._attach_file)
         self.mic_btn.clicked.connect(self._open_voice_mode)
+
+    def _refresh_client_paths(self) -> None:
+        account_root = get_active_account_data_dir()
+        client_dir = get_client_data_dir()
+        self._account_root = account_root
+        self._client_data_dir = client_dir
+        self._sessions_dir = (account_root / "chats" / "ui_chats") if account_root else client_dir / "ui_chats"
+        self._sessions_index_path = self._sessions_dir / "index.json"
+        self._legacy_sessions_path = client_dir / "ui_chats.json"
+        self._ui_state_path = (account_root / "ui_state.json") if account_root else client_dir / "ui_state.json"
+        self._legacy_visible_chat_backup_path = self._sessions_dir / "_legacy_multi_chat_backup.json"
+        self._chat_store = ChatStore(account_root / "chats" / "chats.db") if account_root else None
+        self._attachments_dir = (account_root / "attachments") if account_root else client_dir / "attachments"
+        if self._attachments_dir is not None:
+            self._attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    def _is_account_isolated_scope(self) -> bool:
+        return bool(get_auth_token())
+
+    def _current_account_scope_id(self) -> str:
+        try:
+            from ui.auth_client_store import load_auth_state
+
+            state = load_auth_state()
+            return str(state.get("account_id") or "guest").strip() or "guest"
+        except Exception:
+            return "guest"
+
+    def _reset_chat_scope_view(self) -> None:
+        self._chat_sessions = []
+        self._active_chat_id = None
+        self._history = []
+        self._pending_history_index = None
+        self._pending_user_text = ""
+        self._lazy_history_start_index = 0
+        self._lazy_history_loading = False
+        self._remove_lazy_history_button()
+        if hasattr(self, "messages_layout"):
+            self._clear_message_widgets()
+
+    def _apply_account_environment(self) -> None:
+        account_root = getattr(self, "_account_root", None)
+        account_id = self._current_account_scope_id()
+        if account_root is None or not account_id or account_id == "guest":
+            os.environ.pop("MMIS_ACTIVE_ACCOUNT_ID", None)
+            os.environ.pop("MMIS_CONFIG_FILE", None)
+            return
+        accounts_dir = account_root.parent
+        os.environ["MMIS_ACTIVE_ACCOUNT_ID"] = account_id
+        os.environ["MMIS_ACCOUNTS_DIR"] = str(accounts_dir)
+        os.environ["MMIS_CONFIG_FILE"] = str(account_root / "config" / "config.json")
+
+    def _stop_qthread(self, attr_name: str, *, cancel: bool = False, terminate: bool = False, wait_ms: int = 1500) -> None:
+        worker = getattr(self, attr_name, None)
+        if worker is None:
+            return
+        try:
+            if cancel and hasattr(worker, "request_cancel"):
+                worker.request_cancel()
+        except Exception:
+            pass
+        try:
+            worker.disconnect()
+        except Exception:
+            pass
+        try:
+            if worker.isRunning():
+                if terminate:
+                    worker.terminate()
+                worker.wait(int(wait_ms))
+        except Exception:
+            pass
+        try:
+            if not worker.isRunning():
+                worker.deleteLater()
+        except Exception:
+            pass
+        setattr(self, attr_name, None)
+
+    def _stop_background_threads(self, *, include_reply: bool) -> None:
+        timer = getattr(self, "_runtime_sync_timer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        if include_reply:
+            self._stop_qthread("_worker", cancel=True, terminate=True, wait_ms=1500)
+        self._stop_qthread("_status_worker", terminate=True, wait_ms=1500)
+        self._backend_status_inflight = False
+        self._stop_qthread("_runtime_sync_worker", terminate=True, wait_ms=1500)
 
     def _append_demo_messages(self) -> None:
         self._load_or_init_chat_sessions()
@@ -926,7 +1347,7 @@ class ChatWindow(proto.ExactChatWindow):
 
         current_history_len = sum(len(chat.get("history") or []) for chat in loaded if isinstance(chat, dict))
 
-        if current_history_len <= 0:
+        if current_history_len <= 0 and not self._is_account_isolated_scope():
             legacy_loaded, legacy_active_id = self._load_legacy_project_sessions()
             legacy_history_len = sum(len(chat.get("history") or []) for chat in legacy_loaded if isinstance(chat, dict))
             if legacy_history_len > 0:
@@ -950,7 +1371,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._legacy_sessions_path,
         )
         json_history_len = self._chat_history_len(json_loaded)
-        if json_history_len <= 0:
+        if json_history_len <= 0 and not self._is_account_isolated_scope():
             legacy_loaded, legacy_active_id = self._load_legacy_project_sessions()
             legacy_history_len = self._chat_history_len(legacy_loaded)
             if legacy_history_len > json_history_len:
@@ -1081,6 +1502,8 @@ class ChatWindow(proto.ExactChatWindow):
         chat["updated_at"] = chat_now_iso()
 
     def _save_chat_sessions(self) -> None:
+        if getattr(self, "_account_scope_id", "") != self._current_account_scope_id():
+            return
         self._sync_active_chat_from_history()
         active_chat = self._active_chat()
         active_id = None
@@ -1756,6 +2179,10 @@ class ChatWindow(proto.ExactChatWindow):
         return -1
 
     def _start_reply_worker_for_text(self, text: str, *, store_turn: bool, attachments: list[dict] | None = None) -> None:
+        if not get_auth_token():
+            self._show_login_dialog()
+            if not get_auth_token():
+                return
         if self.api is None:
             self._finalize_pending(
                 text="Нативное окно поднялось, но API сейчас недоступен.",
@@ -1789,6 +2216,10 @@ class ChatWindow(proto.ExactChatWindow):
         if self._worker and self._worker.isRunning():
             MmisMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
             return
+        if not get_auth_token():
+            self._show_login_dialog()
+            if not get_auth_token():
+                return
         if not isinstance(bubble, proto.MessageBubble):
             return
         user_index = self._history_index_for_user_bubble(bubble)
@@ -1930,6 +2361,11 @@ class ChatWindow(proto.ExactChatWindow):
         if self._worker and self._worker.isRunning():
             MmisMessageBox.information(self, "Подожди", "Сейчас уже идёт генерация.")
             return
+
+        if not get_auth_token():
+            self._show_login_dialog()
+            if not get_auth_token():
+                return
 
         self._capture_stream_scroll_mode()
         chat = self._ensure_active_chat()
@@ -2166,8 +2602,18 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot()
     def _cleanup_request(self) -> None:
         self._set_busy_state(False)
-        if self._worker is not None:
-            self._worker.deleteLater()
+        worker = self._worker
+        if worker is not None:
+            try:
+                if worker.isRunning():
+                    worker.wait(1000)
+            except Exception:
+                pass
+            try:
+                if not worker.isRunning():
+                    worker.deleteLater()
+            except Exception:
+                pass
         self._worker = None
         self._force_stream_follow_scroll = False
         self._stream_follow_scroll = False
@@ -2819,16 +3265,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._voice_manager.shutdown()
         except Exception:
             pass
-        if self._worker is not None:
-            try:
-                self._worker.disconnect()
-                self._worker.request_cancel()
-                if self._worker.isRunning():
-                    self._worker.terminate()
-                    self._worker.wait(1500)
-            except Exception:
-                pass
-        self._worker = None
+        self._stop_background_threads(include_reply=True)
         if self._inspector_window is not None:
             self._inspector_window.close()
         super().closeEvent(event)

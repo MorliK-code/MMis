@@ -1,8 +1,0 @@
-{
-  "schema_version": 1,
-  "character_id": "default",
-  "name": "Default",
-  "version": "1.0.0",
-  "default_mood": "thoughtful",
-  "llm_profile": "BALANCED"
-}

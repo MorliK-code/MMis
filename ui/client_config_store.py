@@ -1,41 +1,63 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
-# Path to the local config file relative to the ui/ directory
-# It should be inside ui/.mmis_client/
 UI_DIR = Path(__file__).parent
 PROJECT_ROOT = UI_DIR.parent
 LEGACY_CLIENT_DATA_DIR = UI_DIR / ".mmis_client"
-
-
-def _active_account_data_dir() -> Path | None:
-    account_id = str(os.environ.get("MMIS_ACTIVE_ACCOUNT_ID") or os.environ.get("MMIS_ACCOUNT_ID") or "").strip()
-    accounts_dir = Path(os.environ.get("MMIS_ACCOUNTS_DIR") or (PROJECT_ROOT / "data" / "accounts")).expanduser()
-    if not account_id:
-        try:
-            account_id = (accounts_dir / "current_account.txt").read_text(encoding="utf-8").strip()
-        except Exception:
-            account_id = ""
-    if not account_id:
-        return None
-    safe_account = "".join(ch for ch in account_id if ch.isalnum() or ch in {"_", "-"}).strip()
-    if not safe_account:
-        return None
-    return (accounts_dir / safe_account).resolve()
-
-
-def _client_data_dir() -> Path:
-    account_dir = _active_account_data_dir()
-    if account_dir is None:
-        return LEGACY_CLIENT_DATA_DIR
-    return account_dir / "ui"
-
-
-ACCOUNT_DATA_DIR = _active_account_data_dir()
-CLIENT_DATA_DIR = _client_data_dir()
+ACCOUNTS_DIR = PROJECT_ROOT / "data" / "accounts"
+CLIENT_DATA_DIR = UI_DIR / ".mmis_client"
 CLIENT_CONFIG_PATH = CLIENT_DATA_DIR / "client_config.json"
+ACCOUNT_DATA_DIR = None
+
+
+def _safe_account_id(value: str) -> str:
+    token = str(value or "").strip()
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "-", token)
+    token = token.strip("._-")
+    return token[:80] or "guest"
+
+
+def _active_auth_account_id() -> str:
+    auth_path = LEGACY_CLIENT_DATA_DIR / "auth.json"
+    try:
+        payload = json.loads(auth_path.read_text(encoding="utf-8-sig") or "{}")
+    except Exception:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("account_id") or "").strip()
+
+
+def get_active_account_data_dir() -> Path | None:
+    account_id = _safe_account_id(_active_auth_account_id())
+    if not account_id or account_id == "guest":
+        return None
+    return ACCOUNTS_DIR / account_id
+
+
+def get_client_data_dir() -> Path:
+    account_dir = get_active_account_data_dir()
+    path = account_dir / "ui" if account_dir is not None else LEGACY_CLIENT_DATA_DIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_client_config_path() -> Path:
+    return get_client_data_dir() / "client_config.json"
+
+
+def _client_config_path() -> Path:
+    return get_client_config_path()
+
+
+def get_ui_state_path() -> Path:
+    account_dir = get_active_account_data_dir()
+    if account_dir is not None:
+        return account_dir / "ui_state.json"
+    return get_client_data_dir() / "ui_state.json"
 
 DEFAULT_CONFIG = {
     "connection": {
@@ -52,11 +74,12 @@ DEFAULT_CONFIG = {
 
 def load_client_config() -> dict[str, Any]:
     """Loads the client configuration from the local JSON file."""
-    if not CLIENT_CONFIG_PATH.exists():
+    path = _client_config_path()
+    if not path.exists():
         return save_client_config(DEFAULT_CONFIG)
     
     try:
-        with CLIENT_CONFIG_PATH.open("r", encoding="utf-8") as f:
+        with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
             # Ensure basic structure exists
             for key, default in DEFAULT_CONFIG.items():
@@ -69,8 +92,11 @@ def load_client_config() -> dict[str, Any]:
 def save_client_config(data: dict[str, Any]) -> dict[str, Any]:
     """Saves the client configuration to the local JSON file."""
     try:
-        CLIENT_DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with CLIENT_CONFIG_PATH.open("w", encoding="utf-8") as f:
+        client_dir = get_client_data_dir()
+        path = _client_config_path()
+        client_dir.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
@@ -150,7 +176,11 @@ def set_last_error(error: str | None) -> None:
 # Portable UI state (ui/.mmis_client/ui_state.json)
 # ---------------------------------------------------------------------------
 
-UI_STATE_PATH = (ACCOUNT_DATA_DIR / "ui_state.json") if ACCOUNT_DATA_DIR else CLIENT_DATA_DIR / "ui_state.json"
+UI_STATE_PATH = CLIENT_DATA_DIR / "ui_state.json"
+
+
+def _ui_state_path() -> Path:
+    return get_ui_state_path()
 
 DEFAULT_UI_STATE: dict[str, Any] = {
     "think_enabled": True,
@@ -166,11 +196,12 @@ DEFAULT_UI_STATE: dict[str, Any] = {
 
 def load_ui_state() -> dict[str, Any]:
     """Loads local portable UI state from ui/.mmis_client/ui_state.json."""
-    if not UI_STATE_PATH.exists():
+    path = _ui_state_path()
+    if not path.exists():
         return dict(DEFAULT_UI_STATE)
 
     try:
-        with UI_STATE_PATH.open("r", encoding="utf-8-sig") as f:
+        with path.open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
         if not isinstance(data, dict):
             return dict(DEFAULT_UI_STATE)
@@ -188,8 +219,11 @@ def save_ui_state(data: dict[str, Any]) -> dict[str, Any]:
         out.update(data)
 
     try:
-        CLIENT_DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with UI_STATE_PATH.open("w", encoding="utf-8") as f:
+        client_dir = get_client_data_dir()
+        path = _ui_state_path()
+        client_dir.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
     except Exception:
         pass

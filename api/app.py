@@ -7,17 +7,22 @@ import socket
 import threading
 import time
 import warnings
-from contextlib import asynccontextmanager
+import os
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Header
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.memory_core_api import register_memory_core_api
 from api.character_router import create_character_router
 from api.schemas import (
+    AuthLoginRequest,
+    AuthMeResponse,
+    AuthRegisterRequest,
+    AuthResponse,
     ChatRequest,
     ChatResponse,
     FeedbackRequest,
@@ -32,7 +37,8 @@ from api.schemas import (
     WebModeRequest,
     JsonModeRequest,
 )
-from config.settings import get_config_payload, get_profile, load_config, update_config_values
+from api.auth_store import AuthStore
+from config.settings import DATA_DIR, get_config_payload, get_profile, load_config, update_config_values
 from core.account_manager import prepare_local_account
 from core.character_runtime import CharacterRuntime
 from core.brain import Brain
@@ -176,6 +182,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MMis API", version="2.1.0", lifespan=lifespan)
 LOGGER = get_logger(__name__)
+auth_store = AuthStore()
 
 # Регистрируем Memory Core API
 register_memory_core_api(app)
@@ -268,8 +275,116 @@ class _Runtime:
 
 _runtime = _Runtime()
 
+
+class _CurrentCharacterRuntime:
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_runtime.brain.state_manager, name)
+
 # Регистрируем Character API
-app.include_router(create_character_router(_runtime.brain.state_manager))
+app.include_router(create_character_router(_CurrentCharacterRuntime()))
+
+
+def _bearer_token(authorization: str | None) -> str:
+    raw = str(authorization or "").strip()
+    if raw.lower().startswith("bearer "):
+        return raw[7:].strip()
+    return raw
+
+
+def _require_account(authorization: str | None) -> dict:
+    token = _bearer_token(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="auth_required")
+    account = auth_store.get_account_by_token(token)
+    if not account:
+        raise HTTPException(status_code=401, detail="invalid_or_expired_session")
+    return account
+
+
+@app.middleware("http")
+async def _account_scoped_runtime_middleware(request, call_next):
+    route_path = str(getattr(getattr(request, "url", None), "path", "") or "")
+    if route_path.startswith("/characters"):
+        try:
+            account = _require_account(request.headers.get("authorization"))
+        except HTTPException as exc:
+            return JSONResponse(status_code=int(exc.status_code), content={"detail": exc.detail})
+        with _runtime.lock:
+            _ensure_runtime_account(account)
+    return await call_next(request)
+
+
+@contextmanager
+def _account_runtime_env(account: dict):
+    account_id = str((account or {}).get("account_id") or "").strip()
+    old_values = {
+        "MMIS_ACTIVE_ACCOUNT_ID": os.environ.get("MMIS_ACTIVE_ACCOUNT_ID"),
+        "MMIS_ACCOUNT_ID": os.environ.get("MMIS_ACCOUNT_ID"),
+        "MMIS_ACCOUNTS_DIR": os.environ.get("MMIS_ACCOUNTS_DIR"),
+        "MMIS_CONFIG_FILE": os.environ.get("MMIS_CONFIG_FILE"),
+    }
+    try:
+        if account_id:
+            accounts_dir = Path(DATA_DIR) / "accounts"
+            os.environ["MMIS_ACTIVE_ACCOUNT_ID"] = account_id
+            os.environ["MMIS_ACCOUNT_ID"] = account_id
+            os.environ["MMIS_ACCOUNTS_DIR"] = str(accounts_dir)
+            os.environ["MMIS_CONFIG_FILE"] = str(accounts_dir / account_id / "config" / "config.json")
+        yield
+    finally:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _ensure_runtime_account(account: dict) -> None:
+    global memory_core_adapter
+    account_id = str((account or {}).get("account_id") or "").strip()
+    if not account_id:
+        return
+    current_id = str(getattr(getattr(_runtime, "account_context", None), "account_id", "") or "").strip()
+    if current_id == account_id:
+        return
+
+    with _account_runtime_env(account):
+        new_cfg = load_config(force_reload=True)
+        new_context = prepare_local_account(new_cfg)
+        old_adapter = memory_core_adapter
+        if old_adapter is not None:
+            try:
+                old_adapter.close()
+            except Exception:
+                pass
+        memory_core_adapter = init_memory_core(
+            db_path=str(new_context.memory_db_path),
+            vector_path=str(new_context.memory_vector_path),
+            default_workspace=new_context.account_id,
+            default_namespace=new_cfg.memory_core_default_namespace,
+            top_k=int(new_cfg.memory_core_top_k),
+            enable_background_worker=bool(new_cfg.memory_core_enable_background_worker),
+            worker_poll_interval=float(new_cfg.memory_core_worker_poll_interval),
+        )
+        _runtime.settings = new_cfg
+        _runtime.account_context = new_context
+        _runtime.brain = Brain(
+            provider=_runtime.provider,
+            state_manager=CharacterRuntime(
+                state_path=new_context.data_dir / "state" / "brain_state.json",
+                state_store_dir=new_context.data_dir / "state" / "brain_state_store",
+            ),
+            memory_core=memory_core_adapter,
+        )
+        _runtime.brain.state_manager.patch({"account_id": new_context.account_id})
+        _runtime.model = str(new_cfg.model_name or _runtime.model).strip()
+        _runtime.thinking_enabled = bool(new_cfg.thinking_enabled)
+        _runtime.verbose_enabled = bool(_runtime.brain.state_manager.get("verbose_enabled", False))
+        _runtime.web_mode = new_cfg.web_mode if bool(new_cfg.internet_enabled) else "off"
+        _runtime.json_mode_enabled = bool(new_cfg.json_mode_enabled)
+        _runtime.meta_root = new_context.data_dir / "memory_core" / "metadata"
+        _runtime.meta_root.mkdir(parents=True, exist_ok=True)
+        _runtime._message_seq = _runtime._load_last_message_id()
 
 
 def _normalize_profile_name(value: Any, default: str = "BALANCED") -> str:
@@ -685,6 +800,46 @@ def ping() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/auth/register", response_model=AuthResponse)
+def auth_register(req: AuthRegisterRequest) -> AuthResponse:
+    try:
+        account = auth_store.create_account(
+            login=req.login,
+            password=req.password,
+            display_name=req.display_name,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        if code == "account_exists":
+            raise HTTPException(status_code=409, detail="account_exists") from exc
+        raise HTTPException(status_code=400, detail=code) from exc
+    token = auth_store.create_session(account["account_id"])
+    return AuthResponse(token=token, **account)
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def auth_login(req: AuthLoginRequest) -> AuthResponse:
+    account = auth_store.verify_login(req.login, req.password)
+    if not account:
+        raise HTTPException(status_code=401, detail="invalid_login_or_password")
+    token = auth_store.create_session(account["account_id"])
+    return AuthResponse(token=token, **account)
+
+
+@app.get("/auth/me", response_model=AuthMeResponse)
+def auth_me(authorization: str | None = Header(default=None)) -> AuthMeResponse:
+    account = _require_account(authorization)
+    return AuthMeResponse(**account)
+
+
+@app.post("/auth/logout")
+def auth_logout(authorization: str | None = Header(default=None)) -> dict:
+    token = _bearer_token(authorization)
+    if token:
+        auth_store.revoke_token(token)
+    return {"status": "ok"}
+
+
 def _build_health_response() -> HealthResponse:
     active_profile, quality_profile = _resolve_effective_profiles()
     _profile, profile_payload = _resolved_profile_payload()
@@ -876,7 +1031,8 @@ def memory_inspector_debug(
         )
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
+def chat(req: ChatRequest, authorization: str | None = Header(default=None)) -> ChatResponse:
+    account = _require_account(authorization)
     text = str(req.text or "").strip()
     if not text and list(req.attachments or []):
         text = "Проанализируй вложения."
@@ -884,6 +1040,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Text is empty")
 
     with _runtime.lock:
+        _ensure_runtime_account(account)
         native = _handle_native_chat_command(text)
         if native is not None:
             pass_text = str(native.get("pass_text") or "").strip()
@@ -929,7 +1086,15 @@ def chat(req: ChatRequest) -> ChatResponse:
             LOGGER.info("Scheduler mode '%s': cooperative arbitration, worker pause skipped", scheduler_mode)
 
         try:
-            meta_map = _build_chat_meta(req=req, source="api")
+            meta_map = _build_chat_meta(
+                req=req,
+                source="api",
+                account_id=str(account["account_id"]),
+                user_id=str(account["account_id"]),
+                workspace_id=str(account["account_id"]),
+                account_login=str(account.get("login") or ""),
+                account_display_name=str(account.get("display_name") or ""),
+            )
             result = _runtime.brain.handle_message(
                 text,
                 meta=meta_map,
@@ -988,7 +1153,8 @@ def chat(req: ChatRequest) -> ChatResponse:
 
 
 @app.post("/chat/stream")
-def chat_stream(req: ChatRequest):
+def chat_stream(req: ChatRequest, authorization: str | None = Header(default=None)):
+    account = _require_account(authorization)
     text = str(req.text or "").strip()
     if not text and list(req.attachments or []):
         text = "Проанализируй вложения."
@@ -996,6 +1162,7 @@ def chat_stream(req: ChatRequest):
         raise HTTPException(status_code=400, detail="Text is empty")
 
     with _runtime.lock:
+        _ensure_runtime_account(account)
         _ensure_runtime_model_available()
 
     def generate():
@@ -1083,6 +1250,11 @@ def chat_stream(req: ChatRequest):
                     meta_map = _build_chat_meta(
                         req=req,
                         source="api",
+                        account_id=str(account["account_id"]),
+                        user_id=str(account["account_id"]),
+                        workspace_id=str(account["account_id"]),
+                        account_login=str(account.get("login") or ""),
+                        account_display_name=str(account.get("display_name") or ""),
                         stream_on_answer_chunk=_on_answer,
                         stream_on_thinking_chunk=_on_thinking,
                         stream_on_debug_event=_on_debug_event,
@@ -1241,20 +1413,26 @@ def feedback(req: FeedbackRequest) -> dict:
     
 
 @app.get("/config")
-def get_config() -> dict:
+def get_config(authorization: str | None = Header(default=None)) -> dict:
     """Returns the full nested configuration payload."""
+    account = _require_account(authorization)
     with _runtime.lock:
-        return get_config_payload(force_reload=True)
+        _ensure_runtime_account(account)
+        with _account_runtime_env(account):
+            return get_config_payload(force_reload=True)
 
 
 @app.patch("/config")
-def patch_config(updates: dict[str, Any]) -> dict:
+def patch_config(updates: dict[str, Any], authorization: str | None = Header(default=None)) -> dict:
     """Updates configuration values using a flat dotted-path dictionary."""
+    account = _require_account(authorization)
     with _runtime.lock:
+        _ensure_runtime_account(account)
         try:
-            update_config_values(updates)
-            # Re-sync local runtime state with new config if needed
-            new_cfg = load_config(force_reload=True)
+            with _account_runtime_env(account):
+                update_config_values(updates)
+                # Re-sync local runtime state with new config if needed
+                new_cfg = load_config(force_reload=True)
             _runtime.settings = new_cfg
             _runtime.model = str(new_cfg.model_name or _runtime.model).strip()
             _runtime.thinking_enabled = bool(new_cfg.thinking_enabled)

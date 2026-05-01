@@ -13,6 +13,7 @@ from urllib import request as urllib_request
 import logging
 
 from ui.client_config_store import get_selected_base_url
+from ui.auth_client_store import get_auth_token, clear_auth_state
 
 LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +60,17 @@ class ApiClient:
             path = "/" + path
         return self.base_url + path
 
+    def _account_headers(self) -> dict[str, str]:
+        account_id = str(os.environ.get("MMIS_ACTIVE_ACCOUNT_ID") or "").strip()
+        if not account_id:
+            try:
+                from ui.auth_client_store import load_auth_state
+
+                account_id = str(load_auth_state().get("account_id") or "").strip()
+            except Exception:
+                account_id = ""
+        return {"X-MMis-Account-Id": account_id} if account_id else {}
+
     @staticmethod
     def _parse_json(text: str) -> dict:
         if not text:
@@ -68,6 +80,10 @@ class ApiClient:
     def _request_json(self, method: str, path: str, payload: dict | None = None, timeout: float | None = None) -> dict:
         data = None
         headers = {"Accept": "application/json"}
+        headers.update(self._account_headers())
+        token = get_auth_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -109,6 +125,37 @@ class ApiClient:
 
     def ping(self, timeout: float | None = None) -> dict:
         return self._request_json("GET", "/ping", timeout=timeout or 1.2)
+
+    def auth_login(self, login: str, password: str) -> dict:
+        payload = self._request_json(
+            "POST",
+            "/auth/login",
+            {"login": str(login or ""), "password": str(password or "")},
+            timeout=5.0,
+        )
+        return payload
+
+    def auth_register(self, login: str, password: str, display_name: str = "") -> dict:
+        payload = self._request_json(
+            "POST",
+            "/auth/register",
+            {
+                "login": str(login or ""),
+                "password": str(password or ""),
+                "display_name": str(display_name or ""),
+            },
+            timeout=5.0,
+        )
+        return payload
+
+    def auth_me(self, timeout: float | None = None) -> dict:
+        return self._request_json("GET", "/auth/me", timeout=timeout or 3.0)
+
+    def auth_logout(self) -> None:
+        try:
+            self._request_json("POST", "/auth/logout", timeout=3.0)
+        finally:
+            clear_auth_state(forget_current=True)
 
     def list_models(self, timeout: float | None = None) -> dict:
         payload = self._request_json("GET", "/models", timeout=timeout)
@@ -232,15 +279,21 @@ class ApiClient:
         if json_mode is not None:
             payload["json_mode"] = bool(json_mode)
 
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/x-ndjson",
+            "Cache-Control": "no-cache, no-store",
+            "Pragma": "no-cache",
+        }
+        headers.update(self._account_headers())
+        token = get_auth_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
         req = urllib_request.Request(
             self._url("/chat/stream"),
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/x-ndjson",
-                "Cache-Control": "no-cache, no-store",
-                "Pragma": "no-cache",
-            },
+            headers=headers,
             method="POST",
         )
 

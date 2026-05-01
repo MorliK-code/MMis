@@ -131,6 +131,175 @@ def test_chat_store_archives_chats_except_active(tmp_path):
     assert {chat.chat_id for chat in store.list_chats(include_archived=True)} == {"visible-main-chat", "old-chat"}
 
 
+def test_server_auth_store_sessions_round_trip(tmp_path):
+    from api.auth_store import AuthStore
+
+    store = AuthStore(tmp_path / "auth.db")
+    account = store.create_account("MorliK", "pass1234", "MorliK")
+    token = store.create_session(account["account_id"])
+
+    assert account["login"] == "morlik"
+    assert store.verify_login("morlik", "bad") is None
+    assert store.verify_login("MorliK", "pass1234")["account_id"] == account["account_id"]
+    assert store.get_account_by_token(token)["display_name"] == "MorliK"
+
+    store.revoke_token(token)
+
+    assert store.get_account_by_token(token) is None
+
+
+def test_server_auth_can_claim_legacy_admin_without_password(tmp_path, monkeypatch):
+    import sqlite3
+
+    import api.auth_store as auth_store_module
+    from api.auth_store import AuthStore
+
+    legacy_db = tmp_path / "accounts.db"
+    with sqlite3.connect(str(legacy_db)) as db:
+        db.execute(
+            """
+            CREATE TABLE accounts (
+                account_id TEXT PRIMARY KEY,
+                login TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                password_hash TEXT,
+                created_at REAL NOT NULL,
+                last_login_at REAL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                data_path TEXT NOT NULL
+            )
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO accounts(account_id, login, display_name, password_hash, created_at, data_path)
+            VALUES('admin', 'admin', 'Admin', '', 1.0, 'unused')
+            """
+        )
+
+    monkeypatch.setattr(auth_store_module, "LEGACY_ACCOUNTS_DB_PATH", legacy_db)
+    store = AuthStore(tmp_path / "auth.db")
+
+    account = store.create_account("admin", "pass1234", "")
+
+    assert account["account_id"] == "admin"
+    assert store.verify_login("admin", "pass1234")["account_id"] == "admin"
+
+    account = store.create_account("admin", "newpass123", "")
+
+    assert account["account_id"] == "admin"
+    assert store.verify_login("admin", "pass1234") is None
+    assert store.verify_login("admin", "newpass123")["account_id"] == "admin"
+
+
+def test_ui_auth_state_is_root_client_state(tmp_path, monkeypatch):
+    import ui.client_config_store as client_config_store
+    import ui.auth_client_store as auth_client_store
+
+    root = tmp_path / ".mmis_client"
+    monkeypatch.setattr(client_config_store, "CLIENT_DATA_DIR", root)
+    monkeypatch.setattr(client_config_store, "CLIENT_CONFIG_PATH", root / "client_config.json")
+    monkeypatch.setattr(client_config_store, "UI_STATE_PATH", root / "ui_state.json")
+    monkeypatch.setattr(auth_client_store, "AUTH_STATE_PATH", root / "auth.json")
+
+    auth_client_store.save_auth_state(
+        {
+            "token": "tok",
+            "account_id": "acc_1",
+            "login": "morlik",
+            "display_name": "MorliK",
+        }
+    )
+
+    assert auth_client_store.get_auth_token() == "tok"
+    assert auth_client_store.get_auth_display_name() == "MorliK"
+    assert (root / "auth.json").exists()
+
+    auth_client_store.clear_auth_state()
+
+    assert auth_client_store.get_auth_token() == ""
+
+
+def test_ui_auth_state_keeps_switchable_sessions(tmp_path, monkeypatch):
+    import ui.client_config_store as client_config_store
+    import ui.auth_client_store as auth_client_store
+
+    root = tmp_path / ".mmis_client"
+    monkeypatch.setattr(client_config_store, "CLIENT_DATA_DIR", root)
+    monkeypatch.setattr(client_config_store, "CLIENT_CONFIG_PATH", root / "client_config.json")
+    monkeypatch.setattr(client_config_store, "UI_STATE_PATH", root / "ui_state.json")
+    monkeypatch.setattr(auth_client_store, "AUTH_STATE_PATH", root / "auth.json")
+
+    auth_client_store.save_auth_state({"token": "admin-token", "account_id": "admin", "login": "admin"})
+    auth_client_store.save_auth_state({"token": "user-token", "account_id": "user", "login": "user"})
+
+    assert {row["account_id"] for row in auth_client_store.list_auth_sessions()} == {"admin", "user"}
+
+    auth_client_store.activate_auth_session("admin")
+
+    assert auth_client_store.load_auth_state()["account_id"] == "admin"
+    assert auth_client_store.get_auth_token() == "admin-token"
+
+    auth_client_store.clear_auth_state(forget_current=True)
+
+    assert auth_client_store.get_auth_token() == ""
+    assert [row["account_id"] for row in auth_client_store.list_auth_sessions()] == ["user"]
+
+
+def test_ui_auth_state_preserves_legacy_current_session_when_logging_into_next_account(tmp_path, monkeypatch):
+    import json
+
+    import ui.client_config_store as client_config_store
+    import ui.auth_client_store as auth_client_store
+
+    root = tmp_path / ".mmis_client"
+    monkeypatch.setattr(client_config_store, "CLIENT_DATA_DIR", root)
+    monkeypatch.setattr(client_config_store, "CLIENT_CONFIG_PATH", root / "client_config.json")
+    monkeypatch.setattr(client_config_store, "UI_STATE_PATH", root / "ui_state.json")
+    monkeypatch.setattr(auth_client_store, "AUTH_STATE_PATH", root / "auth.json")
+
+    root.mkdir(parents=True)
+    (root / "auth.json").write_text(
+        json.dumps({"token": "admin-token", "account_id": "admin", "login": "admin"}),
+        encoding="utf-8",
+    )
+
+    auth_client_store.save_auth_state({"token": "user-token", "account_id": "user", "login": "user"})
+
+    assert {row["account_id"] for row in auth_client_store.list_auth_sessions()} == {"admin", "user"}
+
+
+def test_ui_client_data_dir_follows_auth_account(tmp_path, monkeypatch):
+    import ui.auth_client_store as auth_client_store
+    import ui.client_config_store as client_config_store
+
+    root = tmp_path / ".mmis_client"
+    project_root = tmp_path / "project"
+    accounts_dir = project_root / "data" / "accounts"
+    monkeypatch.setattr(client_config_store, "CLIENT_DATA_DIR", root)
+    monkeypatch.setattr(client_config_store, "LEGACY_CLIENT_DATA_DIR", root)
+    monkeypatch.setattr(client_config_store, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(client_config_store, "ACCOUNTS_DIR", accounts_dir)
+    monkeypatch.setattr(client_config_store, "CLIENT_CONFIG_PATH", root / "client_config.json")
+    monkeypatch.setattr(client_config_store, "UI_STATE_PATH", root / "ui_state.json")
+    monkeypatch.setattr(auth_client_store, "AUTH_STATE_PATH", root / "auth.json")
+
+    assert client_config_store.get_client_data_dir() == root
+
+    auth_client_store.save_auth_state({"token": "a", "account_id": "admin", "login": "admin"})
+    assert client_config_store.get_active_account_data_dir() == accounts_dir / "admin"
+    assert client_config_store.get_client_data_dir() == accounts_dir / "admin" / "ui"
+
+    client_config_store.save_ui_state({"last_persona_name": "AdminPersona"})
+
+    auth_client_store.save_auth_state({"token": "b", "account_id": "user", "login": "user"})
+    assert client_config_store.load_ui_state()["last_persona_name"] == "Default"
+
+    auth_client_store.save_auth_state({"token": "a", "account_id": "admin", "login": "admin"})
+    assert client_config_store.load_ui_state()["last_persona_name"] == "AdminPersona"
+    assert (accounts_dir / "admin" / "ui_state.json").exists()
+
+
 def test_legacy_directory_migration_copies_into_existing_account_dirs(tmp_path, monkeypatch):
     import core.account_manager as account_manager_module
 

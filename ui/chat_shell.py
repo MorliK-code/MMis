@@ -36,12 +36,17 @@ from PySide6.QtWidgets import (
 try:
     from ui.api_client import ApiClient, ApiClientError
     from ui.workers import ReplyWorker, ReplyResult, StatusPollWorker
+    from ui.auth_client_store import clear_auth_state, get_auth_display_name, get_auth_token, save_auth_state
 except Exception:  # pragma: no cover
     ApiClient = None
     ApiClientError = RuntimeError
     ReplyWorker = None
     ReplyResult = None
     StatusPollWorker = None
+    clear_auth_state = None
+    get_auth_display_name = None
+    get_auth_token = None
+    save_auth_state = None
 
 
 BG = "#0a0b0d"
@@ -971,6 +976,26 @@ class HoverButton(PaintedButton):
             active_border=_pct_border(),
             active_text=TEXT,
         )
+
+
+class AccountPill(PaintedButton):
+    def __init__(self, text: str = "Войти", parent: QWidget | None = None):
+        super().__init__(text, parent)
+        self.set_button_font(_topbar_font(pixel_size=10))
+        self.set_button_padding(13, 0, 13, 0)
+        self.set_button_radius(6)
+        self.setFixedHeight(20)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.configure_colors(
+            normal_text=TEXT,
+            hover_bg="rgba(139,92,246,0.10)",
+            hover_border="rgba(139,92,246,0.22)",
+            hover_text=TEXT,
+            active_bg="rgba(10,11,13,0.86)",
+            active_border="rgba(139,92,246,0.26)",
+            active_text=TEXT,
+        )
+        self.set_active(True)
 
 
 class RailButton(PaintedButton):
@@ -2812,6 +2837,13 @@ class ExactChatWindow(QMainWindow):
         left.setSpacing(10)
         brand = BrandBadge("MMis")
         left.addWidget(brand)
+
+        self.account_btn = AccountPill("Войти")
+        self.account_btn.setToolTip("Локальный аккаунт")
+        self.account_btn.clicked.connect(self._on_account_clicked)
+        left.addWidget(self.account_btn)
+        self._refresh_account_button()
+
         status_wrap = QHBoxLayout(); status_wrap.setSpacing(5)
         self.status_pills: dict[str, StatusPill] = {}
         for name in ("api", "model", "memory"):
@@ -3262,12 +3294,115 @@ class ExactChatWindow(QMainWindow):
                 return widget
         return None
 
+    def _refresh_account_button(self) -> None:
+        name = ""
+        if callable(get_auth_display_name):
+            name = get_auth_display_name()
+        name = str(name or "Войти").strip()
+        if hasattr(self, "account_btn"):
+            self.account_btn.setText(name)
+            self.account_btn.setToolTip("Аккаунт MMis" if name != "Войти" else "Войти в аккаунт MMis")
+
+    def _on_account_clicked(self) -> None:
+        token = get_auth_token() if callable(get_auth_token) else ""
+        if token:
+            self._show_account_menu()
+        else:
+            self._show_login_dialog()
+
+    def _show_account_menu(self) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        if not hasattr(self, "account_btn"):
+            return
+        name = get_auth_display_name() if callable(get_auth_display_name) else ""
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background: rgba(15,18,22,.96); color: #f3f4f6; border: 1px solid rgba(255,255,255,.08); }"
+            "QMenu::item { padding: 7px 18px; }"
+            "QMenu::item:selected { background: rgba(139,92,246,.18); }"
+        )
+        menu.addAction(str(name or "Аккаунт")).setEnabled(False)
+        menu.addSeparator()
+        logout_action = menu.addAction("Выйти")
+        action = menu.exec(self.account_btn.mapToGlobal(self.account_btn.rect().bottomLeft()))
+        if action == logout_action:
+            if self.api:
+                try:
+                    self.api.auth_logout()
+                except Exception:
+                    if callable(clear_auth_state):
+                        clear_auth_state(forget_current=True)
+            elif callable(clear_auth_state):
+                clear_auth_state(forget_current=True)
+            self._refresh_account_button()
+
+    def _show_login_dialog(self) -> None:
+        from PySide6.QtWidgets import QDialog, QFormLayout, QLineEdit
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Вход в MMis")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(360)
+        dialog.setStyleSheet(
+            "QDialog { background: rgba(15,18,22,.98); color: #f3f4f6; }"
+            "QLineEdit { background: rgba(255,255,255,.04); color: #f3f4f6; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; padding: 7px; }"
+            "QPushButton { background: rgba(139,92,246,.14); color: #f3f4f6; border: 1px solid rgba(139,92,246,.22); border-radius: 8px; padding: 7px 12px; }"
+        )
+        root = QVBoxLayout(dialog)
+        root.addWidget(QLabel("Войти в аккаунт MMis"))
+        form = QFormLayout()
+        login_edit = QLineEdit()
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Логин", login_edit)
+        form.addRow("Пароль", password_edit)
+        root.addLayout(form)
+        error_label = QLabel("")
+        error_label.setStyleSheet("color: #fca5a5;")
+        root.addWidget(error_label)
+        buttons = QHBoxLayout()
+        login_btn = QPushButton("Войти")
+        register_btn = QPushButton("Создать")
+        cancel_btn = QPushButton("Отмена")
+        buttons.addWidget(login_btn)
+        buttons.addWidget(register_btn)
+        buttons.addWidget(cancel_btn)
+        root.addLayout(buttons)
+
+        def do_login(register: bool = False) -> None:
+            login = login_edit.text().strip()
+            password = password_edit.text()
+            if not self.api:
+                error_label.setText("API недоступен")
+                return
+            try:
+                if register:
+                    payload = self.api.auth_register(login, password, display_name=login)
+                else:
+                    payload = self.api.auth_login(login, password)
+                if callable(save_auth_state):
+                    save_auth_state(payload)
+                self._refresh_account_button()
+                dialog.accept()
+            except Exception as exc:
+                error_label.setText(str(exc))
+
+        login_btn.clicked.connect(lambda: do_login(False))
+        register_btn.clicked.connect(lambda: do_login(True))
+        cancel_btn.clicked.connect(dialog.reject)
+        dialog.exec()
+
     def _start_reply_for_text(self, text: str, *, store_turn: bool, append_user: bool) -> bool:
         text = str(text or "").strip()
         if not text:
             return False
         if self._worker is not None and self._worker.isRunning():
             return False
+        if not (get_auth_token() if callable(get_auth_token) else ""):
+            self._show_login_dialog()
+            if not (get_auth_token() if callable(get_auth_token) else ""):
+                return False
         if append_user:
             self._append_message("user", text)
         if self.api is None or ReplyWorker is None:

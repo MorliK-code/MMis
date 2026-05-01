@@ -90,3 +90,27 @@ class MetadataResponse(BaseModel):
     model: str
     count: int
     items: list[dict]
+
+
+class AuthRegisterRequest(BaseModel):
+    login: str = Field(min_length=3)
+    password: str = Field(min_length=4)
+    display_name: str = ""
+
+
+class AuthLoginRequest(BaseModel):
+    login: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AuthResponse(BaseModel):
+    token: str
+    account_id: str
+    login: str
+    display_name: str
+
+
+class AuthMeResponse(BaseModel):
+    account_id: str
+    login: str
+    display_name: str

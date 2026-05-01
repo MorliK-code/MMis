@@ -1,0 +1,14 @@
+{
+  "connection": {
+    "active_endpoint": "local",
+    "local_base_url": "http://192.168.1.2:8027",
+    "public_base_url": ""
+  },
+  "values": {
+    "ui.api.local_base_url": "http://192.168.1.2:8027"
+  },
+  "server_snapshot": {},
+  "pending_updates": {},
+  "last_sync_at": null,
+  "last_error": null
+}

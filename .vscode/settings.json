@@ -1,11 +1,6 @@
 {
     "python-envs.pythonProjects": [
         {
-            "path": "ui/app.py",
-            "envManager": "ms-python.python:venv",
-            "packageManager": "ms-python.python:pip"
-        },
-        {
             "path": "tests/assets/ui.py",
             "envManager": "ms-python.python:venv",
             "packageManager": "ms-python.python:pip"
