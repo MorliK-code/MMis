@@ -74,6 +74,18 @@ class AuthStore:
             )
             """
         )
+        try:
+            self._execute("ALTER TABLE accounts ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        except Exception:
+            pass
+        try:
+            self._execute("ALTER TABLE accounts ADD COLUMN api_access_key_hash TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            self._execute("UPDATE accounts SET role='admin' WHERE lower(login)='admin'")
+        except Exception:
+            pass
         self._execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -86,8 +98,22 @@ class AuthStore:
             )
             """
         )
+        self._execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_api_access_keys (
+                key_hash TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                revoked_at REAL,
+                FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
+            )
+            """
+        )
         self._execute("CREATE INDEX IF NOT EXISTS idx_accounts_login ON accounts(login)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_accounts_api_access_key_hash ON accounts(api_access_key_hash)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id)")
+        self._execute("CREATE INDEX IF NOT EXISTS idx_account_api_access_keys_account ON account_api_access_keys(account_id)")
 
     def _legacy_account_for_login(self, login: str) -> dict[str, str] | None:
         legacy_path = LEGACY_ACCOUNTS_DB_PATH
@@ -131,7 +157,7 @@ class AuthStore:
         if len(clean_password) < 4:
             raise ValueError("password_too_short")
         row = self._execute(
-            "SELECT account_id, login, display_name FROM accounts WHERE login=? AND disabled=0",
+            "SELECT account_id, login, display_name, role FROM accounts WHERE login=? AND disabled=0",
             (clean_login,),
         ).fetchone()
         if row is None:
@@ -145,6 +171,7 @@ class AuthStore:
             "account_id": str(row["account_id"]),
             "login": str(row["login"]),
             "display_name": str(row["display_name"]),
+            "role": str(row["role"] or "user"),
         }
 
     def _ensure_local_account(self, login: str, display_name: str, password: str) -> dict[str, str]:
@@ -196,12 +223,22 @@ class AuthStore:
         ts = _now()
         self._execute(
             """
-            INSERT INTO accounts(account_id, login, display_name, password_salt, password_hash, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO accounts(account_id, login, display_name, password_salt, password_hash, created_at, updated_at, role)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (account_id, clean_login, clean_display, salt_hex, password_hash, ts, ts),
+            (
+                account_id,
+                clean_login,
+                clean_display,
+                salt_hex,
+                password_hash,
+                ts,
+                ts,
+                "admin" if clean_login == "admin" else "user",
+            ),
         )
-        return {"account_id": account_id, "login": clean_login, "display_name": clean_display}
+        role = "admin" if clean_login == "admin" else "user"
+        return {"account_id": account_id, "login": clean_login, "display_name": clean_display, "role": role}
 
     def verify_login(self, login: str, password: str) -> dict[str, Any] | None:
         clean_login = _norm_login(login)
@@ -219,6 +256,7 @@ class AuthStore:
             "account_id": str(row["account_id"]),
             "login": str(row["login"]),
             "display_name": str(row["display_name"]),
+            "role": str(row["role"] or "user"),
         }
 
     def create_session(self, account_id: str) -> str:
@@ -238,7 +276,7 @@ class AuthStore:
         token_hash = _hash_token(token)
         row = self._execute(
             """
-            SELECT a.account_id, a.login, a.display_name
+            SELECT a.account_id, a.login, a.display_name, a.role
             FROM sessions s
             JOIN accounts a ON a.account_id = s.account_id
             WHERE s.token_hash=? AND s.revoked_at IS NULL AND a.disabled=0
@@ -252,7 +290,128 @@ class AuthStore:
             "account_id": str(row["account_id"]),
             "login": str(row["login"]),
             "display_name": str(row["display_name"]),
+            "role": str(row["role"] or "user"),
         }
+
+    def set_api_access_key_hash(self, login: str, key_hash: str, *, label: str = "default") -> dict[str, Any]:
+        clean_login = _norm_login(login)
+        clean_hash = str(key_hash or "").strip().lower()
+        row = self._execute(
+            "SELECT account_id, login, display_name, role FROM accounts WHERE login=? AND disabled=0",
+            (clean_login,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("account_not_found")
+        clean_label = str(label or "default").strip() or "default"
+        self._execute(
+            "UPDATE accounts SET api_access_key_hash=?, updated_at=? WHERE login=?",
+            (clean_hash, _now(), clean_login),
+        )
+        if clean_hash:
+            self._execute(
+                """
+                INSERT INTO account_api_access_keys(key_hash, account_id, label, created_at, revoked_at)
+                VALUES(?, ?, ?, ?, NULL)
+                ON CONFLICT(key_hash) DO UPDATE SET
+                    account_id=excluded.account_id,
+                    label=excluded.label,
+                    revoked_at=NULL
+                """,
+                (clean_hash, str(row["account_id"]), clean_label, _now()),
+            )
+        return {
+            "account_id": str(row["account_id"]),
+            "login": str(row["login"]),
+            "display_name": str(row["display_name"]),
+            "role": str(row["role"] or "user"),
+        }
+
+    def get_account_by_api_access_key_hash(self, key_hash: str) -> dict[str, Any] | None:
+        clean_hash = str(key_hash or "").strip().lower()
+        if not clean_hash:
+            return None
+        row = self._execute(
+            """
+            SELECT a.account_id, a.login, a.display_name, a.role
+            FROM account_api_access_keys k
+            JOIN accounts a ON a.account_id = k.account_id
+            WHERE k.key_hash=? AND k.revoked_at IS NULL AND a.disabled=0
+            """,
+            (clean_hash,),
+        ).fetchone()
+        if row is None:
+            row = self._execute(
+                """
+            SELECT account_id, login, display_name, role
+            FROM accounts
+            WHERE api_access_key_hash=? AND disabled=0
+            """,
+                (clean_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "account_id": str(row["account_id"]),
+            "login": str(row["login"]),
+            "display_name": str(row["display_name"]),
+            "role": str(row["role"] or "user"),
+        }
+
+    def list_api_access_keys(self, login: str = "") -> list[dict[str, Any]]:
+        clean_login = _norm_login(login)
+        if clean_login:
+            rows = self._execute(
+                """
+                SELECT a.login, a.display_name, k.key_hash, k.label, k.created_at, k.revoked_at
+                FROM account_api_access_keys k
+                JOIN accounts a ON a.account_id = k.account_id
+                WHERE a.login=?
+                ORDER BY a.login, k.created_at DESC
+                """,
+                (clean_login,),
+            ).fetchall()
+        else:
+            rows = self._execute(
+                """
+                SELECT a.login, a.display_name, k.key_hash, k.label, k.created_at, k.revoked_at
+                FROM account_api_access_keys k
+                JOIN accounts a ON a.account_id = k.account_id
+                ORDER BY a.login, k.created_at DESC
+                """
+            ).fetchall()
+        return [
+            {
+                "login": str(row["login"]),
+                "display_name": str(row["display_name"]),
+                "key_hash": str(row["key_hash"]),
+                "label": str(row["label"] or ""),
+                "created_at": float(row["created_at"] or 0.0),
+                "revoked": row["revoked_at"] is not None,
+            }
+            for row in rows
+        ]
+
+    def clear_api_access_keys(self, login: str) -> int:
+        clean_login = _norm_login(login)
+        row = self._execute(
+            "SELECT account_id FROM accounts WHERE login=? AND disabled=0",
+            (clean_login,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("account_not_found")
+        account_id = str(row["account_id"])
+        cur = self._execute(
+            "UPDATE account_api_access_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL",
+            (_now(), account_id),
+        )
+        self._execute(
+            "UPDATE accounts SET api_access_key_hash='', updated_at=? WHERE account_id=?",
+            (_now(), account_id),
+        )
+        try:
+            return int(cur.rowcount or 0)
+        except Exception:
+            return 0
 
     def revoke_token(self, token: str) -> None:
         token_hash = _hash_token(token)

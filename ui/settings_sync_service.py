@@ -31,6 +31,8 @@ def default_value_for_path(path: str, kind: str):
         return "http://127.0.0.1:8027"
     if path == "ui.api.public_base_url":
         return ""
+    if path == "ui.api.api_access_key":
+        return ""
     if path == "ui.ollama.start_mode":
         return "serve"
     if path == "ui.ollama.serve_exe":
@@ -200,7 +202,7 @@ def save_settings_updates(
     try:
         LOGGER.info("settings sync target=%s updates=%s", client.base_url, list(remote_updates.keys()))
         client._request_json("PATCH", "/config", payload=remote_updates, timeout=5.0)
-        clear_pending_updates(list(remote_updates.keys()))
+        clear_pending_updates(list(updates.keys()))
         return True, "Synced with server"
     except Exception as e:
         LOGGER.warning("Settings sync failed: %s", e)

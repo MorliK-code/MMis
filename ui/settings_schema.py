@@ -19,6 +19,7 @@ class SettingSpec:
     dangerous: bool = False
     live: bool = False
     placeholder: str = ""
+    admin_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,25 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                 settings=(
                     SettingSpec("api.host", "Host", description="0.0.0.0 разрешает подключения по локальной сети.", example="127.0.0.1", restart_required=True),
                     SettingSpec("api.port", "Port", kind="int", description="Порт сервера FastAPI.", example="8027", restart_required=True),
+                    SettingSpec(
+                        "api.access_lock.enabled",
+                        "API lock",
+                        kind="bool",
+                        description="Полностью закрывает API без правильного X-MMis-Access-Key.",
+                        example="true",
+                        restart_required=True,
+                        dangerous=True,
+                        admin_only=True,
+                    ),
+                    SettingSpec(
+                        "api.access_lock.key_hash",
+                        "API access key SHA256",
+                        description="SHA256 от длинного ключа доступа. Сам ключ здесь не хранить.",
+                        example="sha256...",
+                        restart_required=True,
+                        dangerous=True,
+                        admin_only=True,
+                    ),
                 ),
             ),
             SettingCard(
@@ -103,6 +123,14 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                         "Public API URL",
                         description="Эндпоинт для подключения к API, доступному извне.",
                         example="http://0.0.0.0:8027",
+                        live=True,
+                    ),
+                    SettingSpec(
+                        "ui.api.api_access_key",
+                        "API access key",
+                        description="Длинный ключ, который Desktop UI отправляет в X-MMis-Access-Key.",
+                        example="mmis_...",
+                        dangerous=True,
                         live=True,
                     ),
                 ),

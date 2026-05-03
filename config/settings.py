@@ -207,6 +207,11 @@ class AppSettings:
     model_name: str = "qcwind/qwen3-8b-instruct-Q4-K-M"
     host: str = "0.0.0.0"
     port: int = 8027
+    api_access_lock_enabled: bool = False
+    api_access_key_hash: str = ""
+    api_access_deny_status: int = 404
+    api_access_allow_ping_without_key: bool = False
+    admin_login: str = "admin"
     thinking_enabled: bool = True
     web_mode: str = "auto"
     web_v2: dict[str, Any] = field(default_factory=dict)
@@ -503,6 +508,15 @@ def _default_config_tree() -> dict[str, Any]:
         "api": {
             "host": "127.0.0.1",
             "port": 8027,
+            "access_lock": {
+                "enabled": False,
+                "key_hash": "",
+                "deny_status": 404,
+                "allow_ping_without_key": False,
+            },
+        },
+        "security": {
+            "admin_login": "admin",
         },
         "llm": {
             "provider": "ollama",
@@ -890,6 +904,14 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         model_name=model_name,
         host=_norm_str(_get_dotted(row, "api.host") or "127.0.0.1"),
         port=_to_int(_get_dotted(row, "api.port"), default=8027),
+        api_access_lock_enabled=_to_bool(_get_dotted(row, "api.access_lock.enabled")),
+        api_access_key_hash=_norm_str(_get_dotted(row, "api.access_lock.key_hash")),
+        api_access_deny_status=max(
+            401,
+            min(404, _to_int(_get_dotted(row, "api.access_lock.deny_status"), default=404)),
+        ),
+        api_access_allow_ping_without_key=_to_bool(_get_dotted(row, "api.access_lock.allow_ping_without_key")),
+        admin_login=_norm_str(_get_dotted(row, "security.admin_login") or "admin"),
         thinking_enabled=_to_bool(_get_dotted(row, "llm.thinking_enabled")),
         web_mode=_norm_lower(_get_dotted(row, "internet.web_mode") or "auto"),
         web_v2=_as_dict(_get_dotted(row, "internet.web_v2")),

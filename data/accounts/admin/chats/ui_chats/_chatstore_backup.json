@@ -1,14 +1,14 @@
 {
   "version": 1,
   "source": "ChatStore",
-  "created_at": "2026-05-03T20:32:56",
+  "created_at": "2026-05-03T21:43:25",
   "active_chat_id": "visible-main-chat",
   "chats": [
     {
       "id": "visible-main-chat",
       "title": "Чат",
       "created_at": "2026-04-30T00:29:35",
-      "updated_at": "2026-05-03T20:32:56",
+      "updated_at": "2026-05-03T21:43:25",
       "history": [
         {
           "role": "user",

@@ -108,9 +108,11 @@ class AuthResponse(BaseModel):
     account_id: str
     login: str
     display_name: str
+    role: str = "user"
 
 
 class AuthMeResponse(BaseModel):
     account_id: str
     login: str
     display_name: str
+    role: str = "user"

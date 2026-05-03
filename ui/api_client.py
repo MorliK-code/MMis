@@ -12,7 +12,7 @@ from urllib import request as urllib_request
 
 import logging
 
-from ui.client_config_store import get_selected_base_url
+from ui.client_config_store import get_api_access_key, get_selected_base_url
 from ui.auth_client_store import get_auth_token, clear_auth_state
 
 LOGGER = logging.getLogger(__name__)
@@ -81,6 +81,9 @@ class ApiClient:
         data = None
         headers = {"Accept": "application/json"}
         headers.update(self._account_headers())
+        api_access_key = get_api_access_key()
+        if api_access_key:
+            headers["X-MMis-Access-Key"] = api_access_key
         token = get_auth_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -286,6 +289,9 @@ class ApiClient:
             "Pragma": "no-cache",
         }
         headers.update(self._account_headers())
+        api_access_key = get_api_access_key()
+        if api_access_key:
+            headers["X-MMis-Access-Key"] = api_access_key
         token = get_auth_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"

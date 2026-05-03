@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import copy
+import contextvars
+import hashlib
+import hmac
 import json
 import queue
 import re
@@ -69,6 +73,7 @@ except Exception:  # pragma: no cover
 memory_core_adapter = None
 _nvml_ready = False
 _nvml_checked = False
+_api_access_account_id: contextvars.ContextVar[str] = contextvars.ContextVar("api_access_account_id", default="")
 
 
 def _init_nvml_once() -> bool:
@@ -291,6 +296,54 @@ def _bearer_token(authorization: str | None) -> str:
     return raw
 
 
+def _hash_api_access_key(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _api_access_key_from_request(request) -> str:
+    return str(request.headers.get("x-mmis-access-key") or "").strip()
+
+
+def _api_access_allowed(request) -> bool:
+    request.state.api_access_account_id = ""
+    cfg = load_config(force_reload=True)
+    if not bool(getattr(cfg, "api_access_lock_enabled", False)):
+        return True
+
+    path = str(getattr(getattr(request, "url", None), "path", "") or "")
+    if path == "/ping" and bool(getattr(cfg, "api_access_allow_ping_without_key", False)):
+        return True
+
+    expected_hash = str(getattr(cfg, "api_access_key_hash", "") or "").strip().lower()
+
+    raw_key = _api_access_key_from_request(request)
+    if not raw_key:
+        return False
+
+    actual_hash = _hash_api_access_key(raw_key).lower()
+    if expected_hash and hmac.compare_digest(expected_hash, actual_hash):
+        return True
+
+    account = auth_store.get_account_by_api_access_key_hash(actual_hash)
+    if not account:
+        return False
+    account_id = str(account.get("account_id") or "").strip()
+    if not account_id:
+        return False
+    request.state.api_access_account_id = account_id
+    return True
+
+
+def _api_access_denied_response() -> JSONResponse:
+    cfg = load_config(force_reload=True)
+    status = int(getattr(cfg, "api_access_deny_status", 404) or 404)
+    if status == 401:
+        return JSONResponse(status_code=401, content={"detail": "api_access_required"})
+    if status == 403:
+        return JSONResponse(status_code=403, content={"detail": "api_access_denied"})
+    return JSONResponse(status_code=404, content={"detail": "not_found"})
+
+
 def _require_account(authorization: str | None) -> dict:
     token = _bearer_token(authorization)
     if not token:
@@ -298,20 +351,65 @@ def _require_account(authorization: str | None) -> dict:
     account = auth_store.get_account_by_token(token)
     if not account:
         raise HTTPException(status_code=401, detail="invalid_or_expired_session")
+    access_account_id = str(_api_access_account_id.get("") or "").strip()
+    account_id = str(account.get("account_id") or "").strip()
+    if access_account_id and account_id and access_account_id != account_id:
+        raise HTTPException(status_code=403, detail="api_access_key_account_mismatch")
     return account
+
+
+def _is_admin_account(account: dict) -> bool:
+    login = str((account or {}).get("login") or "").strip().lower()
+    role = str((account or {}).get("role") or "").strip().lower()
+    cfg = load_config(force_reload=True)
+    admin_login = str(getattr(cfg, "admin_login", "admin") or "admin").strip().lower()
+    return role == "admin" or bool(admin_login and login == admin_login)
+
+
+def _assert_admin(account: dict) -> None:
+    if not _is_admin_account(account):
+        raise HTTPException(status_code=403, detail="admin_required")
+
+
+def _strip_admin_only_config(payload: dict) -> dict:
+    out = copy.deepcopy(payload if isinstance(payload, dict) else {})
+    try:
+        out.get("api", {}).pop("access_lock", None)
+    except Exception:
+        pass
+    try:
+        out.pop("security", None)
+    except Exception:
+        pass
+    return out
+
+
+def _contains_admin_only_update(updates: dict[str, Any]) -> bool:
+    for path in dict(updates or {}).keys():
+        clean = str(path or "").strip().lower()
+        if clean.startswith("api.access_lock") or clean.startswith("security."):
+            return True
+    return False
 
 
 @app.middleware("http")
 async def _account_scoped_runtime_middleware(request, call_next):
-    route_path = str(getattr(getattr(request, "url", None), "path", "") or "")
-    if route_path.startswith("/characters"):
-        try:
-            account = _require_account(request.headers.get("authorization"))
-        except HTTPException as exc:
-            return JSONResponse(status_code=int(exc.status_code), content={"detail": exc.detail})
-        with _runtime.lock:
-            _ensure_runtime_account(account)
-    return await call_next(request)
+    if not _api_access_allowed(request):
+        return _api_access_denied_response()
+    token = _api_access_account_id.set(str(getattr(request.state, "api_access_account_id", "") or "").strip())
+    try:
+        route_path = str(getattr(getattr(request, "url", None), "path", "") or "")
+        if route_path.startswith("/characters"):
+            try:
+                account = _require_account(request.headers.get("authorization"))
+            except HTTPException as exc:
+                return JSONResponse(status_code=int(exc.status_code), content={"detail": exc.detail})
+            with _runtime.lock:
+                _ensure_runtime_account(account)
+        return await call_next(request)
+    finally:
+        _api_access_account_id.reset(token)
+
 
 
 @contextmanager
@@ -822,6 +920,10 @@ def auth_login(req: AuthLoginRequest) -> AuthResponse:
     account = auth_store.verify_login(req.login, req.password)
     if not account:
         raise HTTPException(status_code=401, detail="invalid_login_or_password")
+    access_account_id = str(_api_access_account_id.get("") or "").strip()
+    account_id = str(account.get("account_id") or "").strip()
+    if access_account_id and account_id and access_account_id != account_id:
+        raise HTTPException(status_code=403, detail="api_access_key_account_mismatch")
     token = auth_store.create_session(account["account_id"])
     return AuthResponse(token=token, **account)
 
@@ -1419,13 +1521,18 @@ def get_config(authorization: str | None = Header(default=None)) -> dict:
     with _runtime.lock:
         _ensure_runtime_account(account)
         with _account_runtime_env(account):
-            return get_config_payload(force_reload=True)
+            payload = get_config_payload(force_reload=True)
+            if not _is_admin_account(account):
+                payload = _strip_admin_only_config(payload)
+            return payload
 
 
 @app.patch("/config")
 def patch_config(updates: dict[str, Any], authorization: str | None = Header(default=None)) -> dict:
     """Updates configuration values using a flat dotted-path dictionary."""
     account = _require_account(authorization)
+    if _contains_admin_only_update(updates):
+        _assert_admin(account)
     with _runtime.lock:
         _ensure_runtime_account(account)
         try:

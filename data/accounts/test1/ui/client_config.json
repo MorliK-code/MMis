@@ -1,0 +1,13 @@
+{
+  "connection": {
+    "active_endpoint": "local",
+    "local_base_url": "http://127.0.0.1:8027",
+    "public_base_url": "",
+    "api_access_key": ""
+  },
+  "values": {},
+  "server_snapshot": {},
+  "pending_updates": {},
+  "last_sync_at": null,
+  "last_error": null
+}

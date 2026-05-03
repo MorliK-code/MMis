@@ -28,6 +28,8 @@ def _active_auth_account_id() -> str:
         return ""
     if not isinstance(payload, dict):
         return ""
+    if not str(payload.get("token") or "").strip():
+        return ""
     return str(payload.get("account_id") or "").strip()
 
 
@@ -63,7 +65,8 @@ DEFAULT_CONFIG = {
     "connection": {
         "active_endpoint": "local",
         "local_base_url": "http://127.0.0.1:8027",
-        "public_base_url": ""
+        "public_base_url": "",
+        "api_access_key": "",
     },
     "values": {},
     "server_snapshot": {},
@@ -85,6 +88,11 @@ def load_client_config() -> dict[str, Any]:
             for key, default in DEFAULT_CONFIG.items():
                 if key not in data:
                     data[key] = default
+            if not isinstance(data.get("connection"), dict):
+                data["connection"] = dict(DEFAULT_CONFIG["connection"])
+            else:
+                for key, value in DEFAULT_CONFIG["connection"].items():
+                    data["connection"].setdefault(key, value)
             return data
     except Exception:
         return DEFAULT_CONFIG
@@ -106,6 +114,11 @@ def get_connection_config() -> dict[str, Any]:
     """Returns the connection-related part of the config."""
     cfg = load_client_config()
     return cfg.get("connection", DEFAULT_CONFIG["connection"])
+
+
+def get_api_access_key() -> str:
+    conn = get_connection_config()
+    return str(conn.get("api_access_key") or "").strip()
 
 def update_connection_config(values: dict[str, Any]) -> None:
     """Updates only the connection-related settings."""

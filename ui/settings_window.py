@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from ui.settings_sync_service import dotted_set, load_settings_payload, save_settings_updates
 from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor, _ui_font
-from ui.settings_schema import SETTINGS_CATEGORIES, SettingCategory, SettingSpec, dotted_get, get_category
+from ui.settings_schema import SETTINGS_CATEGORIES, SettingCard, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE, apply_settings_tooltip_style
 from ui.settings_widgets import SettingEditor
 from ui.api_client import ApiClient
@@ -550,7 +550,7 @@ class SettingsWindow(QDialog):
                 label = QLabel(_group_title(current_group))
                 label.setObjectName("settings_muted")
                 self.nav_layout.addWidget(label)
-            count = sum(len(card.settings) for card in category.cards)
+            count = sum(len(card.settings) for card in self._filtered_cards(category))
             button = QPushButton(f"{_category_icon(category.key)} {category.title}  {count}")
             button.setObjectName("nav_button")
             button.setProperty("count", str(count))
@@ -975,13 +975,37 @@ class SettingsWindow(QDialog):
         self._render_category()
 
     def _filtered_cards(self, category: SettingCategory):
-        if not getattr(self, "_search_text", ""):
-            return category.cards
+        is_admin = self._is_admin_user()
         cards = []
         for card in category.cards:
-            if any(self._matches_search(spec, category.title, card.title) for spec in card.settings):
-                cards.append(card)
+            visible_settings = tuple(
+                spec for spec in card.settings
+                if is_admin or not getattr(spec, "admin_only", False)
+            )
+            if not visible_settings:
+                continue
+            visible_card = SettingCard(
+                title=card.title,
+                tag=card.tag,
+                settings=visible_settings,
+                dangerous=card.dangerous,
+            )
+            if not getattr(self, "_search_text", ""):
+                cards.append(visible_card)
+            elif any(self._matches_search(spec, category.title, visible_card.title) for spec in visible_card.settings):
+                cards.append(visible_card)
         return tuple(cards)
+
+    def _is_admin_user(self) -> bool:
+        try:
+            from ui.auth_client_store import load_auth_state
+
+            state = load_auth_state()
+            login = str(state.get("login") or "").strip().lower()
+            role = str(state.get("role") or "").strip().lower()
+            return role == "admin" or login == "admin"
+        except Exception:
+            return False
 
     def _matches_search(self, spec: SettingSpec, category_title: str, card_title: str) -> bool:
         needle = getattr(self, "_search_text", "")
@@ -1068,9 +1092,12 @@ _TITLE_BY_PATH: dict[str, str] = {
     "startup.safety_mode": "Режим безопасности",
     "api.host": "API host",
     "api.port": "API port",
+    "api.access_lock.enabled": "API lock",
+    "api.access_lock.key_hash": "API access key SHA256",
     "ui.api.active_endpoint": "Активный API endpoint",
     "ui.api.local_base_url": "Локальный API URL",
     "ui.api.public_base_url": "Публичный API URL",
+    "ui.api.api_access_key": "API access key",
     "llm.provider": "Провайдер LLM",
     "llm.model_name": "Основная модель",
     "llm.thinking_enabled": "Thinking",

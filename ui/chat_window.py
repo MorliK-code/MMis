@@ -664,6 +664,9 @@ class ChatWindow(proto.ExactChatWindow):
         self._apply_account_environment()
         if self.api is not None:
             self.api.set_base_url(get_selected_base_url())
+        if not get_auth_token():
+            self._show_logged_out_state()
+            return
         self._load_ui_state()
         self._sync_runtime_controls()
         if getattr(self, "_settings_window", None) is not None:
@@ -706,6 +709,7 @@ class ChatWindow(proto.ExactChatWindow):
         else:
             clear_auth_state()
         self._refresh_account_button()
+        self._reload_account_scope()
 
     def _show_login_dialog(self) -> None:
         from PySide6.QtWidgets import QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
@@ -1175,13 +1179,15 @@ class ChatWindow(proto.ExactChatWindow):
         return bool(get_auth_token())
 
     def _current_account_scope_id(self) -> str:
+        if not get_auth_token():
+            return "logged-out"
         try:
             from ui.auth_client_store import load_auth_state
 
             state = load_auth_state()
-            return str(state.get("account_id") or "guest").strip() or "guest"
+            return str(state.get("account_id") or "logged-out").strip() or "logged-out"
         except Exception:
-            return "guest"
+            return "logged-out"
 
     def _reset_chat_scope_view(self) -> None:
         self._chat_sessions = []
@@ -1198,7 +1204,7 @@ class ChatWindow(proto.ExactChatWindow):
     def _apply_account_environment(self) -> None:
         account_root = getattr(self, "_account_root", None)
         account_id = self._current_account_scope_id()
-        if account_root is None or not account_id or account_id == "guest":
+        if account_root is None or not account_id or account_id in {"guest", "logged-out"}:
             os.environ.pop("MMIS_ACTIVE_ACCOUNT_ID", None)
             os.environ.pop("MMIS_CONFIG_FILE", None)
             return
@@ -1249,7 +1255,23 @@ class ChatWindow(proto.ExactChatWindow):
         self._stop_qthread("_runtime_sync_worker", terminate=True, wait_ms=1500)
 
     def _append_demo_messages(self) -> None:
+        if not get_auth_token():
+            self._show_logged_out_state(defer_login=True)
+            return
         self._load_or_init_chat_sessions()
+
+    def _show_logged_out_state(self, *, defer_login: bool = False) -> None:
+        self._reset_chat_scope_view()
+        self._chat_sessions = []
+        self._active_chat_id = None
+        self._history = []
+        self._render_history()
+        self._refresh_account_button()
+        self._apply_context_chips()
+        if defer_login:
+            QTimer.singleShot(0, self._show_login_dialog)
+        else:
+            self._show_login_dialog()
 
     def _clear_message_widgets(self) -> None:
         for index in range(self.messages_layout.count() - 1, -1, -1):

@@ -13,6 +13,7 @@ DEFAULT_AUTH_STATE: dict[str, Any] = {
     "account_id": "",
     "login": "",
     "display_name": "",
+    "role": "",
     "sessions": {},
 }
 
@@ -27,6 +28,7 @@ def _session_payload(data: dict[str, Any]) -> dict[str, Any]:
         "account_id": str(data.get("account_id") or ""),
         "login": str(data.get("login") or ""),
         "display_name": str(data.get("display_name") or ""),
+        "role": str(data.get("role") or ""),
     }
 
 

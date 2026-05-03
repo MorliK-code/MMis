@@ -3,14 +3,10 @@
     "active_endpoint": "local",
     "local_base_url": "http://127.0.0.1:8027",
     "public_base_url": "",
-    "api_access_key": ""
+    "api_access_key": "mmis_eOR1WjWfvRXVH1D8ToJM5OXyeTghbdL0NsGtC77xCmzKO61Kgo28NZ3ah2sictJz"
   },
   "values": {
-    "ui.console.auto_start_ollama": true,
-    "memory_core.memory_llm.keep_alive": "0",
-    "api.access_lock.enabled": false,
-    "api.access_lock.key_hash": "",
-    "ui.api.api_access_key": ""
+    "ui.api.api_access_key": "mmis_eOR1WjWfvRXVH1D8ToJM5OXyeTghbdL0NsGtC77xCmzKO61Kgo28NZ3ah2sictJz"
   },
   "server_snapshot": {
     "app": {
@@ -27,25 +23,16 @@
     },
     "startup": {
       "mode": "api",
-      "active_profile": "ASYA",
+      "active_profile": "BALANCED",
       "safety_mode": "allow_os_actions"
     },
     "api": {
-      "host": "0.0.0.0",
-      "port": 8027,
-      "access_lock": {
-        "enabled": false,
-        "key_hash": "",
-        "deny_status": 404,
-        "allow_ping_without_key": false
-      }
-    },
-    "security": {
-      "admin_login": "admin"
+      "host": "127.0.0.1",
+      "port": 8027
     },
     "llm": {
       "provider": "ollama",
-      "model_name": "gemma4:26b",
+      "model_name": "qcwind/qwen3-8b-instruct-Q4-K-M",
       "model_fallbacks": [],
       "thinking_enabled": true,
       "json_mode_enabled": false,
@@ -284,23 +271,20 @@
       "chat_recall_results": 3,
       "chat_events_limit": 10,
       "chat_proofread": false,
-      "chat_proofread_strict": false,
-      "enabled": true
+      "chat_proofread_strict": false
     },
     "memory_core": {
       "enabled": true,
-      "db_path": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core\\memory.db",
-      "vector_path": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core\\vector",
-      "default_workspace": "admin",
+      "db_path": "data/memory_core/memory.db",
+      "vector_path": "data/memory_core/vector",
+      "default_workspace": "global",
       "default_namespace": "default",
       "top_k": 8,
       "enable_background_worker": true,
       "worker_poll_interval": 2.0,
       "memory_llm": {
-        "keep_alive": "0"
-      },
-      "memory_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core",
-      "cache_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\cache"
+        "keep_alive": "30m"
+      }
     },
     "dialog": {
       "new_session_after_min": 360,
@@ -371,14 +355,14 @@
     "ui": {
       "api": {
         "active_endpoint": "local",
-        "local_base_url": "http://192.168.1.2:8027",
-        "public_base_url": "http://45.82.9.3:8027"
+        "local_base_url": "http://127.0.0.1:8027",
+        "public_base_url": "http://0.0.0.0:8027"
       },
       "console": {
         "timeout_sec": 2.5,
         "stream_timeout_sec": 600.0,
         "store_turn": true,
-        "show_thinking": true,
+        "show_thinking": false,
         "thinking_first": true,
         "auto_start_api": true,
         "auto_start_ollama": true,
@@ -399,14 +383,13 @@
       "data_dir": "{dir_path}\\data",
       "models_dir": "{dir_path}\\models",
       "accounts_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts",
-      "performance_profiles_file": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\specs\\performance_profiles.json",
-      "character_specs_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\specs\\characters"
+      "performance_profiles_file": "{dir_path}\\data\\specs\\performance_profiles.json"
     },
     "account": {
-      "account_id": "admin"
+      "account_id": ""
     }
   },
   "pending_updates": {},
-  "last_sync_at": "2026-05-03T21:42:49",
+  "last_sync_at": "2026-05-03T21:41:07",
   "last_error": null
 }
