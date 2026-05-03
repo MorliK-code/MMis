@@ -4560,8 +4560,18 @@ class PostprocessStage(PipelineStage):
     def run(self, ctx: PipelineContext) -> PipelineContext:
         text = _normalize_text(ctx.text)
         if not text:
-            ctx.text = text
-            ctx.logs.append("stage=postprocess empty")
+            ctx.text = (
+                "Модель не вернула видимый ответ. Повтори запрос, я перегенерирую его без пустого вывода."
+            )
+            ctx.status = "error"
+            ctx.error = "empty_visible_answer"
+            ctx.structured_output["status"] = "error"
+            ctx.structured_output["error_type"] = "empty_visible_answer"
+            ctx.structured_output["error"] = "Model returned thinking/metrics without visible answer."
+            ctx.stats["error"] = True
+            ctx.stats["error_stage"] = "postprocess"
+            ctx.stats["error_type"] = "empty_visible_answer"
+            ctx.logs.append("stage=postprocess empty_visible_answer_guard=applied")
             return ctx
 
         verify_cfg = _as_dict(ctx.policies.get("verify"))
@@ -5086,7 +5096,7 @@ class MemoryWriteStage(PipelineStage):
                     "conversation_id": context.get("conversation_id"),
                 }
             )
-        if ctx.route in {"chat", "command"} and ctx.text:
+        if ctx.route in {"chat", "command"} and ctx.text and str(ctx.status or "").strip().lower() != "error":
             turn_tags = self._build_turn_tags(ctx)
             ctx.memory_ops.append(
                 {
@@ -7309,6 +7319,9 @@ def _load_ollama_options_from_performance_profile(profile_name: str) -> dict[str
         for key in ("num_ctx", "num_thread", "num_gpu", "num_batch", "keep_alive"):
             if key in ollama and ollama[key] is not None:
                 options[key] = ollama[key]
+        keep_alive = str(getattr(cfg, "ollama_keep_alive", "") or "").strip()
+        if keep_alive:
+            options["keep_alive"] = keep_alive
         
         return options
     except Exception:
@@ -7344,6 +7357,7 @@ def _inject_temporal_grounding(ctx: PipelineContext) -> None:
             minutes_since_previous = int(round(delta_minutes))
             same_calendar_day = bool(prev_dt.date() == now_dt.date())
 
+    elapsed_text = _temporal_elapsed_text(minutes_since_previous)
     meta["now_iso"] = now_dt.isoformat()
     meta["timezone"] = timezone_name
     meta["now_human"] = now_dt.strftime("%d.%m.%Y %H:%M:%S")
@@ -7355,6 +7369,31 @@ def _inject_temporal_grounding(ctx: PipelineContext) -> None:
         "" if minutes_since_previous is None else str(max(0, int(minutes_since_previous)))
     )
     meta["same_calendar_day"] = "true" if same_calendar_day else "false"
+
+    temporal_context = {
+        "current_message_at": str(meta.get("now_iso") or ""),
+        "current_datetime": str(meta.get("current_datetime") or ""),
+        "timezone": timezone_name,
+        "previous_user_message_at": previous_user_at,
+        "minutes_since_previous_user_message": (
+            None if minutes_since_previous is None else max(0, int(minutes_since_previous))
+        ),
+        "elapsed_since_previous_user_message": elapsed_text,
+        "same_calendar_day_as_previous_user_message": bool(same_calendar_day),
+    }
+    if not previous_user_at:
+        temporal_context["conversation_gap"] = "no previous user message recorded"
+    elif minutes_since_previous is not None:
+        minutes_value = int(minutes_since_previous)
+        if minutes_value >= 60 * 24:
+            temporal_context["conversation_gap"] = "long_gap_days"
+        elif minutes_value >= 180:
+            temporal_context["conversation_gap"] = "long_gap_hours"
+        elif minutes_value >= 45:
+            temporal_context["conversation_gap"] = "short_gap"
+        else:
+            temporal_context["conversation_gap"] = "continuous"
+    state["temporal_context"] = temporal_context
 
     for key in (
         "now_iso",
@@ -7371,6 +7410,27 @@ def _inject_temporal_grounding(ctx: PipelineContext) -> None:
     state["context_tags"] = context_tags
     ctx.state = state
     ctx.meta = meta
+
+
+def _temporal_elapsed_text(minutes: int | None) -> str:
+    if minutes is None:
+        return ""
+    mins = max(0, int(minutes))
+    if mins < 1:
+        return "less than 1 minute"
+    if mins < 60:
+        return f"{mins} minute{'s' if mins != 1 else ''}"
+    hours = mins // 60
+    rest_minutes = mins % 60
+    if hours < 24:
+        if rest_minutes:
+            return f"{hours} hour{'s' if hours != 1 else ''} {rest_minutes} minute{'s' if rest_minutes != 1 else ''}"
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    days = hours // 24
+    rest_hours = hours % 24
+    if rest_hours:
+        return f"{days} day{'s' if days != 1 else ''} {rest_hours} hour{'s' if rest_hours != 1 else ''}"
+    return f"{days} day{'s' if days != 1 else ''}"
 
 
 def _apply_temporal_consistency_guard(*, text: str, user_text: str, meta: dict[str, Any]) -> tuple[str, bool]:

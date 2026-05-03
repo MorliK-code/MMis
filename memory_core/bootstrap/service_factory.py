@@ -208,6 +208,9 @@ def _create_background_worker(
     # Получаем timeout из task_model_profiles
     memory_llm_timeout = float(memory_llm_profile_data.get("timeout", 60.0))
     memory_llm_keep_alive = memory_llm_profile_data.get("keep_alive")
+    app_memory_keep_alive = str(getattr(cfg, "memory_core_memory_llm_keep_alive", "") or "").strip()
+    if app_memory_keep_alive:
+        memory_llm_keep_alive = app_memory_keep_alive
     memory_llm_processor = MemoryLLMProcessor(
         task_router=task_router,
         timeout_sec=memory_llm_timeout,

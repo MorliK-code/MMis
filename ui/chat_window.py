@@ -387,6 +387,9 @@ class ChatWindow(proto.ExactChatWindow):
         self._force_stream_follow_scroll = False
         self._scroll_bottom_queued = False
         self._queued_scroll_follow_only = False
+        self._pending_elapsed_timer: QTimer | None = None
+        self._regen_scroll_anchor: QWidget | None = None
+        self._suppress_lazy_history_until = 0.0
         self._regenerate_scroll_spacer: QWidget | None = None
         self._last_memory_debug_snapshot: dict = {}
         self._runtime_flags_dirty_until = 0.0
@@ -428,6 +431,9 @@ class ChatWindow(proto.ExactChatWindow):
         self._attachment_layout: QHBoxLayout | None = None
         self._load_ui_state()
         super().__init__()
+        self._pending_elapsed_timer = QTimer(self)
+        self._pending_elapsed_timer.setInterval(250)
+        self._pending_elapsed_timer.timeout.connect(self._refresh_pending_elapsed_perf)
         self.setWindowTitle("MMis - Chat")
         if hasattr(self, "_metrics_timer"):
             self._metrics_timer.timeout.connect(self._refresh_persona_label)
@@ -1236,6 +1242,7 @@ class ChatWindow(proto.ExactChatWindow):
             except Exception:
                 pass
         if include_reply:
+            self._stop_pending_elapsed_timer()
             self._stop_qthread("_worker", cancel=True, terminate=True, wait_ms=1500)
         self._stop_qthread("_status_worker", terminate=True, wait_ms=1500)
         self._backend_status_inflight = False
@@ -1379,6 +1386,10 @@ class ChatWindow(proto.ExactChatWindow):
                 self._stream_follow_scroll = self._should_follow_stream_scroll(value, bar.maximum())
             
         if self._lazy_history_loading or self._lazy_history_start_index <= 0:
+            return
+        if getattr(self, "_regen_scroll_anchor", None) is not None:
+            return
+        if time.monotonic() < float(getattr(self, "_suppress_lazy_history_until", 0.0) or 0.0):
             return
         if bar.maximum() <= 0:
             return
@@ -2551,6 +2562,7 @@ class ChatWindow(proto.ExactChatWindow):
         scroll_widget = getattr(self, "scroll", None)
         scroll_bar = scroll_widget.verticalScrollBar() if scroll_widget is not None else None
         scroll_blocker = QSignalBlocker(scroll_bar) if scroll_bar is not None else None
+        self._suppress_lazy_history_until = time.monotonic() + 2.0
         frozen_widgets: list[QWidget] = []
         for widget in (
             scroll_widget,
@@ -2589,7 +2601,9 @@ class ChatWindow(proto.ExactChatWindow):
             assistant_bubble.update_thinking("", None)
             assistant_bubble.set_perf([])
             assistant_bubble.show()
+            self._regen_scroll_anchor = assistant_bubble
             self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
+            self._start_pending_elapsed_timer()
             if hasattr(self, "_lazy_history_start_index"):
                 self._lazy_history_start_index = min(self._lazy_history_start_index, len(self._history))
             sync_lazy = getattr(self, "_sync_lazy_history_button", None)
@@ -2603,13 +2617,13 @@ class ChatWindow(proto.ExactChatWindow):
                 sync_height()
             if scroll_widget and scroll_widget.widget() and scroll_widget.widget().layout():
                 scroll_widget.widget().layout().activate()
-            self._scroll_bottom()
+            self._scroll_to_regenerate_anchor()
         finally:
             del scroll_blocker
             for widget in reversed(frozen_widgets):
                 widget.setUpdatesEnabled(True)
 
-        self._schedule_scroll_bottom()
+        self._schedule_scroll_to_regenerate_anchor()
         self._start_reply_worker_for_text(text, store_turn=False, attachments=attachments)
 
     def _insert_message_bubble_after(self, previous: QWidget, bubble: QWidget) -> None:
@@ -2641,12 +2655,37 @@ class ChatWindow(proto.ExactChatWindow):
             self._queued_scroll_follow_only = False
             if follow_only and not self._stream_follow_scroll:
                 return
+            if self._regen_scroll_anchor is not None:
+                self._scroll_to_regenerate_anchor()
+                return
             scroll_widget = getattr(self, "scroll", None)
             if scroll_widget and scroll_widget.widget() and scroll_widget.widget().layout():
                 scroll_widget.widget().layout().activate()
             self._scroll_bottom()
 
         QTimer.singleShot(0, _flush)
+
+    def _scroll_to_regenerate_anchor(self) -> None:
+        anchor = self._regen_scroll_anchor
+        scroll_widget = getattr(self, "scroll", None)
+        if anchor is None or scroll_widget is None:
+            return
+        try:
+            if scroll_widget.widget() is not None and scroll_widget.widget().layout() is not None:
+                scroll_widget.widget().layout().activate()
+            scroll_widget.ensureWidgetVisible(anchor, 0, 32)
+            bar = scroll_widget.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.maximum())
+        except Exception:
+            pass
+
+    def _schedule_scroll_to_regenerate_anchor(self) -> None:
+        if self._regen_scroll_anchor is None:
+            return
+        QTimer.singleShot(0, self._scroll_to_regenerate_anchor)
+        QTimer.singleShot(80, self._scroll_to_regenerate_anchor)
+        QTimer.singleShot(250, self._scroll_to_regenerate_anchor)
 
     def _set_busy_state(self, busy: bool) -> None:
         self.send_btn.setEnabled(not busy)
@@ -2701,6 +2740,7 @@ class ChatWindow(proto.ExactChatWindow):
         assistant_bubble.hide()
         self._insert_message_bubble(assistant_bubble)
         self._pending = proto.PendingAssistant(bubble=assistant_bubble, started_at=time.perf_counter())
+        self._start_pending_elapsed_timer()
         self._pending_history_index = len(self._history)
         self._history.append(("ai", "", "…", None, None))
         self.input.clear()
@@ -2798,6 +2838,10 @@ class ChatWindow(proto.ExactChatWindow):
         pending_thinking = self._pending.thinking_text if self._pending else ""
         thinking_generated = bool(getattr(result, "thinking_generated", False) or str(pending_thinking or "").strip())
         thinking = self._resolve_thinking_text(str(result.thinking or ""), pending_thinking, thinking_generated)
+        if not text:
+            text = "Модель не вернула видимый ответ. Повтори запрос, я перегенерирую его без пустого вывода."
+            stats["error"] = True
+            stats["error_type"] = "empty_visible_answer"
         debug_trace = dict(result.debug_trace or {})
         finished_at = time.perf_counter()
         fallback_elapsed_ms = 0
@@ -2805,6 +2849,8 @@ class ChatWindow(proto.ExactChatWindow):
         local_answer_ms = 0
         if self._pending is not None:
             fallback_elapsed_ms = max(1, int((finished_at - self._pending.started_at) * 1000))
+            stats["client_wall_elapsed_ms"] = fallback_elapsed_ms
+            stats["display_elapsed_ms"] = fallback_elapsed_ms
             if (
                 self._pending.first_answer_at is not None
                 and self._pending.first_thinking_at is not None
@@ -2866,6 +2912,7 @@ class ChatWindow(proto.ExactChatWindow):
         MmisMessageBox.warning(self, "Ошибка", str(error_text or "Не удалось получить ответ"))
 
     def _finalize_pending(self, *, text: str, thinking: str, thinking_ms: str | None, perf: list[str], stat_line: str | None) -> None:
+        self._stop_pending_elapsed_timer()
         pending_bubble = self._pending.bubble if self._pending else None
         if self._pending:
             self._pending.bubble.update_text(text)
@@ -2915,6 +2962,7 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot()
     def _cleanup_request(self) -> None:
+        self._stop_pending_elapsed_timer()
         self._set_busy_state(False)
         worker = self._worker
         if worker is not None:
@@ -2931,7 +2979,37 @@ class ChatWindow(proto.ExactChatWindow):
         self._worker = None
         self._force_stream_follow_scroll = False
         self._stream_follow_scroll = False
+        self._regen_scroll_anchor = None
         self._apply_context_chips()
+
+    def _start_pending_elapsed_timer(self) -> None:
+        if not self._verbose_enabled:
+            return
+        if self._pending_elapsed_timer is None:
+            return
+        self._refresh_pending_elapsed_perf()
+        self._pending_elapsed_timer.start()
+
+    def _stop_pending_elapsed_timer(self) -> None:
+        timer = getattr(self, "_pending_elapsed_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    @Slot()
+    def _refresh_pending_elapsed_perf(self) -> None:
+        pending = self._pending
+        if pending is None:
+            self._stop_pending_elapsed_timer()
+            return
+        if not self._verbose_enabled:
+            pending.bubble.set_perf([])
+            self._stop_pending_elapsed_timer()
+            return
+        elapsed_ms = max(1, int((time.perf_counter() - pending.started_at) * 1000))
+        pending.bubble.set_perf([self._format_duration_label(elapsed_ms)])
+        if not pending.bubble.isVisible():
+            pending.bubble.show()
+        self._schedule_scroll_bottom(follow_stream_only=True)
 
     @staticmethod
     def _complete_verbose_stats(
@@ -3058,11 +3136,15 @@ class ChatWindow(proto.ExactChatWindow):
         if display_tok_s > 0.0:
             out["display_tok_s"] = display_tok_s
 
-        display_elapsed_ms = int(out.get("display_thinking_ms") or 0) + int(out.get("display_write_ms") or 0)
+        # First verbose chip is user-visible wait time: send click -> final reply.
+        # Backend prompt/write timings can omit queueing, model loading, and setup.
+        display_elapsed_ms = _int_value("client_wall_elapsed_ms")
+        if display_elapsed_ms <= 0:
+            display_elapsed_ms = int(fallback_elapsed_ms or 0)
+        if display_elapsed_ms <= 0:
+            display_elapsed_ms = int(out.get("display_thinking_ms") or 0) + int(out.get("display_write_ms") or 0)
         if display_elapsed_ms <= 0:
             display_elapsed_ms = int(round(float(backend_total_duration_ms or 0.0)) or 0)
-        if display_elapsed_ms <= 0 and fallback_elapsed_ms > 0:
-            display_elapsed_ms = int(fallback_elapsed_ms or 0)
         if display_elapsed_ms <= 0:
             display_elapsed_ms = int(elapsed or 0)
         if display_elapsed_ms > 0:
@@ -3086,7 +3168,9 @@ class ChatWindow(proto.ExactChatWindow):
     @staticmethod
     def _perf_from_stats(stats: dict, fallback_elapsed_ms: int = 0) -> tuple[list[str], str | None]:
         verbose_enabled = True
-        elapsed = int(float(stats.get("display_elapsed_ms") or 0) or 0)
+        elapsed = int(float(stats.get("client_wall_elapsed_ms") or 0) or 0)
+        if elapsed <= 0:
+            elapsed = int(float(stats.get("display_elapsed_ms") or 0) or 0)
         if elapsed <= 0:
             elapsed = int(float(
                 stats.get("elapsed_ms")

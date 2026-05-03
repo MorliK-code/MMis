@@ -37,6 +37,10 @@ def default_value_for_path(path: str, kind: str):
         return ""
     if path == "ui.ollama.models_dir":
         return ""
+    if path == "llm.providers.ollama.keep_alive":
+        return "5m"
+    if path == "memory_core.memory_llm.keep_alive":
+        return "30m"
     
     if kind in {"text", "select", "json"}:
         return ""

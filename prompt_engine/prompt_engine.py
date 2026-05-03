@@ -388,6 +388,7 @@ class PromptEngine:
     def _build_metadata_block(*, state_map: dict[str, Any], blocks: dict[str, str]) -> str:
         tags_block = str(blocks.get("context_tags") or "").strip()
         context = _as_dict(state_map.get("context_tags"))
+        temporal_context = _as_dict(state_map.get("temporal_context"))
         lines: list[str] = []
         seen_keys: set[str] = set()
         hidden_temporal_keys = {
@@ -431,6 +432,30 @@ class PromptEngine:
             "current_datetime",
         ):
             append_key(key, context.get(key))
+
+        if temporal_context:
+            append_key("current_message_at", temporal_context.get("current_message_at"))
+            append_key("timezone", temporal_context.get("timezone"))
+            previous_at = str(temporal_context.get("previous_user_message_at") or "").strip()
+            if previous_at:
+                append_key("previous_user_message_at", previous_at)
+                append_key(
+                    "elapsed_since_previous_user_message",
+                    temporal_context.get("elapsed_since_previous_user_message"),
+                )
+                append_key(
+                    "conversation_gap",
+                    temporal_context.get("conversation_gap"),
+                )
+                minutes = temporal_context.get("minutes_since_previous_user_message")
+                if minutes is not None:
+                    append_key("minutes_since_previous_user_message", minutes)
+                append_key(
+                    "same_calendar_day_as_previous_user_message",
+                    "true" if temporal_context.get("same_calendar_day_as_previous_user_message") else "false",
+                )
+            else:
+                append_key("previous_user_message_at", "none recorded")
 
         if tags_block:
             append_block(tags_block)
@@ -769,6 +794,10 @@ class PromptEngine:
             rows.append("- Live web lookup already executed for this turn. Do not claim lack of internet/web access; answer from WEB_EVIDENCE.")
         if style == "factual_direct":
             rows.append("- Time-sensitive web answers must be direct and factual without rhetorical/flirty openers.")
+        if _as_dict(state_map.get("temporal_context")):
+            rows.append(
+                "- Use METADATA temporal fields to understand when messages were written. If there was a meaningful pause, you may acknowledge it naturally, but do not force a greeting or comment on time in every reply."
+            )
 
         deduped: list[str] = []
         seen: set[str] = set()

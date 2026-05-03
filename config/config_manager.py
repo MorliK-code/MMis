@@ -26,6 +26,7 @@ LEGACY_KEY_MAP: dict[str, str] = {
     "ollama_base_url": "llm.providers.ollama.base_url",
     "ollama_timeout_sec": "llm.providers.ollama.timeout_sec",
     "ollama_retries": "llm.providers.ollama.retries",
+    "ollama_keep_alive": "llm.providers.ollama.keep_alive",
     "openai_api_key": "llm.providers.openai.api_key",
     "openai_api_url": "llm.providers.openai.api_url",
     "openai_timeout_sec": "llm.providers.openai.timeout_sec",

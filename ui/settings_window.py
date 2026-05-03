@@ -1079,6 +1079,7 @@ _TITLE_BY_PATH: dict[str, str] = {
     "llm.providers.ollama.base_url": "Ollama URL",
     "llm.providers.ollama.timeout_sec": "Ollama timeout",
     "llm.providers.ollama.retries": "Ollama retries",
+    "llm.providers.ollama.keep_alive": "Unload after",
     "llm.providers.openai.api_key": "OpenAI API key",
     "llm.providers.openai.api_url": "OpenAI API URL",
     "llm.providers.openai.timeout_sec": "OpenAI timeout",
@@ -1094,6 +1095,7 @@ _TITLE_BY_PATH: dict[str, str] = {
     "memory_core.enabled": "Memory Core",
     "memory_core.enable_background_worker": "Background worker",
     "memory_core.worker_poll_interval": "Worker poll interval",
+    "memory_core.memory_llm.keep_alive": "Memory LLM unload after",
     "internet.enabled": "Интернет",
     "internet.web_mode": "Web mode",
     "internet.search.provider": "Search provider",
@@ -1191,6 +1193,7 @@ _DESCRIPTION_BY_PATH: dict[str, str] = {
     "memory_core.enabled": "Включает новый Memory Core runtime.",
     "memory_core.enable_background_worker": "Разрешает фоновый Memory Core worker, который обрабатывает очередь событий памяти.",
     "memory_core.worker_poll_interval": "Интервал в секундах, с которым Memory Core worker проверяет очередь задач.",
+    "memory_core.memory_llm.keep_alive": "Сколько держать Memory LLM в памяти после обработки задач. Поддерживает формат Ollama: 30s, 5m, 30m, 1h, 0.",
     "ui.ollama.start_mode": (
         "Выбирает способ автозапуска Ollama, если её API сейчас недоступен. "
         "serve запускает указанный ollama.exe с аргументом serve. "

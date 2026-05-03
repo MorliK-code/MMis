@@ -171,6 +171,7 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                     SettingSpec("llm.providers.ollama.base_url", "Ollama URL", description="Базовый URL API Ollama.", example="http://127.0.0.1:11434", restart_required=True),
                     SettingSpec("llm.providers.ollama.timeout_sec", "Ollama timeout", kind="float", description="Таймаут запроса к Ollama в секундах.", example="120.0"),
                     SettingSpec("llm.providers.ollama.retries", "Ollama retries", kind="int", description="Количество попыток при ошибке Ollama.", example="1"),
+                    SettingSpec("llm.providers.ollama.keep_alive", "Unload after", description="Сколько держать модель в памяти после ответа. Формат Ollama: 30s, 5m, 1h, 0.", example="5m", live=True),
                 ),
             ),
             SettingCard(
@@ -237,6 +238,19 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                         kind="float",
                         description="Интервал проверки очереди Memory Core worker в секундах.",
                         example="2.0",
+                    ),
+                ),
+            ),
+            SettingCard(
+                title="Memory LLM",
+                tag="memory_llm",
+                settings=(
+                    SettingSpec(
+                        "memory_core.memory_llm.keep_alive",
+                        "Unload after",
+                        description="Сколько держать Memory LLM в памяти после обработки задач. Формат Ollama: 30s, 5m, 30m, 1h, 0.",
+                        example="30m",
+                        live=True,
                     ),
                 ),
             ),
@@ -416,6 +430,22 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
             ),
         ),
     ),
+)
+
+_CORE_CATEGORY_ORDER = {
+    "main": 0,
+    "llm": 1,
+    "memory": 2,
+    "characters": 3,
+}
+SETTINGS_CATEGORIES = tuple(
+    sorted(
+        SETTINGS_CATEGORIES,
+        key=lambda category: (
+            0 if category.group == "Core" else 1,
+            _CORE_CATEGORY_ORDER.get(category.key, 100),
+        ),
+    )
 )
 
 

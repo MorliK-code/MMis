@@ -252,6 +252,7 @@ class AppSettings:
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_timeout_sec: float = 300.0  # 5 минут для reasoning моделей
     ollama_retries: int = 1
+    ollama_keep_alive: str = "5m"
     openai_api_key: str = ""
     openai_api_url: str = "https://api.openai.com/v1"
     openai_timeout_sec: float = 120.0
@@ -302,6 +303,7 @@ class AppSettings:
     memory_core_top_k: int = 8
     memory_core_enable_background_worker: bool = True
     memory_core_worker_poll_interval: float = 2.0
+    memory_core_memory_llm_keep_alive: str = "30m"
     model_fallbacks: list[str] = field(default_factory=list)
 
     # UI Console
@@ -513,6 +515,7 @@ def _default_config_tree() -> dict[str, Any]:
                     "base_url": "http://127.0.0.1:11434",
                     "timeout_sec": 120.0,
                     "retries": 1,
+                    "keep_alive": "5m",
                 },
                 "openai": {
                     "api_key": "",
@@ -724,6 +727,9 @@ def _default_config_tree() -> dict[str, Any]:
             "top_k": 8,
             "enable_background_worker": True,
             "worker_poll_interval": 2.0,
+            "memory_llm": {
+                "keep_alive": "30m",
+            },
         },
         "dialog": {
             "new_session_after_min": 360,
@@ -925,6 +931,7 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         ollama_base_url=_norm_str(_get_dotted(row, "llm.providers.ollama.base_url") or "http://127.0.0.1:11434"),
         ollama_timeout_sec=float(_pick_value(_get_dotted(row, "llm.providers.ollama.timeout_sec"), 120.0)),
         ollama_retries=max(0, _to_int(_get_dotted(row, "llm.providers.ollama.retries"), default=1)),
+        ollama_keep_alive=_norm_str(_pick_value(_get_dotted(row, "llm.providers.ollama.keep_alive"), "5m")) or "5m",
         openai_api_key=_norm_str(_get_dotted(row, "llm.providers.openai.api_key")),
         openai_api_url=_norm_str(_get_dotted(row, "llm.providers.openai.api_url") or "https://api.openai.com/v1"),
         openai_timeout_sec=float(_pick_value(_get_dotted(row, "llm.providers.openai.timeout_sec"), 120.0)),
@@ -977,6 +984,10 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
             0.2,
             float(_pick_value(_get_dotted(row, "memory_core.worker_poll_interval"), 2.0)),
         ),
+        memory_core_memory_llm_keep_alive=_norm_str(
+            _pick_value(_get_dotted(row, "memory_core.memory_llm.keep_alive"), "30m")
+        )
+        or "30m",
         model_fallbacks=_to_csv_list(_get_dotted(row, "llm.model_fallbacks")),
         console_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.timeout_sec"), 2.5)),
         console_stream_timeout_sec=float(_pick_value(_get_dotted(row, "ui.console.stream_timeout_sec"), 600.0)),
@@ -999,8 +1010,14 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
 def get_model_profiles(*, force_reload: bool = False) -> dict[str, ModelProfile]:
     settings = load_config(force_reload=force_reload)
     rows = _normalize_profile_rows(settings.llm_profiles)
+    keep_alive = _norm_str(getattr(settings, "ollama_keep_alive", "") or "")
     out: dict[str, ModelProfile] = {}
     for key, payload in rows.items():
+        if keep_alive:
+            payload = copy.deepcopy(payload)
+            ollama = _as_dict(payload.get("ollama"))
+            ollama["keep_alive"] = keep_alive
+            payload["ollama"] = ollama
         out[key] = _profile_from_row(name=key, payload=payload)
     return out
 

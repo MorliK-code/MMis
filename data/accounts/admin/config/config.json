@@ -30,7 +30,8 @@
       "ollama": {
         "base_url": "http://127.0.0.1:11434",
         "timeout_sec": 120.0,
-        "retries": 1
+        "retries": 1,
+        "keep_alive": "5m"
       },
       "openai": {
         "api_key": "",
@@ -272,6 +273,9 @@
     "top_k": 8,
     "enable_background_worker": true,
     "worker_poll_interval": 2.0,
+    "memory_llm": {
+      "keep_alive": "0"
+    },
     "memory_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core",
     "cache_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\cache"
   },
