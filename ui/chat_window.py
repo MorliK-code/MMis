@@ -24,9 +24,10 @@ if __package__ in {None, ""}:
     if _config_mod is not None and not hasattr(_config_mod, "__path__"):
         sys.modules.pop("config", None)
 
-from PySide6.QtCore import QSignalBlocker, QTimer, Qt, QUrl, Slot
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, QSignalBlocker, QTimer, Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QCursor
 from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession, QMediaFormat, QMediaPlayer, QMediaRecorder
-from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QDialog
+from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QDialog
 from ui.widgets.message_box import MmisMessageBox
 from core.chat_store import ChatStore
 
@@ -169,6 +170,160 @@ HISTORY_LAZY_BATCH_SIZE = 12
 HISTORY_SCROLL_LOAD_THRESHOLD_PX = 24
 
 
+class AccountSwitchRow(QLabel):
+    clicked = Signal()
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self._pressed = False
+        self._hovered = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._apply_state()
+
+    def _apply_state(self) -> None:
+        if self._pressed:
+            color = "#f3f4f6"
+        elif self._hovered:
+            color = "#a294d2"
+        else:
+            color = "#8f96a3"
+        self.setStyleSheet(
+            f"color: {color};"
+            "background: transparent;"
+            "padding: 0;"
+            "font-family: Cascadia Code;"
+            "font-size: 12px;"
+        )
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self._apply_state()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self._pressed = False
+        self._apply_state()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self._apply_state()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            was_pressed = self._pressed
+            self._pressed = False
+            self._apply_state()
+            if was_pressed and self.rect().contains(event.position().toPoint()):
+                self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class ActiveAccountRow(QWidget):
+    logoutClicked = Signal()
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._expanded_width = 0
+        self._anim = QPropertyAnimation()
+        self.setMouseTracking(True)
+
+        self.state = QLabel(text, self)
+        self.state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.state.setFixedHeight(22)
+        self.state.setStyleSheet(
+            "color: #d9d0ff;"
+            "background: rgba(139,92,246,.10);"
+            "border: 1px solid rgba(139,92,246,.18);"
+            "border-radius: 6px;"
+            "padding: 0 8px;"
+            "font-weight: 500;"
+            "font-family: Cascadia Code;"
+            "font-size: 11px;"
+        )
+
+        self.logout_btn = QPushButton("Выйти", self)
+        self.logout_btn.setObjectName("dangerButton")
+        self.logout_btn.setMaximumWidth(0)
+        self.logout_btn.setMinimumWidth(0)
+        self.logout_btn.clicked.connect(self.logoutClicked)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.state, 1)
+        layout.addWidget(self.logout_btn, 0)
+
+    def _set_logout_open(self, open_: bool) -> None:
+        if self._expanded_width <= 0:
+            self._expanded_width = max(48, self.logout_btn.sizeHint().width())
+        target = self._expanded_width if open_ else 0
+        if self.logout_btn.maximumWidth() == target:
+            return
+        self._anim.stop()
+        self._anim = QPropertyAnimation(self.logout_btn, b"maximumWidth", self)
+        self._anim.setDuration(145)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setStartValue(self.logout_btn.maximumWidth())
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    def enterEvent(self, event) -> None:
+        self._set_logout_open(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._set_logout_open(False)
+        super().leaveEvent(event)
+
+
+class LogoutRevealFilter(QObject):
+    def __init__(self, state: QWidget, button: QPushButton, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._state = state
+        self._button = button
+        self._target_width = max(48, button.sizeHint().width())
+        self._animation = QPropertyAnimation()
+        button.setMaximumWidth(0)
+        button.setMinimumWidth(0)
+        state.installEventFilter(self)
+        button.installEventFilter(self)
+
+    def eventFilter(self, watched: QObject, event) -> bool:
+        if event.type() == QEvent.Type.Enter:
+            self._set_open(True)
+        elif event.type() == QEvent.Type.Leave:
+            QTimer.singleShot(25, self._hide_if_outside)
+        return super().eventFilter(watched, event)
+
+    def _contains_cursor(self, widget: QWidget) -> bool:
+        return widget.isVisible() and widget.rect().contains(widget.mapFromGlobal(QCursor.pos()))
+
+    def _hide_if_outside(self) -> None:
+        if not self._contains_cursor(self._state) and not self._contains_cursor(self._button):
+            self._set_open(False)
+
+    def _set_open(self, open_: bool) -> None:
+        target = self._target_width if open_ else 0
+        if self._button.maximumWidth() == target:
+            return
+        self._animation.stop()
+        self._animation = QPropertyAnimation(self._button, b"maximumWidth", self)
+        self._animation.setDuration(145)
+        self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._animation.setStartValue(self._button.maximumWidth())
+        self._animation.setEndValue(target)
+        self._animation.start()
+
+
 def _configure_qt_startup() -> None:
     if not sys.platform.startswith("win"):
         return
@@ -234,6 +389,7 @@ class ChatWindow(proto.ExactChatWindow):
         self._queued_scroll_follow_only = False
         self._regenerate_scroll_spacer: QWidget | None = None
         self._last_memory_debug_snapshot: dict = {}
+        self._runtime_flags_dirty_until = 0.0
         self._last_active_topic_title: str = ""
         self._last_persona_name: str = "Default"
         self._api_persona_name: str = ""
@@ -578,6 +734,7 @@ class ChatWindow(proto.ExactChatWindow):
         login_btn = QPushButton("Войти")
         register_btn = QPushButton("Создать")
         cancel_btn = QPushButton("Отмена")
+        register_btn.setText("Создать пароль")
         buttons.addWidget(login_btn)
         buttons.addWidget(register_btn)
         buttons.addWidget(cancel_btn)
@@ -607,8 +764,8 @@ class ChatWindow(proto.ExactChatWindow):
         dialog.exec()
 
     def _show_account_menu(self) -> None:
-        from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRect
-        from PySide6.QtWidgets import QFrame, QPushButton
+        from PySide6.QtCore import QRect
+        from PySide6.QtWidgets import QFrame
 
         button = getattr(self, "account_btn", None)
         if button is None:
@@ -627,11 +784,9 @@ class ChatWindow(proto.ExactChatWindow):
         panel.setStyleSheet(
             "QFrame#accountSlidePanel { background: rgba(13,16,19,.97); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; }"
             "QFrame#accountPanelDivider { background: rgba(255,255,255,.08); border: 0; max-height: 1px; min-height: 1px; }"
-            "QLabel { color: #f3f4f6; }"
+            "QLabel { color: #f3f4f6; font-family: Cascadia Code; }"
             "QLabel#accountPanelSection { color: #8b949e; font-size: 10px; font-weight: 700; letter-spacing: 0px; }"
-            "QPushButton { min-height: 28px; padding: 0 12px; border-radius: 8px; font-weight: 600; }"
-            "QPushButton#accountSwitchButton { text-align: left; border: 1px solid rgba(139,92,246,.16); background: rgba(139,92,246,.07); color: #ddd6fe; }"
-            "QPushButton#accountSwitchButton:hover { background: rgba(139,92,246,.16); border-color: rgba(139,92,246,.32); color: #ffffff; }"
+            "QPushButton { min-height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11px; font-weight: 600; font-family: Cascadia Code; }"
             "QPushButton#accountCommandButton { border: 1px solid rgba(255,255,255,.07); background: rgba(255,255,255,.035); color: #c4b5fd; }"
             "QPushButton#accountCommandButton:hover { background: rgba(255,255,255,.07); border-color: rgba(139,92,246,.24); color: #ffffff; }"
             "QPushButton#dangerButton { border: 1px solid rgba(248,113,113,.18); background: rgba(248,113,113,.06); color: #fca5a5; }"
@@ -641,12 +796,36 @@ class ChatWindow(proto.ExactChatWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
         title = QLabel("Аккаунт MMis")
-        title.setStyleSheet("font-weight: 700;")
+        title.setText("Аккаунты")
+        title.setStyleSheet("font-family: Cascadia Code; font-weight: 700;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         name = get_auth_display_name()
         state = QLabel(name or "В аккаунт не выполнен вход")
-        state.setStyleSheet("color: #9ca3af;")
-        layout.addWidget(state)
+        state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        state.setFixedHeight(22)
+        state.setStyleSheet(
+            "color: #d9d0ff;"
+            "background: rgba(139,92,246,.10);"
+            "border: 1px solid rgba(139,92,246,.18);"
+            "border-radius: 6px;"
+            "padding: 0 8px;"
+            "font-weight: 500;"
+            "font-family: Cascadia Code;"
+            "font-size: 11px;"
+        )
+        state.adjustSize()
+        logout_btn = None
+        active_row = QHBoxLayout()
+        active_row.setContentsMargins(0, 0, 0, 0)
+        active_row.setSpacing(6)
+        active_row.addWidget(state, 1)
+        if get_auth_token():
+            logout_btn = QPushButton("Выйти")
+            logout_btn.setObjectName("dangerButton")
+            self._account_logout_reveal_filter = LogoutRevealFilter(state, logout_btn, panel)
+            active_row.addWidget(logout_btn, 0)
+        layout.addLayout(active_row)
 
         sessions = list_auth_sessions()
         current_id = self._current_account_scope_id()
@@ -656,18 +835,13 @@ class ChatWindow(proto.ExactChatWindow):
             if str(session.get("account_id") or "").strip()
             and str(session.get("account_id") or "").strip() != current_id
         ]
-        if switch_sessions:
-            section = QLabel("РђРљРљРђРЈРќРўР«")
-            section.setObjectName("accountPanelSection")
-            layout.addWidget(section)
         for session in switch_sessions:
             account_id = str(session.get("account_id") or "").strip()
             label = str(session.get("display_name") or session.get("login") or account_id).strip()
-            switch_btn = QPushButton(label)
-            switch_btn.setObjectName("accountSwitchButton")
+            switch_btn = AccountSwitchRow(label, panel)
             switch_btn.setToolTip("Перейти на аккаунт")
             layout.addWidget(switch_btn)
-            switch_btn.clicked.connect(lambda _checked=False, aid=account_id: self._switch_saved_account(aid))
+            switch_btn.clicked.connect(lambda aid=account_id: self._switch_saved_account(aid))
 
         add_btn = QPushButton("Добавить")
         divider = QFrame(panel)
@@ -676,14 +850,8 @@ class ChatWindow(proto.ExactChatWindow):
 
         add_btn.setObjectName("accountCommandButton")
         layout.addWidget(add_btn)
-        logout_btn = None
-        if get_auth_token():
-            logout_btn = QPushButton("Выйти")
-            logout_btn.setObjectName("dangerButton")
-            layout.addWidget(logout_btn)
-
-        panel_width = 230
-        panel_height = 102 + (44 if switch_sessions else 0) + (34 * len(switch_sessions)) + (36 if logout_btn is not None else 0)
+        panel_width = 190
+        panel_height = 102 + (26 * len(switch_sessions))
         top_left = parent.mapFromGlobal(button.mapToGlobal(button.rect().bottomLeft()))
         x = max(8, min(int(top_left.x()), max(8, parent.width() - panel_width - 8)))
         y = int(top_left.y() + 8)
@@ -741,7 +909,120 @@ class ChatWindow(proto.ExactChatWindow):
     def _on_account_clicked(self) -> None:
         self._show_account_menu()
 
+    def _show_login_overlay(self) -> None:
+        from PySide6.QtWidgets import QFormLayout, QFrame, QGraphicsBlurEffect, QLineEdit
+
+        existing = getattr(self, "_login_overlay", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            return
+
+        blur_target = self.centralWidget()
+        if blur_target is not None:
+            effect = QGraphicsBlurEffect(blur_target)
+            effect.setBlurRadius(16)
+            effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+            blur_target.setGraphicsEffect(effect)
+            self._login_blur_target = blur_target
+
+        overlay = QFrame(self)
+        overlay.setObjectName("loginOverlay")
+        central = self.centralWidget()
+        overlay.setGeometry(central.geometry() if central is not None else self.rect())
+        overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        overlay.setStyleSheet(
+            "QFrame#loginOverlay { background: rgba(5,7,10,.46); }"
+            "QFrame#loginPanel { background: rgba(13,16,19,.97); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; }"
+            "QLabel { color: #f3f4f6; font-family: Cascadia Code; font-size: 11px; }"
+            "QLabel#loginError { color: #fca5a5; }"
+            "QLineEdit { background: rgba(255,255,255,.04); color: #f3f4f6; border: 1px solid rgba(255,255,255,.08); border-radius: 7px; padding: 4px 7px; font-family: Cascadia Code; font-size: 11px; min-height: 22px; }"
+            "QLineEdit:focus { border-color: rgba(139,92,246,.32); background: rgba(139,92,246,.06); }"
+            "QPushButton { background: rgba(139,92,246,.14); color: #f3f4f6; border: 1px solid rgba(139,92,246,.22); border-radius: 7px; padding: 5px 9px; font-family: Cascadia Code; font-size: 11px; }"
+            "QPushButton:hover { background: rgba(139,92,246,.22); }"
+        )
+        overlay_layout = QVBoxLayout(overlay)
+        overlay_layout.setContentsMargins(18, 18, 18, 18)
+        overlay_layout.setSpacing(0)
+
+        panel = QFrame(overlay)
+        panel.setObjectName("loginPanel")
+        panel.setFixedWidth(360)
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(12, 12, 12, 10)
+        root.setSpacing(8)
+
+        title = QLabel("Войти или добавить аккаунт MMis")
+        title.setStyleSheet("font-size: 12px; font-weight: 700;")
+        root.addWidget(title)
+        form = QFormLayout()
+        form.setVerticalSpacing(7)
+        form.setHorizontalSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
+        login_edit = QLineEdit()
+        login_edit.setPlaceholderText("Например: admin")
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Логин", login_edit)
+        form.addRow("Пароль", password_edit)
+        root.addLayout(form)
+
+        error_label = QLabel("")
+        error_label.setObjectName("loginError")
+        root.addWidget(error_label)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        login_btn = QPushButton("Войти")
+        register_btn = QPushButton("Создать / задать пароль")
+        cancel_btn = QPushButton("Отмена")
+        register_btn.setText("Создать пароль")
+        buttons.addWidget(login_btn)
+        buttons.addWidget(register_btn)
+        buttons.addWidget(cancel_btn)
+        root.addLayout(buttons)
+        overlay_layout.addWidget(panel, 0, Qt.AlignmentFlag.AlignCenter)
+
+        def close_overlay() -> None:
+            target = getattr(self, "_login_blur_target", None)
+            if target is not None:
+                target.setGraphicsEffect(None)
+                self._login_blur_target = None
+            current = getattr(self, "_login_overlay", None)
+            if current is not None:
+                current.hide()
+                current.deleteLater()
+                self._login_overlay = None
+
+        def do_login(register: bool = False) -> None:
+            login = login_edit.text().strip()
+            password = password_edit.text()
+            if not self.api:
+                error_label.setText("API недоступен")
+                return
+            try:
+                self._save_chat_sessions()
+                if register:
+                    payload = self.api.auth_register(login, password, display_name=login)
+                else:
+                    payload = self.api.auth_login(login, password)
+                save_auth_state(payload)
+                self._reload_account_scope()
+                close_overlay()
+            except Exception as exc:
+                error_label.setText(str(exc))
+
+        login_btn.clicked.connect(lambda: do_login(False))
+        register_btn.clicked.connect(lambda: do_login(True))
+        cancel_btn.clicked.connect(close_overlay)
+        self._login_overlay = overlay
+        overlay.show()
+        overlay.raise_()
+        login_edit.setFocus()
+
     def _show_login_dialog(self) -> None:
+        self._show_login_overlay()
+        return
         from PySide6.QtWidgets import QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
 
         dialog = QDialog(self)
@@ -1878,16 +2159,17 @@ class ChatWindow(proto.ExactChatWindow):
         
         if row.get("api_ok") and "persona_name" in row:
             self._cache_persona_name(row.get("persona_name"))
-        for attr, key in (
-            ("_thinking_enabled", "thinking_enabled"),
-            ("_verbose_enabled", "verbose_enabled"),
-            ("_json_mode_enabled", "json_mode_enabled"),
-        ):
-            if key in row:
-                setattr(self, attr, bool(row.get(key)))
-        if str(row.get("web_mode") or "").strip():
-            self._web_mode = str(row.get("web_mode") or self._web_mode)
-        self._sync_controls_to_state()
+        if time.monotonic() >= float(getattr(self, "_runtime_flags_dirty_until", 0.0)):
+            for attr, key in (
+                ("_thinking_enabled", "thinking_enabled"),
+                ("_verbose_enabled", "verbose_enabled"),
+                ("_json_mode_enabled", "json_mode_enabled"),
+            ):
+                if key in row:
+                    setattr(self, attr, bool(row.get(key)))
+            if str(row.get("web_mode") or "").strip():
+                self._web_mode = str(row.get("web_mode") or self._web_mode)
+            self._sync_controls_to_state()
 
     def _sync_controls_to_state(self) -> None:
         if hasattr(self, "think_toggle"):
@@ -1988,6 +2270,17 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot(bool)
     def _on_think_toggled(self, checked: bool) -> None:
+        self._runtime_flags_dirty_until = time.monotonic() + 2.0
+        self._thinking_enabled = bool(checked)
+        self._runtime_flags["think"] = self._thinking_enabled
+        self._runtime_flags["verbose"] = self._verbose_enabled
+        self._runtime_flags["json"] = self._json_mode_enabled
+        self._runtime_flags["web_mode"] = self._web_mode
+        self._sync_controls_to_state()
+        self._save_ui_state()
+        self._runtime_sync_timer.start(150)
+        QTimer.singleShot(80, self._render_history)
+        return
         previous = self._thinking_enabled
         self._thinking_enabled = bool(checked)
         if self.api:
@@ -2004,6 +2297,17 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot(bool)
     def _on_verbose_toggled(self, checked: bool) -> None:
+        self._runtime_flags_dirty_until = time.monotonic() + 2.0
+        self._verbose_enabled = bool(checked)
+        self._runtime_flags["think"] = self._thinking_enabled
+        self._runtime_flags["verbose"] = self._verbose_enabled
+        self._runtime_flags["json"] = self._json_mode_enabled
+        self._runtime_flags["web_mode"] = self._web_mode
+        self._sync_controls_to_state()
+        self._save_ui_state()
+        self._runtime_sync_timer.start(150)
+        QTimer.singleShot(80, self._render_history)
+        return
         previous = self._verbose_enabled
         self._verbose_enabled = bool(checked)
         if self.api:
@@ -2020,6 +2324,16 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot(bool)
     def _on_json_toggled(self, checked: bool) -> None:
+        self._runtime_flags_dirty_until = time.monotonic() + 2.0
+        self._json_mode_enabled = bool(checked)
+        self._runtime_flags["think"] = self._thinking_enabled
+        self._runtime_flags["verbose"] = self._verbose_enabled
+        self._runtime_flags["json"] = self._json_mode_enabled
+        self._runtime_flags["web_mode"] = self._web_mode
+        self._sync_controls_to_state()
+        self._save_ui_state()
+        self._runtime_sync_timer.start(150)
+        return
         previous = self._json_mode_enabled
         self._json_mode_enabled = bool(checked)
         if self.api:
@@ -2738,25 +3052,19 @@ class ChatWindow(proto.ExactChatWindow):
             out["display_write_ms"] = display_write_ms
 
         tok_s = backend_tok_s
-        if tok_s <= 0.0 and gen_tokens > 0 and decode_ms > 0.0:
-            out["eval_tokens_per_sec"] = round(float(gen_tokens) / (decode_ms / 1000.0), 2)
-            tok_s = float(out["eval_tokens_per_sec"])
-        elif tok_s > 0.0:
+        if tok_s > 0.0:
             out.setdefault("eval_tokens_per_sec", round(float(tok_s), 2))
         display_tok_s = round(float(tok_s), 2) if tok_s > 0.0 else 0.0
         if display_tok_s > 0.0:
             out["display_tok_s"] = display_tok_s
 
-        display_elapsed_ms = int(round(float(backend_total_duration_ms or 0.0)) or 0)
+        display_elapsed_ms = int(out.get("display_thinking_ms") or 0) + int(out.get("display_write_ms") or 0)
+        if display_elapsed_ms <= 0:
+            display_elapsed_ms = int(round(float(backend_total_duration_ms or 0.0)) or 0)
         if display_elapsed_ms <= 0 and fallback_elapsed_ms > 0:
             display_elapsed_ms = int(fallback_elapsed_ms or 0)
         if display_elapsed_ms <= 0:
             display_elapsed_ms = int(elapsed or 0)
-        if display_elapsed_ms <= 0:
-            display_elapsed_ms = max(
-                int(out.get("display_thinking_ms") or 0),
-                int(out.get("display_write_ms") or 0),
-            )
         if display_elapsed_ms > 0:
             out["display_elapsed_ms"] = display_elapsed_ms
 
@@ -2825,15 +3133,14 @@ class ChatWindow(proto.ExactChatWindow):
             tok_s_float = float(tok_s) if tok_s not in (None, "") else 0.0
         except Exception:
             tok_s_float = 0.0
-        if verbose_enabled and tok_s_float <= 0.0 and gen_t_int > 0 and decode_ms > 0:
-            tok_s_float = round(float(gen_t_int) / (decode_ms / 1000.0), 2)
         perf: list[str] = []
         if elapsed:
             perf.append(ChatWindow._format_duration_label(elapsed))
         if decode_ms:
             perf.append(f"write {ChatWindow._format_duration_label(decode_ms)}")
         if verbose_enabled:
-            perf.append(f"{tok_s_float:.1f} tok/s")
+            if tok_s_float > 0.0:
+                perf.append(f"{tok_s_float:.1f} tok/s")
             perf.append(f"prompt {prompt_t_int}")
             perf.append(f"gen {gen_t_int}")
         else:

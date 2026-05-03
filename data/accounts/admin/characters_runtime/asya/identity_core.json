@@ -1,24 +1,28 @@
 {
   "schema_version": 1,
   "addressing": {
-    "canonical_name": "Пользователь",
+    "canonical_name": "на",
     "allowed_forms": [
       "Пользователь",
       "на",
       "игнорирует",
       "то",
-      "меня"
+      "меня",
+      "общаться",
+      "была"
     ],
     "forbidden_forms": [
       "ответил",
       "сегд",
       "офигивай",
       "забывал",
-      "забыл"
+      "забыл",
+      "хотел",
+      "согласн"
     ],
     "allow_diminutives": false,
     "use_name_by_default": false,
-    "updated_at": "2026-04-19T18:17:54.333+03:00"
+    "updated_at": "2026-05-03T14:57:34.423+03:00"
   },
   "interaction_style": {
     "prefers_directness": 0.82,
@@ -33,5 +37,5 @@
     "treat_short_replies_as_low_bandwidth": true
   },
   "assistant_trait_baseline": {},
-  "updated_at": "2026-04-19T18:17:54.333+03:00"
+  "updated_at": "2026-05-03T14:57:34.423+03:00"
 }

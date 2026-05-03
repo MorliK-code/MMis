@@ -1630,7 +1630,7 @@ class CharacterRuntime:
         if not text:
             return
         history = self._coerce_history(self._state.get("history"))
-        history.append({"role": str(role or "user"), "content": text})
+        history.append({"role": str(role or "user"), "content": text, "ts": now_local_ts()})
         limit = self.history_limit if max_items is None else max(10, int(max_items))
         if len(history) > limit:
             history = history[-limit:]
@@ -3909,17 +3909,24 @@ class CharacterRuntime:
         used_tokens = 0
         for row in reversed(tail):
             clipped, _ = _clip_to_tokens(row["content"], budgets.tail_turn_tokens)
-            line = f"- {row['role']}: {clipped}"
+            ts_label = _format_turn_ts_label(row.get("ts", ""))
+            line = f"- {row['role']}{ts_label}: {clipped}"
             line_tokens = estimate_tokens(line)
             if used_tokens + line_tokens > budgets.tail_tokens:
                 continue
             used_tokens += line_tokens
-            selected_rev.append({"role": row["role"], "content": clipped})
+            entry: dict[str, str] = {"role": row["role"], "content": clipped}
+            if row.get("ts"):
+                entry["ts"] = row["ts"]
+            selected_rev.append(entry)
 
         selected = list(reversed(selected_rev))
         if not selected:
             return "- none", [], len(tail)
-        block = "\n".join(f"- {x['role']}: {x['content']}" for x in selected)
+        block = "\n".join(
+            f"- {x['role']}{_format_turn_ts_label(x.get('ts', ''))}: {x['content']}"
+            for x in selected
+        )
         return block, selected, max(0, len(tail) - len(selected))
 
     def _build_long_summary_block(
@@ -4811,6 +4818,23 @@ def _coerce_memory(item) -> dict[str, Any]:
     }
 
 
+
+def _format_turn_ts_label(ts_raw: str) -> str:
+    """Format a turn timestamp into a compact label like ' [03.05 14:32]'."""
+    text = str(ts_raw or "").strip()
+    if not text:
+        return ""
+    try:
+        epoch = parse_time_to_epoch(text, 0.0)
+        if float(epoch) <= 0:
+            return ""
+        import datetime as _dt
+        local_dt = _dt.datetime.fromtimestamp(float(epoch))
+        return local_dt.strftime(" [%d.%m %H:%M]")
+    except Exception:
+        return ""
+
+
 def _coerce_turn(item) -> dict[str, str]:
     """Привести turn."""
     if isinstance(item, dict):
@@ -4818,10 +4842,14 @@ def _coerce_turn(item) -> dict[str, str]:
         content = _normalize_text(item.get("content") or item.get("text") or "")
         if role == "assistant" and is_internal_error_reply(content):
             content = ""
-        return {
+        ts = str(item.get("ts") or "").strip()
+        out: dict[str, str] = {
             "role": role,
             "content": content,
         }
+        if ts:
+            out["ts"] = ts
+        return out
     return {"role": "user", "content": _normalize_text(item)}
 
 

@@ -397,7 +397,18 @@ class StyledMessageLabel(QLabel):
         self._preferred_text_width: int | None = None
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setTextFormat(Qt.TextFormat.RichText)
-        self.setStyleSheet("QLabel { background: transparent; }")
+        self.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self.setStyleSheet(
+            "QLabel {"
+            "background: transparent;"
+            "selection-background-color: rgba(184,168,239,.25);"
+            "selection-color: #f3f4f6;"
+            "}"
+        )
         self.setText(text)
 
     def text(self) -> str:  # noqa: N802
@@ -631,6 +642,8 @@ class PaintedButton(QPushButton):
         self._disabled_text = _to_qcolor(MUTED_2)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFlat(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setStyleSheet("QPushButton { background: transparent; border: 0; }")
 
     def set_button_font(self, font: QFont) -> None:
         self._font = QFont(font)
@@ -1043,6 +1056,7 @@ class StatusPill(QWidget):
         self._active = bool(active)
         self.setFixedHeight(20)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
     def set_status(self, active: bool, *, tooltip: str = "", text: str | None = None) -> None:
         if text is not None:
@@ -1654,6 +1668,7 @@ class ResourcePill(QWidget):
         self._value = str(value or "")
         self._font = _topbar_font(pixel_size=10)
         self.setFixedHeight(22)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
     def set_value(self, text: str) -> None:
         self._value = str(text or "")
@@ -2735,6 +2750,26 @@ class RuntimeFlagSyncWorker(QThread):
         self.payload = dict(payload or {})
 
     def run(self) -> None:
+        errors: list[str] = []
+        timeout = 1.5
+
+        def post(path: str, payload: dict) -> None:
+            try:
+                self.api._request_json("POST", path, payload=payload, timeout=timeout)
+            except Exception as exc:
+                errors.append(str(exc))
+
+        if "think" in self.payload:
+            post("/thinking", {"enabled": bool(self.payload["think"])})
+        if "verbose" in self.payload:
+            post("/verbose", {"enabled": bool(self.payload["verbose"])})
+        if "json" in self.payload:
+            post("/json-mode", {"enabled": bool(self.payload["json"])})
+        if "web_mode" in self.payload:
+            post("/web-mode", {"mode": str(self.payload["web_mode"])})
+
+        self.done.emit(not errors, " | ".join(errors) if errors else "ok")
+        return
         try:
             # Важно: никаких долгих timeout.
             timeout = 1.5
@@ -2828,32 +2863,35 @@ class ExactChatWindow(QMainWindow):
         topbar.setObjectName("chat_topbar")
         topbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         topbar.setStyleSheet(f"QFrame#chat_topbar {{ background:rgba(13,16,19,.74); border-bottom:1px solid {LINE}; }}")
-        topbar.setFixedHeight(64)
+        topbar.setFixedHeight(48)
         tb = QHBoxLayout(topbar)
-        tb.setContentsMargins(6, 6, 12, 6)
+        tb.setContentsMargins(6, 4, 12, 4)
         tb.setSpacing(10)
 
         left = QHBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(10)
         brand = BrandBadge("MMis")
-        left.addWidget(brand)
+        left.addWidget(brand, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.account_btn = AccountPill("Войти")
         self.account_btn.setToolTip("Локальный аккаунт")
         self.account_btn.clicked.connect(self._on_account_clicked)
-        left.addWidget(self.account_btn)
+        left.addWidget(self.account_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self._refresh_account_button()
 
-        status_wrap = QHBoxLayout(); status_wrap.setSpacing(5)
+        status_wrap = QHBoxLayout()
+        status_wrap.setContentsMargins(0, 0, 0, 0)
+        status_wrap.setSpacing(5)
         self.status_pills: dict[str, StatusPill] = {}
         for name in ("api", "model", "memory"):
             pill = StatusPill(name, active=False)
             self.status_pills[name] = pill
-            status_wrap.addWidget(pill)
+            status_wrap.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
         sw = QWidget(); sw.setLayout(status_wrap)
-        left.addWidget(sw)
+        left.addWidget(sw, 0, Qt.AlignmentFlag.AlignVCenter)
         left_w = QWidget(); left_w.setLayout(left)
-        tb.addWidget(left_w, 0, Qt.AlignmentFlag.AlignLeft)
+        tb.addWidget(left_w, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         tb.addStretch(1)
 
         self.cpu_pill = ResourcePill("CPU", "--")
@@ -3172,7 +3210,7 @@ class ExactChatWindow(QMainWindow):
             self._runtime_sync_timer.start(250)
 
     def _sync_runtime_flags_async(self) -> None:
-        if self._runtime_sync_worker is not None and self._runtime_sync_worker.isRunning():
+        if self._runtime_sync_worker is not None and self._runtime_worker_is_running():
             # Если прошлый sync ещё идёт, попробуем позже.
             self._runtime_sync_timer.start(500)
             return
@@ -3186,11 +3224,21 @@ class ExactChatWindow(QMainWindow):
 
         self._runtime_sync_worker = RuntimeFlagSyncWorker(self.api, payload)
         self._runtime_sync_worker.done.connect(self._on_runtime_flags_synced)
+        self._runtime_sync_worker.finished.connect(lambda: setattr(self, "_runtime_sync_worker", None))
         self._runtime_sync_worker.finished.connect(self._runtime_sync_worker.deleteLater)
         self._runtime_sync_worker.start()
 
+    def _runtime_worker_is_running(self) -> bool:
+        try:
+            return bool(self._runtime_sync_worker is not None and self._runtime_sync_worker.isRunning())
+        except RuntimeError:
+            self._runtime_sync_worker = None
+            return False
+
     def _on_runtime_flags_synced(self, ok: bool, message: str) -> None:
         if ok:
+            return
+        if "timed out" in str(message or "").lower():
             return
         try:
             print(f"[runtime flags sync] {message}")
@@ -3512,8 +3560,19 @@ class ExactChatWindow(QMainWindow):
             getattr(result, "thinking", ""),
         )
         stats = getattr(result, "stats", {}) or {}
-        elapsed = int(float(stats.get("elapsed_ms") or stats.get("total_ms") or max(1, (finished_at - self._pending.started_at) * 1000)))
         write_ms = int(float(stats.get("decode_ms") or stats.get("eval_ms") or 0))
+        
+        thinking_ms = ""
+        thinking_ms_int = 0
+        if str(thinking or "").strip():
+            if self._pending.first_answer_at is not None and self._pending.first_thinking_at is not None:
+                thinking_ms_int = max(1, int((self._pending.first_answer_at - self._pending.first_thinking_at) * 1000))
+                thinking_ms = f"{thinking_ms_int} ms"
+        
+        elapsed = thinking_ms_int + write_ms
+        if elapsed <= 0:
+            elapsed = int(float(stats.get("elapsed_ms") or stats.get("total_ms") or max(1, (finished_at - self._pending.started_at) * 1000)))
+            
         tok_s = stats.get("tokens_per_second") or stats.get("tok_s") or stats.get("tps")
         prompt_t = stats.get("prompt_tokens") or stats.get("prompt_eval_count")
         gen_t = stats.get("gen_tokens") or stats.get("eval_count")
@@ -3522,17 +3581,14 @@ class ExactChatWindow(QMainWindow):
             perf.append(f"write {write_ms} ms")
         if tok_s not in (None, ""):
             try:
-                perf.append(f"{float(tok_s):.1f} tok/s")
+                if float(tok_s) > 0.0:
+                    perf.append(f"{float(tok_s):.1f} tok/s")
             except Exception:
-                perf.append(f"{tok_s} tok/s")
+                pass
         if prompt_t not in (None, ""):
             perf.append(f"prompt {prompt_t}")
         if gen_t not in (None, ""):
             perf.append(f"gen {gen_t}")
-        thinking_ms = ""
-        if str(thinking or "").strip():
-            if self._pending.first_answer_at is not None and self._pending.first_thinking_at is not None:
-                thinking_ms = f"{max(1, int((self._pending.first_answer_at - self._pending.first_thinking_at) * 1000))} ms"
         self._pending.bubble.update_text(text)
         self._pending.bubble.update_thinking(thinking, thinking_ms)
         self._pending.bubble.set_perf(perf)

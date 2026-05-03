@@ -1,0 +1,165 @@
+{
+  "version": "1.0.0",
+  "description": "LLM generation profiles — единый источник истины для всех профилей производительности",
+  "profiles": {
+    "FAST": {
+      "name": "FAST",
+      "description": "Быстрые ответы с минимальным использованием токенов",
+      "use_cases": [
+        "smalltalk",
+        "quick_questions",
+        "chat"
+      ],
+      "generation": {
+        "temperature": 0.55,
+        "top_p": 0.9,
+        "repeat_penalty": 1.05,
+        "stop": []
+      },
+      "ollama": {
+        "num_thread": 4,
+        "num_ctx": 4096,
+        "num_gpu": 20,
+        "num_batch": 64,
+        "keep_alive": "2m"
+      },
+      "openai": {
+        "model": "",
+        "reasoning_effort": "low"
+      }
+    },
+    "BALANCED": {
+      "name": "BALANCED",
+      "description": "Баланс между скоростью и качеством",
+      "use_cases": [
+        "general_chat",
+        "tasks",
+        "questions"
+      ],
+      "generation": {
+        "temperature": 0.7,
+        "top_p": 0.92,
+        "repeat_penalty": 1.1,
+        "stop": []
+      },
+      "ollama": {
+        "num_thread": 4,
+        "num_ctx": 8192,
+        "num_gpu": 30,
+        "num_batch": 128,
+        "keep_alive": "5m"
+      },
+      "openai": {
+        "model": "",
+        "reasoning_effort": "medium"
+      }
+    },
+    "QUALITY": {
+      "name": "QUALITY",
+      "description": "Максимальное качество с полным контекстом",
+      "use_cases": [
+        "complex_tasks",
+        "analysis",
+        "creative"
+      ],
+      "generation": {
+        "temperature": 0.82,
+        "top_p": 0.95,
+        "repeat_penalty": 1.2,
+        "stop": []
+      },
+      "ollama": {
+        "num_thread": 4,
+        "num_ctx": 12288,
+        "num_gpu": 36,
+        "num_batch": 160,
+        "keep_alive": "10m"
+      },
+      "openai": {
+        "model": "",
+        "reasoning_effort": "high"
+      }
+    },
+    "ECONOM": {
+      "name": "ECONOM",
+      "description": "Минимальное использование ресурсов",
+      "use_cases": [
+        "simple_queries",
+        "status_checks"
+      ],
+      "generation": {
+        "temperature": 0.45,
+        "top_p": 0.88,
+        "repeat_penalty": 1.12,
+        "stop": []
+      },
+      "ollama": {
+        "num_thread": 4,
+        "num_ctx": 2048,
+        "num_gpu": 10,
+        "num_batch": 32,
+        "keep_alive": "1m"
+      },
+      "openai": {
+        "model": "",
+        "reasoning_effort": "low"
+      }
+    },
+    "AUTONOMOUS": {
+      "name": "AUTONOMOUS",
+      "description": "Полная автономность с agent loop",
+      "use_cases": [
+        "agent_tasks",
+        "multi_step",
+        "tool_use"
+      ],
+      "generation": {
+        "temperature": 0.75,
+        "top_p": 0.93,
+        "repeat_penalty": 1.15,
+        "stop": []
+      },
+      "ollama": {
+        "num_thread": 4,
+        "num_ctx": 8192,
+        "num_gpu": 9999,
+        "num_batch": 128,
+        "keep_alive": "15m"
+      },
+      "openai": {
+        "model": "",
+        "reasoning_effort": "high"
+      },
+      "agent_loop": {
+        "enabled": true,
+        "max_tool_calls": 3,
+        "max_passes": 2
+      }
+    },
+    "ASYA": {
+      "name": "ASYA",
+      "description": "Кастомный профиль для Asya (персонаж по умолчанию)",
+      "use_cases": [
+        "character_chat",
+        "roleplay"
+      ],
+      "generation": {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "repeat_penalty": 1.2,
+        "stop": []
+      },
+      "ollama": {
+        "num_thread": 6,
+        "num_ctx": 32000,
+        "num_gpu": 64,
+        "num_batch": 128,
+        "keep_alive": "5m"
+      },
+      "openai": {
+        "model": "",
+        "reasoning_effort": "medium"
+      }
+    }
+  }
+}
