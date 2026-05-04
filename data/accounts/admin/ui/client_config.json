@@ -2,15 +2,12 @@
   "connection": {
     "active_endpoint": "local",
     "local_base_url": "http://127.0.0.1:8027",
-    "public_base_url": "",
-    "api_access_key": ""
+    "public_base_url": "http://45.82.9.3:8027",
+    "api_access_key": "mmis_Npi3_jJLFCSSvu1h4_L-8UekpedVMf5b6MmJxajAxt-b6Kn1TojXekJuvkxlKvaL"
   },
   "values": {
-    "ui.console.auto_start_ollama": true,
-    "memory_core.memory_llm.keep_alive": "0",
-    "api.access_lock.enabled": false,
-    "api.access_lock.key_hash": "",
-    "ui.api.api_access_key": ""
+    "ui.api.api_access_key": "mmis_Npi3_jJLFCSSvu1h4_L-8UekpedVMf5b6MmJxajAxt-b6Kn1TojXekJuvkxlKvaL",
+    "api.access_lock.key_hash": "2fca761d7638bd9bf398723f7d3e3e9ead1cd5775b8a8dc9b12dced2ca132927"
   },
   "server_snapshot": {
     "app": {
@@ -34,8 +31,8 @@
       "host": "0.0.0.0",
       "port": 8027,
       "access_lock": {
-        "enabled": false,
-        "key_hash": "",
+        "enabled": true,
+        "key_hash": "59ef359065eb226cd05aa6970a222da9a9517cb2fc00dffa201cb0160a9c35bc",
         "deny_status": 404,
         "allow_ping_without_key": false
       }
@@ -297,7 +294,7 @@
       "enable_background_worker": true,
       "worker_poll_interval": 2.0,
       "memory_llm": {
-        "keep_alive": "0"
+        "keep_alive": "5s"
       },
       "memory_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core",
       "cache_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\cache"
@@ -406,7 +403,10 @@
       "account_id": "admin"
     }
   },
-  "pending_updates": {},
-  "last_sync_at": "2026-05-03T21:42:49",
+  "pending_updates": {
+    "ui.api.api_access_key": "mmis_Npi3_jJLFCSSvu1h4_L-8UekpedVMf5b6MmJxajAxt-b6Kn1TojXekJuvkxlKvaL",
+    "api.access_lock.key_hash": "2fca761d7638bd9bf398723f7d3e3e9ead1cd5775b8a8dc9b12dced2ca132927"
+  },
+  "last_sync_at": "2026-05-04T15:30:13",
   "last_error": null
 }

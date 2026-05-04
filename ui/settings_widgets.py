@@ -39,7 +39,7 @@ from ui.chat_shell import (
 from ui.api_client import ApiClient
 from ui.client_config_store import get_ollama_models_cache, set_ollama_models_cache
 from ui.settings_sync_service import load_settings_payload, dotted_get
-from utils.ollama_runtime import ensure_ollama_started
+from ui.ollama_runtime import ensure_ollama_started
 
 _ACTIVE_MODEL_LIST_WORKERS: set[QThread] = set()
 
@@ -600,7 +600,7 @@ class ModelListWorker(QThread):
             from ui.api_client import ApiClient
             from ui.settings_sync_service import load_settings_payload
             from ui.settings_schema import dotted_get
-            from utils.ollama_runtime import ensure_ollama_started
+            from ui.ollama_runtime import ensure_ollama_started
 
             try:
                 cfg, _ = load_settings_payload()

@@ -1,0 +1,7 @@
+# UI runtime dependencies for the desktop client.
+# Install from the project root with:
+#   python -m pip install -r ui/requirements.txt
+
+PySide6
+PySide6-Addons
+PySide6-Essentials

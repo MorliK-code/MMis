@@ -48,7 +48,9 @@ def main() -> int:
             return 0
         for row in rows:
             status = "revoked" if row["revoked"] else "active"
-            print(f"{row['login']}\t{status}\t{row['label']}\t{row['key_hash']}")
+            key = str(row.get("key") or "")
+            key_text = key if key else "<raw key not stored>"
+            print(f"{row['login']}\t{status}\t{row['label']}\t{row['key_hash']}\t{key_text}")
         return 0
 
     if args.clear:
@@ -58,7 +60,7 @@ def main() -> int:
 
     key = str(args.key or "").strip() or _make_key(args.prefix, args.bytes)
     digest = _sha256(key)
-    account = store.set_api_access_key_hash(login, digest, label=args.label)
+    account = store.set_api_access_key_hash(login, digest, label=args.label, raw_key=key)
 
     print("MMis per-account API access key")
     print()

@@ -304,6 +304,36 @@ def _api_access_key_from_request(request) -> str:
     return str(request.headers.get("x-mmis-access-key") or "").strip()
 
 
+def _is_auth_entry_path(path: str) -> bool:
+    clean = str(path or "").strip().rstrip("/")
+    return clean in {"/auth/login", "/auth/register"}
+
+
+def _is_admin_api_access_path(path: str) -> bool:
+    clean = str(path or "").strip().rstrip("/")
+    return (
+        clean == "/auth/api-access-keys"
+        or clean.startswith("/auth/api-access-keys/")
+        or clean == "/admin/api-access-keys"
+        or clean.startswith("/admin/api-access-keys/")
+    )
+
+
+def _is_api_access_bootstrap_path(path: str) -> bool:
+    clean = str(path or "").strip().rstrip("/")
+    return _is_auth_entry_path(clean) or _is_admin_api_access_path(clean)
+
+
+def _admin_account_from_request(request) -> dict | None:
+    token = _bearer_token(str(request.headers.get("authorization") or ""))
+    if not token:
+        return None
+    account = auth_store.get_account_by_token(token)
+    if not account or not _is_admin_account(account):
+        return None
+    return account
+
+
 def _api_access_allowed(request) -> bool:
     request.state.api_access_account_id = ""
     cfg = load_config(force_reload=True)
@@ -311,7 +341,11 @@ def _api_access_allowed(request) -> bool:
         return True
 
     path = str(getattr(getattr(request, "url", None), "path", "") or "")
+    if _is_api_access_bootstrap_path(path):
+        return True
     if path == "/ping" and bool(getattr(cfg, "api_access_allow_ping_without_key", False)):
+        return True
+    if _is_admin_api_access_path(path) and _admin_account_from_request(request):
         return True
 
     expected_hash = str(getattr(cfg, "api_access_key_hash", "") or "").strip().lower()
@@ -399,7 +433,17 @@ async def _account_scoped_runtime_middleware(request, call_next):
     token = _api_access_account_id.set(str(getattr(request.state, "api_access_account_id", "") or "").strip())
     try:
         route_path = str(getattr(getattr(request, "url", None), "path", "") or "")
-        if route_path.startswith("/characters"):
+        cfg = load_config(force_reload=True)
+        lock_enabled = bool(getattr(cfg, "api_access_lock_enabled", False))
+        ping_open = route_path == "/ping" and bool(getattr(cfg, "api_access_allow_ping_without_key", False))
+        if lock_enabled and not _is_api_access_bootstrap_path(route_path) and not ping_open:
+            try:
+                account = _require_account(request.headers.get("authorization"))
+            except HTTPException as exc:
+                return JSONResponse(status_code=int(exc.status_code), content={"detail": exc.detail})
+            with _runtime.lock:
+                _ensure_runtime_account(account)
+        elif route_path.startswith("/characters"):
             try:
                 account = _require_account(request.headers.get("authorization"))
             except HTTPException as exc:
@@ -940,6 +984,100 @@ def auth_logout(authorization: str | None = Header(default=None)) -> dict:
     if token:
         auth_store.revoke_token(token)
     return {"status": "ok"}
+
+
+def _api_access_keys_payload(authorization: str | None) -> dict:
+    account = _require_account(authorization)
+    _assert_admin(account)
+    return {
+        "accounts": auth_store.list_accounts(),
+        "keys": auth_store.list_api_access_keys(),
+    }
+
+
+def _create_api_access_key_payload(payload: dict[str, Any], authorization: str | None) -> dict:
+    account = _require_account(authorization)
+    _assert_admin(account)
+    login = str((payload or {}).get("login") or "").strip().lower()
+    raw_key = str((payload or {}).get("key") or "").strip()
+    key_hash = str((payload or {}).get("key_hash") or "").strip().lower()
+    label = str((payload or {}).get("label") or "ui").strip() or "ui"
+    replace = bool((payload or {}).get("replace"))
+    if not login:
+        raise HTTPException(status_code=400, detail="login_required")
+    if raw_key:
+        key_hash = _hash_api_access_key(raw_key).lower()
+    if not key_hash:
+        raise HTTPException(status_code=400, detail="key_or_hash_required")
+    if not re.fullmatch(r"[0-9a-f]{64}", key_hash):
+        raise HTTPException(status_code=400, detail="invalid_sha256")
+    try:
+        if replace:
+            auth_store.delete_api_access_keys_for_account(login)
+        auth_store.set_api_access_key_hash(login, key_hash, label=label, raw_key=raw_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "login": login, "key_hash": key_hash}
+
+
+def _update_api_access_key_payload(key_hash: str, payload: dict[str, Any], authorization: str | None) -> dict:
+    account = _require_account(authorization)
+    _assert_admin(account)
+    if "enabled" not in dict(payload or {}):
+        raise HTTPException(status_code=400, detail="enabled_required")
+    ok = auth_store.set_api_access_key_enabled(key_hash, bool((payload or {}).get("enabled")))
+    if not ok:
+        raise HTTPException(status_code=404, detail="key_not_found")
+    return {"status": "ok"}
+
+
+def _delete_api_access_key_payload(key_hash: str, authorization: str | None) -> dict:
+    account = _require_account(authorization)
+    _assert_admin(account)
+    ok = auth_store.delete_api_access_key(key_hash)
+    if not ok:
+        raise HTTPException(status_code=404, detail="key_not_found")
+    return {"status": "ok"}
+
+
+@app.get("/auth/api-access-keys")
+def auth_api_access_keys(authorization: str | None = Header(default=None)) -> dict:
+    return _api_access_keys_payload(authorization)
+
+
+@app.post("/auth/api-access-keys")
+def auth_create_api_access_key(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict:
+    return _create_api_access_key_payload(payload, authorization)
+
+
+@app.patch("/auth/api-access-keys/{key_hash}")
+def auth_update_api_access_key(key_hash: str, payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict:
+    return _update_api_access_key_payload(key_hash, payload, authorization)
+
+
+@app.delete("/auth/api-access-keys/{key_hash}")
+def auth_delete_api_access_key(key_hash: str, authorization: str | None = Header(default=None)) -> dict:
+    return _delete_api_access_key_payload(key_hash, authorization)
+
+
+@app.get("/admin/api-access-keys")
+def admin_api_access_keys(authorization: str | None = Header(default=None)) -> dict:
+    return _api_access_keys_payload(authorization)
+
+
+@app.post("/admin/api-access-keys")
+def admin_create_api_access_key(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict:
+    return _create_api_access_key_payload(payload, authorization)
+
+
+@app.patch("/admin/api-access-keys/{key_hash}")
+def admin_update_api_access_key(key_hash: str, payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict:
+    return _update_api_access_key_payload(key_hash, payload, authorization)
+
+
+@app.delete("/admin/api-access-keys/{key_hash}")
+def admin_delete_api_access_key(key_hash: str, authorization: str | None = Header(default=None)) -> dict:
+    return _delete_api_access_key_payload(key_hash, authorization)
 
 
 def _build_health_response() -> HealthResponse:

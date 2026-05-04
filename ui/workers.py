@@ -58,7 +58,7 @@ class ReplyWorker(QThread):
     def run(self):
         try:
             from ui.settings_sync_service import load_settings_payload, dotted_get
-            from utils.ollama_runtime import ensure_ollama_started
+            from ui.ollama_runtime import ensure_ollama_started
 
             settings_payload, _meta = load_settings_payload(allow_remote=False)
             provider = str(dotted_get(settings_payload, "llm.provider", "ollama") or "ollama").lower()

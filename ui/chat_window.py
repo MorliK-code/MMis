@@ -29,7 +29,10 @@ from PySide6.QtGui import QCursor
 from PySide6.QtMultimedia import QAudioInput, QAudioOutput, QMediaCaptureSession, QMediaFormat, QMediaPlayer, QMediaRecorder
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QDialog
 from ui.widgets.message_box import MmisMessageBox
-from core.chat_store import ChatStore
+try:
+    from core.chat_store import ChatStore
+except ImportError:
+    from ui.local_chat_store import ChatStore
 
 from ui.settings_sync_service import load_settings_payload
 from ui.client_config_store import (

@@ -104,12 +104,17 @@ class AuthStore:
                 key_hash TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL,
                 label TEXT NOT NULL DEFAULT '',
+                raw_key TEXT NOT NULL DEFAULT '',
                 created_at REAL NOT NULL,
                 revoked_at REAL,
                 FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON DELETE CASCADE
             )
             """
         )
+        try:
+            self._execute("ALTER TABLE account_api_access_keys ADD COLUMN raw_key TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         self._execute("CREATE INDEX IF NOT EXISTS idx_accounts_login ON accounts(login)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_accounts_api_access_key_hash ON accounts(api_access_key_hash)")
         self._execute("CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id)")
@@ -293,7 +298,14 @@ class AuthStore:
             "role": str(row["role"] or "user"),
         }
 
-    def set_api_access_key_hash(self, login: str, key_hash: str, *, label: str = "default") -> dict[str, Any]:
+    def set_api_access_key_hash(
+        self,
+        login: str,
+        key_hash: str,
+        *,
+        label: str = "default",
+        raw_key: str = "",
+    ) -> dict[str, Any]:
         clean_login = _norm_login(login)
         clean_hash = str(key_hash or "").strip().lower()
         row = self._execute(
@@ -308,16 +320,21 @@ class AuthStore:
             (clean_hash, _now(), clean_login),
         )
         if clean_hash:
+            clean_raw_key = str(raw_key or "").strip()
             self._execute(
                 """
-                INSERT INTO account_api_access_keys(key_hash, account_id, label, created_at, revoked_at)
-                VALUES(?, ?, ?, ?, NULL)
+                INSERT INTO account_api_access_keys(key_hash, account_id, label, raw_key, created_at, revoked_at)
+                VALUES(?, ?, ?, ?, ?, NULL)
                 ON CONFLICT(key_hash) DO UPDATE SET
                     account_id=excluded.account_id,
                     label=excluded.label,
+                    raw_key=CASE
+                        WHEN excluded.raw_key != '' THEN excluded.raw_key
+                        ELSE account_api_access_keys.raw_key
+                    END,
                     revoked_at=NULL
                 """,
-                (clean_hash, str(row["account_id"]), clean_label, _now()),
+                (clean_hash, str(row["account_id"]), clean_label, clean_raw_key, _now()),
             )
         return {
             "account_id": str(row["account_id"]),
@@ -325,6 +342,25 @@ class AuthStore:
             "display_name": str(row["display_name"]),
             "role": str(row["role"] or "user"),
         }
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        rows = self._execute(
+            """
+            SELECT account_id, login, display_name, role, disabled
+            FROM accounts
+            ORDER BY lower(login)
+            """
+        ).fetchall()
+        return [
+            {
+                "account_id": str(row["account_id"]),
+                "login": str(row["login"]),
+                "display_name": str(row["display_name"]),
+                "role": str(row["role"] or "user"),
+                "disabled": bool(row["disabled"]),
+            }
+            for row in rows
+        ]
 
     def get_account_by_api_access_key_hash(self, key_hash: str) -> dict[str, Any] | None:
         clean_hash = str(key_hash or "").strip().lower()
@@ -362,7 +398,7 @@ class AuthStore:
         if clean_login:
             rows = self._execute(
                 """
-                SELECT a.login, a.display_name, k.key_hash, k.label, k.created_at, k.revoked_at
+                SELECT a.login, a.display_name, k.key_hash, k.label, k.raw_key, k.created_at, k.revoked_at
                 FROM account_api_access_keys k
                 JOIN accounts a ON a.account_id = k.account_id
                 WHERE a.login=?
@@ -373,7 +409,7 @@ class AuthStore:
         else:
             rows = self._execute(
                 """
-                SELECT a.login, a.display_name, k.key_hash, k.label, k.created_at, k.revoked_at
+                SELECT a.login, a.display_name, k.key_hash, k.label, k.raw_key, k.created_at, k.revoked_at
                 FROM account_api_access_keys k
                 JOIN accounts a ON a.account_id = k.account_id
                 ORDER BY a.login, k.created_at DESC
@@ -385,11 +421,34 @@ class AuthStore:
                 "display_name": str(row["display_name"]),
                 "key_hash": str(row["key_hash"]),
                 "label": str(row["label"] or ""),
+                "key": str(row["raw_key"] or ""),
                 "created_at": float(row["created_at"] or 0.0),
                 "revoked": row["revoked_at"] is not None,
             }
             for row in rows
         ]
+
+    def set_api_access_key_enabled(self, key_hash: str, enabled: bool) -> bool:
+        clean_hash = str(key_hash or "").strip().lower()
+        if not clean_hash:
+            return False
+        revoked_at = None if bool(enabled) else _now()
+        cur = self._execute(
+            "UPDATE account_api_access_keys SET revoked_at=? WHERE key_hash=?",
+            (revoked_at, clean_hash),
+        )
+        return bool(cur.rowcount)
+
+    def delete_api_access_key(self, key_hash: str) -> bool:
+        clean_hash = str(key_hash or "").strip().lower()
+        if not clean_hash:
+            return False
+        cur = self._execute("DELETE FROM account_api_access_keys WHERE key_hash=?", (clean_hash,))
+        self._execute(
+            "UPDATE accounts SET api_access_key_hash='', updated_at=? WHERE api_access_key_hash=?",
+            (_now(), clean_hash),
+        )
+        return bool(cur.rowcount)
 
     def clear_api_access_keys(self, login: str) -> int:
         clean_login = _norm_login(login)
@@ -412,6 +471,62 @@ class AuthStore:
             return int(cur.rowcount or 0)
         except Exception:
             return 0
+
+    def delete_api_access_keys_for_account(self, login: str) -> int:
+        clean_login = _norm_login(login)
+        row = self._execute(
+            "SELECT account_id FROM accounts WHERE login=? AND disabled=0",
+            (clean_login,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("account_not_found")
+        account_id = str(row["account_id"])
+        cur = self._execute("DELETE FROM account_api_access_keys WHERE account_id=?", (account_id,))
+        self._execute(
+            "UPDATE accounts SET api_access_key_hash='', updated_at=? WHERE account_id=?",
+            (_now(), account_id),
+        )
+        try:
+            return int(cur.rowcount or 0)
+        except Exception:
+            return 0
+
+    def delete_account(self, login: str, *, soft: bool = True) -> dict[str, Any]:
+        clean_login = _norm_login(login)
+        row = self._execute(
+            "SELECT account_id, login, display_name, role FROM accounts WHERE login=?",
+            (clean_login,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("account_not_found")
+        account = {
+            "account_id": str(row["account_id"]),
+            "login": str(row["login"]),
+            "display_name": str(row["display_name"]),
+            "role": str(row["role"] or "user"),
+        }
+        account_id = account["account_id"]
+        now = _now()
+        self._execute(
+            "UPDATE sessions SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL",
+            (now, account_id),
+        )
+        self._execute(
+            "UPDATE account_api_access_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL",
+            (now, account_id),
+        )
+        if soft:
+            self._execute(
+                """
+                UPDATE accounts
+                SET disabled=1, api_access_key_hash='', updated_at=?
+                WHERE account_id=?
+                """,
+                (now, account_id),
+            )
+        else:
+            self._execute("DELETE FROM accounts WHERE account_id=?", (account_id,))
+        return account
 
     def revoke_token(self, token: str) -> None:
         token_hash = _hash_token(token)

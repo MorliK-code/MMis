@@ -20,8 +20,8 @@
     "host": "0.0.0.0",
     "port": 8027,
     "access_lock": {
-      "enabled": false,
-      "key_hash": "",
+      "enabled": true,
+      "key_hash": "59ef359065eb226cd05aa6970a222da9a9517cb2fc00dffa201cb0160a9c35bc",
       "deny_status": 404,
       "allow_ping_without_key": false
     }
@@ -283,7 +283,7 @@
     "enable_background_worker": true,
     "worker_poll_interval": 2.0,
     "memory_llm": {
-      "keep_alive": "0"
+      "keep_alive": "5s"
     },
     "memory_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core",
     "cache_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\cache"

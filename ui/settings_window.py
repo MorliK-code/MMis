@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import secrets
 from typing import Any
+from urllib.parse import urlparse
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QFontMetrics, QPainter, QPen, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
+    QCheckBox,
+    QComboBox,
     QFrame,
     QGraphicsBlurEffect,
     QGridLayout,
@@ -24,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.settings_sync_service import dotted_set, load_settings_payload, save_settings_updates
+from ui.client_config_store import get_selected_base_url, save_account_client_config_updates
 from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor, _ui_font
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCard, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE, apply_settings_tooltip_style
@@ -249,6 +256,399 @@ class HintButton(QToolButton):
             int(Qt.AlignmentFlag.AlignCenter),
             "?",
         )
+
+
+class ApiAccessKeyManager(QFrame):
+    def __init__(self, api: ApiClient, parent: QWidget | None = None, owner: QWidget | None = None):
+        super().__init__(parent)
+        self.api = api
+        self.owner = owner
+        self._backend = "api"
+        self._accounts: list[dict[str, Any]] = []
+        self._keys: list[dict[str, Any]] = []
+        self._account_ids_by_login: dict[str, str] = {}
+        self.setObjectName("settings_card")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        top = QHBoxLayout()
+        title = QLabel("меню управления API-ключами")
+        title.setObjectName("card_title")
+        top.addWidget(title)
+        top.addStretch(1)
+        reload_btn = QPushButton("Обновить")
+        reload_btn.clicked.connect(self.reload)
+        top.addWidget(reload_btn)
+        root.addLayout(top)
+
+        add = QHBoxLayout()
+        self.account_combo = QComboBox()
+        self.account_combo.setEditable(True)
+        self.account_combo.setMinimumWidth(120)
+        self.hash_edit = QLineEdit()
+        self.hash_edit.setPlaceholderText("SHA256")
+        self.key_edit = QLineEdit()
+        self.key_edit.setPlaceholderText("или сырой KEY")
+        self.key_edit.textChanged.connect(self._sync_hash_from_key)
+        gen_btn = QPushButton("+")
+        gen_btn.setToolTip("Сгенерировать сырой ключ")
+        gen_btn.clicked.connect(self._generate_key)
+        add_btn = QPushButton("Добавить")
+        add_btn.setObjectName("primary_button")
+        add_btn.clicked.connect(lambda: self._submit_key(replace=False))
+        replace_btn = QPushButton("Сменить")
+        replace_btn.clicked.connect(lambda: self._submit_key(replace=True))
+        add.addWidget(self.account_combo)
+        add.addWidget(self.hash_edit, 1)
+        add.addWidget(self.key_edit, 1)
+        add.addWidget(gen_btn)
+        add.addWidget(add_btn)
+        add.addWidget(replace_btn)
+        root.addLayout(add)
+
+        self.rows = QGridLayout()
+        self.rows.setContentsMargins(0, 0, 0, 0)
+        self.rows.setHorizontalSpacing(8)
+        self.rows.setVerticalSpacing(5)
+        root.addLayout(self.rows)
+
+        self.status = QLabel("")
+        self.status.setObjectName("settings_muted")
+        root.addWidget(self.status)
+        self._syncing_hash = False
+        self.reload()
+
+    @staticmethod
+    def _hash_key(value: str) -> str:
+        return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _short_hash(value: str) -> str:
+        text = str(value or "").strip()
+        return text if len(text) <= 20 else f"{text[:12]}...{text[-8:]}"
+
+    @staticmethod
+    def _short_key(value: str) -> str:
+        text = str(value or "").strip()
+        return text if len(text) <= 28 else f"{text[:16]}...{text[-8:]}"
+
+    @staticmethod
+    def _table_label(text: str, *, muted: bool = False) -> QLabel:
+        label = QLabel(str(text or ""))
+        label.setObjectName("api_key_table_muted" if muted else "api_key_table_text")
+        label.setFont(_ui_font(pixel_size=11, bold=True))
+        return label
+
+    def _clear_rows(self) -> None:
+        while self.rows.count():
+            item = self.rows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _local_store(self):
+        try:
+            from api.auth_store import AuthStore
+
+            return AuthStore()
+        except Exception:
+            from ui.local_auth_store import AuthStore
+
+            return AuthStore()
+
+    def _refresh_api_base_url(self) -> None:
+        try:
+            override = getattr(self.owner, "_current_api_base_url_from_fields", None)
+            base_url = override() if callable(override) else ""
+            self.api.set_base_url(base_url or get_selected_base_url())
+        except Exception:
+            pass
+
+    def _can_use_local_fallback(self) -> bool:
+        try:
+            self._refresh_api_base_url()
+            parsed = urlparse(str(self.api.base_url or get_selected_base_url() or ""))
+            host = str(parsed.hostname or "").strip().lower()
+            return host in {"", "127.0.0.1", "localhost", "::1"}
+        except Exception:
+            return False
+
+    def _load_keys_payload(self) -> dict[str, Any]:
+        try:
+            self._refresh_api_base_url()
+            payload = self.api.admin_list_api_access_keys()
+            self._backend = "api"
+            return payload
+        except Exception as exc:
+            if not self._can_use_local_fallback():
+                raise exc
+            store = self._local_store()
+            try:
+                self._backend = "local"
+                return {
+                    "accounts": store.list_accounts(),
+                    "keys": store.list_api_access_keys(),
+                }
+            finally:
+                try:
+                    store._conn.close()
+                except Exception:
+                    pass
+
+    def _create_key(self, *, login: str, key: str, key_hash: str, replace: bool) -> None:
+        try:
+            self._refresh_api_base_url()
+            self.status.setText(f"POST -> {self.api.base_url}/auth/api-access-keys")
+            self.api.admin_create_api_access_key(
+                login=login,
+                key=key,
+                key_hash=key_hash,
+                label="ui",
+                replace=replace,
+            )
+            self._backend = "api"
+            return
+        except Exception as exc:
+            if not self._can_use_local_fallback():
+                raise exc
+        store = self._local_store()
+        try:
+            if replace:
+                store.delete_api_access_keys_for_account(login)
+            store.set_api_access_key_hash(login, key_hash, label="ui", raw_key=key)
+            self._backend = "local"
+        finally:
+            try:
+                store._conn.close()
+            except Exception:
+                pass
+
+    def _set_key_enabled(self, key_hash: str, enabled: bool) -> None:
+        try:
+            self._refresh_api_base_url()
+            self.status.setText(f"PATCH -> {self.api.base_url}/auth/api-access-keys/...")
+            self.api.admin_set_api_access_key_enabled(key_hash, enabled)
+            self._backend = "api"
+            return
+        except Exception as exc:
+            if not self._can_use_local_fallback():
+                raise exc
+        store = self._local_store()
+        try:
+            if not store.set_api_access_key_enabled(key_hash, enabled):
+                raise ValueError("key_not_found")
+            self._backend = "local"
+        finally:
+            try:
+                store._conn.close()
+            except Exception:
+                pass
+
+    def _delete_key_hash(self, key_hash: str) -> None:
+        try:
+            self._refresh_api_base_url()
+            self.status.setText(f"DELETE -> {self.api.base_url}/auth/api-access-keys/...")
+            self.api.admin_delete_api_access_key(key_hash)
+            self._backend = "api"
+            return
+        except Exception as exc:
+            if not self._can_use_local_fallback():
+                raise exc
+        store = self._local_store()
+        try:
+            if not store.delete_api_access_key(key_hash):
+                raise ValueError("key_not_found")
+            self._backend = "local"
+        finally:
+            try:
+                store._conn.close()
+            except Exception:
+                pass
+
+    def reload(self) -> None:
+        try:
+            payload = self._load_keys_payload()
+            self._accounts = list(payload.get("accounts") or [])
+            self._keys = list(payload.get("keys") or [])
+            self._account_ids_by_login = {
+                str(account.get("login") or "").strip().lower(): str(account.get("account_id") or "").strip()
+                for account in self._accounts
+                if str(account.get("login") or "").strip() and str(account.get("account_id") or "").strip()
+            }
+            self.status.setText("" if self._backend == "api" else "Локальный доступ к auth.db.")
+        except Exception as exc:
+            self._accounts = []
+            self._keys = []
+            self.status.setText(f"Не удалось загрузить: {exc}")
+        self._refresh_accounts()
+        self._render_rows()
+
+    def _refresh_accounts(self) -> None:
+        current = self.account_combo.currentData()
+        self.account_combo.clear()
+        for account in self._accounts:
+            if bool(account.get("disabled")):
+                continue
+            login = str(account.get("login") or "").strip()
+            if login:
+                self.account_combo.addItem(login, login)
+        if current:
+            idx = self.account_combo.findData(current)
+            if idx >= 0:
+                self.account_combo.setCurrentIndex(idx)
+
+    def _render_rows(self) -> None:
+        self._clear_rows()
+        for col, text in enumerate(("аккаунт", "sha256", "ключ", "копия", "вкл/выкл", "удалить")):
+            label = self._table_label(text, muted=True)
+            self.rows.addWidget(label, 0, col)
+        if not self._keys:
+            empty = self._table_label("Ключей пока нет.", muted=True)
+            self.rows.addWidget(empty, 1, 0, 1, 6)
+            return
+        for row, item in enumerate(self._keys, start=1):
+            login = str(item.get("login") or "")
+            key_hash = str(item.get("key_hash") or "")
+            raw_key = str(item.get("key") or "")
+            revoked = bool(item.get("revoked"))
+            login_label = self._table_label(login)
+            hash_label = self._table_label(self._short_hash(key_hash))
+            hash_label.setToolTip(key_hash)
+            hash_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            raw_label = self._table_label(self._short_key(raw_key) if raw_key else "ключ неизвестен", muted=not bool(raw_key))
+            raw_label.setToolTip(raw_key or "Этот ключ был добавлен только как SHA256, сырой KEY не сохранён.")
+            raw_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            copy_btn = QPushButton("Копировать")
+            copy_btn.setEnabled(bool(raw_key))
+            copy_btn.clicked.connect(lambda _checked=False, key=raw_key: self._copy_key(key))
+            enabled = QCheckBox("")
+            enabled.setObjectName("api_key_enabled_checkbox")
+            enabled.setFont(_ui_font(pixel_size=11, bold=True))
+            enabled.setChecked(not revoked)
+            enabled.stateChanged.connect(lambda _state, h=key_hash, login=login, box=enabled: self._set_enabled(h, box.isChecked(), login=login))
+            delete_btn = QPushButton("Удалить")
+            delete_btn.setObjectName("dangerButton")
+            delete_btn.clicked.connect(lambda _checked=False, h=key_hash, login=login: self._delete_key(h, login=login))
+            self.rows.addWidget(login_label, row, 0)
+            self.rows.addWidget(hash_label, row, 1)
+            self.rows.addWidget(raw_label, row, 2)
+            self.rows.addWidget(copy_btn, row, 3)
+            self.rows.addWidget(enabled, row, 4, Qt.AlignmentFlag.AlignCenter)
+            self.rows.addWidget(delete_btn, row, 5)
+
+    def _generate_key(self) -> None:
+        key = "mmis_" + secrets.token_urlsafe(48)
+        self.key_edit.setText(key)
+        self.hash_edit.setText(self._hash_key(key))
+
+    def _sync_hash_from_key(self, value: str) -> None:
+        if getattr(self, "_syncing_hash", False):
+            return
+        key = str(value or "").strip()
+        if not key:
+            return
+        self._syncing_hash = True
+        try:
+            self.hash_edit.setText(self._hash_key(key))
+        finally:
+            self._syncing_hash = False
+
+    def _submit_key(self, *, replace: bool) -> None:
+        login = str(self.account_combo.currentData() or self.account_combo.currentText() or "").strip().lower()
+        key = self.key_edit.text().strip()
+        key_hash = self.hash_edit.text().strip().lower()
+        if not login:
+            self.status.setText("Выбери аккаунт.")
+            return
+        if not key and not key_hash:
+            self.status.setText("Введи сырой KEY или SHA256.")
+            return
+        try:
+            final_key_hash = self._hash_key(key) if key else key_hash
+            self._create_key(login=login, key=key, key_hash=final_key_hash, replace=replace)
+            self._save_key_for_login_local_profile(login, key, final_key_hash)
+            self.key_edit.clear()
+            self.hash_edit.clear()
+            self.reload()
+            sync_key = getattr(self.owner, "_sync_api_access_key_fields", None)
+            if callable(sync_key):
+                sync_key(login, key, final_key_hash)
+            self.status.setText("Ключ сменён." if replace else "Ключ добавлен.")
+        except Exception as exc:
+            self.status.setText(f"Не удалось добавить: {exc}")
+
+    def _sync_login_from_rows(self, login: str) -> None:
+        clean_login = str(login or "").strip().lower()
+        sync_key = getattr(self.owner, "_sync_api_access_key_fields", None)
+        if not clean_login or not callable(sync_key):
+            return
+        for item in self._keys:
+            if str(item.get("login") or "").strip().lower() != clean_login:
+                continue
+            if bool(item.get("revoked")):
+                continue
+            raw_key = str(item.get("key") or "")
+            key_hash = str(item.get("key_hash") or "")
+            self._save_key_for_login_local_profile(clean_login, raw_key, key_hash)
+            sync_key(clean_login, raw_key, key_hash)
+            return
+        self._save_key_for_login_local_profile(clean_login, "", "", clear=True)
+        sync_key(clean_login, "", "")
+
+    def _save_key_for_login_local_profile(self, login: str, raw_key: str, key_hash: str, *, clear: bool = False) -> None:
+        clean_login = str(login or "").strip().lower()
+        account_id = str(self._account_ids_by_login.get(clean_login) or "").strip()
+        if not account_id:
+            return
+        connection: dict[str, Any] = {}
+        values: dict[str, Any] = {}
+        clean_key = str(raw_key or "").strip()
+        clean_hash = str(key_hash or "").strip().lower()
+        if clear:
+            connection["api_access_key"] = ""
+            values["api.access_lock.key_hash"] = ""
+        elif clean_key:
+            connection["api_access_key"] = clean_key
+            if clean_hash:
+                values["api.access_lock.key_hash"] = clean_hash
+        elif clean_hash:
+            values["api.access_lock.key_hash"] = clean_hash
+        if not connection and not values:
+            return
+        try:
+            save_account_client_config_updates(account_id, connection=connection, values=values)
+        except Exception:
+            pass
+
+    def _copy_key(self, raw_key: str) -> None:
+        key = str(raw_key or "").strip()
+        if not key:
+            self.status.setText("Сырой ключ не сохранён.")
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(key)
+            self.status.setText("Ключ скопирован.")
+
+    def _set_enabled(self, key_hash: str, enabled: bool, *, login: str = "") -> None:
+        try:
+            self._set_key_enabled(key_hash, enabled)
+            self.reload()
+            self._sync_login_from_rows(login)
+            self.status.setText("Состояние обновлено.")
+        except Exception as exc:
+            self.status.setText(f"Не удалось изменить: {exc}")
+
+    def _delete_key(self, key_hash: str, *, login: str = "") -> None:
+        try:
+            self._delete_key_hash(key_hash)
+            self.reload()
+            self._sync_login_from_rows(login)
+            self.status.setText("Ключ удалён.")
+        except Exception as exc:
+            self.status.setText(f"Не удалось удалить: {exc}")
 
 
 class SettingsWindow(QDialog):
@@ -678,6 +1078,11 @@ class SettingsWindow(QDialog):
             layout.addStretch(1)
             colspan = 1 if two_column else 2
             self.content_layout.addWidget(frame, row, col, 1, colspan)
+        if self._category_key == "main" and self._can_show_api_key_manager() and self._should_show_api_key_manager():
+            manager = ApiAccessKeyManager(self.api, self.content, owner=self)
+            api_row = last_row + 1
+            self.content_layout.addWidget(manager, api_row, 0, 1, 2)
+            last_row = api_row
         self.content_layout.setColumnStretch(0, 1)
         self.content_layout.setColumnStretch(1, 1)
         self.content_layout.setRowStretch(last_row + 1, 1)
@@ -1001,11 +1406,88 @@ class SettingsWindow(QDialog):
             from ui.auth_client_store import load_auth_state
 
             state = load_auth_state()
+            token = str(state.get("token") or "").strip()
+            login = str(state.get("login") or "").strip().lower()
+            role = str(state.get("role") or "").strip().lower()
+            return bool(token) and (role == "admin" or login == "admin")
+        except Exception:
+            return False
+
+    def _can_show_api_key_manager(self) -> bool:
+        try:
+            from ui.auth_client_store import load_auth_state
+
+            state = load_auth_state()
+            token = str(state.get("token") or "").strip()
             login = str(state.get("login") or "").strip().lower()
             role = str(state.get("role") or "").strip().lower()
             return role == "admin" or login == "admin"
         except Exception:
-            return False
+            return self._is_admin_user()
+
+    def _current_setting_value(self, path: str) -> Any:
+        if path in self._changed:
+            return self._changed[path]
+        editor = self._editors.get(path)
+        if editor is not None:
+            try:
+                return editor.value()
+            except Exception:
+                pass
+        return dotted_get(self._payload, path)
+
+    def _current_api_base_url_from_fields(self) -> str:
+        active = str(self._current_setting_value("ui.api.active_endpoint") or "local").strip().lower()
+        path = "ui.api.public_base_url" if active == "public" else "ui.api.local_base_url"
+        url = str(self._current_setting_value(path) or "").strip()
+        if not url:
+            return ""
+        url = url.rstrip("/")
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = "http://" + url
+        return url
+
+    def _active_login(self) -> str:
+        try:
+            from ui.auth_client_store import load_auth_state
+
+            state = load_auth_state()
+            return str(state.get("login") or "").strip().lower()
+        except Exception:
+            return ""
+
+    def _set_setting_value(self, path: str, value: Any, *, persist_local: bool = False) -> None:
+        dotted_set(self._payload, path, value)
+        editor = self._editors.get(path)
+        if editor is not None:
+            try:
+                editor.blockSignals(True)
+                editor.set_value(value)
+            finally:
+                editor.blockSignals(False)
+        self._changed.pop(path, None)
+        if persist_local:
+            try:
+                save_settings_updates({path: value}, sync_remote=False)
+            except Exception:
+                pass
+        self._update_badge(path)
+        self._refresh_preview()
+
+    def _sync_api_access_key_fields(self, login: str, raw_key: str, key_hash: str) -> None:
+        if str(login or "").strip().lower() != self._active_login():
+            return
+        clean_key = str(raw_key or "").strip()
+        clean_hash = str(key_hash or "").strip().lower()
+        self._set_setting_value("ui.api.api_access_key", clean_key, persist_local=True)
+        self._set_setting_value("api.access_lock.key_hash", clean_hash, persist_local=True)
+
+    def _should_show_api_key_manager(self) -> bool:
+        needle = str(getattr(self, "_search_text", "") or "").strip().lower()
+        if not needle:
+            return True
+        haystack = "api key access sha256 hash ключ аккаунт account управление"
+        return needle in haystack
 
     def _matches_search(self, spec: SettingSpec, category_title: str, card_title: str) -> bool:
         needle = getattr(self, "_search_text", "")
@@ -1074,12 +1556,12 @@ def _hint_popup_width(spec: SettingSpec) -> int:
     example_width = max((metrics.horizontalAdvance(line) for line in example.splitlines()), default=0)
     title_width = metrics.horizontalAdvance(spec.path)
 
-    target = max(236, title_width + 42, longest_word_width + 62, min(example_width + 42, 300))
+    target = max(236, title_width + 42, longest_word_width + 62, min(example_width + 42, 420))
     if len(description) > 220 or len(example) > 90:
-        target = max(target, 300)
+        target = max(target, 360)
     elif len(description) > 150 or len(example) > 60:
-        target = max(target, 286)
-    return min(320, target)
+        target = max(target, 320)
+    return min(440, target)
 
 
 _TITLE_BY_PATH: dict[str, str] = {

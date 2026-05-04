@@ -7,8 +7,24 @@ from typing import Any
 UI_DIR = Path(__file__).parent
 PROJECT_ROOT = UI_DIR.parent
 LEGACY_CLIENT_DATA_DIR = UI_DIR / ".mmis_client"
-ACCOUNTS_DIR = PROJECT_ROOT / "data" / "accounts"
-CLIENT_DATA_DIR = UI_DIR / ".mmis_client"
+
+
+def _default_client_data_dir() -> Path:
+    portable = str(os.environ.get("MMIS_UI_PORTABLE") or "").strip().lower()
+    if portable in {"1", "true", "yes", "on"}:
+        return LEGACY_CLIENT_DATA_DIR
+    override = str(os.environ.get("MMIS_UI_DATA_DIR") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    if os.name == "nt":
+        root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if root:
+            return Path(root) / "MMis" / "ui_client"
+    return Path.home() / ".mmis" / "ui_client"
+
+
+CLIENT_DATA_DIR = _default_client_data_dir()
+ACCOUNTS_DIR = CLIENT_DATA_DIR / "accounts"
 CLIENT_CONFIG_PATH = CLIENT_DATA_DIR / "client_config.json"
 ACCOUNT_DATA_DIR = None
 
@@ -21,7 +37,7 @@ def _safe_account_id(value: str) -> str:
 
 
 def _active_auth_account_id() -> str:
-    auth_path = LEGACY_CLIENT_DATA_DIR / "auth.json"
+    auth_path = CLIENT_DATA_DIR / "auth.json"
     try:
         payload = json.loads(auth_path.read_text(encoding="utf-8-sig") or "{}")
     except Exception:
@@ -42,13 +58,18 @@ def get_active_account_data_dir() -> Path | None:
 
 def get_client_data_dir() -> Path:
     account_dir = get_active_account_data_dir()
-    path = account_dir / "ui" if account_dir is not None else LEGACY_CLIENT_DATA_DIR
+    path = account_dir / "ui" if account_dir is not None else CLIENT_DATA_DIR
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def get_client_config_path() -> Path:
     return get_client_data_dir() / "client_config.json"
+
+
+def get_account_client_config_path(account_id: str) -> Path:
+    safe = _safe_account_id(account_id)
+    return ACCOUNTS_DIR / safe / "ui" / "client_config.json"
 
 
 def _client_config_path() -> Path:
@@ -110,10 +131,58 @@ def save_client_config(data: dict[str, Any]) -> dict[str, Any]:
         pass
     return data
 
+
+def _load_client_config_at(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return dict(DEFAULT_CONFIG)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+        if not isinstance(data, dict):
+            return dict(DEFAULT_CONFIG)
+        out = dict(DEFAULT_CONFIG)
+        out.update(data)
+        conn = out.get("connection")
+        if not isinstance(conn, dict):
+            out["connection"] = dict(DEFAULT_CONFIG["connection"])
+        else:
+            merged = dict(DEFAULT_CONFIG["connection"])
+            merged.update(conn)
+            out["connection"] = merged
+        for key in ("values", "server_snapshot", "pending_updates"):
+            if not isinstance(out.get(key), dict):
+                out[key] = {}
+        return out
+    except Exception:
+        return dict(DEFAULT_CONFIG)
+
+
+def save_account_client_config_updates(
+    account_id: str,
+    *,
+    connection: dict[str, Any] | None = None,
+    values: dict[str, Any] | None = None,
+) -> None:
+    safe = _safe_account_id(account_id)
+    if not safe or safe == "guest":
+        return
+    path = get_account_client_config_path(safe)
+    cfg = _load_client_config_at(path)
+    if isinstance(connection, dict):
+        cfg.setdefault("connection", {}).update(connection)
+    if isinstance(values, dict):
+        cfg.setdefault("values", {}).update(values)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
 def get_connection_config() -> dict[str, Any]:
     """Returns the connection-related part of the config."""
     cfg = load_client_config()
-    return cfg.get("connection", DEFAULT_CONFIG["connection"])
+    conn = cfg.get("connection", DEFAULT_CONFIG["connection"])
+    if not isinstance(conn, dict):
+        conn = {}
+    out = dict(DEFAULT_CONFIG["connection"])
+    out.update(conn)
+    return out
 
 
 def get_api_access_key() -> str:
@@ -186,7 +255,7 @@ def set_last_error(error: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Portable UI state (ui/.mmis_client/ui_state.json)
+# Local UI state.
 # ---------------------------------------------------------------------------
 
 UI_STATE_PATH = CLIENT_DATA_DIR / "ui_state.json"
@@ -208,7 +277,7 @@ DEFAULT_UI_STATE: dict[str, Any] = {
 
 
 def load_ui_state() -> dict[str, Any]:
-    """Loads local portable UI state from ui/.mmis_client/ui_state.json."""
+    """Loads local UI state from this machine's UI data directory."""
     path = _ui_state_path()
     if not path.exists():
         return dict(DEFAULT_UI_STATE)
@@ -226,7 +295,7 @@ def load_ui_state() -> dict[str, Any]:
 
 
 def save_ui_state(data: dict[str, Any]) -> dict[str, Any]:
-    """Saves local portable UI state to ui/.mmis_client/ui_state.json."""
+    """Saves local UI state to this machine's UI data directory."""
     out = dict(DEFAULT_UI_STATE)
     if isinstance(data, dict):
         out.update(data)

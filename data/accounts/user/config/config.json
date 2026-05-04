@@ -18,7 +18,16 @@
   },
   "api": {
     "host": "127.0.0.1",
-    "port": 8027
+    "port": 8027,
+    "access_lock": {
+      "enabled": false,
+      "key_hash": "",
+      "deny_status": 404,
+      "allow_ping_without_key": false
+    }
+  },
+  "security": {
+    "admin_login": "admin"
   },
   "llm": {
     "provider": "ollama",
@@ -30,7 +39,8 @@
       "ollama": {
         "base_url": "http://127.0.0.1:11434",
         "timeout_sec": 120.0,
-        "retries": 1
+        "retries": 1,
+        "keep_alive": "5m"
       },
       "openai": {
         "api_key": "",
@@ -271,6 +281,9 @@
     "top_k": 8,
     "enable_background_worker": true,
     "worker_poll_interval": 2.0,
+    "memory_llm": {
+      "keep_alive": "30m"
+    },
     "memory_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\user\\memory_core",
     "cache_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\user\\cache"
   },

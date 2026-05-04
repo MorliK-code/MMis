@@ -77,11 +77,19 @@ class ApiClient:
             return {}
         return json.loads(text)
 
-    def _request_json(self, method: str, path: str, payload: dict | None = None, timeout: float | None = None) -> dict:
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        timeout: float | None = None,
+        *,
+        include_api_access_key: bool = True,
+    ) -> dict:
         data = None
         headers = {"Accept": "application/json"}
         headers.update(self._account_headers())
-        api_access_key = get_api_access_key()
+        api_access_key = get_api_access_key() if include_api_access_key else ""
         if api_access_key:
             headers["X-MMis-Access-Key"] = api_access_key
         token = get_auth_token()
@@ -159,6 +167,50 @@ class ApiClient:
             self._request_json("POST", "/auth/logout", timeout=3.0)
         finally:
             clear_auth_state(forget_current=True)
+
+    def admin_list_api_access_keys(self, timeout: float | None = None) -> dict:
+        return self._request_json("GET", "/auth/api-access-keys", timeout=timeout or 5.0, include_api_access_key=False)
+
+    def admin_create_api_access_key(
+        self,
+        *,
+        login: str,
+        key: str = "",
+        key_hash: str = "",
+        label: str = "ui",
+        replace: bool = False,
+        timeout: float | None = None,
+    ) -> dict:
+        return self._request_json(
+            "POST",
+            "/auth/api-access-keys",
+            {
+                "login": str(login or ""),
+                "key": str(key or ""),
+                "key_hash": str(key_hash or ""),
+                "label": str(label or "ui"),
+                "replace": bool(replace),
+            },
+            timeout=timeout or 5.0,
+            include_api_access_key=False,
+        )
+
+    def admin_set_api_access_key_enabled(self, key_hash: str, enabled: bool, timeout: float | None = None) -> dict:
+        return self._request_json(
+            "PATCH",
+            f"/auth/api-access-keys/{str(key_hash or '').strip()}",
+            {"enabled": bool(enabled)},
+            timeout=timeout or 5.0,
+            include_api_access_key=False,
+        )
+
+    def admin_delete_api_access_key(self, key_hash: str, timeout: float | None = None) -> dict:
+        return self._request_json(
+            "DELETE",
+            f"/auth/api-access-keys/{str(key_hash or '').strip()}",
+            timeout=timeout or 5.0,
+            include_api_access_key=False,
+        )
 
     def list_models(self, timeout: float | None = None) -> dict:
         payload = self._request_json("GET", "/models", timeout=timeout)

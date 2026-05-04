@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _CHEVRON_DOWN = (Path(__file__).resolve().parent / "assets" / "settings_chevron_down.svg").as_posix()
+_CHECK_ICON = (Path(__file__).resolve().parent / "assets" / "settings_check.svg").as_posix()
 
 
 SETTINGS_TOOLTIP_STYLE = """
@@ -87,6 +88,18 @@ QLabel#settings_muted {
     color: #8f96a3;
     font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
+}
+QLabel#api_key_table_text {
+    color: #f3f4f6;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#api_key_table_muted {
+    color: #8f96a3;
+    font-family: Cascadia Code, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 600;
 }
 QWidget#settings_center {
     background: rgba(10, 12, 16, 34);
@@ -576,6 +589,21 @@ QCheckBox::indicator:checked {
     background: rgba(139, 92, 246, 120);
     border-color: rgba(196, 181, 253, 110);
 }
+QCheckBox#api_key_enabled_checkbox {
+    color: #d8dee9;
+    spacing: 6px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QCheckBox#api_key_enabled_checkbox::indicator {
+    width: 13px;
+    height: 13px;
+}
+QCheckBox#api_key_enabled_checkbox::indicator:checked {
+    image: url(__CHECK_ICON__);
+    background: rgba(139, 92, 246, 140);
+    border-color: rgba(196, 181, 253, 130);
+}
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
@@ -682,4 +710,4 @@ QLabel#settings_message_body {
     font-size: 11px;
     line-height: 1.35;
 }
-""".replace("__CHEVRON_DOWN__", _CHEVRON_DOWN)
+""".replace("__CHEVRON_DOWN__", _CHEVRON_DOWN).replace("__CHECK_ICON__", _CHECK_ICON)
