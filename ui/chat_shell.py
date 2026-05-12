@@ -933,9 +933,16 @@ class FlowWrap(QWidget):
         if layout is None:
             return super().sizeHint()
         base = layout.minimumSize()
+        max_width = int(self.maximumWidth() or 0)
+        if max_width > 0 and max_width < 16_777_215:
+            base_width = min(base.width(), max_width)
+        else:
+            base_width = base.width()
         if getattr(self, "expand_width_hint", True):
-            width = max(1, self.width() or base.width())
-            return QSize(base.width(), max(base.height(), self.heightForWidth(width)))
+            width = max(1, self.width() or base_width)
+            if max_width > 0 and max_width < 16_777_215:
+                width = min(width, max_width)
+            return QSize(base_width, max(base.height(), self.heightForWidth(width)))
         else:
             width = 0
             actual_w = max(1, self.width() or 100)
@@ -951,6 +958,9 @@ class FlowWrap(QWidget):
         if layout is None:
             return
         width = max(1, self.width() or layout.minimumSize().width())
+        max_width = int(self.maximumWidth() or 0)
+        if max_width > 0 and max_width < 16_777_215:
+            width = min(width, max_width)
         if not getattr(self, "expand_width_hint", True) and hasattr(self.parentWidget(), "width"):
             p_width = self.parentWidget().width()
             if p_width > 0:
@@ -962,6 +972,8 @@ class FlowWrap(QWidget):
                 # Only use parent width if our own width is suspiciously small (initial state)
                 if self.width() < p_width:
                     width = p_width
+                    if max_width > 0 and max_width < 16_777_215:
+                        width = min(width, max_width)
         height = max(layout.minimumSize().height(), self.heightForWidth(width))
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
@@ -2512,6 +2524,7 @@ class MessageBubble(QFrame):
             outer.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
         self.perf_wrap = FlowWrap(self)
         self.perf_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.perf_wrap.setMaximumWidth(760)
         self.perf_wrap.setVisible(bool(perf))
         perf_lay = FlowLayout(self.perf_wrap, margin=0, hspacing=6, vspacing=6)
         self.perf_wrap.setLayout(perf_lay)
@@ -2699,13 +2712,54 @@ class MessageBubble(QFrame):
         self._reflow_message_body()
 
     def set_perf(self, perf: list[str]) -> None:
+        normalized_perf = [str(item) for item in list(perf or [])]
+        if getattr(self, "_perf_items", None) == normalized_perf:
+            target_visible = bool(normalized_perf)
+            if self.perf_wrap.isHidden() == target_visible:
+                self.perf_wrap.setVisible(target_visible)
+            return
         layout = self.perf_wrap.layout()
+        if layout is not None and layout.count() == len(normalized_perf):
+            old_height = int(self.sizeHint().height() or self.height() or 0)
+            changed_width = False
+            for index, item in enumerate(normalized_perf):
+                widget = layout.itemAt(index).widget()
+                if widget is None:
+                    changed_width = True
+                    break
+                before = int(widget.sizeHint().width())
+                setter = getattr(widget, "setText", None)
+                if callable(setter):
+                    setter(item)
+                else:
+                    changed_width = True
+                    break
+                after = int(widget.sizeHint().width())
+                changed_width = changed_width or before != after
+            if not changed_width:
+                self._perf_items = normalized_perf
+                target_visible = bool(normalized_perf)
+                if self.perf_wrap.isHidden() == target_visible:
+                    self.perf_wrap.setVisible(target_visible)
+                return
+            layout.invalidate()
+            layout.activate()
+            self.perf_wrap.refresh_height()
+            self.updateGeometry()
+            self._perf_items = normalized_perf
+            new_height = int(self.sizeHint().height() or self.height() or 0)
+            if old_height != new_height:
+                self._reflow_message_body()
+            return
+        self._perf_items = normalized_perf
+        was_visible = not self.perf_wrap.isHidden()
+        old_height = int(self.sizeHint().height() or self.height() or 0)
         while layout.count():
             item = layout.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
-        for item in perf:
+        for item in normalized_perf:
             chip = TinyStatChip(item)
             layout.addWidget(chip)
         layout.invalidate()
@@ -2714,6 +2768,10 @@ class MessageBubble(QFrame):
         self.perf_wrap.refresh_height()
         self.updateGeometry()
         self.perf_wrap.setVisible(bool(perf))
+        self.perf_wrap.refresh_height()
+        new_height = int(self.sizeHint().height() or self.height() or 0)
+        if was_visible != (not self.perf_wrap.isHidden()) or old_height != new_height:
+            self._reflow_message_body()
 
 
 @dataclass

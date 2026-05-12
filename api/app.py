@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI):
     
     # Регистрируем Memory Inspector UI после инициализации adapter
     from api.memory_inspector_router import create_memory_inspector_router
-    app.include_router(create_memory_inspector_router(memory_core_adapter))
+    app.include_router(create_memory_inspector_router(lambda: memory_core_adapter))
 
     yield
 

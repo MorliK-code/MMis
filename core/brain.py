@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import RLock
 from types import SimpleNamespace
 from typing import Any
@@ -274,6 +274,15 @@ class Brain:
             except Exception as exc:
                 LOGGER.exception("harvest_response_stats failed: %s", exc)
                 result.logs.append(f"stats_warning={type(exc).__name__}:{exc}")
+
+            latest_debug_trace = dict(meta_for_pipeline.get("debug_trace") or {})
+            latest_memory_snapshot = dict(meta_for_pipeline.get("memory_debug_snapshot") or {})
+            if latest_debug_trace or latest_memory_snapshot:
+                result = replace(
+                    result,
+                    debug_trace=latest_debug_trace or dict(result.debug_trace or {}),
+                    memory_debug_snapshot=latest_memory_snapshot or dict(result.memory_debug_snapshot or {}),
+                )
 
         with self._lock:
             self._remember(signature, now, result)

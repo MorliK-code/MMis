@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "addressing": {
-    "canonical_name": "на",
+    "canonical_name": "поговорить",
     "allowed_forms": [
       "Пользователь",
       "на",
@@ -9,7 +9,12 @@
       "то",
       "меня",
       "общаться",
-      "была"
+      "была",
+      "сейчас",
+      "накотило",
+      "заимностью",
+      "ещё",
+      "поговорить"
     ],
     "forbidden_forms": [
       "ответил",
@@ -18,11 +23,14 @@
       "забывал",
       "забыл",
       "хотел",
-      "согласн"
+      "согласн",
+      "любил",
+      "настроен",
+      "доверяю"
     ],
     "allow_diminutives": false,
     "use_name_by_default": false,
-    "updated_at": "2026-05-03T14:57:34.423+03:00"
+    "updated_at": "2026-05-06T04:53:10.894+03:00"
   },
   "interaction_style": {
     "prefers_directness": 0.82,
@@ -37,5 +45,5 @@
     "treat_short_replies_as_low_bandwidth": true
   },
   "assistant_trait_baseline": {},
-  "updated_at": "2026-05-03T14:57:34.423+03:00"
+  "updated_at": "2026-05-06T04:53:10.894+03:00"
 }

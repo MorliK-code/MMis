@@ -14,13 +14,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T13:33:49.036+03:00",
-      "last_used_ts": "2026-05-04T13:33:49.036+03:00",
+      "updated_at": "2026-05-06T06:48:22.050+03:00",
+      "last_used_ts": "2026-05-06T06:48:22.050+03:00",
       "decay_ts": ""
     },
     "warmth": {
       "type": "scalar",
-      "value": 0.6882679403779588,
+      "value": 0.684577299325178,
       "min": 0.0,
       "max": 0.82,
       "decay_per_day": 0.01,
@@ -32,13 +32,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-22T16:37:18.886+03:00",
-      "last_used_ts": "2026-04-22T16:37:18.886+03:00",
+      "updated_at": "2026-05-06T06:14:32.389+03:00",
+      "last_used_ts": "2026-05-06T06:14:32.389+03:00",
       "decay_ts": ""
     },
     "playfulness": {
       "type": "scalar",
-      "value": 0.7184536337770072,
+      "value": 0.72,
       "min": 0.0,
       "max": 0.72,
       "decay_per_day": 0.01,
@@ -50,13 +50,13 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T13:33:49.036+03:00",
-      "last_used_ts": "2026-05-04T13:33:49.036+03:00",
+      "updated_at": "2026-05-06T06:48:22.049+03:00",
+      "last_used_ts": "2026-05-06T06:48:22.049+03:00",
       "decay_ts": ""
     },
     "verbosity": {
       "type": "scalar",
-      "value": 0.0020000000000000035,
+      "value": 0.0,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.0,
@@ -65,8 +65,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T00:43:28.217+03:00",
-      "last_used_ts": "2026-05-04T00:43:28.217+03:00",
+      "updated_at": "2026-05-06T06:49:24.357+03:00",
+      "last_used_ts": "2026-05-06T06:49:24.357+03:00",
       "decay_ts": ""
     },
     "directness": {
@@ -80,8 +80,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T00:43:28.217+03:00",
-      "last_used_ts": "2026-05-04T00:43:28.217+03:00",
+      "updated_at": "2026-05-06T06:49:24.357+03:00",
+      "last_used_ts": "2026-05-06T06:49:24.357+03:00",
       "decay_ts": ""
     },
     "humor": {
@@ -95,8 +95,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T13:33:49.036+03:00",
-      "last_used_ts": "2026-05-04T13:33:49.036+03:00",
+      "updated_at": "2026-05-06T06:48:22.049+03:00",
+      "last_used_ts": "2026-05-06T06:48:22.049+03:00",
       "decay_ts": ""
     },
     "energy": {
@@ -110,8 +110,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T13:33:49.036+03:00",
-      "last_used_ts": "2026-05-04T13:33:49.036+03:00",
+      "updated_at": "2026-05-06T06:48:22.049+03:00",
+      "last_used_ts": "2026-05-06T06:48:22.049+03:00",
       "decay_ts": ""
     },
     "emoji_rate": {
@@ -125,38 +125,38 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T13:33:49.036+03:00",
-      "last_used_ts": "2026-05-04T13:33:49.036+03:00",
+      "updated_at": "2026-05-06T06:48:22.050+03:00",
+      "last_used_ts": "2026-05-06T06:48:22.050+03:00",
       "decay_ts": ""
     },
     "empathy": {
       "type": "scalar",
-      "value": 0.12961180839277728,
+      "value": 0.17702246653236758,
       "min": 0.0,
       "max": 0.84,
       "decay_per_day": 0.0,
-      "confidence": 0.6600000000000001,
+      "confidence": 0.7800000000000002,
       "tags": [],
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-22T16:37:18.886+03:00",
-      "last_used_ts": "2026-04-22T16:37:18.886+03:00",
+      "updated_at": "2026-05-06T06:14:32.389+03:00",
+      "last_used_ts": "2026-05-06T06:14:32.389+03:00",
       "decay_ts": ""
     },
     "patience": {
       "type": "scalar",
-      "value": 0.13103695646400002,
+      "value": 0.18031754577698245,
       "min": 0.0,
       "max": 1.0,
       "decay_per_day": 0.0,
-      "confidence": 0.6600000000000001,
+      "confidence": 0.7800000000000002,
       "tags": [],
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-04-22T16:37:18.886+03:00",
-      "last_used_ts": "2026-04-22T16:37:18.886+03:00",
+      "updated_at": "2026-05-06T06:14:32.389+03:00",
+      "last_used_ts": "2026-05-06T06:14:32.389+03:00",
       "decay_ts": ""
     },
     "teasing": {
@@ -170,8 +170,8 @@
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-05-04T13:33:49.036+03:00",
-      "last_used_ts": "2026-05-04T13:33:49.036+03:00",
+      "updated_at": "2026-05-06T06:48:22.050+03:00",
+      "last_used_ts": "2026-05-06T06:48:22.050+03:00",
       "decay_ts": ""
     },
     "professionalism": {
@@ -206,17 +206,17 @@
     },
     "strictness": {
       "type": "scalar",
-      "value": 0.03,
+      "value": 0.05890243902439024,
       "min": 0.0,
       "max": 0.82,
       "decay_per_day": 0.0,
-      "confidence": 0.48,
+      "confidence": 0.51,
       "tags": [],
       "prompt_file": "",
       "ttl_days": 0.0,
       "disabled": false,
-      "updated_at": "2026-03-29T15:32:53.285+03:00",
-      "last_used_ts": "2026-03-29T15:32:53.285+03:00",
+      "updated_at": "2026-05-06T06:14:32.389+03:00",
+      "last_used_ts": "2026-05-06T06:14:32.389+03:00",
       "decay_ts": ""
     }
   }

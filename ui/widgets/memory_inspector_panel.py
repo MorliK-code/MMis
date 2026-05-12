@@ -280,6 +280,7 @@ class MemoryInspectorPanel(QWidget):
         root.addWidget(self.tabs, 1)
 
         self.retrieval_page = _InspectorPage("Retrieval", self.tabs)
+        self.memory_core_page = _InspectorPage("Memory Core", self.tabs)
         self.governor_page = _InspectorPage("Governor", self.tabs)
         self.identity_core_page = _InspectorPage("Identity Core", self.tabs)
         self.persona_page = _InspectorPage("Persona", self.tabs)
@@ -288,6 +289,7 @@ class MemoryInspectorPanel(QWidget):
         self.loop_page = _InspectorPage("Loop", self.tabs)
 
         self.tabs.addTab(self.retrieval_page, "Retrieval")
+        self.tabs.addTab(self.memory_core_page, "Memory Core")
         self.tabs.addTab(self.governor_page, "Governor")
         self.tabs.addTab(self.identity_core_page, "Identity Core")
         self.tabs.addTab(self.persona_page, "Persona")
@@ -323,6 +325,7 @@ class MemoryInspectorPanel(QWidget):
             self._show_prompt_blocks = bool(show_prompt_blocks)
         for page in (
             self.retrieval_page,
+            self.memory_core_page,
             self.governor_page,
             self.identity_core_page,
             self.persona_page,
@@ -339,6 +342,7 @@ class MemoryInspectorPanel(QWidget):
         self._snapshot = row
         self.meta_label.setText(self._build_meta_text(row))
         self.retrieval_page.set_sections(self._retrieval_sections(row))
+        self.memory_core_page.set_sections(self._memory_core_sections(row))
         self.governor_page.set_sections(self._governor_sections(row))
         self.identity_core_page.set_sections(self._identity_core_sections(row))
         self.persona_page.set_sections(self._persona_sections(row))
@@ -350,14 +354,53 @@ class MemoryInspectorPanel(QWidget):
     def _build_meta_text(snapshot: dict[str, Any]) -> str:
         request_id = str(snapshot.get("request_id") or "").strip()
         user_text = str(snapshot.get("user_text") or "").strip()
-        if not request_id and not user_text:
+        timestamp = snapshot.get("timestamp")
+        memory_core = dict(snapshot.get("memory_core") or {})
+        memory_core_snapshot = dict(memory_core.get("snapshot") or {})
+        stats = dict(snapshot.get("stats") or memory_core_snapshot.get("stats") or {})
+        if not request_id and not user_text and not timestamp and not stats:
             return "No trace yet"
         lines: list[str] = []
         if request_id:
             lines.append(f"request_id: {request_id}")
         if user_text:
             lines.append(f"user: {user_text}")
+        if timestamp:
+            lines.append(f"timestamp: {timestamp}")
+        if stats:
+            events_total = stats.get("events_total") or stats.get("event_count") or stats.get("events")
+            artifacts_total = stats.get("artifacts_total") or stats.get("artifact_count") or stats.get("artifacts")
+            jobs_total = stats.get("jobs_total") or stats.get("job_count") or stats.get("jobs")
+            summary = ", ".join(
+                part
+                for part in (
+                    f"events={events_total}" if events_total not in {None, ""} else "",
+                    f"artifacts={artifacts_total}" if artifacts_total not in {None, ""} else "",
+                    f"jobs={jobs_total}" if jobs_total not in {None, ""} else "",
+                )
+                if part
+            )
+            if summary:
+                lines.append(summary)
         return "\n".join(lines)
+
+    def _memory_core_sections(self, snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
+        memory_core = dict(snapshot.get("memory_core") or {})
+        root = dict(memory_core.get("snapshot") or memory_core or snapshot)
+        sections: list[tuple[str, Any]] = [
+            ("Stats", root.get("stats")),
+            ("Events", root.get("events") or root.get("recent_events")),
+            ("Artifacts", root.get("artifacts") or root.get("recent_artifacts")),
+            ("Runtime", root.get("runtime")),
+            ("Episodes", root.get("episodes")),
+            ("Jobs", root.get("jobs")),
+            ("Live Events", root.get("live_events") or snapshot.get("live_events")),
+        ]
+        if root.get("memory_context"):
+            sections.append(("Memory Context", root.get("memory_context")))
+        if root.get("memory_native_state"):
+            sections.append(("Native State", root.get("memory_native_state")))
+        return sections
 
     def _retrieval_sections(self, snapshot: dict[str, Any]) -> list[tuple[str, Any]]:
         retrieval = _get_section(snapshot, "retrieval", "memory_retrieval")

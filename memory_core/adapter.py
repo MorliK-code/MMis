@@ -733,6 +733,7 @@ class MemoryCoreAdapter:
         self._bump_resume_epoch()
 
         worker = self._get_worker()
+        worker_still_running = False
         if worker is not None:
             pause = getattr(worker, "pause", None)
             if callable(pause):
@@ -749,6 +750,10 @@ class MemoryCoreAdapter:
                         stop(timeout_sec=3.0)
                 except Exception as exc:
                     LOGGER.debug(f"MemoryCoreAdapter.close(): worker.stop() failed: {exc}")
+            try:
+                worker_still_running = bool(callable(is_running) and is_running())
+            except Exception:
+                worker_still_running = False
 
             shutdown_memory_provider = getattr(worker, "_shutdown_memory_llm_provider", None)
             if callable(shutdown_memory_provider):
@@ -772,6 +777,9 @@ class MemoryCoreAdapter:
 
         db = getattr(getattr(self.service, "event_store", None), "db", None)
         close_db = getattr(db, "close", None)
+        if worker_still_running:
+            LOGGER.warning("MemoryCoreAdapter.close(): worker is still running; leaving DB open for shutdown")
+            return
         if callable(close_db):
             try:
                 close_db()
@@ -991,17 +999,7 @@ class MemoryCoreAdapter:
             self._main_sleep_deadline_at = time.monotonic() + remaining
             self._schedule_main_sleep_unload(epoch, remaining)
             
-            # Если модели одинаковые — ничего не делаем, она уже в VRAM (или Ollama её держит)
-            # Если разные — греем основную
-            main_model = self._runtime_main_model_name()
-            memory_model = self._runtime_memory_model_name()
-            
-            if main_model and memory_model and main_model == memory_model:
-                LOGGER.debug("MemoryCoreAdapter: same model for main and memory, skipping redundant warm/unload")
-            else:
-                self._hold_memory_for_main_lease()
-                self._unload_memory_llm()
-                self._warm_main_model_in_vram(remaining)
+            self._return_main_llm_after_memory_jobs(remaining)
             return
 
         remaining = self._main_sleep_remaining_sec()
@@ -1015,9 +1013,18 @@ class MemoryCoreAdapter:
             "MemoryCoreAdapter: memory jobs drained with %.1fs main lease left; returning main LLM",
             remaining,
         )
+        self._return_main_llm_after_memory_jobs(remaining)
+
+    def _return_main_llm_after_memory_jobs(self, keep_alive_remaining_sec: float) -> None:
+        remaining = max(0.0, float(keep_alive_remaining_sec or 0.0))
+        if remaining <= 0:
+            return
         self._hold_memory_for_main_lease()
         self._unload_memory_llm()
-        self._warm_main_model_in_vram(remaining)
+        if not self._warm_main_model_in_vram(remaining):
+            LOGGER.warning(
+                "MemoryCoreAdapter: main LLM warmup after Memory LLM did not confirm model restore"
+            )
 
     def _hold_memory_for_main_lease(self) -> None:
         self._main_lease_holds_memory = True

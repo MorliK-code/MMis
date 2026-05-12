@@ -391,10 +391,12 @@ class ChatWindow(proto.ExactChatWindow):
         self._scroll_bottom_queued = False
         self._queued_scroll_follow_only = False
         self._pending_elapsed_timer: QTimer | None = None
+        self._pending_elapsed_label: str = ""
         self._regen_scroll_anchor: QWidget | None = None
         self._suppress_lazy_history_until = 0.0
         self._regenerate_scroll_spacer: QWidget | None = None
         self._last_memory_debug_snapshot: dict = {}
+        self._memory_debug_events: list[dict] = []
         self._runtime_flags_dirty_until = 0.0
         self._last_active_topic_title: str = ""
         self._last_persona_name: str = "Default"
@@ -435,7 +437,8 @@ class ChatWindow(proto.ExactChatWindow):
         self._load_ui_state()
         super().__init__()
         self._pending_elapsed_timer = QTimer(self)
-        self._pending_elapsed_timer.setInterval(250)
+        self._pending_elapsed_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._pending_elapsed_timer.setInterval(1)
         self._pending_elapsed_timer.timeout.connect(self._refresh_pending_elapsed_perf)
         self.setWindowTitle("MMis - Chat")
         if hasattr(self, "_metrics_timer"):
@@ -1323,7 +1326,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._history[index] = (role, text, upgraded_stat_line, feedback, thinking)
             stat_line = upgraded_stat_line
         thinking_ms = self._extract_thinking_ms_from_stat_line(stat_line)
-        perf_items = self._split_stat_line(stat_line)
+        perf_items = self._split_stat_line(stat_line) if self._verbose_enabled else []
         display_text = str(text or "")
         extracted_attachments = []
         if display_text and "\n\nВложения:\n-" in display_text:
@@ -1457,8 +1460,7 @@ class ChatWindow(proto.ExactChatWindow):
             self,
             "Очистить чат",
             "Удалить историю текущего чата?",
-            MmisMessageBox.Yes | MmisMessageBox.No,
-            MmisMessageBox.No,
+            ["Да", "Нет"],
         )
         if answer != MmisMessageBox.Yes:
             return
@@ -1595,7 +1597,7 @@ class ChatWindow(proto.ExactChatWindow):
         resolved_thinking_ms = self._normalize_perf_label(thinking_ms) if thinking_ms and str(thinking or "").strip() else ""
         if not resolved_thinking_ms and str(thinking or "").strip():
             resolved_thinking_ms = self._thinking_ms_label(stats, fallback_ms=local_thinking_ms)
-        perf, _stat_line = self._perf_from_stats(stats, fallback_elapsed_ms=elapsed_ms)
+        perf, _stat_line = self._perf_from_stats(stats, fallback_elapsed_ms=elapsed_ms, verbose_enabled=True)
         return self._compose_stat_line(perf, resolved_thinking_ms or None)
 
     def _load_legacy_project_sessions(self) -> tuple[list[dict], str | None]:
@@ -2158,10 +2160,12 @@ class ChatWindow(proto.ExactChatWindow):
             try:
                 payload = self.api.health(timeout=5.0)
                 if str(payload.get("status") or "").strip().lower() == "ok":
-                    self._thinking_enabled = bool(payload.get("thinking_enabled", self._thinking_enabled))
-                    self._verbose_enabled = bool(payload.get("verbose_enabled", self._verbose_enabled))
-                    self._json_mode_enabled = bool(payload.get("json_mode_enabled", self._json_mode_enabled))
-                    self._web_mode = str(payload.get("web_mode") or self._web_mode)
+                    can_update_runtime = time.monotonic() >= float(getattr(self, "_runtime_flags_dirty_until", 0.0) or 0.0)
+                    if can_update_runtime:
+                        self._thinking_enabled = bool(payload.get("thinking_enabled", self._thinking_enabled))
+                        self._verbose_enabled = bool(payload.get("verbose_enabled", self._verbose_enabled))
+                        self._json_mode_enabled = bool(payload.get("json_mode_enabled", self._json_mode_enabled))
+                        self._web_mode = str(payload.get("web_mode") or self._web_mode)
                     if "persona_name" in payload:
                         self._cache_persona_name(payload.get("persona_name"))
                     active_topic = str(payload.get("active_topic_title") or "").strip()
@@ -2208,6 +2212,10 @@ class ChatWindow(proto.ExactChatWindow):
             self._sync_controls_to_state()
 
     def _sync_controls_to_state(self) -> None:
+        self._runtime_flags["think"] = bool(self._thinking_enabled)
+        self._runtime_flags["verbose"] = bool(self._verbose_enabled)
+        self._runtime_flags["json"] = bool(self._json_mode_enabled)
+        self._runtime_flags["web_mode"] = str(self._web_mode)
         if hasattr(self, "think_toggle"):
             self.think_toggle.blockSignals(True)
             self.think_toggle.setChecked(self._thinking_enabled)
@@ -2533,6 +2541,7 @@ class ChatWindow(proto.ExactChatWindow):
             self._show_login_dialog()
             if not get_auth_token():
                 return
+        self._memory_debug_events = []
         if self.api is None:
             self._finalize_pending(
                 text="Нативное окно поднялось, но API сейчас недоступен.",
@@ -2608,14 +2617,11 @@ class ChatWindow(proto.ExactChatWindow):
 
             if existing_assistant is not None:
                 assistant_bubble = existing_assistant
-                preserved_height = max(
-                    int(assistant_bubble.minimumHeight() or 0),
-                    int(assistant_bubble.height() or 0),
-                    int(assistant_bubble.sizeHint().height() or 0),
-                )
-                assistant_bubble.setProperty("regen_previous_min_height", assistant_bubble.minimumHeight())
-                if preserved_height > 0:
-                    assistant_bubble.setMinimumHeight(preserved_height)
+                assistant_bubble.setProperty("regen_previous_min_height", None)
+                assistant_bubble.setMinimumHeight(0)
+                panel = getattr(assistant_bubble, "_message_panel", None)
+                if isinstance(panel, QWidget):
+                    panel.setMinimumHeight(0)
                 self._remove_message_widgets_after(assistant_bubble)
             else:
                 self._remove_message_widgets_after(bubble)
@@ -2831,9 +2837,16 @@ class ChatWindow(proto.ExactChatWindow):
     @Slot(object)
     def _on_memory_debug_event(self, snapshot: object) -> None:
         payload = dict(snapshot or {}) if isinstance(snapshot, dict) else {}
-        self._last_memory_debug_snapshot = payload
+        if "kind" in payload and "payload" in payload:
+            self._memory_debug_events.append(payload)
+            self._memory_debug_events = self._memory_debug_events[-80:]
+            merged = dict(self._last_memory_debug_snapshot or {})
+            merged["live_events"] = list(self._memory_debug_events)
+            self._last_memory_debug_snapshot = merged
+        else:
+            self._last_memory_debug_snapshot = payload
         if self._inspector_panel is not None:
-            self._inspector_panel.set_snapshot(payload)
+            self._inspector_panel.set_snapshot(self._last_memory_debug_snapshot)
 
     @staticmethod
     def _merge_streamed_and_final_text(streamed: str, final: str) -> str:
@@ -2900,11 +2913,15 @@ class ChatWindow(proto.ExactChatWindow):
             fallback_elapsed_ms=fallback_elapsed_ms,
             local_answer_ms=local_answer_ms,
             local_thinking_ms=local_thinking_ms,
-            verbose_enabled=bool(self._verbose_enabled or stats.get("verbose_enabled")),
+            verbose_enabled=bool(self._verbose_enabled),
             debug_trace=debug_trace,
         )
         thinking_ms = self._thinking_ms_label(stats, fallback_ms=local_thinking_ms) if thinking_generated and thinking else None
-        perf, _stat_line = self._perf_from_stats(stats, fallback_elapsed_ms=fallback_elapsed_ms)
+        perf, _stat_line = self._perf_from_stats(
+            stats,
+            fallback_elapsed_ms=fallback_elapsed_ms,
+            verbose_enabled=bool(self._verbose_enabled),
+        )
         stat_line = self._compose_stat_line(perf, thinking_ms)
         served_model = str(result.model or stats.get("served_model") or self.api.get_runtime_model() if self.api else "").strip()
         if served_model:
@@ -2913,6 +2930,8 @@ class ChatWindow(proto.ExactChatWindow):
         if not snapshot:
             snapshot = debug_trace
         if snapshot:
+            if self._memory_debug_events:
+                snapshot["live_events"] = list(self._memory_debug_events)
             self._last_memory_debug_snapshot = snapshot
             if self._inspector_panel is not None:
                 self._inspector_panel.set_snapshot(snapshot)
@@ -2943,14 +2962,6 @@ class ChatWindow(proto.ExactChatWindow):
             self._pending.bubble.update_text(text)
             self._pending.bubble.update_thinking(thinking, thinking_ms)
             self._pending.bubble.set_perf(perf)
-        if pending_bubble is not None:
-            previous_min_height = pending_bubble.property("regen_previous_min_height")
-            if previous_min_height is not None:
-                try:
-                    pending_bubble.setMinimumHeight(max(0, int(previous_min_height)))
-                except Exception:
-                    pending_bubble.setMinimumHeight(0)
-                pending_bubble.setProperty("regen_previous_min_height", None)
         idx = self._pending_history_index
         if idx is not None and 0 <= idx < len(self._history):
             self._history[idx] = ("ai", text, stat_line, None, thinking or None)
@@ -3012,6 +3023,7 @@ class ChatWindow(proto.ExactChatWindow):
             return
         if self._pending_elapsed_timer is None:
             return
+        self._pending_elapsed_label = ""
         self._refresh_pending_elapsed_perf()
         self._pending_elapsed_timer.start()
 
@@ -3028,13 +3040,19 @@ class ChatWindow(proto.ExactChatWindow):
             return
         if not self._verbose_enabled:
             pending.bubble.set_perf([])
+            self._pending_elapsed_label = ""
             self._stop_pending_elapsed_timer()
             return
         elapsed_ms = max(1, int((time.perf_counter() - pending.started_at) * 1000))
-        pending.bubble.set_perf([self._format_duration_label(elapsed_ms)])
-        if not pending.bubble.isVisible():
+        label = self._format_duration_label(elapsed_ms)
+        was_hidden = not pending.bubble.isVisible()
+        if label == self._pending_elapsed_label and not was_hidden:
+            return
+        self._pending_elapsed_label = label
+        pending.bubble.set_perf([label])
+        if was_hidden:
             pending.bubble.show()
-        self._schedule_scroll_bottom(follow_stream_only=True)
+            self._schedule_scroll_bottom(follow_stream_only=True)
 
     @staticmethod
     def _complete_verbose_stats(
@@ -3191,8 +3209,14 @@ class ChatWindow(proto.ExactChatWindow):
         return None
 
     @staticmethod
-    def _perf_from_stats(stats: dict, fallback_elapsed_ms: int = 0) -> tuple[list[str], str | None]:
-        verbose_enabled = True
+    def _perf_from_stats(
+        stats: dict,
+        fallback_elapsed_ms: int = 0,
+        *,
+        verbose_enabled: bool = False,
+    ) -> tuple[list[str], str | None]:
+        if not verbose_enabled:
+            return [], None
         elapsed = int(float(stats.get("client_wall_elapsed_ms") or 0) or 0)
         if elapsed <= 0:
             elapsed = int(float(stats.get("display_elapsed_ms") or 0) or 0)

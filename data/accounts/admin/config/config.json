@@ -17,11 +17,11 @@
     "safety_mode": "allow_os_actions"
   },
   "api": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 8027,
     "access_lock": {
-      "enabled": true,
-      "key_hash": "59ef359065eb226cd05aa6970a222da9a9517cb2fc00dffa201cb0160a9c35bc",
+      "enabled": false,
+      "key_hash": "",
       "deny_status": 404,
       "allow_ping_without_key": false
     }
@@ -283,7 +283,7 @@
     "enable_background_worker": true,
     "worker_poll_interval": 2.0,
     "memory_llm": {
-      "keep_alive": "5s"
+      "keep_alive": "30m"
     },
     "memory_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core",
     "cache_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\cache"
@@ -357,14 +357,14 @@
   "ui": {
     "api": {
       "active_endpoint": "local",
-      "local_base_url": "http://192.168.1.2:8027",
-      "public_base_url": "http://45.82.9.3:8027"
+      "local_base_url": "http://127.0.0.1:8027",
+      "public_base_url": "http://0.0.0.0:8027"
     },
     "console": {
       "timeout_sec": 2.5,
       "stream_timeout_sec": 600.0,
       "store_turn": true,
-      "show_thinking": true,
+      "show_thinking": false,
       "thinking_first": true,
       "auto_start_api": true,
       "auto_start_ollama": true,

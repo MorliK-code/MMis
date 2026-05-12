@@ -97,7 +97,7 @@
     .scroll::-webkit-scrollbar-track { background: rgba(0,0,0,.2); border-radius: 4px; }
     .scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
     pre { margin:10px 0 0; font-size:12px; line-height:1.7; color:#d4d4d8; overflow-x:auto; white-space:pre-wrap; }
-    .loading { opacity: 0.6; pointer-events: none; }
+    .loading { opacity: 0.92; }
     .empty-state { text-align: center; padding: 40px; color: var(--muted); }
     .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
     .stat-row:last-child { border-bottom: none; }
@@ -214,7 +214,8 @@ async function fetchJson(url) {
   return r.json();
 }
 
-async function loadAll() {
+async function loadAll(options = {}) {
+  const silent = Boolean(options.silent);
   if (state.loading) return;
   state.loading = true;
   document.getElementById('app').classList.add('loading');
@@ -250,7 +251,9 @@ async function loadAll() {
     render();
   } catch (e) {
     console.error('Failed to load data:', e);
-    alert('Ошибка загрузки данных: ' + e.message);
+    if (!silent) {
+      alert('Ошибка загрузки данных: ' + e.message);
+    }
   } finally {
     state.loading = false;
     document.getElementById('app').classList.remove('loading');
@@ -860,7 +863,8 @@ async function deleteJob(jobId) {
 // Auto refresh
 function setupAutoRefresh() {
   if (state.autoRefresh) {
-    state.refreshInterval = setInterval(loadAll, 5000); // 5 секунд
+    clearInterval(state.refreshInterval);
+    state.refreshInterval = setInterval(() => loadAll({ silent: true }), 5000); // 5 секунд
   }
 }
 

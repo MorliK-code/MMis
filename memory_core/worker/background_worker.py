@@ -188,6 +188,30 @@ class BackgroundWorker:
             LOGGER.info(f"Worker {self.config.worker_id}: preempted at stage '{stage}', requeueing job")
         raise preemption
 
+    def _job_queue_db_closed(self) -> bool:
+        try:
+            db = getattr(self.job_queue, "db", None)
+            return db is not None and getattr(db, "_conn", None) is None
+        except Exception:
+            return True
+
+    def _fail_job_safely(self, job_id: str, error_text: str, *, retry: bool) -> bool:
+        if self._stop_event.is_set() or self._job_queue_db_closed():
+            LOGGER.debug(
+                "Worker %s: skip job fail/retry during shutdown or after DB close",
+                self.config.worker_id,
+            )
+            return False
+        try:
+            return bool(self.job_queue.fail(job_id, error_text, retry=retry))
+        except (AssertionError, RuntimeError) as exc:
+            LOGGER.debug(
+                "Worker %s: job fail/retry skipped because storage is closing: %s",
+                self.config.worker_id,
+                exc,
+            )
+            return False
+
     def start(self) -> None:
         """Запускает воркер в фоновом потоке."""
         if self._running and self._thread is not None and self._thread.is_alive():
@@ -437,11 +461,22 @@ class BackgroundWorker:
             )
             requeue_now = getattr(self.job_queue, "requeue_immediately", None)
             self.stats.interrupt_count += 1
-            if callable(requeue_now):
-                if requeue_now(job.job_id, ""):
-                    self.stats.requeue_count += 1
-            else:
-                self.job_queue.fail(job.job_id, "", retry=True)
+            if self._stop_event.is_set() or self._job_queue_db_closed():
+                LOGGER.debug(
+                    "Worker %s: interrupted job requeue skipped during shutdown",
+                    self.config.worker_id,
+                )
+            elif callable(requeue_now):
+                try:
+                    if requeue_now(job.job_id, ""):
+                        self.stats.requeue_count += 1
+                except (AssertionError, RuntimeError) as exc:
+                    LOGGER.debug(
+                        "Worker %s: interrupted job requeue skipped because storage is closing: %s",
+                        self.config.worker_id,
+                        exc,
+                    )
+            elif self._fail_job_safely(job.job_id, "", retry=True):
                 self.stats.requeue_count += 1
             self.stats.jobs_retried += 1
             return False  # FIXED: Stop burst on interruption
@@ -452,7 +487,7 @@ class BackgroundWorker:
             self.stats.last_error = str(e)
 
             # Пытаемся сделать retry
-            retried = self.job_queue.fail(job.job_id, str(e), retry=True)
+            retried = self._fail_job_safely(job.job_id, str(e), retry=True)
             if retried:
                 self.stats.jobs_retried += 1
             return True
