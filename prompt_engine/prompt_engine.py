@@ -545,6 +545,22 @@ class PromptEngine:
 
         parts: list[str] = []
 
+        topic_focus = _as_dict(native_state.get("topic_focus"))
+        if topic_focus:
+            focus_items = []
+            if topic_focus.get("locked"):
+                focus_items.append("locked=true")
+            if topic_focus.get("topic_title"):
+                focus_items.append(f"title={str(topic_focus.get('topic_title'))[:80]}")
+            elif topic_focus.get("topic_key"):
+                focus_items.append(f"key={str(topic_focus.get('topic_key'))[:80]}")
+            if topic_focus.get("task_goal"):
+                focus_items.append(f"goal={str(topic_focus.get('task_goal'))[:100]}")
+            if topic_focus.get("route_reason"):
+                focus_items.append(f"route={str(topic_focus.get('route_reason'))[:40]}")
+            if focus_items:
+                parts.append("[FOCUS] " + "; ".join(focus_items))
+
         # Identity core — компактно (1 строка)
         identity_core = _as_dict(native_state.get("identity_core"))
         if identity_core:

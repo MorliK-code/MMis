@@ -191,9 +191,11 @@ class TopicRouter:
             current_thread is not None
             and best_thread is not None
             and best_thread.thread_id != current_thread.thread_id
-            and best_score >= 0.82
-            and current_score <= 0.25
+            and best_score >= 0.88
+            and current_score <= 0.18
             and not looks_like_continuation
+            and not recent_current
+            and not dict(state.get("active_task") or {})
         ):
             self.topic_store.touch_thread(
                 best_thread.thread_id,

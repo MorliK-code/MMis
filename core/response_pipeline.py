@@ -656,10 +656,51 @@ class MemoryNativeStateStage(PipelineStage):
 
         # Строим memory_native_state из текущего state и memory_context
         # Это always-on слой — доступен даже без retrieval и для не-chat маршрутов
+        memory_context = _as_dict(ctx.memory_context)
+        topic_focus = _build_topic_focus_state(ctx)
+        active_task = _as_dict(ctx.state.get("active_task"))
+
+        recent_topics = _merge_compact_strings(
+            [
+                ctx.state.get("active_topic_title"),
+                ctx.state.get("topic_thread_title"),
+                ctx.state.get("active_topic_key"),
+                ctx.state.get("topic_key"),
+            ],
+            ctx.state.get("recent_topics"),
+            limit=5,
+        )
+
+        open_questions = _merge_compact_strings(
+            ctx.state.get("open_questions"),
+            memory_context.get("open_questions"),
+            active_task.get("open_questions"),
+            limit=6,
+        )
+
+        current_decisions = _merge_compact_strings(
+            ctx.state.get("current_decisions"),
+            memory_context.get("current_decisions"),
+            active_task.get("decisions"),
+            limit=6,
+        )
+
         native_state = {
-            "hits": ctx.memory_context.get("hits", []) if ctx.memory_context else [],
-            "citations": ctx.memory_context.get("citations", []) if ctx.memory_context else [],
+            "hits": memory_context.get("hits", []),
+            "citations": memory_context.get("citations", []),
+            "identity_core": _as_dict(ctx.state.get("identity_core")),
+            "active_task": active_task,
+            "open_questions": open_questions,
+            "current_decisions": current_decisions,
+            "recent_topics": recent_topics,
+            "topic_focus": topic_focus,
+            "continuity": {
+                "active": bool(active_task or topic_focus.get("active")),
+                "source": "topic_focus" if topic_focus.get("active") else "state",
+                "confidence": 0.95 if topic_focus.get("locked") else 0.55,
+            },
         }
+        ctx.state["topic_focus"] = topic_focus
         ctx.state["memory_native_state"] = native_state
 
         # Логируем, что было построено
@@ -885,6 +926,31 @@ class EpisodeContinuityStage(PipelineStage):
                 ctx.state.pop("_active_task_source", None)
                 trace.active_task = {"event": "clear", "reason": "switch_topic_phrase", "source": "continuation"}
                 ctx.logs.append("stage=episode_continuity active_task_cleared(reason=switch_topic_phrase)")
+                return ctx
+            route_reason = str(ctx.state.get("topic_route_reason") or "").strip().lower()
+            explicit_switch = (
+                route_reason in {"explicit_new_topic", "explicit_return"}
+                or _is_explicit_topic_switch_text(user_text)
+            )
+            if not explicit_switch:
+                kept_task = dict(existing_task)
+                kept_task["updated_at"] = now_ts
+                ctx.state["active_task"] = kept_task
+                ctx.state["active_goal"] = str(
+                    kept_task.get("current_goal")
+                    or kept_task.get("summary_short")
+                    or ctx.state.get("active_goal")
+                    or ""
+                ).strip()
+                if list(kept_task.get("decisions") or []):
+                    ctx.state["active_tasks"] = [dict(kept_task)]
+                    ctx.state["current_decisions"] = list(kept_task.get("decisions") or [])
+                trace.active_task = {
+                    "event": "keep",
+                    "reason": "topic_focus_lock",
+                    "source": "continuation",
+                }
+                ctx.logs.append("stage=episode_continuity kept_active_task(reason=topic_focus_lock)")
                 return ctx
             if len(user_text.split()) <= 3:
                 kept_task = dict(existing_task)
@@ -1589,6 +1655,27 @@ class PromptBuildStage(PipelineStage):
             prompt_state["plan"] = ctx.plan
         prompt_state["active_task"] = dict(_as_dict(ctx.state.get("active_task")))
         prompt_state["active_tasks"] = [dict(x) for x in list(_as_list(ctx.state.get("active_tasks"))) if isinstance(x, dict)]
+        topic_focus = _as_dict(ctx.state.get("topic_focus"))
+        if topic_focus:
+            prompt_state["topic_focus"] = topic_focus
+            if bool(topic_focus.get("locked")):
+                focus_title = str(
+                    topic_focus.get("topic_title")
+                    or topic_focus.get("topic_key")
+                    or topic_focus.get("task_goal")
+                    or "current thread"
+                ).strip()
+                _append_policy_rule(
+                    ctx.policies,
+                    "FOCUS_LOCK is active. Stay on the current active topic/task: "
+                    f"{focus_title}. Do not switch to a different topic unless the user's latest message explicitly asks to change/return/switch topic. "
+                    "If the latest message mentions a side detail, treat it only as a side detail inside the current task.",
+                )
+                _append_policy_rule(
+                    ctx.policies,
+                    "When FOCUS_LOCK is active, answer the user's latest message through the current topic/task first. "
+                    "Do not continue a different recalled topic just because it appears semantically related.",
+                )
         memory_context_for_prompt = _as_dict(ctx.memory_context)
         if memory_context_for_prompt:
             filtered_blocks = dict(_as_dict(memory_context_for_prompt.get("blocks")))
@@ -5403,8 +5490,8 @@ class ResponsePipeline:
                 "mode_select",
                 "personality",
                 "topic_routing",
-                "memory_native_state",
                 "episode_continuity",
+                "memory_native_state",
                 "prompt_build",
                 "prompt_engine",
                 "generate",
@@ -5419,8 +5506,8 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "topic_routing",
-                "memory_native_state",
                 "episode_continuity",
+                "memory_native_state",
                 "web_retrieve",
                 "prompt_build",
                 "prompt_engine",
@@ -5437,8 +5524,8 @@ class ResponsePipeline:
                 "plan",
                 "personality",
                 "topic_routing",
-                "memory_native_state",
                 "episode_continuity",
+                "memory_native_state",
                 "web_retrieve",
                 "prompt_build",
                 "prompt_engine",
@@ -5456,6 +5543,7 @@ class ResponsePipeline:
                 "personality",
                 "topic_routing",
                 "episode_continuity",
+                "memory_native_state",
                 "web_retrieve",
                 "prompt_build",
                 "prompt_engine",
@@ -6864,7 +6952,10 @@ def _merge_compact_strings(*groups: Any, limit: int = 10) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
     for group in groups:
-        for value in list(group or []):
+        if group in (None, "", [], {}, ()):
+            continue
+        values = group if isinstance(group, (list, tuple, set)) else [group]
+        for value in list(values):
             clean = " ".join(str(value or "").strip().split())
             if not clean or clean in seen:
                 continue
@@ -6873,6 +6964,91 @@ def _merge_compact_strings(*groups: Any, limit: int = 10) -> list[str]:
             if len(result) >= max(1, int(limit or 10)):
                 return result
     return result
+
+
+def _is_explicit_topic_switch_text(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    markers = (
+        "другая тема",
+        "новая тема",
+        "новый вопрос",
+        "ещё вопрос",
+        "еще вопрос",
+        "отдельный вопрос",
+        "отдельно",
+        "кстати",
+        "сменим тему",
+        "перейдем к",
+        "перейдём к",
+        "теперь про",
+        "а теперь про",
+        "давай теперь про",
+        "вернемся к",
+        "вернёмся к",
+        "another topic",
+        "new topic",
+        "switch topic",
+        "separate question",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _build_topic_focus_state(ctx: PipelineContext) -> dict[str, Any]:
+    text = str(ctx.clean_user_msg or ctx.user_msg or "").strip()
+    route_reason = str(
+        ctx.state.get("topic_route_reason")
+        or ctx.meta.get("topic_route_reason")
+        or ""
+    ).strip().lower()
+
+    explicit_switch = (
+        route_reason in {"explicit_new_topic", "explicit_return"}
+        or _is_explicit_topic_switch_text(text)
+    )
+
+    active_task = _as_dict(ctx.state.get("active_task"))
+    thread_id = str(
+        ctx.state.get("topic_thread_id")
+        or ctx.state.get("active_topic_thread_id")
+        or ctx.meta.get("topic_thread_id")
+        or ""
+    ).strip()
+    topic_key = str(
+        ctx.state.get("topic_key")
+        or ctx.state.get("active_topic_key")
+        or ctx.meta.get("topic_key")
+        or ""
+    ).strip()
+    topic_title = str(
+        ctx.state.get("topic_thread_title")
+        or ctx.state.get("active_topic_title")
+        or ctx.meta.get("topic_title")
+        or ctx.meta.get("topic_thread_title")
+        or ""
+    ).strip()
+
+    task_goal = str(
+        active_task.get("current_goal")
+        or active_task.get("summary_short")
+        or ctx.state.get("active_goal")
+        or ""
+    ).strip()
+
+    has_focus = bool(thread_id or topic_key or topic_title or task_goal)
+    locked = bool(has_focus and not explicit_switch)
+
+    return {
+        "active": has_focus,
+        "locked": locked,
+        "explicit_switch": explicit_switch,
+        "thread_id": thread_id,
+        "topic_key": topic_key,
+        "topic_title": topic_title,
+        "task_goal": task_goal,
+        "route_reason": route_reason,
+    }
 
 
 def _should_enable_agent_loop(ctx: PipelineContext) -> bool:
