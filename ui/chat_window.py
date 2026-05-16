@@ -470,7 +470,7 @@ class ChatWindow(proto.ExactChatWindow):
         self._refresh_persona_label()
         self.input.setPlaceholderText("Напиши сообщение")
         self.search_btn.setText("Очистить")
-        self.clear_btn.setText("Инспектор")
+        self.clear_btn.hide()
         self.plus_btn.set_button_padding(0, 0, 0, 0)
         self.plus_btn.setFixedSize(24, 24)
         self.mic_btn.set_button_padding(0, 0, 0, 0)
@@ -1162,7 +1162,6 @@ class ChatWindow(proto.ExactChatWindow):
         except Exception:
             pass
         self.search_btn.clicked.connect(self._clear_messages)
-        self.clear_btn.clicked.connect(self._toggle_inspector)
         self.plus_btn.clicked.connect(self._attach_file)
         self.mic_btn.clicked.connect(self._open_voice_mode)
 
@@ -1240,10 +1239,11 @@ class ChatWindow(proto.ExactChatWindow):
         except Exception:
             pass
         try:
-            if not worker.isRunning():
-                worker.deleteLater()
+            if worker.isRunning():
+                return
+            worker.deleteLater()
         except Exception:
-            pass
+            return
         setattr(self, attr_name, None)
 
     def _stop_background_threads(self, *, include_reply: bool) -> None:
@@ -1988,24 +1988,28 @@ class ChatWindow(proto.ExactChatWindow):
             return
         widgets = [rail_layout.itemAt(i).widget() for i in range(rail_layout.count())]
         actual_widgets = [widget for widget in widgets if widget is not None]
-        if len(actual_widgets) < 6:
+        chat_button = rail.findChild(QWidget, "rail_chat_button") if rail is not None else None
+        voice_button = rail.findChild(QWidget, "rail_voice_button") if rail is not None else None
+        settings_button = rail.findChild(QWidget, "rail_settings_button") if rail is not None else None
+        if chat_button is None and actual_widgets:
+            chat_button = actual_widgets[0]
+        if voice_button is None and len(actual_widgets) > 1:
+            voice_button = actual_widgets[1]
+        if chat_button is None or voice_button is None:
             return
-        self._chat_rail_button = actual_widgets[0]
-        self._voice_rail_button = actual_widgets[1]
-        self._file_rail_button = actual_widgets[2]
-        self._memory_rail_button = actual_widgets[3]
-        self._settings_rail_button = actual_widgets[5]
+        self._chat_rail_button = chat_button
+        self._voice_rail_button = voice_button
+        self._file_rail_button = None
+        self._memory_rail_button = None
+        self._settings_rail_button = settings_button
 
         self._chat_rail_button.setToolTip("Чат")
         self._chat_rail_button.clicked.connect(self._close_voice_mode)
         self._voice_rail_button.setToolTip("Голосовое общение")
         self._voice_rail_button.clicked.connect(self._open_voice_mode)
-        self._file_rail_button.setToolTip("Прикрепить файл")
-        self._file_rail_button.clicked.connect(self._attach_file)
-        self._memory_rail_button.setToolTip("Память / Inspector")
-        self._memory_rail_button.clicked.connect(self._toggle_inspector)
-        self._settings_rail_button.setToolTip("Настройки")
-        self._settings_rail_button.clicked.connect(self._open_settings_window)
+        if self._settings_rail_button is not None:
+            self._settings_rail_button.setToolTip("Настройки")
+            self._settings_rail_button.clicked.connect(self._open_settings_window)
         self._sync_rail_mode_buttons()
 
     @Slot()
@@ -2168,9 +2172,7 @@ class ChatWindow(proto.ExactChatWindow):
                         self._web_mode = str(payload.get("web_mode") or self._web_mode)
                     if "persona_name" in payload:
                         self._cache_persona_name(payload.get("persona_name"))
-                    active_topic = str(payload.get("active_topic_title") or "").strip()
-                    if active_topic:
-                        self._last_active_topic_title = active_topic
+                    self._cache_active_topic_title(payload.get("active_topic_title"))
                     model = str(payload.get("model") or "").strip()
                     if model:
                         self._active_model = model
@@ -2199,6 +2201,8 @@ class ChatWindow(proto.ExactChatWindow):
         
         if row.get("api_ok") and "persona_name" in row:
             self._cache_persona_name(row.get("persona_name"))
+        if row.get("api_ok"):
+            self._cache_active_topic_title(row.get("active_topic_title"))
         if time.monotonic() >= float(getattr(self, "_runtime_flags_dirty_until", 0.0)):
             for attr, key in (
                 ("_thinking_enabled", "thinking_enabled"),
@@ -2399,18 +2403,15 @@ class ChatWindow(proto.ExactChatWindow):
 
     @Slot(str)
     def _on_web_mode_changed(self, mode: str) -> None:
-        previous = self._web_mode
         self._web_mode = str(mode or "auto")
-        if self.api:
-            try:
-                self._web_mode = str(self.api.set_web_mode(self._web_mode) or self._web_mode)
-            except ApiClientError as exc:
-                self._web_mode = previous
-                self._sync_controls_to_state()
-                MmisMessageBox.warning(self, "Функции", str(exc))
-                return
+        self._runtime_flags_dirty_until = time.monotonic() + 2.0
+        self._runtime_flags["think"] = self._thinking_enabled
+        self._runtime_flags["verbose"] = self._verbose_enabled
+        self._runtime_flags["json"] = self._json_mode_enabled
+        self._runtime_flags["web_mode"] = self._web_mode
         self._sync_controls_to_state()
         self._save_ui_state()
+        self._runtime_sync_timer.start(150)
 
     @Slot()
     def _on_new_chat_clicked(self) -> None:
@@ -2435,31 +2436,50 @@ class ChatWindow(proto.ExactChatWindow):
         chat["title"] = _trim_title(user_text)
         chat["updated_at"] = chat_now_iso()
 
-    def _resolve_active_topic_title(self) -> str:
-        snapshot = dict(self._last_memory_debug_snapshot or {})
-        final_meta = dict(snapshot.get("final_answer_meta") or {})
-        memory_context = dict(snapshot.get("memory_context") or {})
+    @staticmethod
+    def _is_generic_topic_title(title: str) -> bool:
+        cleaned = " ".join(str(title or "").split()).strip().lower()
+        return cleaned in {"", "чат", "chat", "general", "default", "none", "null"}
+
+    @staticmethod
+    def _extract_active_topic_title_from_snapshot(snapshot: dict) -> str:
+        data = dict(snapshot or {})
+        final_meta = dict(data.get("final_answer_meta") or {})
+        memory_context = dict(data.get("memory_context") or {})
         candidates = [
-            snapshot.get("active_topic_title"),
-            snapshot.get("topic_thread_title"),
-            snapshot.get("topic_title"),
+            data.get("active_topic_title"),
+            data.get("topic_thread_title"),
+            data.get("topic_title"),
             final_meta.get("active_topic_title"),
             final_meta.get("topic_thread_title"),
             final_meta.get("topic_title"),
             memory_context.get("active_topic_title"),
             memory_context.get("topic_thread_title"),
             memory_context.get("topic_title"),
-            snapshot.get("topic_key"),
-            final_meta.get("topic_key"),
-            memory_context.get("topic_key"),
         ]
         for candidate in candidates:
-            text = str(candidate or "").strip()
-            if text:
-                return _trim_title(text, limit=40)
-        
+            text = " ".join(str(candidate or "").split()).strip()
+            if text and not ChatWindow._is_generic_topic_title(text):
+                return text
+        return ""
+
+    def _cache_active_topic_title(self, title: str) -> None:
+        clean = " ".join(str(title or "").split()).strip()
+        if self._is_generic_topic_title(clean):
+            return
+        trimmed = _trim_title(clean, limit=40)
+        if trimmed == getattr(self, "_last_active_topic_title", ""):
+            return
+        self._last_active_topic_title = trimmed
+        self._save_ui_state()
+
+    def _resolve_active_topic_title(self) -> str:
+        extracted = self._extract_active_topic_title_from_snapshot(dict(self._last_memory_debug_snapshot or {}))
+        if extracted:
+            return _trim_title(extracted, limit=40)
+
         cached = str(getattr(self, "_last_active_topic_title", "") or "").strip()
-        if cached:
+        if cached and not self._is_generic_topic_title(cached):
             return _trim_title(cached, limit=40)
             
         return SINGLE_VISIBLE_CHAT_TITLE
@@ -2933,6 +2953,7 @@ class ChatWindow(proto.ExactChatWindow):
             if self._memory_debug_events:
                 snapshot["live_events"] = list(self._memory_debug_events)
             self._last_memory_debug_snapshot = snapshot
+            self._cache_active_topic_title(self._extract_active_topic_title_from_snapshot(snapshot))
             if self._inspector_panel is not None:
                 self._inspector_panel.set_snapshot(snapshot)
         self._finalize_pending(text=text, thinking=thinking, thinking_ms=thinking_ms, perf=perf, stat_line=stat_line)

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPointF, Property, QPropertyAnimation, QRect, QRectF, QSize, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QFontMetricsF, QPen, QRadialGradient, QTextCursor, QTextDocument
+from PySide6.QtGui import QColor, QCursor, QFont, QImage, QLinearGradient, QMouseEvent, QPainter, QPainterPath, QFontMetricsF, QPen, QRadialGradient, QTextCursor, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -1443,7 +1443,7 @@ class PlainTextScrollOverlay(QWidget):
 
     def _sync_geometry(self):
         e = self._editor
-        self.setGeometry(e.width() - 12, 4, 10, e.height() - 8)
+        self.setGeometry(e.width() - 11, 4, 8, e.height() - 8)
         visible = self._bar.maximum() > self._bar.minimum()
         self.setVisible(visible)
         if visible:
@@ -1920,18 +1920,45 @@ class ChatBackdrop(QWidget):
 
 class ComposerEdit(QPlainTextEdit):
     submitRequested = Signal()
+    composerHeightChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._display_font = _ui_font(pixel_size=14)
         self._native_text_visible: bool | None = None
+        self._min_input_height = 46
+        self._max_input_height = 160
+        self._height_sync_queued = False
         self.setFont(self._display_font)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(self._min_input_height)
         self._apply_native_text_style(False)
         self.textChanged.connect(self._refresh_overlay)
+        self.textChanged.connect(self._schedule_height_sync)
+        self.blockCountChanged.connect(lambda _count: self._schedule_height_sync())
         self.cursorPositionChanged.connect(self._refresh_overlay)
         self.selectionChanged.connect(self._refresh_overlay)
         self.updateRequest.connect(lambda *_args: self._refresh_overlay())
         self.scroll_overlay = PlainTextScrollOverlay(self)
+
+    def setHeightRange(self, min_height: int, max_height: int) -> None:
+        self._min_input_height = max(1, int(min_height))
+        self._max_input_height = max(self._min_input_height, int(max_height))
+        self._schedule_height_sync()
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        hint.setHeight(self.height() or self._min_input_height)
+        return hint
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._schedule_height_sync()
+        self._refresh_overlay()
 
     def keyPressEvent(self, event) -> None:
         key = event.key()
@@ -1945,21 +1972,47 @@ class ComposerEdit(QPlainTextEdit):
         super().keyPressEvent(event)
 
     def _refresh_overlay(self) -> None:
-        self._apply_native_text_style(self.textCursor().hasSelection())
+        self._apply_native_text_style(True)
         self.viewport().update()
+
+    def _schedule_height_sync(self) -> None:
+        if self._height_sync_queued:
+            return
+        self._height_sync_queued = True
+        QTimer.singleShot(0, self._sync_dynamic_height)
+
+    def _sync_dynamic_height(self) -> None:
+        self._height_sync_queued = False
+        document = QTextDocument()
+        document.setDefaultFont(self.font())
+        text_option = document.defaultTextOption()
+        text_option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        document.setDefaultTextOption(text_option)
+        document.setPlainText(self.toPlainText() or " ")
+        document.setTextWidth(max(1, self.viewport().width() - 10))
+        document_height = int(document.size().height())
+        if document_height <= 0:
+            document_height = self.fontMetrics().lineSpacing()
+        margins = self.contentsMargins()
+        target = document_height + margins.top() + margins.bottom() + 14
+        target = max(self._min_input_height, min(self._max_input_height, target))
+        if self.height() != target:
+            self.setFixedHeight(target)
+            self.updateGeometry()
+            self.composerHeightChanged.emit()
 
     def _apply_native_text_style(self, visible: bool) -> None:
         native_visible = bool(visible)
         if self._native_text_visible is native_visible:
             return
         self._native_text_visible = native_visible
-        text_color = TEXT if native_visible else "transparent"
+        text_color = TEXT
         self.setStyleSheet(
             "QPlainTextEdit{"
             "background:transparent;"
             "border:none;"
             f"color:{text_color};"
-            "padding:2px 0 0 5px;"
+            "padding:2px 11px 0 5px;"
             "selection-background-color:rgba(139,92,246,.22);"
             f"selection-color:{TEXT};"
             "}"
@@ -1979,10 +2032,9 @@ class ComposerEdit(QPlainTextEdit):
         )
 
     def paintEvent(self, event) -> None:
-        has_selection = self.textCursor().hasSelection()
-        self._apply_native_text_style(has_selection)
+        self._apply_native_text_style(True)
         super().paintEvent(event)
-        if has_selection:
+        if self.toPlainText():
             return
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -1991,8 +2043,7 @@ class ComposerEdit(QPlainTextEdit):
         rect = self._overlay_text_rect()
         text = self.toPlainText()
         if text:
-            painter.setPen(_to_qcolor(TEXT))
-            painter.drawText(rect, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap), text)
+            return
         elif self.placeholderText():
             painter.setPen(_to_qcolor(MUTED_2))
             painter.drawText(
@@ -2978,14 +3029,19 @@ class ExactChatWindow(QMainWindow):
         rail_lay = QVBoxLayout(rail)
         rail_lay.setContentsMargins(5, 7, 5, 7)
         rail_lay.setSpacing(5)
-        rail_lay.addWidget(RailButton("💬", active=True), 0, Qt.AlignmentFlag.AlignTop)
-        rail_lay.addWidget(RailButton("🎙"), 0, Qt.AlignmentFlag.AlignTop)
-        rail_lay.addWidget(RailButton("📎"), 0, Qt.AlignmentFlag.AlignTop)
+        chat_button = RailButton("💬", active=True)
+        chat_button.setObjectName("rail_chat_button")
+        voice_button = RailButton("🎙")
+        voice_button.setObjectName("rail_voice_button")
+        rail_lay.addWidget(chat_button, 0, Qt.AlignmentFlag.AlignTop)
+        rail_lay.addWidget(voice_button, 0, Qt.AlignmentFlag.AlignTop)
         rail_lay.addStretch(1)
-        rail_lay.addWidget(RailButton("🧠"), 0, Qt.AlignmentFlag.AlignBottom)
         self.models_button = RailButton("🧬")
-        rail_lay.addWidget(self.models_button, 0, Qt.AlignmentFlag.AlignBottom)
-        rail_lay.addWidget(RailButton("⚙"), 0, Qt.AlignmentFlag.AlignBottom)
+        self.models_button.setParent(rail)
+        self.models_button.hide()
+        settings_button = RailButton("⚙")
+        settings_button.setObjectName("rail_settings_button")
+        rail_lay.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignBottom)
         layout.addWidget(rail)
 
         chat = QFrame()
@@ -3034,7 +3090,7 @@ class ExactChatWindow(QMainWindow):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -3058,9 +3114,7 @@ class ExactChatWindow(QMainWindow):
         self.messages_layout.setSpacing(10)
         self.scroll.setWidget(self.messages_host)
         self.chat_scroll_overlay = ChatScrollOverlay(self.scroll)
-        chat_lay.addWidget(self.scroll)
-
-        chat_lay.addStretch(1)
+        chat_lay.addWidget(self.scroll, 1)
         composer_wrap = QFrame()
         composer_wrap.setObjectName("composer_wrap")
         composer_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -3076,8 +3130,9 @@ class ExactChatWindow(QMainWindow):
         composer_lay.setSpacing(6)
         self.input = ComposerEdit()
         self.input.setPlaceholderText("Напиши сообщение")
-        self.input.setFixedHeight(46)
+        self.input.setHeightRange(46, 160)
         self.input.setFont(_ui_font(pixel_size=14))
+        self.input.composerHeightChanged.connect(self._sync_composer_height)
         self.input.submitRequested.connect(self._send_message)
         composer_lay.addWidget(self.input)
         actions = QHBoxLayout(); actions.setSpacing(8)
@@ -3143,12 +3198,10 @@ class ExactChatWindow(QMainWindow):
         scroll.setVisible(True)
         layout.invalidate()
         layout.activate()
-        content_height = max(int(layout.sizeHint().height()), int(layout.minimumSize().height()), 1)
-        available_height = self._available_messages_view_height()
-        target_height = content_height if available_height <= 0 else min(content_height, available_height)
-        target_height = max(1, int(target_height))
-        if int(scroll.minimumHeight()) != target_height or int(scroll.maximumHeight()) != target_height:
-            scroll.setFixedHeight(target_height)
+        if int(scroll.minimumHeight()) != 1:
+            scroll.setMinimumHeight(1)
+        if int(scroll.maximumHeight()) != 16777215:
+            scroll.setMaximumHeight(16777215)
         self.messages_host.updateGeometry()
         scroll.updateGeometry()
         parent = scroll.parentWidget()
@@ -3161,6 +3214,17 @@ class ExactChatWindow(QMainWindow):
             return
         self._messages_view_height_sync_queued = True
         QTimer.singleShot(0, self._sync_messages_view_height)
+
+    def _sync_composer_height(self) -> None:
+        composer_wrap = self.findChild(QWidget, "composer_wrap")
+        if composer_wrap is not None:
+            composer = self.input.parentWidget()
+            if composer and composer.layout():
+                composer.layout().invalidate()
+            if composer_wrap.layout():
+                composer_wrap.layout().invalidate()
+            composer_wrap.setFixedHeight(composer_wrap.sizeHint().height())
+        self._schedule_messages_view_height_sync()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

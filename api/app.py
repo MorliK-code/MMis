@@ -519,7 +519,7 @@ def _ensure_runtime_account(account: dict) -> None:
             memory_core=memory_core_adapter,
         )
         _runtime.brain.state_manager.patch({"account_id": new_context.account_id})
-        _runtime.model = str(new_cfg.model_name or _runtime.model).strip()
+        _set_runtime_model(str(new_cfg.model_name or _runtime.model).strip())
         _runtime.thinking_enabled = bool(new_cfg.thinking_enabled)
         _runtime.verbose_enabled = bool(_runtime.brain.state_manager.get("verbose_enabled", False))
         _runtime.web_mode = new_cfg.web_mode if bool(new_cfg.internet_enabled) else "off"
@@ -1080,6 +1080,47 @@ def admin_delete_api_access_key(key_hash: str, authorization: str | None = Heade
     return _delete_api_access_key_payload(key_hash, authorization)
 
 
+def _runtime_active_topic_title() -> str:
+    snapshot = dict(getattr(_runtime, "last_memory_debug_snapshot", {}) or {})
+    final_meta = dict(snapshot.get("final_answer_meta") or {})
+    memory_context = dict(snapshot.get("memory_context") or {})
+    candidates = [
+        snapshot.get("active_topic_title"),
+        snapshot.get("topic_thread_title"),
+        snapshot.get("topic_title"),
+        final_meta.get("active_topic_title"),
+        final_meta.get("topic_thread_title"),
+        final_meta.get("topic_title"),
+        memory_context.get("active_topic_title"),
+        memory_context.get("topic_thread_title"),
+        memory_context.get("topic_title"),
+    ]
+    try:
+        state_mgr = _runtime.brain.state_manager
+        candidates.extend(
+            [
+                state_mgr.get("active_topic_title"),
+                state_mgr.get("topic_thread_title"),
+                state_mgr.get("topic_title"),
+                state_mgr.get("active_topic_key"),
+                state_mgr.get("topic_key"),
+            ]
+        )
+        context_tags = state_mgr.get("context_tags", {}) or {}
+        if isinstance(context_tags, dict):
+            candidates.append(context_tags.get("topic_title"))
+            candidates.append(context_tags.get("topic"))
+    except Exception:
+        pass
+
+    generic = {"chat", "чат", "general", "default", "none", "null"}
+    for value in candidates:
+        text = " ".join(str(value or "").split()).strip()
+        if text and text.lower() not in generic:
+            return text[:80]
+    return ""
+
+
 def _build_health_response() -> HealthResponse:
     active_profile, quality_profile = _resolve_effective_profiles()
     _profile, profile_payload = _resolved_profile_payload()
@@ -1148,6 +1189,7 @@ def _build_health_response() -> HealthResponse:
         json_mode_enabled=bool(_runtime.json_mode_enabled),
         web_mode=str(_runtime.web_mode),
         persona_name=persona_name,
+        active_topic_title=_runtime_active_topic_title(),
         active_profile=str(active_profile or "BALANCED"),
         quality_profile=str(quality_profile or "BALANCED"),
         profile_parameters=profile_payload,
@@ -1679,7 +1721,7 @@ def patch_config(updates: dict[str, Any], authorization: str | None = Header(def
                 # Re-sync local runtime state with new config if needed
                 new_cfg = load_config(force_reload=True)
             _runtime.settings = new_cfg
-            _runtime.model = str(new_cfg.model_name or _runtime.model).strip()
+            _set_runtime_model(str(new_cfg.model_name or _runtime.model).strip())
             _runtime.thinking_enabled = bool(new_cfg.thinking_enabled)
             _runtime.web_mode = new_cfg.web_mode if bool(new_cfg.internet_enabled) else "off"
             _runtime.json_mode_enabled = bool(new_cfg.json_mode_enabled)

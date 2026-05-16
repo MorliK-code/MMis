@@ -13,7 +13,7 @@
   },
   "startup": {
     "mode": "api",
-    "active_profile": "ASYA",
+    "active_profile": "BALANCED",
     "safety_mode": "allow_os_actions"
   },
   "api": {
@@ -40,7 +40,7 @@
         "base_url": "http://127.0.0.1:11434",
         "timeout_sec": 120.0,
         "retries": 1,
-        "keep_alive": "5m"
+        "keep_alive": "15m"
       },
       "openai": {
         "api_key": "",
@@ -270,8 +270,7 @@
     "chat_recall_results": 3,
     "chat_events_limit": 10,
     "chat_proofread": false,
-    "chat_proofread_strict": false,
-    "enabled": true
+    "chat_proofread_strict": false
   },
   "memory_core": {
     "enabled": true,
@@ -283,7 +282,7 @@
     "enable_background_worker": true,
     "worker_poll_interval": 2.0,
     "memory_llm": {
-      "keep_alive": "30m"
+      "keep_alive": "30s"
     },
     "memory_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\memory_core",
     "cache_dir": "C:\\Users\\user\\Desktop\\MMis\\data\\accounts\\admin\\cache"

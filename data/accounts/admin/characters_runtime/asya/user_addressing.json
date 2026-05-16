@@ -1,5 +1,5 @@
 {
-  "canonical_name": "поговорить",
+  "canonical_name": "питал",
   "allowed_forms": [
     "Пользователь",
     "на",
@@ -12,7 +12,8 @@
     "накотило",
     "заимностью",
     "ещё",
-    "поговорить"
+    "поговорить",
+    "питал"
   ],
   "forbidden_forms": [
     "ответил",
@@ -28,5 +29,5 @@
   ],
   "allow_diminutives": false,
   "use_name_by_default": false,
-  "updated_at": "2026-05-06T04:53:10.894+03:00"
+  "updated_at": "2026-05-14T16:29:29.138+03:00"
 }

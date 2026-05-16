@@ -52,6 +52,10 @@ def default_value_for_path(path: str, kind: str):
         return False
     return ""
 
+def _is_client_only_path(path: str) -> bool:
+    path = str(path or "")
+    return path.startswith("ui.api.") or path.startswith("ui.ollama.")
+
 def _load_project_config_snapshot() -> dict:
     """Loads the actual config snapshot from the project's config manager."""
     try:
@@ -62,7 +66,7 @@ def _load_project_config_snapshot() -> dict:
         LOGGER.debug("Failed to load local project config snapshot: %s", exc)
         return {}
 
-def resolve_value(spec, local_config: dict, project_snapshot: dict | None = None) -> Any:
+def resolve_value(spec, local_config: dict, project_snapshot: dict | None = None, *, prefer_server_snapshot: bool = False) -> Any:
     """Resolves the value for a specific setting based on priority."""
     path = spec.path
     pending = local_config.get("pending_updates", {})
@@ -80,30 +84,40 @@ def resolve_value(spec, local_config: dict, project_snapshot: dict | None = None
         if key in conn:
             return conn[key]
 
-    # 3. Local values (cached from UI changes)
-    if path in values:
+    # 3. Client-only values live only in the UI cache.
+    if _is_client_only_path(path) and path in values:
         return values[path]
     
-    # 4. Server snapshot (last known values from API)
+    # 4. Fresh server snapshot, only when this load successfully reached API.
+    if prefer_server_snapshot:
+        val = dotted_get(snapshot, path)
+        if val is not None:
+            return val
+
+    # 5. Local project/account config (current on-disk source of truth).
+    val = dotted_get(project_snapshot or {}, path)
+    if val is not None:
+        return val
+
+    # 6. Stale server snapshot as a fallback only.
     val = dotted_get(snapshot, path)
     if val is not None:
         return val
 
-    # 5. Local project config/defaults (REAL SOURCE OF TRUTH)
-    val = dotted_get(project_snapshot or {}, path)
-    if val is not None:
-        return val
-        
-    # 6. Fallback (schema defaults)
+    # 7. Local values are only a fallback for paths missing from real config.
+    if path in values:
+        return values[path]
+
+    # 8. Fallback (schema defaults)
     return default_value_for_path(path, spec.kind)
 
-def build_payload_from_schema(local_config: dict, project_snapshot: dict | None = None) -> dict:
+def build_payload_from_schema(local_config: dict, project_snapshot: dict | None = None, *, prefer_server_snapshot: bool = False) -> dict:
     """Constructs the full settings payload using the schema and local config."""
     payload = {}
     for category in SETTINGS_CATEGORIES:
         for card in category.cards:
             for spec in card.settings:
-                value = resolve_value(spec, local_config, project_snapshot)
+                value = resolve_value(spec, local_config, project_snapshot, prefer_server_snapshot=prefer_server_snapshot)
                 dotted_set(payload, spec.path, value)
     return payload
 
@@ -118,7 +132,7 @@ def load_settings_payload(
     """
     local_cfg = load_client_config()
     project_snapshot = _load_project_config_snapshot()
-    payload = build_payload_from_schema(local_cfg, project_snapshot)
+    payload = build_payload_from_schema(local_cfg, project_snapshot, prefer_server_snapshot=False)
     
     meta = {
         "online": False,
@@ -140,7 +154,7 @@ def load_settings_payload(
             save_server_snapshot(server_config)
             # Re-build payload with new snapshot
             local_cfg = load_client_config()
-            payload = build_payload_from_schema(local_cfg, project_snapshot)
+            payload = build_payload_from_schema(local_cfg, project_snapshot, prefer_server_snapshot=True)
             meta["online"] = True
             meta["source"] = "server"
             meta["pending_count"] = len(local_cfg.get("pending_updates", {}))

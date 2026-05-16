@@ -48,6 +48,7 @@ class HealthResponse(BaseModel):
     verbose_enabled: bool
     web_mode: str
     persona_name: str = ""
+    active_topic_title: str = ""
     json_mode_enabled: bool
     active_profile: str
     quality_profile: str

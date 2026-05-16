@@ -594,6 +594,14 @@ class ModelListWorker(QThread):
     def __init__(self, current: str, parent: QWidget | None = None):
         super().__init__(parent)
         self.current = str(current or "").strip()
+        self._cancelled = False
+
+    def request_cancel(self) -> None:
+        self._cancelled = True
+        self.requestInterruption()
+
+    def _is_cancelled(self) -> bool:
+        return bool(self._cancelled or self.isInterruptionRequested())
 
     def run(self) -> None:
         try:
@@ -613,16 +621,22 @@ class ModelListWorker(QThread):
             serve_exe = str(dotted_get(cfg, "ui.ollama.serve_exe", "") or "")
             models_dir = str(dotted_get(cfg, "ui.ollama.models_dir", "") or "")
 
+            if self._is_cancelled():
+                return
+
             ensure_ollama_started(
                 base_url=base_url,
-                wait_sec=8.0,
+                wait_sec=2.0,
                 enabled=enabled,
                 start_mode=start_mode,
                 serve_exe=serve_exe,
                 models_dir=models_dir,
             )
 
-            payload = ApiClient().list_models(timeout=8.0)
+            if self._is_cancelled():
+                return
+
+            payload = ApiClient().list_models(timeout=2.5)
             runtime = str(payload.get("runtime_model") or self.current or "").strip()
             models = _extract_model_names(payload.get("models") or payload.get("available_models"))
 
@@ -634,9 +648,50 @@ class ModelListWorker(QThread):
             if models:
                 set_ollama_models_cache(models)
 
+            if self._is_cancelled():
+                return
+
             self.loaded.emit(runtime or self.current, models)
         except Exception as exc:
-            self.failed.emit(str(exc))
+            if not self._is_cancelled():
+                self.failed.emit(str(exc))
+
+
+def cleanup_active_model_workers(wait_ms: int = 1200) -> None:
+    for worker in list(_ACTIVE_MODEL_LIST_WORKERS):
+        try:
+            worker.request_cancel()
+        except Exception:
+            pass
+        try:
+            if worker.isRunning():
+                worker.wait(int(wait_ms))
+        except Exception:
+            pass
+        try:
+            if worker.isRunning():
+                worker.terminate()
+                worker.wait(500)
+        except Exception:
+            pass
+        try:
+            if worker.isRunning():
+                continue
+        except Exception:
+            continue
+        _ACTIVE_MODEL_LIST_WORKERS.discard(worker)
+        try:
+            worker.deleteLater()
+        except Exception:
+            pass
+
+
+def _finish_orphan_model_worker(worker: ModelListWorker) -> None:
+    _ACTIVE_MODEL_LIST_WORKERS.discard(worker)
+    try:
+        worker.deleteLater()
+    except Exception:
+        pass
 
 
 class ModelPickerPopup(QFrame):
@@ -769,7 +824,6 @@ class ModelNameEditor(QWidget):
         layout.addWidget(self.arrow_button)
 
         self._refresh_preview()
-        self.destroyed.connect(lambda *_: self.dispose())
 
     def value(self) -> str:
         return self._value
@@ -902,6 +956,10 @@ class ModelNameEditor(QWidget):
 
         if worker is not None:
             try:
+                worker.request_cancel()
+            except Exception:
+                pass
+            try:
                 worker.loaded.disconnect(self._on_models_loaded)
             except Exception:
                 pass
@@ -909,6 +967,15 @@ class ModelNameEditor(QWidget):
                 worker.failed.disconnect(self._on_models_failed)
             except Exception:
                 pass
+            try:
+                worker.finished.disconnect()
+            except Exception:
+                pass
+            if not worker.isRunning():
+                _ACTIVE_MODEL_LIST_WORKERS.discard(worker)
+                worker.deleteLater()
+            else:
+                worker.finished.connect(lambda w=worker: _finish_orphan_model_worker(w))
 
     def _refresh_preview(self) -> None:
         self.preview.setText(_preview_text(self._value))

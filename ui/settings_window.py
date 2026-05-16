@@ -34,7 +34,7 @@ from ui.client_config_store import get_selected_base_url, save_account_client_co
 from ui.chat_shell import ChatScrollOverlay, PlainTextScrollOverlay, _to_qcolor, _ui_font
 from ui.settings_schema import SETTINGS_CATEGORIES, SettingCard, SettingCategory, SettingSpec, dotted_get, get_category
 from ui.settings_styles import SETTINGS_STYLE, apply_settings_tooltip_style
-from ui.settings_widgets import SettingEditor
+from ui.settings_widgets import SettingEditor, cleanup_active_model_workers
 from ui.api_client import ApiClient
 from ui.widgets.character_manager import CharacterManager
 from ui.widgets.message_box import MmisMessageBox
@@ -855,7 +855,7 @@ class SettingsWindow(QDialog):
         self.content.setObjectName("settings_content")
         self.content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.content_layout = QGridLayout(self.content)
-        self.content_layout.setContentsMargins(0, 0, 0, 20)
+        self.content_layout.setContentsMargins(0, 0, 18, 20)
         self.content_layout.setHorizontalSpacing(8)
         self.content_layout.setVerticalSpacing(10)
         self.scroll.setWidget(self.content)
@@ -877,6 +877,7 @@ class SettingsWindow(QDialog):
 
     def closeEvent(self, event) -> None:
         self._dispose_editors()
+        cleanup_active_model_workers()
         self._clear_parent_blur()
         super().closeEvent(event)
 
@@ -1023,6 +1024,7 @@ class SettingsWindow(QDialog):
         self._hide_hint_popup()
         self._hint_targets.clear()
         self._hint_rows.clear()
+        cleanup_active_model_workers(wait_ms=800)
         self._dispose_editors()
 
         for button_key, button in self._nav_buttons.items():
@@ -1351,6 +1353,8 @@ class SettingsWindow(QDialog):
             
         self._refresh_preview()
         self.saved.emit(copy.deepcopy(updates))
+        if online:
+            self._apply_live_runtime_updates(updates)
         
         if not online:
             try:
@@ -1366,6 +1370,15 @@ class SettingsWindow(QDialog):
                     "Settings sync",
                     f"Настройки сохранены локально, но не отправлены в MMis API.\n\nПричина: {message}"
                 )
+
+    def _apply_live_runtime_updates(self, updates: dict) -> None:
+        model_name = str(dict(updates or {}).get("llm.model_name") or "").strip()
+        if not model_name:
+            return
+        try:
+            self.api.set_model(model_name)
+        except Exception as exc:
+            MmisMessageBox.warning(self, "Model", f"Настройка сохранена, но runtime-модель не переключилась:\n{exc}")
 
 
     def _on_search(self, text: str) -> None:

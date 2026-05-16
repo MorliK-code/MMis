@@ -63,6 +63,33 @@ class TopicRouter:
         "\u0447\u0442\u043e \u0442\u0430\u043c \u0441",
         "\u043e\u0431\u0440\u0430\u0442\u043d\u043e \u043a",
     )
+    _TITLE_HINT_LABELS = {
+        "memory": "память",
+        "database": "база данных",
+        "architecture": "архитектура",
+        "code": "код",
+        "testing": "тесты",
+        "documents": "документы",
+        "character": "персонаж",
+    }
+    _GENERIC_HINTS = {"tasks", "problem", "issue", "general"}
+    _TITLE_STOP_WORDS = {
+        "давай", "давайте", "надо", "нужно", "можно", "просто", "сейчас",
+        "проверь", "проверить", "помоги", "помощь", "разберем", "разберём",
+        "разобрать", "исправь", "исправить", "пофиксить", "сделать",
+        "делать", "добавить", "добавь", "почему", "какой", "какая", "какие",
+        "когда", "если", "чтобы", "который", "которая", "которые", "это",
+        "есть", "будет", "было", "также", "так", "вот", "там", "тут",
+        "мол", "типа", "очень", "краткое", "короткое", "активная",
+        "отображается", "обсуждаем", "использование", "основе",
+        "the", "and", "for", "with", "from", "this", "that", "what", "why",
+        "how", "can", "could", "should", "please", "about",
+    }
+    _INDEPENDENT_QUESTION_PREFIXES = (
+        "почему ", "зачем ", "как ", "что ", "где ", "куда ", "когда ",
+        "можно ли ", "а можно ", "расскажи ", "объясни ", "подскажи ",
+        "why ", "how ", "what ", "where ", "when ", "explain ", "tell me ",
+    )
 
     def __init__(
         self,
@@ -134,6 +161,13 @@ class TopicRouter:
         related_ids = [thread.thread_id for thread, score in ranked[1:3] if score >= 0.45]
         looks_like_continuation = self._looks_like_continuation(clean_text)
         recent_current = self._is_recent_thread(current_thread)
+        looks_like_independent_question = self._looks_like_independent_question(clean_text)
+        recent_current_for_routing = recent_current and not (
+            looks_like_independent_question
+            and current_score < 0.24
+            and best_score < 0.72
+            and not looks_like_continuation
+        )
 
         if explicit_return:
             matched = self._match_explicit_target(explicit_return, threads)
@@ -194,7 +228,7 @@ class TopicRouter:
             and best_score >= 0.88
             and current_score <= 0.18
             and not looks_like_continuation
-            and not recent_current
+            and not recent_current_for_routing
             and not dict(state.get("active_task") or {})
         ):
             self.topic_store.touch_thread(
@@ -252,14 +286,14 @@ class TopicRouter:
                     score=current_score,
                     related_thread_ids=related_ids,
                 )
-            if current_score >= 0.40 or looks_like_continuation or recent_current:
+            if current_score >= 0.40 or looks_like_continuation or recent_current_for_routing:
                 reason = "continue_current_topic"
                 score = current_score
-                if current_score >= 0.40 and not looks_like_continuation and not recent_current:
+                if current_score >= 0.40 and not looks_like_continuation and not recent_current_for_routing:
                     reason = "prefer_current_topic"
                 elif looks_like_continuation:
                     score = max(score, 0.68)
-                elif recent_current:
+                elif recent_current_for_routing:
                     score = max(score, 0.62)
                 self.topic_store.touch_thread(
                     current_thread.thread_id,
@@ -421,19 +455,44 @@ class TopicRouter:
             result.append(value)
         return result[:8]
 
-    @staticmethod
-    def _derive_title(text: str, hints: list[str]) -> str:
-        if hints:
-            return " / ".join(item.replace("_", " ") for item in hints[:3])
-        words = [word for word in str(text or "").strip().split() if word]
-        title = " ".join(words[:6]).strip()
-        return title if len(title) <= 80 else title[:77].rstrip() + "..."
+    @classmethod
+    def _derive_title(cls, text: str, hints: list[str]) -> str:
+        keywords = cls._keywords_for_title(text)
 
-    @staticmethod
-    def _derive_topic_key(text: str, hints: list[str]) -> str:
-        if hints:
-            return str(hints[0]).strip().lower()
-        tokens = [token for token in TopicRouter._tokenize(text) if len(token) >= 4]
+        if "фокус" in keywords and ("тема" in keywords or "ui" in keywords):
+            return "фокус и тема UI"
+        if "дом" in keywords and any(item in keywords for item in {"построить", "постройка", "строительство"}):
+            return "постройка дома"
+
+        if keywords:
+            return " ".join(keywords[:4])[:60].strip()
+
+        for hint in list(hints or []):
+            clean = str(hint or "").strip().lower()
+            if clean in cls._GENERIC_HINTS:
+                continue
+            label = cls._TITLE_HINT_LABELS.get(clean)
+            if label:
+                return label
+            if clean:
+                return clean.replace("_", " ")[:60]
+
+        words = [word for word in str(text or "").strip().split() if word]
+        title = " ".join(words[:4]).strip()
+        return title[:60] if title else "тема"
+
+    @classmethod
+    def _derive_topic_key(cls, text: str, hints: list[str]) -> str:
+        for hint in list(hints or []):
+            clean = str(hint or "").strip().lower()
+            if clean and clean not in cls._GENERIC_HINTS:
+                return clean[:48]
+
+        keywords = cls._keywords_for_title(text)
+        if keywords:
+            return "_".join(keywords[:3])[:48].strip("_") or "general"
+
+        tokens = [token for token in cls._ordered_tokens(text) if len(token) >= 4]
         if not tokens:
             return "general"
         return "_".join(tokens[:3])[:48].strip("_") or "general"
@@ -463,12 +522,16 @@ class TopicRouter:
         lowered = str(text or "").strip().lower()
         if any(marker in lowered for marker in TopicRouter._NEW_TOPIC_MARKERS):
             return False
+        if any(lowered.startswith(marker) for marker in TopicRouter._INDEPENDENT_QUESTION_PREFIXES):
+            return False
         return bool(words)
 
     @staticmethod
     def _looks_like_continuation(text: str) -> bool:
         lowered = str(text or "").strip().lower()
         if not lowered:
+            return False
+        if any(lowered.startswith(prefix) for prefix in TopicRouter._INDEPENDENT_QUESTION_PREFIXES):
             return False
         if any(lowered.startswith(marker) for marker in TopicRouter._CONTINUATION_PREFIXES):
             return True
@@ -478,6 +541,42 @@ class TopicRouter:
         if len(words) <= 3:
             return True
         return False
+
+    @classmethod
+    def _looks_like_independent_question(cls, text: str) -> bool:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return False
+        words = [word for word in lowered.split() if word]
+        if len(words) <= 3:
+            return False
+        if any(lowered.startswith(prefix) for prefix in cls._INDEPENDENT_QUESTION_PREFIXES):
+            return True
+        if any(lowered.startswith(prefix) for prefix in cls._CONTINUATION_PREFIXES):
+            return False
+        return "?" in lowered and len(words) >= 7
+
+    @classmethod
+    def _ordered_tokens(cls, text: str) -> list[str]:
+        return [
+            token.lower()
+            for token in re.findall(r"[A-Za-z\u0400-\u04FF0-9_]{2,}", str(text or ""))
+        ]
+
+    @classmethod
+    def _keywords_for_title(cls, text: str) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for token in cls._ordered_tokens(text):
+            if len(token) < 3 and token not in {"ui", "db", "ai", "llm", "api"}:
+                continue
+            if token in cls._TITLE_STOP_WORDS:
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            result.append(token)
+        return result[:8]
 
     @staticmethod
     def _is_recent_thread(thread: TopicThread | None) -> bool:
