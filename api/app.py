@@ -12,6 +12,7 @@ import threading
 import time
 import warnings
 import os
+from datetime import datetime
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from threading import Lock
@@ -43,7 +44,8 @@ from api.schemas import (
 )
 from api.auth_store import AuthStore
 from config.settings import DATA_DIR, get_config_payload, get_profile, load_config, update_config_values
-from core.account_manager import prepare_local_account
+from core.account_manager import AccountManager, prepare_local_account
+from core.chat_store import ChatStore
 from core.character_runtime import CharacterRuntime
 from core.brain import Brain
 from core.spec_registry import validate_no_txt_paths
@@ -984,6 +986,186 @@ def auth_logout(authorization: str | None = Header(default=None)) -> dict:
     if token:
         auth_store.revoke_token(token)
     return {"status": "ok"}
+
+
+def _chat_iso_from_epoch(value: float | int | str | None) -> str:
+    try:
+        return datetime.fromtimestamp(float(value or 0.0)).isoformat(timespec="seconds")
+    except Exception:
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
+
+def _chat_epoch_from_iso(value: str | None) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _account_chat_store(account: dict) -> ChatStore:
+    account_id = str((account or {}).get("account_id") or "").strip()
+    manager = AccountManager(DATA_DIR / "accounts")
+    stored = manager.get_account(account_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    context = stored.to_context()
+    context.ensure_dirs()
+    return ChatStore(context.chats_db_path)
+
+
+def _server_chat_sessions_payload(account: dict) -> dict[str, Any]:
+    store = _account_chat_store(account)
+    chats: list[dict[str, Any]] = []
+    for chat in store.list_chats(include_archived=False):
+        history: list[dict[str, Any]] = []
+        for message in store.list_messages(chat.chat_id):
+            meta = dict(message.metadata or {})
+            role = "ai" if str(message.role or "") == "assistant" else str(message.role or "")
+            history.append(
+                {
+                    "role": role,
+                    "text": str(message.text or ""),
+                    "stat_line": str(meta.get("stat_line") or "") or None,
+                    "feedback": meta.get("feedback"),
+                    "thinking": str(meta.get("thinking") or "") or None,
+                }
+            )
+        chats.append(
+            {
+                "id": str(chat.chat_id),
+                "title": str(chat.title or "Chat"),
+                "incognito": False,
+                "created_at": _chat_iso_from_epoch(chat.created_at),
+                "updated_at": _chat_iso_from_epoch(chat.updated_at),
+                "history": history,
+            }
+        )
+    active_id = str(chats[0].get("id") or "") if chats else None
+    return {
+        "version": 1,
+        "active_chat_id": active_id,
+        "chats": chats,
+        "history_len": sum(len(chat.get("history") or []) for chat in chats),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+    }
+
+
+@app.get("/ui/chat-sessions")
+def get_ui_chat_sessions(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    account = _require_account(authorization)
+    return _server_chat_sessions_payload(account)
+
+
+@app.put("/ui/chat-sessions")
+def put_ui_chat_sessions(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    account = _require_account(authorization)
+    store = _account_chat_store(account)
+    chats = payload.get("chats") if isinstance(payload, dict) else []
+    if not isinstance(chats, list):
+        raise HTTPException(status_code=400, detail="chats_must_be_list")
+
+    active_ids: set[str] = set()
+    for chat in chats:
+        if not isinstance(chat, dict) or bool(chat.get("incognito", False)):
+            continue
+        chat_id = str(chat.get("id") or "").strip()
+        if not chat_id:
+            continue
+        active_ids.add(chat_id)
+        updated_at = _chat_epoch_from_iso(str(chat.get("updated_at") or ""))
+        store.upsert_chat(
+            chat_id=chat_id,
+            title=str(chat.get("title") or "Chat"),
+            persona_id=str(chat.get("persona_id") or "default"),
+            updated_at=updated_at,
+        )
+        rows: list[dict[str, Any]] = []
+        history = chat.get("history")
+        if isinstance(history, list):
+            for index, row in enumerate(history):
+                if not isinstance(row, dict):
+                    continue
+                role = str(row.get("role") or "").strip()
+                if role == "ai":
+                    role = "assistant"
+                if role not in {"user", "assistant", "system"}:
+                    continue
+                rows.append(
+                    {
+                        "message_id": f"{chat_id}:{index}",
+                        "role": role,
+                        "text": str(row.get("text") or ""),
+                        "created_at": time.time() + (index / 1000.0),
+                        "metadata": {
+                            "stat_line": str(row.get("stat_line") or ""),
+                            "feedback": row.get("feedback"),
+                            "thinking": str(row.get("thinking") or ""),
+                        },
+                    }
+                )
+        store.replace_messages(chat_id, rows)
+    store.archive_chats_except(active_ids)
+    return _server_chat_sessions_payload(account)
+
+
+@app.post("/voice/transcribe")
+def voice_transcribe(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    account = _require_account(authorization)
+    audio_b64 = str((payload or {}).get("audio_base64") or "").strip()
+    if not audio_b64:
+        raise HTTPException(status_code=400, detail="audio_base64_required")
+    try:
+        audio_bytes = base64.b64decode(audio_b64, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid_audio_base64") from exc
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="empty_audio")
+
+    account_id = str((account or {}).get("account_id") or "").strip()
+    manager = AccountManager(DATA_DIR / "accounts")
+    stored = manager.get_account(account_id)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    context = stored.to_context()
+    context.ensure_dirs()
+    input_dir = context.data_dir / "voice" / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    suffix = Path(str((payload or {}).get("filename") or "audio.wav")).suffix.lower()
+    if suffix not in {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".webm"}:
+        suffix = ".wav"
+    audio_path = input_dir / f"remote_{int(time.time() * 1000)}{suffix}"
+    audio_path.write_bytes(audio_bytes)
+
+    try:
+        from modules.voice.stt import STTConfig, STTService
+
+        cfg = load_config(force_reload=True)
+        voice = dict(getattr(cfg, "voice", {}) or {}) if hasattr(cfg, "voice") else {}
+        stt = dict(voice.get("stt") or {}) if isinstance(voice, dict) else {}
+        config = STTConfig(
+            vad=True,
+            engine=str(stt.get("engine") or getattr(cfg, "voice_stt_engine", "qwen-asr") or "qwen-asr"),
+            model=str(stt.get("model") or getattr(cfg, "voice_stt_model", "Qwen/Qwen3-ASR-1.7B") or "Qwen/Qwen3-ASR-1.7B"),
+            device=str(stt.get("device") or getattr(cfg, "voice_stt_device", "auto") or "auto"),
+            compute_type=str(stt.get("compute_type") or getattr(cfg, "voice_stt_compute_type", "default") or "default"),
+            language_hint=str(stt.get("language_hint") or getattr(cfg, "voice_stt_language_hint", "") or ""),
+        )
+        result = STTService().transcribe(str(audio_path), config=config)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"voice_transcribe_failed: {exc}") from exc
+
+    return {
+        "text": str(getattr(result, "text", "") or "").strip(),
+        "conf": float(getattr(result, "conf", 0.0) or 0.0),
+        "metadata": dict(getattr(result, "metadata", {}) or {}),
+    }
 
 
 def _api_access_keys_payload(authorization: str | None) -> dict:

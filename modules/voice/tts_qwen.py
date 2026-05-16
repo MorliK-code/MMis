@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import wave
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from modules.voice.tts import AudioChunk, TTSConfig, split_text_for_tts
 from utils.logger import get_logger
@@ -15,18 +18,14 @@ LOGGER = get_logger(__name__)
 class QwenTTSEngine:
     name = "qwen"
 
-    def __init__(self, model_name: str = "Qwen3-TTS-0.6B", *, device: str = "auto"):
-        self.model_name = str(model_name or "Qwen3-TTS-0.6B").strip() or "Qwen3-TTS-0.6B"
+    def __init__(self, model_name: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", *, device: str = "auto"):
+        self.model_name = _normalize_model_name(model_name)
         self.device = str(device or "auto").strip() or "auto"
-        self._pipeline: Any | None = None
+        self._model: Any | None = None
 
     @classmethod
     def available(cls) -> bool:
-        return (
-            importlib.util.find_spec("transformers") is not None
-            and importlib.util.find_spec("soundfile") is not None
-            and importlib.util.find_spec("torch") is not None
-        )
+        return importlib.util.find_spec("qwen_tts") is not None and importlib.util.find_spec("soundfile") is not None
 
     def synthesize(self, text: str, lang: str, config: TTSConfig, out_path: Path) -> AudioChunk:
         payload = str(text or "").strip()
@@ -58,38 +57,125 @@ class QwenTTSEngine:
 
     def _synthesize_one(self, text: str, lang: str, config: TTSConfig, out_path: Path) -> None:
         import soundfile as sf  # type: ignore
-        from transformers import pipeline  # type: ignore
 
-        pipe = self._pipeline
-        if pipe is None:
-            device = _pipeline_device(config.device or self.device)
-            kwargs: dict[str, Any] = {"model": self.model_name}
-            if device is not None:
-                kwargs["device"] = device
-            pipe = pipeline("text-to-speech", **kwargs)
-            self._pipeline = pipe
-
-        prompt = text
-        if lang:
-            prompt = f"[{lang}] {text}"
-        if config.voice and config.voice != "default":
-            prompt = f"{config.voice}: {prompt}"
-
-        result = pipe(prompt)
-        audio = result.get("audio") if isinstance(result, dict) else None
-        sample_rate = result.get("sampling_rate") if isinstance(result, dict) else None
-        if audio is None:
+        model = self._load_model(config)
+        language = _qwen_language(lang)
+        if "customvoice" in self.model_name.lower() or "custom_voice" in self.model_name.lower():
+            wavs, sample_rate = model.generate_custom_voice(
+                text=text,
+                language=language,
+                speaker=_qwen_speaker(config.voice),
+                instruct=_qwen_instruct(config.voice),
+            )
+        else:
+            raise RuntimeError(
+                "Qwen TTS Base requires reference audio. Use Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice "
+                "or add reference-audio support before selecting a Base checkpoint."
+            )
+        if not wavs:
             raise RuntimeError("Qwen TTS backend returned no audio")
+        audio = np.asarray(wavs[0])
         sf.write(str(out_path), audio, int(sample_rate or config.sample_rate or 22050))
 
+    def _load_model(self, config: TTSConfig):
+        if self._model is not None:
+            return self._model
 
-def _pipeline_device(device: str) -> int | str | None:
+        import torch  # type: ignore
+        _ensure_sox_on_path()
+        from qwen_tts import Qwen3TTSModel  # type: ignore
+
+        device = _resolved_device(config.device or self.device)
+        kwargs: dict[str, Any] = {"device_map": "cuda:0" if device == "cuda" else "cpu"}
+        kwargs["dtype"] = torch.bfloat16 if device == "cuda" else torch.float32
+        self._model = Qwen3TTSModel.from_pretrained(self.model_name, **kwargs)
+        return self._model
+
+
+def _normalize_model_name(value: str) -> str:
+    raw = str(value or "").strip()
+    lowered = raw.lower()
+    if lowered in {"", "qwen3-tts", "qwen3-tts-0.6b", "qwen/qwen3-tts-0.6b"}:
+        return "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    if lowered in {"qwen3-tts-12hz-0.6b-customvoice", "qwen/qwen3-tts-12hz-0.6b-customvoice"}:
+        return "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    return raw
+
+
+def _resolved_device(device: str) -> str:
     raw = str(device or "auto").strip().lower()
+    wants_cuda = raw.startswith("cuda") or raw in {"gpu", "cu"}
     if raw in {"", "default", "auto"}:
-        return None
-    if raw.startswith("cuda") or raw in {"gpu", "cu"}:
-        return 0
-    return -1
+        wants_cuda = _torch_cuda_available()
+    if wants_cuda and _torch_cuda_available():
+        return "cuda"
+    if wants_cuda:
+        LOGGER.warning("Qwen TTS requested CUDA, but torch CUDA is not available; using CPU")
+    return "cpu"
+
+
+def _torch_cuda_available() -> bool:
+    try:
+        import torch  # type: ignore
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _ensure_sox_on_path() -> None:
+    if _which_sox():
+        return
+    roots = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages",
+        Path(os.environ.get("ProgramFiles", "")),
+    ]
+    for root in roots:
+        if not root.exists():
+            continue
+        try:
+            match = next(root.rglob("sox.exe"), None)
+        except Exception:
+            match = None
+        if match is not None:
+            os.environ["PATH"] = f"{match.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+            return
+
+
+def _which_sox() -> bool:
+    paths = os.environ.get("PATH", "").split(os.pathsep)
+    for item in paths:
+        path = Path(item) / "sox.exe"
+        if path.exists():
+            return True
+    return False
+
+
+def _qwen_language(lang: str) -> str:
+    raw = str(lang or "").strip().lower()
+    mapping = {
+        "ru": "Russian",
+        "rus": "Russian",
+        "russian": "Russian",
+        "en": "English",
+        "eng": "English",
+        "english": "English",
+        "zh": "Chinese",
+        "chinese": "Chinese",
+    }
+    return mapping.get(raw, "Russian")
+
+
+def _qwen_speaker(voice: str) -> str:
+    raw = str(voice or "").strip()
+    if raw and raw.lower() not in {"default", "ru-ru-dmitryneural"}:
+        return raw
+    return "Ryan"
+
+
+def _qwen_instruct(voice: str) -> str:
+    _ = voice
+    return "Speak naturally and calmly."
 
 
 def _concat_wav(parts: list[Path], out_path: Path) -> None:

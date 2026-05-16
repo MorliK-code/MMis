@@ -65,7 +65,7 @@ except ImportError:
 import ui.chat_shell as proto
 from ui.api_client import ApiClient, ApiClientError
 from ui.chat_sessions import SINGLE_VISIBLE_CHAT_ID, SINGLE_VISIBLE_CHAT_TITLE
-from ui.chat_sessions import collapse_to_single_visible_chat, history_to_serializable
+from ui.chat_sessions import collapse_to_single_visible_chat, history_from_serializable, history_to_serializable
 from ui.chat_sessions import load_sessions as load_chat_sessions
 from ui.chat_sessions import make_new_chat_payload, now_iso as chat_now_iso
 from ui.chat_sessions import save_sessions as save_chat_sessions
@@ -73,22 +73,123 @@ from ui.settings_window import SettingsWindow
 from ui.settings_schema import dotted_get
 try:
     from modules.voice.voice_manager import VoiceState
-except ImportError:
+except ImportError as exc:
+    _VOICE_STATE_IMPORT_ERROR = exc
     class VoiceState:
         IDLE = "idle"
         LISTENING = "listening"
         PROCESSING = "processing"
         SPEAKING = "speaking"
         ERROR = "error"
+else:
+    _VOICE_STATE_IMPORT_ERROR = None
 try:
     from ui.voice_adapter import build_stt_config, build_stt_engine, build_tts_config, build_tts_engine, build_voice_manager
-except ImportError:
-    # Fallback for voice manager if modules.voice is missing
+except ImportError as exc:
+    _VOICE_ADAPTER_IMPORT_ERROR = exc
+    class _UnavailableVoiceTTS:
+        def stop(self) -> None:
+            return None
+
+    class _UnavailableVoiceResult:
+        def __init__(self, text: str = "", conf: float = 0.0, metadata: dict | None = None):
+            self.text = str(text or "")
+            self.conf = float(conf or 0.0)
+            self.metadata = dict(metadata or {})
+
+    def _voice_unavailable_message() -> str:
+        reasons = []
+        if _VOICE_STATE_IMPORT_ERROR is not None:
+            reasons.append(str(_VOICE_STATE_IMPORT_ERROR))
+        if _VOICE_ADAPTER_IMPORT_ERROR is not None:
+            reasons.append(str(_VOICE_ADAPTER_IMPORT_ERROR))
+        detail = "; ".join(reason for reason in reasons if reason) or "voice modules are not available"
+        return (
+            "Voice backend is unavailable on this PC. "
+            "Copy the full MMis project and install voice dependencies. "
+            f"Import error: {detail}"
+        )
+
+    def build_stt_engine():
+        class DummySTTEngine:
+            def transcribe_file(self, path):
+                from ui.api_client import ApiClient
+
+                payload = ApiClient().transcribe_voice_file(path, timeout=180.0)
+                return str(payload.get("text") or "").strip()
+        return DummySTTEngine()
+
+    def build_tts_engine(*, tts_voice: str, tts_rate: str, tts_volume: str):
+        class DummyTTSEngine:
+            def synthesize_to_file(self, text, out_path):
+                raise RuntimeError(_voice_unavailable_message())
+        return DummyTTSEngine()
+
+    def build_stt_config():
+        return None
+
+    def build_tts_config(*, tts_voice: str = "", tts_rate: str = ""):
+        return None
+
     def build_voice_manager():
         class DummyVoiceManager:
-            def set_callbacks(self, **kwargs): pass
-            def get_state(self): return "idle"
+            def __init__(self):
+                self.tts = _UnavailableVoiceTTS()
+                self._on_partial = None
+                self._on_final = None
+                self._on_state = None
+
+            def set_callbacks(self, **kwargs):
+                if kwargs.get("on_partial") is not None:
+                    self._on_partial = kwargs.get("on_partial")
+                if kwargs.get("on_final") is not None:
+                    self._on_final = kwargs.get("on_final")
+                if kwargs.get("on_state") is not None:
+                    self._on_state = kwargs.get("on_state")
+                return None
+
+            def get_state(self):
+                return VoiceState.IDLE
+
+            def start_listening(self):
+                if callable(self._on_state):
+                    self._on_state(VoiceState.LISTENING)
+                return VoiceState.LISTENING
+
+            def stop_listening(self):
+                if callable(self._on_state):
+                    self._on_state(VoiceState.IDLE)
+                return VoiceState.IDLE
+
+            def barge_in(self):
+                return None
+
+            def transcribe(self, *args, **kwargs):
+                if not args:
+                    raise RuntimeError(_voice_unavailable_message())
+                from ui.api_client import ApiClient
+
+                payload = ApiClient().transcribe_voice_file(args[0], timeout=180.0)
+                text = str(payload.get("text") or "").strip()
+                if text and callable(getattr(self, "_on_final", None)):
+                    self._on_final(text)
+                return _UnavailableVoiceResult(
+                    text=text,
+                    conf=float(payload.get("conf") or 0.0),
+                    metadata=dict(payload.get("metadata") or {}),
+                )
+
+            def enqueue_speak(self, *args, **kwargs):
+                raise RuntimeError(_voice_unavailable_message())
+
+            def speak(self, *args, **kwargs):
+                raise RuntimeError(_voice_unavailable_message())
+
+            def shutdown(self):
+                return None
         return DummyVoiceManager()
+else:
+    _VOICE_ADAPTER_IMPORT_ERROR = None
 from ui.voice_panel import VoicePanel
 from ui.widgets.memory_inspector_panel import MemoryInspectorPanel
 from ui.workers import ReplyResult, ReplyWorker
@@ -372,6 +473,8 @@ class ChatWindow(proto.ExactChatWindow):
         self._chat_sessions: list[dict] = []
         self._active_chat_id: str | None = None
         self._account_scope_id = self._current_account_scope_id()
+        self._remote_chat_sync_ready = False
+        self._remote_chat_syncing = False
         self._history: list[HistoryRow] = []
         self._lazy_history_start_index = 0
         self._lazy_history_button: QWidget | None = None
@@ -667,6 +770,7 @@ class ChatWindow(proto.ExactChatWindow):
         self._reset_chat_scope_view()
         self._refresh_client_paths()
         self._account_scope_id = self._current_account_scope_id()
+        self._remote_chat_sync_ready = False
         self._apply_account_environment()
         if self.api is not None:
             self.api.set_base_url(get_selected_base_url())
@@ -1675,13 +1779,14 @@ class ChatWindow(proto.ExactChatWindow):
         if current_history_len <= 0 and not loaded:
             loaded, active_id = self._load_chat_store_sessions()
 
+        loaded, active_id, _used_remote, remote_ok = self._choose_synced_chat_sessions(loaded, active_id)
         self._backup_legacy_visible_chats(loaded, active_id)
         chosen = collapse_to_single_visible_chat(loaded, active_id)
         self._chat_sessions = [chosen]
         self._active_chat_id = str(chosen.get("id") or SINGLE_VISIBLE_CHAT_ID)
         self._history = list(chosen.get("history") or [])
         self._render_history()
-        self._save_chat_sessions()
+        self._save_chat_sessions(push_remote=remote_ok or self._chat_history_len(self._chat_sessions) > 0)
 
     def _load_or_init_chat_sessions_from_store(self) -> None:
         json_loaded, json_active_id = load_chat_sessions(
@@ -1715,11 +1820,13 @@ class ChatWindow(proto.ExactChatWindow):
         else:
             chosen = self._new_chat_payload()
 
+        chosen_rows, chosen_active_id, _used_remote, remote_ok = self._choose_synced_chat_sessions([chosen], store_active_id)
+        chosen = collapse_to_single_visible_chat(chosen_rows, chosen_active_id) if chosen_rows else chosen
         self._chat_sessions = [chosen]
         self._active_chat_id = str(chosen.get("id") or SINGLE_VISIBLE_CHAT_ID)
         self._history = list(chosen.get("history") or [])
         self._render_history()
-        self._save_chat_sessions()
+        self._save_chat_sessions(push_remote=remote_ok or self._chat_history_len(self._chat_sessions) > 0)
 
     def _load_chat_store_sessions(self) -> tuple[list[dict], str | None]:
         store = getattr(self, "_chat_store", None)
@@ -1754,6 +1861,93 @@ class ChatWindow(proto.ExactChatWindow):
     @staticmethod
     def _chat_history_len(chats: list[dict]) -> int:
         return sum(len(chat.get("history") or []) for chat in list(chats or []) if isinstance(chat, dict))
+
+    @staticmethod
+    def _latest_chat_updated_at(chats: list[dict]) -> str:
+        return max((str(chat.get("updated_at") or "") for chat in list(chats or []) if isinstance(chat, dict)), default="")
+
+    def _remote_chat_sessions_payload(self, chats: list[dict] | None = None, active_id: str | None = None) -> dict:
+        rows = []
+        for chat in list(chats if chats is not None else self._chat_sessions):
+            if not isinstance(chat, dict) or bool(chat.get("incognito", False)):
+                continue
+            rows.append(
+                {
+                    "id": str(chat.get("id") or ""),
+                    "title": str(chat.get("title") or SINGLE_VISIBLE_CHAT_TITLE),
+                    "incognito": False,
+                    "created_at": str(chat.get("created_at") or chat_now_iso()),
+                    "updated_at": str(chat.get("updated_at") or chat_now_iso()),
+                    "history": history_to_serializable(list(chat.get("history") or [])),
+                }
+            )
+        return {
+            "version": 1,
+            "active_chat_id": active_id if active_id is not None else self._active_chat_id,
+            "chats": rows,
+        }
+
+    def _load_remote_chat_sessions(self) -> tuple[list[dict], str | None, bool]:
+        if not get_auth_token() or self.api is None:
+            return [], None, False
+        try:
+            payload = self.api.get_ui_chat_sessions(timeout=3.0)
+        except Exception:
+            return [], None, False
+        chats_raw = payload.get("chats") if isinstance(payload, dict) else []
+        chats: list[dict] = []
+        if isinstance(chats_raw, list):
+            for row in chats_raw:
+                if not isinstance(row, dict) or bool(row.get("incognito", False)):
+                    continue
+                chat_id = str(row.get("id") or "").strip()
+                if not chat_id:
+                    continue
+                chats.append(
+                    {
+                        "id": chat_id,
+                        "title": str(row.get("title") or SINGLE_VISIBLE_CHAT_TITLE),
+                        "incognito": False,
+                        "created_at": str(row.get("created_at") or chat_now_iso()),
+                        "updated_at": str(row.get("updated_at") or chat_now_iso()),
+                        "history": history_from_serializable(row.get("history")),
+                    }
+                )
+        active_id_raw = payload.get("active_chat_id") if isinstance(payload, dict) else None
+        active_id = str(active_id_raw) if active_id_raw else None
+        self._remote_chat_sync_ready = True
+        return chats, active_id, True
+
+    def _choose_synced_chat_sessions(
+        self,
+        local_chats: list[dict],
+        local_active_id: str | None,
+    ) -> tuple[list[dict], str | None, bool, bool]:
+        remote_chats, remote_active_id, remote_ok = self._load_remote_chat_sessions()
+        if not remote_ok:
+            return local_chats, local_active_id, False, False
+
+        local_len = self._chat_history_len(local_chats)
+        remote_len = self._chat_history_len(remote_chats)
+        if remote_len > local_len:
+            return remote_chats, remote_active_id, True, True
+        if remote_len == local_len and remote_chats and self._latest_chat_updated_at(remote_chats) > self._latest_chat_updated_at(local_chats):
+            return remote_chats, remote_active_id, True, True
+        return local_chats, local_active_id, False, True
+
+    def _push_remote_chat_sessions(self, active_id: str | None) -> None:
+        if self._remote_chat_syncing or not get_auth_token() or self.api is None:
+            return
+        if not self._remote_chat_sync_ready and self._chat_history_len(self._chat_sessions) <= 0:
+            return
+        self._remote_chat_syncing = True
+        try:
+            self.api.put_ui_chat_sessions(self._remote_chat_sessions_payload(active_id=active_id), timeout=5.0)
+            self._remote_chat_sync_ready = True
+        except Exception:
+            pass
+        finally:
+            self._remote_chat_syncing = False
 
     @staticmethod
     def _iso_from_epoch(value: float | int | str | None) -> str:
@@ -1820,7 +2014,7 @@ class ChatWindow(proto.ExactChatWindow):
         chat["history"] = list(self._history)
         chat["updated_at"] = chat_now_iso()
 
-    def _save_chat_sessions(self) -> None:
+    def _save_chat_sessions(self, *, push_remote: bool = True) -> None:
         if getattr(self, "_account_scope_id", "") != self._current_account_scope_id():
             return
         self._sync_active_chat_from_history()
@@ -1834,6 +2028,8 @@ class ChatWindow(proto.ExactChatWindow):
                 self._write_chat_store_backup(active_id)
             else:
                 save_chat_sessions(self._sessions_dir, self._sessions_index_path, self._chat_sessions, active_id)
+            if push_remote:
+                self._push_remote_chat_sessions(active_id)
         except Exception:
             pass
 

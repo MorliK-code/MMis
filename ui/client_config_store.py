@@ -100,6 +100,9 @@ def load_client_config() -> dict[str, Any]:
     """Loads the client configuration from the local JSON file."""
     path = _client_config_path()
     if not path.exists():
+        if path != CLIENT_CONFIG_PATH and CLIENT_CONFIG_PATH.exists():
+            inherited = _load_client_config_at(CLIENT_CONFIG_PATH)
+            return save_client_config(inherited)
         return save_client_config(DEFAULT_CONFIG)
     
     try:

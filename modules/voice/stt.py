@@ -202,6 +202,15 @@ def transcribe_result(audio: str | Path | bytes, config: STTConfig | None = None
 def create_stt_engine(config: STTConfig | None = None, *, engine: str | None = None) -> STTEngine:
     cfg = config or STTConfig()
     requested = str(engine or cfg.engine or "auto").strip().lower()
+    if requested in {"qwen", "qwen-asr", "qwen_asr", "qwen3", "qwen3-asr", "qwen3_asr"}:
+        try:
+            from modules.voice.stt_qwen import QwenASRSTTEngine
+
+            if QwenASRSTTEngine.available():
+                return QwenASRSTTEngine(model_name=str(cfg.model or "Qwen/Qwen3-ASR-1.7B"), device=str(cfg.device or "auto"))
+            LOGGER.warning("Qwen ASR requested but qwen-asr package is not installed; using NullSTTEngine")
+        except Exception as exc:
+            LOGGER.warning("failed to initialize Qwen ASR engine: %s", exc)
     if requested in {"", "auto", "faster", "faster-whisper", "faster_whisper"}:
         try:
             from modules.voice.stt_faster_whisper import FasterWhisperSTTEngine

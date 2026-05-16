@@ -1,0 +1,2 @@
+files=1
+memory_core/inspect/inspector_page.html | mojibake_lines:1 (read:utf-8-sig)

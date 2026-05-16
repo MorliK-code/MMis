@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QRadialGradient
-from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPalette, QRadialGradient
+from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 import ui.chat_shell as proto
 
@@ -21,6 +21,8 @@ class VoicePanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._pulse_animation: QPropertyAnimation | None = None
         self._opacity_effect: QGraphicsOpacityEffect | None = None
+        self._history_lines: list[tuple[QFrame, QLabel]] = []
+        self._history_scroll_overlay: proto.ChatScrollOverlay | None = None
         self._build_ui()
         self.set_state("idle")
 
@@ -102,6 +104,16 @@ class VoicePanel(QWidget):
                 color: #8f96a3;
                 font-size: 13px;
             }
+            QScrollArea#voice_history_scroll {
+                background: transparent;
+                border: none;
+            }
+            QScrollArea#voice_history_scroll > QWidget {
+                background: transparent;
+            }
+            QWidget#voice_history_content {
+                background: transparent;
+            }
             QFrame#voice_composer_wrap {
                 background: rgba(11, 13, 16, 0.18);
                 border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -125,6 +137,9 @@ class VoicePanel(QWidget):
                 background: rgba(139, 92, 246, 0.10);
                 border-color: rgba(139, 92, 246, 0.18);
             }
+            QPushButton:focus {
+                outline: none;
+            }
             QPushButton#voice_accent {
                 color: rgba(196, 181, 253, 0.88);
             }
@@ -136,6 +151,25 @@ class VoicePanel(QWidget):
             QLabel#voice_hint {
                 color: #646b76;
                 font-size: 10px;
+            }
+            QWidget#voice_history_overlay {
+                background: rgba(8, 10, 13, 0.82);
+                border-radius: 12px;
+            }
+            QPushButton#voice_history_toggle {
+                color: rgba(196, 181, 253, 0.58);
+                background: transparent;
+                border: none;
+                padding: 0;
+                font-size: 11px;
+                font-weight: 700;
+                min-width: 76px;
+                min-height: 18px;
+            }
+            QPushButton#voice_history_toggle:hover {
+                color: rgba(221, 214, 254, 0.86);
+                background: transparent;
+                border: none;
             }
             """
         )
@@ -150,6 +184,7 @@ class VoicePanel(QWidget):
         voice_page = QWidget(self)
         voice_page.setObjectName("voice_page_body")
         voice_page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._voice_page_body = voice_page
         body = QVBoxLayout(voice_page)
         body.setContentsMargins(18, 24, 18, 24)
         body.setSpacing(14)
@@ -187,15 +222,55 @@ class VoicePanel(QWidget):
         self.status_sub_label.setMaximumWidth(460)
         body.addWidget(self.status_sub_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        history = QWidget(voice_page)
+        history_overlay = QWidget(self)
+        history_overlay.setObjectName("voice_history_overlay")
+        history_overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        history_overlay.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        history_overlay.setFixedWidth(584)
+        history_overlay_lay = QVBoxLayout(history_overlay)
+        history_overlay_lay.setContentsMargins(0, 4, 0, 0)
+        history_overlay_lay.setSpacing(4)
+
+        self.history_toggle = QPushButton("показать ↑", history_overlay)
+        self.history_toggle.setObjectName("voice_history_toggle")
+        self.history_toggle.clicked.connect(self._toggle_history_overlay)
+        history_overlay_lay.addWidget(self.history_toggle, 0, Qt.AlignmentFlag.AlignRight)
+
+        history_scroll = QScrollArea(history_overlay)
+        history_scroll.setObjectName("voice_history_scroll")
+        history_scroll.setWidgetResizable(False)
+        history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        history_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        history_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        history_scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        history_scroll.setMaximumWidth(584)
+        history_scroll.setMinimumWidth(584)
+        history_scroll.setMaximumHeight(260)
+        history_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        history_scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        history_scroll.viewport().setAutoFillBackground(False)
+        self._make_transparent(history_scroll)
+        self._make_transparent(history_scroll.viewport())
+
+        history = QWidget(history_scroll)
+        history.setObjectName("voice_history_content")
+        self._make_transparent(history)
         history.setMaximumWidth(560)
-        history.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        history.setMinimumWidth(560)
+        history.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         history_lay = QVBoxLayout(history)
         history_lay.setContentsMargins(0, 4, 0, 0)
         history_lay.setSpacing(8)
         self.user_text = self._history_line(history_lay, "Ты")
         self.assistant_text = self._history_line(history_lay, "Ася")
-        body.addWidget(history, 0, Qt.AlignmentFlag.AlignHCenter)
+        history_scroll.setWidget(history)
+        history_overlay_lay.addWidget(history_scroll)
+        self._history_overlay = history_overlay
+        self._history_visible = False
+        history_scroll.setVisible(False)
+        self._history_scroll = history_scroll
+        self._history_widget = history
+        self._history_scroll_overlay = proto.ChatScrollOverlay(history_scroll)
         body.addStretch(1)
         root.addWidget(voice_page, 1)
 
@@ -217,13 +292,9 @@ class VoicePanel(QWidget):
         lay.addWidget(persona)
         lay.addStretch(1)
 
-        back = QPushButton("В чат", head)
-        back.setObjectName("voice_accent")
         stop = QPushButton("Стоп", head)
         stop.setObjectName("voice_stop")
-        back.clicked.connect(self.closeRequested.emit)
         stop.clicked.connect(self.stopRequested.emit)
-        lay.addWidget(back)
         lay.addWidget(stop)
         return head
 
@@ -233,9 +304,9 @@ class VoicePanel(QWidget):
         lay = QHBoxLayout(modes)
         lay.setContentsMargins(14, 8, 14, 8)
         lay.setSpacing(6)
-        for idx, text in enumerate(("страница: voice", "режим: voice", "stt: on", "tts: on", "interrupt: on")):
+        for idx, text in enumerate(("режим: voice", "stt: on", "tts: on", "interrupt: on")):
             chip = QLabel(text, modes)
-            chip.setObjectName("voice_chip_active" if idx == 0 else "voice_chip")
+            chip.setObjectName("voice_chip")
             lay.addWidget(chip)
         lay.addStretch(1)
         return modes
@@ -252,8 +323,6 @@ class VoicePanel(QWidget):
         row.setContentsMargins(8, 8, 8, 8)
         row.setSpacing(8)
 
-        back = QPushButton("<- чат", composer)
-        back.clicked.connect(self.closeRequested.emit)
         file_button = QPushButton("Файл", composer)
         file_button.clicked.connect(self.fileRequested.emit)
         mic = QPushButton("\U0001f399", composer)
@@ -263,15 +332,10 @@ class VoicePanel(QWidget):
         mic.released.connect(self.listenReleased.emit)
         functions = self._build_functions_button(composer)
 
-        row.addWidget(back)
         row.addWidget(file_button)
         row.addWidget(mic)
         row.addWidget(functions)
         row.addStretch(1)
-
-        hint = QLabel("voice page внутри текущего чата", composer)
-        hint.setObjectName("voice_hint")
-        row.addWidget(hint)
 
         repeat = QPushButton("Повторить", composer)
         repeat.clicked.connect(self.repeatRequested.emit)
@@ -394,9 +458,19 @@ class VoicePanel(QWidget):
         else:
             popup.open_above(x_offset=0, y_gap=12)
 
+    def _toggle_history_overlay(self) -> None:
+        visible = not bool(getattr(self, "_history_visible", True))
+        self._history_visible = visible
+        scroll = getattr(self, "_history_scroll", None)
+        if scroll is not None:
+            scroll.setVisible(visible)
+        self.history_toggle.setText("скрыть ↓" if visible else "показать ↑")
+        self._position_history_overlay()
+
     def _history_line(self, parent_layout: QVBoxLayout, role: str) -> QLabel:
         frame = QFrame(self)
         frame.setObjectName("voice_line")
+        frame.setFixedWidth(560)
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
@@ -404,13 +478,17 @@ class VoicePanel(QWidget):
         role_label = QLabel(f"{role}:", frame)
         role_label.setObjectName("voice_line_role")
         role_label.setAlignment(Qt.AlignmentFlag.AlignTop)
+        role_label.setFixedWidth(28)
         text_label = QLabel("-", frame)
         text_label.setObjectName("voice_line_text")
         text_label.setWordWrap(True)
         text_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        text_label.setMinimumWidth(0)
+        text_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         lay.addWidget(role_label, 0)
         lay.addWidget(text_label, 1)
         parent_layout.addWidget(frame)
+        self._history_lines.append((frame, text_label))
         return text_label
 
     def set_state(self, state: str) -> None:
@@ -436,9 +514,76 @@ class VoicePanel(QWidget):
 
     def set_user_text(self, text: str) -> None:
         self.user_text.setText(str(text or "").strip() or "-")
+        self._resize_history_widget()
 
     def set_assistant_text(self, text: str) -> None:
         self.assistant_text.setText(str(text or "").strip() or "-")
+        self._resize_history_widget()
+
+    def _resize_history_widget(self) -> None:
+        history = getattr(self, "_history_widget", None)
+        scroll = getattr(self, "_history_scroll", None)
+        if history is None:
+            return
+        self._resize_history_lines()
+        layout = history.layout()
+        if layout is not None:
+            layout.activate()
+        content_height = max(1, history.sizeHint().height())
+        history.resize(560, content_height)
+        if scroll is not None:
+            frame = scroll.frameWidth() * 2
+            target_height = min(260, content_height + frame)
+            scroll.setFixedHeight(target_height)
+            scroll.updateGeometry()
+            overlay = getattr(self, "_history_scroll_overlay", None)
+            if overlay is not None:
+                overlay._sync_geometry()
+        self._position_history_overlay()
+
+    def _resize_history_lines(self) -> None:
+        for frame, text_label in getattr(self, "_history_lines", []):
+            layout = frame.layout()
+            if layout is None:
+                continue
+            margins = layout.contentsMargins()
+            spacing = int(layout.spacing())
+            role_width = 28
+            text_width = max(1, 560 - margins.left() - margins.right() - spacing - role_width)
+            text_label.setFixedWidth(text_width)
+            text_height = max(text_label.sizeHint().height(), text_label.heightForWidth(text_width))
+            frame_height = margins.top() + margins.bottom() + max(text_height, text_label.fontMetrics().height()) + 4
+            frame.setFixedHeight(frame_height)
+
+    @staticmethod
+    def _make_transparent(widget: QWidget) -> None:
+        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        widget.setAutoFillBackground(False)
+        palette = widget.palette()
+        transparent = QColor(0, 0, 0, 0)
+        palette.setColor(QPalette.ColorRole.Window, transparent)
+        palette.setColor(QPalette.ColorRole.Base, transparent)
+        widget.setPalette(palette)
+
+    def _position_history_overlay(self) -> None:
+        overlay = getattr(self, "_history_overlay", None)
+        page = getattr(self, "_voice_page_body", None)
+        if overlay is None or page is None:
+            return
+        overlay.layout().activate()
+        overlay.adjustSize()
+        width = int(overlay.width() or overlay.sizeHint().width() or 584)
+        height = int(overlay.sizeHint().height())
+        local_x = max(18, page.width() - width - 18)
+        local_y = max(18, page.height() - height - 24)
+        panel_pos = page.mapTo(self, QPoint(local_x, local_y))
+        overlay.setGeometry(panel_pos.x(), panel_pos.y(), width, height)
+        overlay.raise_()
+        QTimer.singleShot(0, overlay.raise_)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._position_history_overlay)
 
     def _set_mic_pulse(self, enabled: bool, *, fast: bool = False, opacity: float = 1.0) -> None:
         if self._opacity_effect is None:

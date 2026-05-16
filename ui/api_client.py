@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import socket
+import base64
+from pathlib import Path
 from dataclasses import dataclass
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -167,6 +169,21 @@ class ApiClient:
             self._request_json("POST", "/auth/logout", timeout=3.0)
         finally:
             clear_auth_state(forget_current=True)
+
+    def get_ui_chat_sessions(self, timeout: float | None = None) -> dict:
+        return self._request_json("GET", "/ui/chat-sessions", timeout=timeout or 3.0)
+
+    def put_ui_chat_sessions(self, payload: dict, timeout: float | None = None) -> dict:
+        return self._request_json("PUT", "/ui/chat-sessions", dict(payload or {}), timeout=timeout or 5.0)
+
+    def transcribe_voice_file(self, path: str | os.PathLike, timeout: float | None = None) -> dict:
+        audio_path = Path(path).expanduser()
+        data = audio_path.read_bytes()
+        payload = {
+            "filename": audio_path.name,
+            "audio_base64": base64.b64encode(data).decode("ascii"),
+        }
+        return self._request_json("POST", "/voice/transcribe", payload, timeout=timeout or 180.0)
 
     def admin_list_api_access_keys(self, timeout: float | None = None) -> dict:
         return self._request_json("GET", "/auth/api-access-keys", timeout=timeout or 5.0, include_api_access_key=False)

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import uvicorn
@@ -102,6 +103,8 @@ def _cleanup_mmis_processes(tag: str = "mmis", *, quiet: bool = False) -> int:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run MMis API server")
+    parser.add_argument("--host", default=None, help="Host/interface to bind, e.g. 0.0.0.0 for LAN access")
+    parser.add_argument("--port", type=int, default=None, help="API port")
     parser.add_argument("--mmis-tag", default="mmis", help="MMis API process tag for cleanup")
     parser.add_argument(
         "--no-clean-tagged",
@@ -119,6 +122,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = _build_arg_parser().parse_args()
     cfg = load_config()
+    overrides = {}
+    if args.host:
+        overrides["host"] = str(args.host)
+    if args.port is not None:
+        overrides["port"] = int(args.port)
+    if overrides:
+        cfg = replace(cfg, **overrides)
     setup_logging(cfg)
 
     quiet = bool(args.quiet)

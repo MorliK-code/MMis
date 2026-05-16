@@ -57,7 +57,7 @@ class _TTSEngineAdapter:
             speed=self._speed,
             cache_enabled=True,
             engine=str(voice_cfg.get("tts_engine") or "auto"),
-            model=str(voice_cfg.get("tts_model") or "Qwen3-TTS-0.6B"),
+            model=str(voice_cfg.get("tts_model") or "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"),
             device=str(voice_cfg.get("tts_device") or "default"),
         )
         audio = self._svc.synthesize(text=str(text or ""), lang="", config=cfg)
@@ -99,7 +99,7 @@ def build_tts_config(*, tts_voice: str = "", tts_rate: str = "") -> TTSConfig:
         voice=str(tts_voice or voice.get("tts_voice") or "default"),
         speed=speed,
         engine=str(voice.get("tts_engine") or "auto"),
-        model=str(voice.get("tts_model") or "Qwen3-TTS-0.6B"),
+        model=str(voice.get("tts_model") or "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"),
         device=str(voice.get("tts_device") or "default"),
         cache_enabled=True,
     )

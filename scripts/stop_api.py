@@ -99,7 +99,7 @@ def find_mmis_processes(tag: str = "mmis") -> List[Tuple[int, str]]:
                         processes.append((pid, cmd.strip()))
 
         except Exception as exc:
-            print(f"⚠️  Error finding processes: {exc}", file=sys.stderr)
+            print(f"WARNING: Error finding processes: {exc}", file=sys.stderr)
 
     else:  # Linux/Mac
         try:
@@ -125,12 +125,12 @@ def find_mmis_processes(tag: str = "mmis") -> List[Tuple[int, str]]:
                     processes.append((pid, cmd.strip()))
 
         except Exception as exc:
-            print(f"⚠️  Error finding processes: {exc}", file=sys.stderr)
+            print(f"WARNING: Error finding processes: {exc}", file=sys.stderr)
 
     return processes
 
 
-def request_llm_unload(api_port: int = 8000) -> bool:
+def request_llm_unload(api_port: int = 8027) -> bool:
     """
     Отправляет HTTP запрос для принудительной выгрузки LLM из VRAM.
     
@@ -148,15 +148,15 @@ def request_llm_unload(api_port: int = 8000) -> bool:
         req = urllib.request.Request(url, method="POST")
         with urllib.request.urlopen(req, timeout=5.0) as response:
             if response.status == 200:
-                print(f"✅ LLM unload request sent (port {api_port})")
+                print(f"OK: LLM unload request sent (port {api_port})")
                 return True
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            print(f"ℹ️  LLM unload endpoint not available (port {api_port})")
+            print(f"INFO: LLM unload endpoint not available (port {api_port})")
         else:
-            print(f"⚠️  LLM unload failed (port {api_port}): {e.code}")
+            print(f"WARNING: LLM unload failed (port {api_port}): {e.code}")
     except Exception as exc:
-        print(f"⚠️  LLM unload error (port {api_port}): {exc}")
+        print(f"WARNING: LLM unload error (port {api_port}): {exc}")
     return False
 
 
@@ -166,6 +166,10 @@ def terminate_process(pid: int, timeout: float = 15.0) -> bool:
     
     Отправляет мягкий сигнал и ждёт завершения worker.
     """
+    if not is_process_running(pid):
+        print(f"Process {pid} is already stopped")
+        return True
+
     if os.name == "nt":  # Windows
         # Пробуем мягкое завершение
         try:
@@ -192,8 +196,14 @@ def terminate_process(pid: int, timeout: float = 15.0) -> bool:
                 print(f"Process {pid} did not terminate gracefully, forcing...")
             else:
                 print(f"Graceful terminate failed: {result.stderr}")
+                if not is_process_running(pid):
+                    print(f"Process {pid} stopped before force terminate")
+                    return True
         except Exception as exc:
             print(f"Error during graceful terminate: {exc}")
+            if not is_process_running(pid):
+                print(f"Process {pid} stopped before force terminate")
+                return True
         
         # Принудительное завершение (последняя попытка)
         try:
@@ -212,6 +222,9 @@ def terminate_process(pid: int, timeout: float = 15.0) -> bool:
                 return True
             else:
                 print(f"Failed to force terminate: {result.stderr}")
+                if not is_process_running(pid):
+                    print(f"Process {pid} is already stopped")
+                    return True
                 return False
         except Exception as exc:
             print(f"Error during force terminate: {exc}")
@@ -360,7 +373,7 @@ def main() -> int:
         print("No MMis API processes found")
         # Всё равно пробуем выгрузить LLM и убить Ollama
         print("\nRequesting LLM unload via HTTP...")
-        request_llm_unload(api_port=8000)
+        request_llm_unload(api_port=8027)
         time.sleep(2.0)
         
         print("\nKilling Ollama processes to free VRAM...")
@@ -383,7 +396,7 @@ def main() -> int:
 
     # Сначала пробуем выгрузить LLM через HTTP запрос
     print("\nRequesting LLM unload via HTTP...")
-    request_llm_unload(api_port=8000)
+    request_llm_unload(api_port=8027)
     time.sleep(2.0)  # Ждём выгрузки
 
     if args.force:

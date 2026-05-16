@@ -280,15 +280,15 @@ class AppSettings:
     voice_tts_volume: str = "+0%"
     voice_mode: str = "push_to_talk"
     voice_open_mode_from_rail: bool = True
-    voice_stt_engine: str = "faster_whisper"
-    voice_stt_model: str = "small"
-    voice_stt_device: str = "cuda"
-    voice_stt_compute_type: str = "int8_float16"
+    voice_stt_engine: str = "qwen-asr"
+    voice_stt_model: str = "Qwen/Qwen3-ASR-1.7B"
+    voice_stt_device: str = "auto"
+    voice_stt_compute_type: str = "default"
     voice_stt_language_hint: str = "ru"
     voice_tts_engine: str = "qwen"
-    voice_tts_model: str = "Qwen3-TTS-0.6B"
+    voice_tts_model: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
     voice_runtime_tts_voice: str = "default"
-    voice_tts_device: str = "cuda"
+    voice_tts_device: str = "auto"
     voice_auto_speak_replies: bool = True
     voice_barge_in: bool = True
     voice_input_dir: Path | None = None
@@ -506,7 +506,7 @@ def _default_config_tree() -> dict[str, Any]:
             "safety_mode": "read_only_tools",
         },
         "api": {
-            "host": "127.0.0.1",
+            "host": "0.0.0.0",
             "port": 8027,
             "access_lock": {
                 "enabled": False,
@@ -756,15 +756,15 @@ def _default_config_tree() -> dict[str, Any]:
             "enabled": True,
             "mode": "push_to_talk",
             "open_mode_from_rail": True,
-            "stt_engine": "faster_whisper",
-            "stt_model": "small",
-            "stt_device": "cuda",
-            "stt_compute_type": "int8_float16",
+            "stt_engine": "qwen-asr",
+            "stt_model": "Qwen/Qwen3-ASR-1.7B",
+            "stt_device": "auto",
+            "stt_compute_type": "default",
             "stt_language_hint": "ru",
             "tts_engine": "qwen",
-            "tts_model": "Qwen3-TTS-0.6B",
+            "tts_model": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
             "tts_voice": "default",
-            "tts_device": "cuda",
+            "tts_device": "auto",
             "auto_speak_replies": True,
             "barge_in": True,
             "tts": {
@@ -902,7 +902,7 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         active_profile=_norm_upper(_get_dotted(row, "startup.active_profile") or "BALANCED"),
         llm_default_provider=llm_default_provider,
         model_name=model_name,
-        host=_norm_str(_get_dotted(row, "api.host") or "127.0.0.1"),
+        host=_norm_str(_get_dotted(row, "api.host") or "0.0.0.0"),
         port=_to_int(_get_dotted(row, "api.port"), default=8027),
         api_access_lock_enabled=_to_bool(_get_dotted(row, "api.access_lock.enabled")),
         api_access_key_hash=_norm_str(_get_dotted(row, "api.access_lock.key_hash")),
@@ -972,15 +972,15 @@ def _settings_from_payload(payload: dict[str, Any], *, config_file: Path) -> App
         voice_tts_volume=_norm_str(_get_dotted(row, "voice.tts.volume") or "+0%"),
         voice_mode=_norm_str(_get_dotted(row, "voice.mode") or "push_to_talk"),
         voice_open_mode_from_rail=_to_bool(_pick_value(_get_dotted(row, "voice.open_mode_from_rail"), True)),
-        voice_stt_engine=_norm_str(_get_dotted(row, "voice.stt_engine") or "faster_whisper"),
-        voice_stt_model=_norm_str(_get_dotted(row, "voice.stt_model") or "small"),
-        voice_stt_device=_norm_str(_get_dotted(row, "voice.stt_device") or "cuda"),
-        voice_stt_compute_type=_norm_str(_get_dotted(row, "voice.stt_compute_type") or "int8_float16"),
+        voice_stt_engine=_norm_str(_get_dotted(row, "voice.stt_engine") or "qwen-asr"),
+        voice_stt_model=_norm_str(_get_dotted(row, "voice.stt_model") or "Qwen/Qwen3-ASR-1.7B"),
+        voice_stt_device=_norm_str(_get_dotted(row, "voice.stt_device") or "auto"),
+        voice_stt_compute_type=_norm_str(_get_dotted(row, "voice.stt_compute_type") or "default"),
         voice_stt_language_hint=_norm_str(_get_dotted(row, "voice.stt_language_hint") or "ru"),
         voice_tts_engine=_norm_str(_get_dotted(row, "voice.tts_engine") or "qwen"),
-        voice_tts_model=_norm_str(_get_dotted(row, "voice.tts_model") or "Qwen3-TTS-0.6B"),
+        voice_tts_model=_norm_str(_get_dotted(row, "voice.tts_model") or "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"),
         voice_runtime_tts_voice=_norm_str(_get_dotted(row, "voice.tts_voice") or "default"),
-        voice_tts_device=_norm_str(_get_dotted(row, "voice.tts_device") or "cuda"),
+        voice_tts_device=_norm_str(_get_dotted(row, "voice.tts_device") or "auto"),
         voice_auto_speak_replies=_to_bool(_pick_value(_get_dotted(row, "voice.auto_speak_replies"), True)),
         voice_barge_in=_to_bool(_pick_value(_get_dotted(row, "voice.barge_in"), True)),
         voice_input_dir=voice_input,

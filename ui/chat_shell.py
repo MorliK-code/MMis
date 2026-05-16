@@ -77,6 +77,24 @@ STATUS_LINE = OK_LINE
 RESOURCE_BG = "rgba(255,255,255,.03)"
 RESOURCE_LINE = LINE
 
+NO_BUTTON_FOCUS_OUTLINE_STYLE = """
+/* MMIS_NO_BUTTON_FOCUS_OUTLINE */
+QPushButton:focus, QToolButton:focus {
+    outline: none;
+}
+"""
+
+
+def _apply_no_button_focus_outline() -> None:
+    app = QApplication.instance()
+    if app is None:
+        return
+    current = app.styleSheet() or ""
+    marker = "/* MMIS_NO_BUTTON_FOCUS_OUTLINE */"
+    if marker in current:
+        return
+    app.setStyleSheet(current + "\n" + NO_BUTTON_FOCUS_OUTLINE_STYLE)
+
 
 def _pct_color() -> str:
     return "rgba(139,92,246,0.10)"
@@ -1047,8 +1065,11 @@ class Chip(CrispLabel):
         super().__init__(text)
         self.setFont(_ui_font(pixel_size=10))
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(20)
         self.set_box_style(radius=12, padding=(8, 4, 8, 4))
         self.apply_chip_style(active)
+        self.setFixedWidth(self.sizeHint().width())
 
     def apply_chip_style(self, active: bool) -> None:
         self.set_text_color(MUTED)
@@ -2923,6 +2944,7 @@ class RuntimeFlagSyncWorker(QThread):
 class ExactChatWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        _apply_no_button_focus_outline()
         self.setWindowTitle("MMis — Exact PySide6 Chat")
         self.resize(1200, 820)
         self.setFont(_ui_font())
@@ -3073,6 +3095,7 @@ class ExactChatWindow(QMainWindow):
         head_lay.addWidget(self.search_btn)
         head_lay.addWidget(self.clear_btn)
         chat_lay.addWidget(head)
+        head.setFixedHeight(head.sizeHint().height())
 
         modes = QFrame()
         modes.setObjectName("chat_modes")
@@ -3087,6 +3110,7 @@ class ExactChatWindow(QMainWindow):
             modes_lay.addWidget(Chip(t))
         modes_lay.addStretch(1)
         chat_lay.addWidget(modes)
+        modes.setFixedHeight(modes.sizeHint().height())
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -3190,10 +3214,6 @@ class ExactChatWindow(QMainWindow):
         layout = getattr(self, "messages_layout", None)
         scroll = getattr(self, "scroll", None)
         if layout is None or scroll is None:
-            return
-        if self._message_widget_count() <= 0:
-            scroll.setVisible(False)
-            scroll.setFixedHeight(0)
             return
         scroll.setVisible(True)
         layout.invalidate()

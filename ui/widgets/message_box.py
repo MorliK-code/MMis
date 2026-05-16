@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Literal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QFrame, QToolButton, QWidget
+    QPushButton, QFrame, QToolButton, QWidget, QTextEdit, QSizePolicy
 )
 from PySide6.QtCore import Qt, Signal
 from ui.chat_shell import _ui_font
@@ -42,7 +42,7 @@ class MmisMessageBox(QDialog):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setMinimumWidth(430)
+        self.setFixedWidth(430)
         
         # Result mapping for buttons
         self._button_results = {}
@@ -89,11 +89,19 @@ class MmisMessageBox(QDialog):
         body_root.addLayout(header)
         
         # Body text
-        self.body = QLabel(text)
+        self.body = QTextEdit()
         self.body.setObjectName("mmis_message_body")
-        self.body.setWordWrap(True)
+        self.body.setReadOnly(True)
+        self.body.setPlainText(str(text or ""))
+        self.body.setFrameShape(QFrame.Shape.NoFrame)
         self.body.setFont(_ui_font(pixel_size=12))
-        self.body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.body.setMinimumHeight(58)
+        self.body.setMaximumHeight(170)
+        doc_height = int(self.body.document().size().height()) + 12
+        self.body.setFixedHeight(max(58, min(170, doc_height)))
+        self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         body_root.addWidget(self.body)
         
         # Buttons

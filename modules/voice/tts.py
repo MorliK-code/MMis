@@ -46,7 +46,7 @@ class TTSConfig:
     sample_rate: int = 22050
     device: str = "default"
     engine: str = "auto"
-    model: str = "Qwen3-TTS-0.6B"
+    model: str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
     cache_enabled: bool = True
     max_chunk_chars: int = 320
 

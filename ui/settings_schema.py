@@ -339,10 +339,10 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                 title="STT",
                 tag="stt",
                 settings=(
-                    SettingSpec("voice.stt_engine", "STT engine", description="Движок распознавания речи.", example="faster_whisper", restart_required=True),
-                    SettingSpec("voice.stt_model", "STT model", description="Модель распознавания.", example="small", restart_required=True),
+                    SettingSpec("voice.stt_engine", "STT engine", description="Движок распознавания речи.", example="qwen-asr", restart_required=True),
+                    SettingSpec("voice.stt_model", "STT model", description="Модель распознавания.", example="Qwen/Qwen3-ASR-1.7B", restart_required=True),
                     SettingSpec("voice.stt_device", "STT device", kind="select", options=("cuda", "cpu", "auto"), description="Устройство для вычислений STT.", example="cuda", restart_required=True),
-                    SettingSpec("voice.stt_compute_type", "Compute type", description="Тип вычислений (напр. float16).", example="int8_float16", restart_required=True),
+                    SettingSpec("voice.stt_compute_type", "Compute type", description="Тип вычислений (напр. float16).", example="default", restart_required=True),
                     SettingSpec("voice.stt_language_hint", "Language hint", description="Подсказка языка для STT.", example="ru"),
                 ),
             ),
@@ -351,7 +351,7 @@ SETTINGS_CATEGORIES: tuple[SettingCategory, ...] = (
                 tag="tts",
                 settings=(
                     SettingSpec("voice.tts_engine", "TTS engine", description="Движок синтеза речи.", example="qwen", restart_required=True),
-                    SettingSpec("voice.tts_model", "TTS model", description="Модель синтеза.", example="Qwen3-TTS-0.6B", restart_required=True),
+                    SettingSpec("voice.tts_model", "TTS model", description="Модель синтеза.", example="Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", restart_required=True),
                     SettingSpec("voice.tts_device", "TTS device", kind="select", options=("cuda", "cpu", "auto"), description="Устройство для вычислений TTS.", example="cuda", restart_required=True),
                     SettingSpec("voice.tts.voice", "Voice", description="Голос для озвучки.", example="ru-RU-DmitryNeural"),
                     SettingSpec("voice.tts.rate", "Rate", description="Скорость речи.", example="+0%"),

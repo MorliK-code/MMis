@@ -126,6 +126,9 @@ QPushButton, QToolButton {
     font-family: Cascadia Code, Consolas, monospace;
     font-size: 11px;
 }
+QPushButton:focus, QToolButton:focus {
+    outline: none;
+}
 QToolButton#close_button {
     min-width: 24px;
     max-width: 24px;
@@ -642,7 +645,7 @@ QFrame#json_preview {
     font-size: 10px;
 }
 
-QDialog#settings_message_box {
+QDialog#settings_message_box, QDialog#mmis_message_box {
     background: transparent;
 }
 
@@ -656,9 +659,12 @@ QLabel#settings_message_title, QLabel#mmis_message_title {
     font-size: 14px;
     font-weight: 700;
 }
-QLabel#settings_message_body, QLabel#mmis_message_body {
+QLabel#settings_message_body, QTextEdit#mmis_message_body {
     color: #d1d5db;
     font-size: 12px;
+    background: transparent;
+    border: 0;
+    selection-background-color: rgba(139, 92, 246, 80);
 }
 QLabel#settings_message_icon, QLabel#mmis_message_icon_info {
     background: rgba(139, 92, 246, 30);
